@@ -1,0 +1,6 @@
+[workspace]
+resolver = "3"
+members = [
+  "sedimentree_sync_core",
+  "sedimentree_sync_wasm"
+]

@@ -1,0 +1,9 @@
+[package]
+name = "sedimentree_sync_wasm"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+js-sys = "0.3.77"
+sedimentree = "0.0.1"
+wasm-bindgen = "0.2.100"
