@@ -87,7 +87,7 @@
         gzip = "${pkgs.gzip}/bin/gzip";
         node = "${pkgs.nodejs_22}/bin/node";
         pnpm = "${pkgs.pnpm}/bin/pnpm";
-        playwright = "${pnpm} --dir=./sedimentree_wasm exec playwright";
+        playwright = "${pnpm} --dir=./sedimentree_sync_wasm exec playwright";
         wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
@@ -98,13 +98,13 @@
             "${cargo} build --release";
 
          "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-           "${wasm-pack} build ./sedimentree_wasm --release --target=web && ${gzip} -f ./sedimentree_wasm/pkg/sedimentree_wasm_bg.wasm";
+           "${wasm-pack} build ./sedimentree_sync_wasm --release --target=web && ${gzip} -f ./sedimentree_sync_wasm/pkg/sedimentree_wasm_bg.wasm";
 
          "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
-            "${wasm-pack} build ./sedimentree_wasm --release --target=bundler && ${gzip} -f ./sedimentree_wasm/pkg/sedimentree_wasm_bg.wasm";
+            "${wasm-pack} build ./sedimentree_sync_wasm --release --target=bundler && ${gzip} -f ./sedimentree_sync_wasm/pkg/sedimentree_wasm_bg.wasm";
 
           "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./sedimentree_wasm --release --target=nodejs && ${gzip} -f ./sedimentree_wasm/pkg/sedimentree_wasm_bg.wasm";
+            "${wasm-pack} build ./sedimentree_sync_wasm --release --target=nodejs && ${gzip} -f ./sedimentree_sync_wasm/pkg/sedimentree_wasm_bg.wasm";
         };
 
         build = {
@@ -112,16 +112,16 @@
             "${cargo} build";
 
           "build:wasm:web" = cmd "Build for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build ./sedimentree_wasm --dev --target=web";
+            "${wasm-pack} build ./sedimentree_sync_wasm --dev --target=web";
  
           "build:wasm:nodejs" = cmd "Build for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./sedimentree_wasm --dev --target=nodejs";
+            "${wasm-pack} build ./sedimentree_sync_wasm --dev --target=nodejs";
 
           "build:node" = cmd "Build JS-wrapped Wasm library"
             "${pnpm}/bin/pnpm install && ${node} run build";
 
           "build:wasi" = cmd "Build for Wasm32-WASI"
-            "${cargo} build ./sedimentree_wasm --target wasm32-wasi";
+            "${cargo} build ./sedimentree_sync_wasm --target wasm32-wasi";
         };
 
         bench = {
@@ -180,22 +180,22 @@
             "test:wasm:node && test:ts:web";
 
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
-            "${wasm-pack} test --node sedimentree_wasm";
+            "${wasm-pack} test --node sedimentree_sync_wasm";
 
-          "test:ts:web" = cmd "Run sedimentree_wasm Typescript tests in Playwright"
+          "test:ts:web" = cmd "Run sedimentree_sync_wasm Typescript tests in Playwright"
             "build:wasm:web && ${playwright} test";
 
           "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
             "${playwright} show-report";
 
           "test:wasm:chrome" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --chrome sedimentree_wasm --features='browser_test'";
+            "${wasm-pack} test --chrome sedimentree_sync_wasm --features='browser_test'";
 
           "test:wasm:firefox" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --firefox sedimentree_wasm --features='browser_test'";
+            "${wasm-pack} test --firefox sedimentree_sync_wasm --features='browser_test'";
 
           "test:wasm:safari" = cmd "Run wasm-pack tests in headless Chrome"
-            "${wasm-pack} test --safari sedimentree_wasm --features='browser_test'";
+            "${wasm-pack} test --safari sedimentree_sync_wasm --features='browser_test'";
 
           "test:docs" = cmd "Run Cargo doctests"
             "${cargo} test --doc --features='mermaid_docs,test_utils'";

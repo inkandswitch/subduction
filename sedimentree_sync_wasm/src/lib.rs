@@ -29,9 +29,9 @@ use std::{collections::{hash_map::Entry, HashMap, HashSet}, hash::{DefaultHasher
 use wasm_bindgen::prelude::*;
 use js_sys::Function;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct DocumentId([u8; 32]);
+pub type DocumentId = String;
 
+#[wasm_bindgen]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Callback {
     function: Function,
@@ -56,13 +56,32 @@ impl Hash for Callback {
     }
 }
 
+#[wasm_bindgen]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SedimentreeNetwork {
-    adapters: HashMap<DocumentId, HashSet<Callback>>, // Or something
+    adapters: HashMap<DocumentId, HashSet<Callback>>, // TODO Or something
 }
 
+#[wasm_bindgen]
 impl SedimentreeNetwork {
-    pub fn register(&mut self, doc_id: DocumentId, js_callback: &Function) -> Result<(), JsValue> {
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        web_sys::console::log_1(&"Creating SedimentreeNetwork".into());
+        Self {
+            adapters: HashMap::new(),
+        }
+    }
+
+    pub fn start(&self, _adapters: Vec<u8>) {
+        web_sys::console::log_1(&"!! start".into());
+    }
+
+    pub async fn find(&self, _doc_id: DocumentId) -> Option<Vec<Callback>> {
+        web_sys::console::log_1(&format!("Finding adapters for doc_id: {:?}", _doc_id).into());
+        None
+    }
+
+    pub fn  on(&mut self, doc_id: DocumentId, js_callback: &Function) -> Result<(), JsValue> {
         self.entry(doc_id)
             .and_modify(|set| {
                 set.insert(js_callback.clone().into());
@@ -75,7 +94,7 @@ impl SedimentreeNetwork {
     }
 
     pub fn unregister(&mut self, doc_id: DocumentId, js_callback: &Function) -> Result<(), JsValue> {
-        self.entry(doc_id)
+        self.entry(doc_id.clone())
             .and_modify(|set| {
                 set.remove(&js_callback.clone().into());
             });
@@ -89,7 +108,7 @@ impl SedimentreeNetwork {
         Ok(())
     }
 
-    pub fn entry(&mut self, doc_id: DocumentId) -> Entry<'_, DocumentId, HashSet<Callback>> {
+    fn entry(&mut self, doc_id: DocumentId) -> Entry<'_, DocumentId, HashSet<Callback>> {
         self.adapters.entry(doc_id)
     }
 
@@ -97,7 +116,7 @@ impl SedimentreeNetwork {
         todo!()
     }
 
-    pub async fn whenRead() -> bool {
+    pub async fn when_read() -> bool {
         true
     }
 }
@@ -107,14 +126,13 @@ impl SedimentreeNetwork {
 
 // TODO use a hardcoded docid for now, and hardcode the doc content
 // send a chunk to automegre
-//
 
 
 
 pub trait SedimentreeNetworkAdapter {
     // TODO Fails if DocID not availavle
-    fn on_change(documentId: DocumentId, callback: Function) -> Result<(), JsValue>;
-    fn unsubscribe(documentId: DocumentId, callback: Function) -> Result<(), JsValue>;
+    fn on_change(docId: DocumentId, callback: Function) -> Result<(), JsValue>;
+    fn unsubscribe(docId: DocumentId, callback: Function) -> Result<(), JsValue>;
 
     // fn send_bundle
     //
