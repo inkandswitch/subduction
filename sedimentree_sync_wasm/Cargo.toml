@@ -7,6 +7,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+automerge = { version = "0.6.1", features = ["wasm"] }
 js-sys = "0.3.77"
 web-sys = { version = "0.3.77", features = ["console"] } # FIXME temp for development
 sedimentree = "0.0.1"

@@ -76,9 +76,10 @@ impl SedimentreeNetwork {
         web_sys::console::log_1(&"!! start".into());
     }
 
-    pub async fn find(&self, _doc_id: DocumentId) -> Option<Vec<Callback>> {
-        web_sys::console::log_1(&format!("Finding adapters for doc_id: {:?}", _doc_id).into());
-        None
+    pub async fn find(&self, doc_id: DocumentId) -> Option<Vec<u8>> {
+        web_sys::console::log_1(&format!("Finding adapters for doc_id: {:?}", doc_id).into());
+        web_sys::console::log_1(&"(returning blank doc for now)".into());
+        Some(automerge::Automerge::new().save())
     }
 
     pub fn  on(&mut self, doc_id: DocumentId, js_callback: &Function) -> Result<(), JsValue> {
