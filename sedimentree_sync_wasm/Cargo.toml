@@ -7,9 +7,9 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-automerge = { version = "0.6.1", features = ["wasm"] }
+automerge = { workspace = true, features = ["wasm"] }
 js-sys = "0.3.77"
 web-sys = { version = "0.3.77", features = ["console"] } # FIXME temp for development
-sedimentree = "0.0.1"
+sedimentree_sync_core = { path = "../sedimentree_sync_core" }
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"

@@ -235,6 +235,7 @@
               pkgs.nodejs_20
               pkgs.rust-analyzer
               pkgs.wasm-pack
+              pkgs.websocat
             ]
             ++ format-pkgs
             ++ cargo-installs;
