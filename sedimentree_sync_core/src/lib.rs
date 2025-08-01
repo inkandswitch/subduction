@@ -131,7 +131,7 @@ pub struct SedimentreeSync<N: NetworkAdapter> {
 }
 
 impl<N: NetworkAdapter> SedimentreeSync<N> {
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip_all, fields(docs = ?docs))]
     pub fn new(docs: HashMap<DocumentId, Automerge>, network_adapters: HashMap<String, N>) -> Self {
         Self {
             docs,
@@ -140,7 +140,7 @@ impl<N: NetworkAdapter> SedimentreeSync<N> {
     }
 
     // FIXME return more info about unstarted adapters
-    #[tracing::instrument(skip_all)]
+    #[tracing::instrument(skip(self))]
     pub fn start(&mut self) {
         for (name, adapter) in &self.network_adapters {
             if adapter.is_ready() {
@@ -156,6 +156,7 @@ impl<N: NetworkAdapter> SedimentreeSync<N> {
         }
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn find(&self, doc_id: DocumentId) -> Option<Vec<Vec<u8>>> {
         for (_name, adapter) in &self.network_adapters {
             adapter.send(Message {
@@ -172,6 +173,7 @@ impl<N: NetworkAdapter> SedimentreeSync<N> {
 
     // FIXME closure tyep?
     // FIXME error type
+    #[tracing::instrument(skip(self, callback))]
     pub fn on<F: Fn() -> ()>(&mut self, event: String, callback: &F) -> Result<(), String> {
         todo!();
         Ok(())
@@ -179,24 +181,28 @@ impl<N: NetworkAdapter> SedimentreeSync<N> {
 
     // FIXME closure tyep?
     // FIXME error type
+    #[tracing::instrument(skip(self, callback))]
     pub fn off<F: Fn() -> ()>(&mut self, doc_id: DocumentId, callback: &F) -> Result<(), String> {
         todo!();
         Ok(())
     }
 
+    // #[tracing::instrument]
     // fn entry(&mut self, doc_id: DocumentId) -> Entry<'_, DocumentId, HashSet<Callback>> {
     //     self.adapters.entry(doc_id)
     // }
 
+    #[tracing::instrument(skip(self))]
     pub async fn stop(&mut self) {
         todo!()
     }
 
+    #[tracing::instrument(skip(self))]
     pub async fn when_ready(&self) -> bool {
         true
     }
 
-
+    #[tracing::instrument(skip(self))]
     pub async fn new_commit(&mut self, _document_id: DocumentId, hash: String, data: Vec<u8>) {
         todo!()
     }

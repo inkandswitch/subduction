@@ -1,9 +1,11 @@
 [workspace]
 resolver = "3"
-members = [ "sedimentree_sync_cli",
+members = [
+  "sedimentree_sync_cli",
   "sedimentree_sync_core",
   "sedimentree_sync_wasm"
 ]
 
 [workspace.dependencies]
 automerge = "0.6.1"
+tracing = "0.1.41"

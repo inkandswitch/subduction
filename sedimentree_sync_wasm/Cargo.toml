@@ -8,8 +8,11 @@ edition = "2024"
 
 [dependencies]
 automerge = { workspace = true, features = ["wasm"] }
+console_error_panic_hook = "0.1.7"
 js-sys = "0.3.77"
-web-sys = { version = "0.3.77", features = ["console"] } # FIXME temp for development
 sedimentree_sync_core = { path = "../sedimentree_sync_core" }
+tracing-wasm = "0.2.1"
+tracing.workspace = true
 wasm-bindgen = "0.2.100"
 wasm-bindgen-futures = "0.4.50"
+web-sys = { version = "0.3.77", features = ["console"] } # FIXME temp for development
