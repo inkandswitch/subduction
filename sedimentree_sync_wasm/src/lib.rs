@@ -227,7 +227,6 @@ pub struct SedimentreeSyncWasm(SedimentreeSync<NetworkAdapterInterface>);
 
 #[wasm_bindgen]
 impl SedimentreeSyncWasm {
-    #[tracing::instrument]
     #[wasm_bindgen(constructor)]
     pub fn new(js_docs: js_sys::Map, js_network_adapters: Vec<NetworkAdapterInterface>) -> Self {
         let mut docs = HashMap::new();
@@ -271,12 +270,10 @@ impl SedimentreeSyncWasm {
         ))
     }
 
-    #[tracing::instrument]
     pub fn start(&mut self) {
         self.0.start();
     }
 
-    #[tracing::instrument]
     pub async fn find(&self, doc_id: JsDocumentId) -> Option<js_sys::Array> {
         self.0.find(doc_id.into()).await.map(|vec_doc_bytes| {
             vec_doc_bytes.into_iter().map(|am_bytes| {
@@ -288,7 +285,6 @@ impl SedimentreeSyncWasm {
         })
     }
 
-    #[tracing::instrument]
     pub fn on(&mut self, event: String, js_callback: &Function) -> Result<(), JsValue> {
         // web_sys::console::log_1(&format!("Registering callback for doc_id: {:?}", doc_id).into());
         // self.entry(doc_id)
@@ -302,7 +298,6 @@ impl SedimentreeSyncWasm {
         Ok(())
     }
 
-    #[tracing::instrument]
     pub fn off(&mut self, doc_id: JsDocumentId, js_callback: &Function) -> Result<(), JsValue> {
         // self.entry(doc_id.clone())
         //     .and_modify(|set| {
@@ -322,18 +317,15 @@ impl SedimentreeSyncWasm {
     //     self.adapters.entry(doc_id)
     // }
 
-    #[tracing::instrument]
     pub async fn stop(&mut self) {
         todo!()
     }
 
-    #[tracing::instrument]
     #[wasm_bindgen(js_name = "whenReady")]
     pub async fn when_ready(&self) -> bool {
         true
     }
 
-    #[tracing::instrument]
     #[wasm_bindgen(js_name = "newCommit")]
     pub async fn new_commit(&mut self, _document_id: JsDocumentId, hash: String, data: js_sys::Uint8Array) {
         todo!()
