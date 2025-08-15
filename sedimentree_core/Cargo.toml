@@ -1,0 +1,22 @@
+[package]
+name = "sedimentree_core"
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+version = "0.1.0"
+
+[dependencies]
+bs58 = { version = "0.5.1", features = ["check"] }
+hex = { workspace = true }
+tracing = { workspace = true }
+thiserror = { workspace = true }
+blake3 = { workspace = true }
+futures = { workspace = true }
+num = { workspace = true }
+arbitrary = { workspace = true, optional = true }
+
+[dev-dependencies]
+bolero = { workspace = true }
+rand = { workspace = true }

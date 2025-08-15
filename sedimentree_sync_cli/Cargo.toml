@@ -1,7 +1,7 @@
 [package]
 name = "sedimentree_sync_cli"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 
 [dependencies]
 automerge = "0.6.1" # FIXME use workspace version
