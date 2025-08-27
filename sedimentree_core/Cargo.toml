@@ -8,15 +8,16 @@ rust-version.workspace = true
 version = "0.1.0"
 
 [dependencies]
-bs58 = { version = "0.5.1", features = ["check"] }
-hex = { workspace = true }
-tracing = { workspace = true }
-thiserror = { workspace = true }
+arbitrary = { workspace = true, optional = true, features = ["derive"] }
 blake3 = { workspace = true }
+bs58 = { version = "0.5.1", features = ["check"] }
 futures = { workspace = true }
+hex = { workspace = true }
+nonempty = { workspace = true, features = ["arbitrary"] }
 num = { workspace = true }
-arbitrary = { workspace = true, optional = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
-bolero = { workspace = true }
+bolero = { workspace = true, features = ["arbitrary"] }
 rand = { workspace = true }

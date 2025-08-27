@@ -78,6 +78,9 @@ name = "arbitrary"
 version = "1.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3d036a3c4ab069c7b410a2ce876bd74808d2d0888a82667669f8e783a898bf1"
+dependencies = [
+ "derive_arbitrary",
+]
 
 [[package]]
 name = "arrayref"
@@ -276,6 +279,7 @@ version = "0.13.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "98a5782f2650f80d533f58ec339c6dce4cc5428f9c2755894f98156f52af81f2"
 dependencies = [
+ "arbitrary",
  "bolero-generator-derive",
  "either",
  "getrandom",
@@ -507,6 +511,17 @@ name = "data-encoding"
 version = "2.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a2330da5de22e8a3cb63252ce2abb30116bf5265e89c0e01bc17015ce30a476"
+
+[[package]]
+name = "derive_arbitrary"
+version = "1.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e567bd82dcff979e4b03460c307b3cdc9e96fde3d73bed1496d2bc75d9dd62a"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "digest"
@@ -1062,6 +1077,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nonempty"
+version = "0.12.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9737e026353e5cd0736f98eddae28665118eb6f6600902a7f50db585621fecb6"
+dependencies = [
+ "arbitrary",
+]
+
+[[package]]
 name = "num"
 version = "0.4.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1445,6 +1469,7 @@ dependencies = [
  "bs58",
  "futures",
  "hex",
+ "nonempty",
  "num",
  "rand",
  "thiserror 2.0.14",
@@ -1468,11 +1493,10 @@ dependencies = [
 name = "sedimentree_sync_core"
 version = "0.1.0"
 dependencies = [
- "automerge 0.6.1",
  "futures",
- "getrandom",
  "sedimentree_core",
  "serde",
+ "thiserror 2.0.14",
  "tracing",
 ]
 
@@ -1483,6 +1507,7 @@ dependencies = [
  "automerge 0.6.1",
  "automerge-wasm",
  "console_error_panic_hook",
+ "getrandom",
  "js-sys",
  "sedimentree_core",
  "sedimentree_sync_core",

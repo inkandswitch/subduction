@@ -1,5 +1,5 @@
 use sedimentree_sync_core::{
-    chunk::Chunk,
+    payload::Payload,
     storage::{adapter::StorageAdapter, key::StorageKey},
 };
 use wasm_bindgen::prelude::*;
@@ -67,7 +67,7 @@ impl StorageAdapter for StorageAdapterInterface {
         Ok(())
     }
 
-    async fn load_range(&self, prefix: &StorageKey) -> Result<Vec<Chunk>, String> {
+    async fn load_range(&self, prefix: &StorageKey) -> Result<Vec<Payload>, String> {
         let promise = self.js_load_range(prefix.clone().into());
         let js_val = JsFuture::from(promise)
             .await
@@ -77,7 +77,7 @@ impl StorageAdapter for StorageAdapterInterface {
             .dyn_into::<js_sys::Array>()
             .map_err(|_| "Expected an array".to_string())?;
 
-        let mut chunks = Vec::new();
+        let mut payloads = Vec::new();
         for js_value in js_array.iter() {
             let js_obj = js_value
                 .dyn_into::<js_sys::Object>()
@@ -98,10 +98,10 @@ impl StorageAdapter for StorageAdapterInterface {
                 .map_err(|_| "Data should be a Uint8Array".to_string())?
                 .to_vec();
 
-            chunks.push(Chunk { key, data });
+            payloads.push(Payload { key, data });
         }
 
-        Ok(chunks)
+        Ok(payloads)
     }
 
     async fn remove_range(&self, prefix: &StorageKey) -> Result<(), String> {

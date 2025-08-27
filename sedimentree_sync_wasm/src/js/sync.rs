@@ -21,7 +21,7 @@ impl JsSedimentreeSync {
         js_docs: js_sys::Map,
         js_network_adapters: Vec<NetworkAdapterInterface>,
         js_storage_adapters: Vec<StorageAdapterInterface>,
-    ) -> Self {
+    ) -> Result<Self, JsValue> {
         let mut docs = HashMap::new();
         let doc_entries = js_docs.entries();
         let entry_array = js_sys::Array::from(&doc_entries);
@@ -38,7 +38,7 @@ impl JsSedimentreeSync {
             let bytes: Vec<u8> = if value.is_instance_of::<js_sys::Uint8Array>() {
                 value.unchecked_into::<js_sys::Uint8Array>().to_vec()
             } else {
-                todo!("FIXME error")
+                Err("expected Uint8Array")?
             };
 
             let doc = automerge::Automerge::load(&bytes).expect("FIXME");
@@ -51,28 +51,39 @@ impl JsSedimentreeSync {
         }
 
         let mut network_adapters = HashMap::new();
-        for (n, js_net_adapter) in js_network_adapters.iter().enumerate() {
-            // FIXME should reallt be pased in or random, not iterated
-            let peer_id: String = NetworkAdapterInterface::peer_id(&js_net_adapter)
-                .as_string()
-                .expect("FIXME");
-            network_adapters.insert(
-                format!("network-adapter-{n}-{peer_id}"),
-                js_net_adapter.clone(),
-            );
+        for js_net_adapter in js_network_adapters.iter() {
+            let mut net_id_buf = [0u8; 16];
+            getrandom::fill(&mut net_id_buf)
+                .map_err(|_| "source of randomness should be available")?;
+
+            let net_id = net_id_buf
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
+
+            network_adapters.insert(format!("network-adapter-{net_id}"), js_net_adapter.clone());
         }
 
         let mut storage_adapters = HashMap::new();
-        for (n, js_storage_adapter) in js_storage_adapters.iter().enumerate() {
-            // FIXME should reallt be pased in or random, not iterated
-            storage_adapters.insert(format!("storage-adapter-{n}"), js_storage_adapter.clone());
+        for js_storage_adapter in js_storage_adapters.iter() {
+            let mut store_id_buf = [0u8; 16];
+            getrandom::fill(&mut store_id_buf).expect("source of randomness should be available");
+            let store_id = store_id_buf
+                .iter()
+                .map(|b| format!("{:02x}", b))
+                .collect::<String>();
+
+            storage_adapters.insert(
+                format!("storage-adapter-{store_id}"),
+                js_storage_adapter.clone(),
+            );
         }
 
-        Self(SedimentreeSync::new(
+        Ok(Self(SedimentreeSync::new(
             docs,
             network_adapters,
             storage_adapters,
-        ))
+        )))
     }
 
     pub fn start(&mut self) {
@@ -95,21 +106,46 @@ impl JsSedimentreeSync {
         })
     }
 
-    pub fn on(&mut self, event: String, js_callback: &Function) -> Result<(), JsValue> {
-        let callback = || {
-            js_callback.call0(&JsValue::NULL).expect("FIXME");
-            ()
-        };
+    // Called whenever the sedimentree network is aware of new changes for a document.
+    #[wasm_bindgen(js_name = "onChange")]
+    pub fn on_change(
+        &mut self,
+        doc_id: &JsDocumentId,
+        js_callback: &Function,
+    ) -> Result<(), JsValue> {
+        todo!("FIXME");
+        // let callback = || {
+        //     if let Err(e) = js_callback.call0(&JsValue::NULL) {
+        //         tracing::error!("Error calling callback: {:?}", e);
+        //     }
+        // };
 
-        self.0
-            .on(event, &callback)
-            .map_err(|e| JsValue::from_str(&e))
+        // self.0
+        //     .on(event, &callback)
+        //     .map_err(|e| JsValue::from_str(&e))
     }
 
+    // Register a callback to provide bundles for the sedimentree
+    #[wasm_bindgen(js_name = "onBundleRequired")]
+    pub fn on_bundle_required(&mut self, js_callback: &Function) -> Result<(), JsValue> {
+        todo!("FIXME");
+        // let callback = || {
+        //     if let Err(e) = js_callback.call0(&JsValue::NULL) {
+        //         tracing::error!("Error calling callback: {:?}", e);
+        //     }
+        // };
+
+        // self.0
+        //     .on(event, &callback)
+        //     .map_err(|e| JsValue::from_str(&e))
+    }
+
+    // Stop listening for changes to a particular document
     pub fn off(&mut self, js_doc_id: &JsDocumentId, js_callback: &Function) -> Result<(), JsValue> {
         let callback = || {
-            js_callback.call0(&JsValue::NULL).expect("FIXME");
-            ()
+            if let Err(e) = js_callback.call0(&JsValue::NULL) {
+                tracing::error!("Error calling callback: {:?}", e);
+            }
         };
 
         self.0
@@ -127,9 +163,24 @@ impl JsSedimentreeSync {
     }
 
     #[wasm_bindgen(js_name = "newCommit")]
-    pub async fn new_commit(&mut self, js_document_id: &JsDocumentId, hash: String, data: &[u8]) {
+    pub async fn new_commit(
+        &mut self,
+        js_document_id: &JsDocumentId,
+        hash: &[u8], // FIXME split out
+        data: &[u8],
+    ) -> Result<(), JsValue> {
+        let hash = if hash.len() == 32 {
+            let mut array = [0u8; 32];
+            array.copy_from_slice(&hash);
+            array
+        } else {
+            return Err(JsValue::from_str("Hash must be 32 bytes"));
+        };
+
         self.0
             .new_commit(js_document_id.clone().into(), hash, data.to_vec())
             .await;
+
+        Ok(())
     }
 }

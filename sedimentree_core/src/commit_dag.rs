@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{Digest, LooseCommit};
 
-use super::Stratum;
+use super::Chunk;
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
 // `nodes` and `edges` vectors instead of pointers in order to please the borrow checker.
@@ -109,7 +109,7 @@ impl CommitDag {
         }
     }
 
-    pub fn simplify(&self, strata: &[Stratum]) -> Self {
+    pub fn simplify(&self, strata: &[Chunk]) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -172,8 +172,8 @@ impl CommitDag {
         for tip in tips {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
             for hash in self.reverse_topo(tip) {
-                let level = super::Level::from(hash);
-                if level <= crate::TOP_STRATA_LEVEL {
+                let level = super::Depth::from(hash);
+                if level <= crate::MAX_STRATA_DEPTH {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -188,10 +188,10 @@ impl CommitDag {
                     block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if level > crate::TOP_STRATA_LEVEL {
+                    if level > crate::MAX_STRATA_DEPTH {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && level > crate::TOP_STRATA_LEVEL
+                } else if !commits_to_blocks.contains_key(&hash) && level > crate::MAX_STRATA_DEPTH
                 {
                     blockless_commits.insert(hash);
                 }
@@ -299,28 +299,22 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    pub fn canonical_sequence<'a, I: Iterator<Item = &'a Stratum> + Clone + 'a>(
+    pub fn canonical_sequence<'a, I: Iterator<Item = &'a Chunk> + Clone + 'a>(
         &'a self,
         strata: I,
     ) -> impl Iterator<Item = Digest> + 'a {
         // First find the tips of the DAG, which is the heads of the commit DAG,
         // plus the end hashes of any strata which are not contained in the
         // commit DAG
-        let mut heads = self
-            .heads()
-            .chain(
-                strata
-                    .clone()
-                    .filter_map(|s| {
-                        if !self.contains_commit(&s.end()) {
-                            Some(s.end())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect::<Vec<_>>(),
-            )
-            .collect::<Vec<_>>();
+        let mut ends = Vec::new();
+        for stratum in strata.clone() {
+            for end in stratum.ends() {
+                if !self.contains_commit(end) {
+                    ends.push(*end);
+                }
+            }
+        }
+        let mut heads = self.heads().chain(ends).collect::<Vec<_>>();
         heads.sort();
 
         // Then for each tip, do a reverse depth first traversal. When we reach
@@ -346,9 +340,9 @@ impl CommitDag {
                     } else {
                         let mut supporting_strata = strata
                             .clone()
-                            .filter(|s| s.end() == commit)
+                            .filter(|s| s.ends().contains(&commit))
                             .collect::<Vec<_>>();
-                        supporting_strata.sort_by_key(|s| s.level());
+                        supporting_strata.sort_by_key(|s| s.depth());
                         supporting_strata.reverse();
                         if let Some(stratum) = supporting_strata.pop() {
                             for commit in stratum.checkpoints() {
@@ -435,10 +429,11 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
+    use nonempty::nonempty;
     use num::Num;
 
     use super::{
-        super::{LooseCommit, Stratum},
+        super::{Chunk, LooseCommit},
         CommitDag,
     };
     use std::collections::{HashMap, HashSet};
@@ -459,7 +454,7 @@ mod tests {
         let mut num_str = zero_str;
         num_str.push('1');
         while num_str.len() < num_digits as usize {
-            let digit = rng.gen_range(0..=base - 1);
+            let digit = rng.random_range(0..=base - 1);
             num_str.push_str(&digit.to_string());
         }
         // reverse the string to get the correct representation
@@ -588,9 +583,9 @@ mod tests {
         ) => {
             let node_info = vec![$((stringify!($node), $level)),*];
             let graph = TestGraph::new($rng, node_info, vec![$((stringify!($from), stringify!($to)),)*]);
-            let strata = vec![$(Stratum::new(
+            let strata = vec![$(Chunk::new(
                 graph.node_hash(stringify!($strata_start)),
-                graph.node_hash(stringify!($strata_end)),
+                nonempty![graph.node_hash(stringify!($strata_end))],
                 vec![$(graph.node_hash(stringify!($checkpoint)),)*],
                 random_blob($rng),
             ),)*];
@@ -625,7 +620,7 @@ mod tests {
     #[test]
     fn simplify_basic() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut rand::rng(),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   0   |
@@ -648,7 +643,7 @@ mod tests {
     #[test]
     fn simplify_multiple_heads() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut rand::rng(),
             nodes => | node | level |
                      |   a  |   0   |
                      |   b  |   0   |
@@ -669,7 +664,7 @@ mod tests {
     #[test]
     fn simplify_block_boundaries_without_strata() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut rand::rng(),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   0   |,
@@ -684,7 +679,7 @@ mod tests {
     #[test]
     fn simplify_consevutive_block_boundary_commits_without_strata() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut rand::rng(),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   2   |,
@@ -698,7 +693,7 @@ mod tests {
 
     #[test]
     fn test_parents() {
-        let mut rng = rand::thread_rng();
+        let mut rng = rand::rng();
         let a = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let c = LooseCommit::new(

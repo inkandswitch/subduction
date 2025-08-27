@@ -2,7 +2,6 @@ use sedimentree_sync_core::{
     message::Message,
     network::adapter::NetworkAdapter,
     peer::{id::PeerId, metadata::PeerMetadata},
-    storage::id::StorageId,
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -36,6 +35,9 @@ extern "C" {
 
     #[wasm_bindgen(method)]
     pub fn send(this: &NetworkAdapterInterface, message: JsMessage);
+
+    #[wasm_bindgen(method)]
+    pub fn recv(this: &NetworkAdapterInterface, message: JsMessage);
 
     #[wasm_bindgen(method)]
     pub fn disconnect(this: &NetworkAdapterInterface);
@@ -76,7 +78,11 @@ impl NetworkAdapter for NetworkAdapterInterface {
         }
     }
 
-    fn connect(&self, peer_id: &PeerId, peer_metadata: &Option<PeerMetadata>) {
+    async fn connect(
+        &self,
+        peer_id: &PeerId,
+        peer_metadata: &Option<PeerMetadata>,
+    ) -> Result<(), String> {
         let js_peer_id = JsValue::from(peer_id.to_string());
         let js_peer_metadata = match peer_metadata {
             Some(metadata) => {
@@ -98,9 +104,10 @@ impl NetworkAdapter for NetworkAdapterInterface {
             None => JsValue::undefined(),
         };
         NetworkAdapterInterface::connect(self, &js_peer_id, &js_peer_metadata);
+        Ok(())
     }
 
-    fn send(&self, message: Message) {
+    async fn send(&self, message: Message) -> Result<(), String> {
         NetworkAdapterInterface::send(
             self,
             JsMessage::new(
@@ -108,10 +115,24 @@ impl NetworkAdapter for NetworkAdapterInterface {
                 message.sender_id.into(),
                 message.target_id.into(),
             ),
-        )
+        );
+        Ok(())
     }
 
-    fn disconnect(&mut self) {
+    async fn recv(&self, message: Message) -> Result<(), String> {
+        NetworkAdapterInterface::recv(
+            self,
+            JsMessage::new(
+                &message.action,
+                message.sender_id.into(),
+                message.target_id.into(),
+            ),
+        );
+        Ok(())
+    }
+
+    async fn disconnect(&mut self) -> Result<(), String> {
         NetworkAdapterInterface::disconnect(self);
+        Ok(())
     }
 }

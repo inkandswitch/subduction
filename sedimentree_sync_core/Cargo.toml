@@ -4,9 +4,8 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
-automerge = { workspace = true }
 futures = { workspace = true }
-getrandom = { workspace = true, features = ["wasm_js"] }
 sedimentree_core = { path = "../sedimentree_core" }
 serde = { version = "1.0" , features = ["derive"] }
+thiserror = { workspace = true }
 tracing = { workspace = true }

@@ -1,13 +1,13 @@
-use super::{CommitOrStratum, Diff, LooseCommit, Sedimentree, Stratum};
+use super::{Chunk, CommitOrChunk, Diff, LooseCommit, Sedimentree};
 pub use error::LoadTreeData;
 
 #[allow(async_fn_in_trait)] // TODO: re-evaluate this decision
 pub trait Storage {
     type Error: core::error::Error;
     async fn load_loose_commits(&self) -> Result<Vec<LooseCommit>, Self::Error>;
-    async fn load_strata(&self) -> Result<Vec<Stratum>, Self::Error>;
+    async fn load_strata(&self) -> Result<Vec<Chunk>, Self::Error>;
     async fn save_loose_commit(&self, commit: LooseCommit) -> Result<(), Self::Error>;
-    async fn save_stratum(&self, stratum: Stratum) -> Result<(), Self::Error>;
+    async fn save_stratum(&self, stratum: Chunk) -> Result<(), Self::Error>;
     async fn load_blob(&self, blob_hash: crate::Digest) -> Result<Option<Vec<u8>>, Self::Error>;
 }
 
@@ -75,26 +75,28 @@ pub async fn update<S: Storage + Clone>(
 pub fn data<S: Storage + Clone>(
     storage: S,
     tree: Sedimentree,
-) -> impl futures::Stream<Item = Result<(CommitOrStratum, Vec<u8>), LoadTreeData>> {
+) -> impl futures::Stream<Item = Result<(CommitOrChunk, Vec<u8>), LoadTreeData>> {
     let items = tree.into_items().map(|item| {
         let storage = storage.clone();
         async move {
             match item {
-                super::CommitOrStratum::Commit(c) => {
+                super::CommitOrChunk::Commit(c) => {
                     let data = storage
                         .load_blob(c.blob().digest())
                         .await
                         .map_err(|e| LoadTreeData::Storage(e.to_string()))?
                         .ok_or_else(|| LoadTreeData::MissingBlob(c.blob().digest()))?;
-                    Ok((CommitOrStratum::Commit(c), data))
+                    Ok((CommitOrChunk::Commit(c), data))
                 }
-                super::CommitOrStratum::Stratum(s) => {
+                super::CommitOrChunk::Chunk(s) => {
                     let data = storage
-                        .load_blob(s.meta().blob().digest())
+                        .load_blob(s.summary().blob_meta().digest())
                         .await
                         .map_err(|e| LoadTreeData::Storage(e.to_string()))?
-                        .ok_or_else(|| LoadTreeData::MissingBlob(s.meta().blob().digest()))?;
-                    Ok((CommitOrStratum::Stratum(s), data))
+                        .ok_or_else(|| {
+                            LoadTreeData::MissingBlob(s.summary().blob_meta().digest())
+                        })?;
+                    Ok((CommitOrChunk::Chunk(s), data))
                 }
             }
         }
@@ -109,7 +111,7 @@ pub async fn write_loose_commit<S: Storage>(
     storage.save_loose_commit(commit.clone()).await
 }
 
-pub async fn write_stratum<S: Storage>(storage: S, stratum: Stratum) -> Result<(), S::Error> {
+pub async fn write_stratum<S: Storage>(storage: S, stratum: Chunk) -> Result<(), S::Error> {
     storage.save_stratum(stratum).await
 }
 
@@ -122,9 +124,11 @@ pub async fn load_loose_commit_data<S: Storage>(
 
 pub async fn load_stratum_data<S: Storage>(
     storage: S,
-    stratum: &Stratum,
+    stratum: &Chunk,
 ) -> Result<Option<Vec<u8>>, S::Error> {
-    storage.load_blob(stratum.meta().blob().digest()).await
+    storage
+        .load_blob(stratum.summary().blob_meta().digest())
+        .await
 }
 
 mod error {

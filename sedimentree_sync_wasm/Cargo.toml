@@ -10,6 +10,7 @@ rust-version.workspace = true
 [dependencies]
 automerge = { workspace = true, features = ["wasm"] }
 console_error_panic_hook = "0.1.7"
+getrandom = { workspace = true, features = ["wasm_js"] }
 js-sys = "0.3.77"
 sedimentree_core = { path = "../sedimentree_core" }
 sedimentree_sync_core = { path = "../sedimentree_sync_core" }
