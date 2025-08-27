@@ -25,6 +25,7 @@ pub mod storage;
 
 pub use blob::*;
 
+/// The maximum depth of strata that a [`Sedimentree`] can go to.
 pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 
 /// A unique identifier for some data managed by Sedimentree.
@@ -383,6 +384,7 @@ impl LooseCommit {
     }
 }
 
+/// The difference between two [`Sedimentree`]s.
 pub struct Diff<'a> {
     pub left_missing_chunks: Vec<&'a Chunk>,
     pub left_missing_commits: Vec<&'a LooseCommit>,
@@ -390,6 +392,7 @@ pub struct Diff<'a> {
     pub right_missing_commits: Vec<&'a LooseCommit>,
 }
 
+/// The difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
 pub struct RemoteDiff<'a> {
     pub remote_chunk_summaries: Vec<&'a ChunkSummary>,
     pub remote_commits: Vec<&'a LooseCommit>,
@@ -599,6 +602,7 @@ impl Sedimentree {
     }
 }
 
+/// The barest information needed to identify a chunk.
 #[derive(Debug, Clone)]
 pub struct ChunkSpec {
     id: SedimentreeId,
@@ -607,6 +611,25 @@ pub struct ChunkSpec {
     ends: NonEmpty<Digest>,
 }
 
+impl ChunkSpec {
+    pub fn id(&self) -> SedimentreeId {
+        self.id
+    }
+
+    pub fn start(&self) -> Digest {
+        self.start
+    }
+
+    pub fn ends(&self) -> &NonEmpty<Digest> {
+        &self.ends
+    }
+
+    pub fn checkpoints(&self) -> &[Digest] {
+        &self.checkpoints
+    }
+}
+
+/// An enum over either a [`LooseCommit`] or a [`Chunk`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitOrChunk {
     Commit(LooseCommit),
@@ -643,6 +666,7 @@ impl std::fmt::Debug for Sedimentree {
     }
 }
 
+/// The minimum ordered hash of a [`Sedimentree`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct MinimalTreeHash([u8; 32]);
@@ -659,6 +683,7 @@ impl From<[u8; 32]> for MinimalTreeHash {
     }
 }
 
+/// Checks if any of the given commits has a commit boundary.
 pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>>(commits: I) -> bool {
     commits
         .into_iter()
