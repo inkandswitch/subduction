@@ -109,7 +109,7 @@ impl CommitDag {
         }
     }
 
-    pub fn simplify(&self, strata: &[Chunk]) -> Self {
+    pub fn simplify(&self, chunks: &[Chunk]) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -217,7 +217,7 @@ impl CommitDag {
             .filter_map(|(commit, blocks)| {
                 if blocks
                     .iter()
-                    .all(|&b| strata.iter().any(|s| s.supports_block(b)))
+                    .all(|&b| chunks.iter().any(|s| s.supports_block(b)))
                 {
                     None
                 } else {
@@ -301,14 +301,14 @@ impl CommitDag {
     /// be bundled into strata
     pub fn canonical_sequence<'a, I: Iterator<Item = &'a Chunk> + Clone + 'a>(
         &'a self,
-        strata: I,
+        chunks: I,
     ) -> impl Iterator<Item = Digest> + 'a {
         // First find the tips of the DAG, which is the heads of the commit DAG,
-        // plus the end hashes of any strata which are not contained in the
+        // plus the end hashes of any chunks which are not contained in the
         // commit DAG
         let mut ends = Vec::new();
-        for stratum in strata.clone() {
-            for end in stratum.ends() {
+        for chunk in chunks.clone() {
+            for end in chunk.ends() {
                 if !self.contains_commit(end) {
                     ends.push(*end);
                 }
@@ -323,7 +323,7 @@ impl CommitDag {
         heads.into_iter().flat_map(move |head| {
             let mut stack = vec![head];
             let mut visited = HashSet::new();
-            let strata = strata.clone();
+            let chunks = chunks.clone();
             std::iter::from_fn(move || {
                 while let Some(commit) = stack.pop() {
                     if visited.contains(&commit) {
@@ -338,17 +338,17 @@ impl CommitDag {
                         parents.sort();
                         stack.extend(parents);
                     } else {
-                        let mut supporting_strata = strata
+                        let mut supporting_chunks = chunks
                             .clone()
                             .filter(|s| s.ends().contains(&commit))
                             .collect::<Vec<_>>();
-                        supporting_strata.sort_by_key(|s| s.depth());
-                        supporting_strata.reverse();
-                        if let Some(stratum) = supporting_strata.pop() {
-                            for commit in stratum.checkpoints() {
+                        supporting_chunks.sort_by_key(|s| s.depth());
+                        supporting_chunks.reverse();
+                        if let Some(chunk) = supporting_chunks.pop() {
+                            for commit in chunk.checkpoints() {
                                 stack.push(*commit);
                             }
-                            stack.push(stratum.start());
+                            stack.push(chunk.start());
                         }
                     }
                     return Some(commit);
@@ -578,14 +578,14 @@ mod tests {
             rng => $rng: expr,
             nodes => |node|level| $(|$node:ident | $level:literal| )*,
             graph => {$($from:ident  --> $to:ident)*},
-            strata => [$({start: $strata_start: ident, end: $strata_end: ident, checkpoints: [$($checkpoint: ident),*]})*],
+            chunks => [$({start: $chunk_start: ident, end: $chunk_end: ident, checkpoints: [$($checkpoint: ident),*]})*],
             simplified => [$($remaining: ident),*]
         ) => {
             let node_info = vec![$((stringify!($node), $level)),*];
             let graph = TestGraph::new($rng, node_info, vec![$((stringify!($from), stringify!($to)),)*]);
-            let strata = vec![$(Chunk::new(
-                graph.node_hash(stringify!($strata_start)),
-                nonempty![graph.node_hash(stringify!($strata_end))],
+            let chunks = vec![$(Chunk::new(
+                graph.node_hash(stringify!($chunk_start)),
+                nonempty![graph.node_hash(stringify!($chunk_end))],
                 vec![$(graph.node_hash(stringify!($checkpoint)),)*],
                 random_blob($rng),
             ),)*];
@@ -595,7 +595,7 @@ mod tests {
                 commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
             )*
             let expected_commits = HashSet::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
-            let actual_commits = dag.simplify(&strata).commit_hashes().collect::<HashSet<_>>();
+            let actual_commits = dag.simplify(&chunks).commit_hashes().collect::<HashSet<_>>();
             let expected_message = pretty_hashes(&commit_name_map, &expected_commits);
             let actual_message = pretty_hashes(&commit_name_map, &actual_commits);
             assert_eq!(expected_commits, actual_commits, "\nexpected: {:?}, \nactual: {:?}", expected_message, actual_message);
@@ -633,7 +633,7 @@ mod tests {
                 b --> d
                 d --> e
             },
-            strata => [
+            chunks => [
                 {start: a, end: d, checkpoints: []}
             ],
             simplified => [a, c, e]
@@ -654,7 +654,7 @@ mod tests {
                 c --> b
                 b --> d
             },
-            strata => [
+            chunks => [
                 {start: c, end: d, checkpoints: []}
             ],
             simplified => [a, c]
@@ -662,7 +662,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_block_boundaries_without_strata() {
+    fn simplify_block_boundaries_without_chunks() {
         simplify_test!(
             rng => &mut rand::rng(),
             nodes => | node | level |
@@ -671,13 +671,13 @@ mod tests {
             graph => {
                 a --> b
             },
-            strata => [],
+            chunks => [],
             simplified => [a, b]
         );
     }
 
     #[test]
-    fn simplify_consevutive_block_boundary_commits_without_strata() {
+    fn simplify_consevutive_block_boundary_commits_without_chunks() {
         simplify_test!(
             rng => &mut rand::rng(),
             nodes => | node | level |
@@ -686,7 +686,7 @@ mod tests {
             graph => {
                 a --> b
             },
-            strata => [],
+            chunks => [],
             simplified => [a, b]
         );
     }
