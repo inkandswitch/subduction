@@ -7,7 +7,7 @@ use super::Chunk;
 // An adjacency list based representation of a commit DAG except that we use indexes into the
 // `nodes` and `edges` vectors instead of pointers in order to please the borrow checker.
 #[derive(Debug, Clone)]
-pub struct CommitDag {
+pub(crate) struct CommitDag {
     nodes: Vec<Node>,
     node_map: HashMap<crate::Digest, NodeIdx>,
     edges: Vec<Edge>,
@@ -35,7 +35,9 @@ struct NodeIdx(usize);
 struct EdgeIdx(usize);
 
 impl CommitDag {
-    pub fn from_commits<'a, I: Iterator<Item = &'a LooseCommit> + Clone>(commits: I) -> Self {
+    pub(crate) fn from_commits<'a, I: Iterator<Item = &'a LooseCommit> + Clone>(
+        commits: I,
+    ) -> Self {
         let nodes = commits
             .clone()
             .map(|c| Node {
@@ -109,7 +111,7 @@ impl CommitDag {
         }
     }
 
-    pub fn simplify(&self, chunks: &[Chunk]) -> Self {
+    pub(crate) fn simplify(&self, chunks: &[Chunk]) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -283,11 +285,11 @@ impl CommitDag {
         ReverseTopo::new(self, start)
     }
 
-    pub fn contains_commit(&self, commit: &Digest) -> bool {
+    pub(crate) fn contains_commit(&self, commit: &Digest) -> bool {
         self.node_map.contains_key(commit)
     }
 
-    pub fn heads(&self) -> impl Iterator<Item = Digest> + '_ {
+    pub(crate) fn heads(&self) -> impl Iterator<Item = Digest> + '_ {
         self.nodes.iter().filter_map(|node| {
             if node.children.is_none() {
                 Some(node.hash)
@@ -299,7 +301,7 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    pub fn canonical_sequence<'a, I: Iterator<Item = &'a Chunk> + Clone + 'a>(
+    pub(crate) fn canonical_sequence<'a, I: Iterator<Item = &'a Chunk> + Clone + 'a>(
         &'a self,
         chunks: I,
     ) -> impl Iterator<Item = Digest> + 'a {

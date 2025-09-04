@@ -1,16 +1,40 @@
+//! Storage abstraction for `Sedimentree` data.
+
+use crate::{Blob, Digest};
+
 use super::{Chunk, CommitOrChunk, Diff, LooseCommit, Sedimentree};
 pub use error::LoadTreeData;
 
-#[allow(async_fn_in_trait)] // TODO: re-evaluate this decision
+/// Abstraction over storage for `Sedimentree` data.
 pub trait Storage {
     type Error: core::error::Error;
-    async fn load_loose_commits(&self) -> Result<Vec<LooseCommit>, Self::Error>;
-    async fn load_chunks(&self) -> Result<Vec<Chunk>, Self::Error>;
-    async fn save_loose_commit(&self, commit: LooseCommit) -> Result<(), Self::Error>;
-    async fn save_chunk(&self, chunk: Chunk) -> Result<(), Self::Error>;
-    async fn load_blob(&self, blob_hash: crate::Digest) -> Result<Option<Vec<u8>>, Self::Error>;
+
+    /// Load all loose commits from storage.
+    fn load_loose_commits(&self) -> impl Future<Output = Result<Vec<LooseCommit>, Self::Error>>;
+
+    /// Save a loose commit to storage.
+    fn save_loose_commit(
+        &self,
+        loose_commit: LooseCommit,
+    ) -> impl Future<Output = Result<(), Self::Error>>;
+
+    /// Save a chunk to storage.
+    fn save_chunk(&self, chunk: Chunk) -> impl Future<Output = Result<(), Self::Error>>;
+
+    /// Load all chunks from storage.
+    fn load_chunks(&self) -> impl Future<Output = Result<Vec<Chunk>, Self::Error>>;
+
+    /// Save a blob to storage.
+    fn save_blob(&self, blob: Blob) -> impl Future<Output = Result<Digest, Self::Error>>;
+
+    /// Load a blob from storage.
+    fn load_blob(
+        &self,
+        blob_digest: Digest,
+    ) -> impl Future<Output = Result<Option<Blob>, Self::Error>>;
 }
 
+/// Load the local `Sedimentree` state from storage.
 #[tracing::instrument(skip(storage))]
 pub async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>, S::Error> {
     let chunks = {
@@ -31,6 +55,7 @@ pub async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>,
     }
 }
 
+/// Update storage to reflect the new state of the `Sedimentree`.
 pub async fn update<S: Storage + Clone>(
     storage: S,
     original: Option<&Sedimentree>,
@@ -72,10 +97,11 @@ pub async fn update<S: Storage + Clone>(
     Ok(())
 }
 
+/// Stream the data for all commits and chunks in a `Sedimentree`.
 pub fn data<S: Storage + Clone>(
     storage: S,
     tree: Sedimentree,
-) -> impl futures::Stream<Item = Result<(CommitOrChunk, Vec<u8>), LoadTreeData>> {
+) -> impl futures::Stream<Item = Result<(CommitOrChunk, Blob), LoadTreeData>> {
     let items = tree.into_items().map(|item| {
         let storage = storage.clone();
         async move {
@@ -104,6 +130,7 @@ pub fn data<S: Storage + Clone>(
     futures::stream::FuturesUnordered::from_iter(items)
 }
 
+/// Write a [`LooseCommit`] to storage.
 pub async fn write_loose_commit<S: Storage>(
     storage: S,
     commit: &LooseCommit,
@@ -111,21 +138,24 @@ pub async fn write_loose_commit<S: Storage>(
     storage.save_loose_commit(commit.clone()).await
 }
 
+/// Write a [`Chunk`] to storage.
 pub async fn write_chunk<S: Storage>(storage: S, chunk: Chunk) -> Result<(), S::Error> {
     storage.save_chunk(chunk).await
 }
 
+/// Load the data for a [`LooseCommit`].
 pub async fn load_loose_commit_data<S: Storage>(
     storage: S,
     commit: &LooseCommit,
-) -> Result<Option<Vec<u8>>, S::Error> {
+) -> Result<Option<Blob>, S::Error> {
     storage.load_blob(commit.blob().digest()).await
 }
 
+/// Load the data for a [`Chunk`].
 pub async fn load_chunk_data<S: Storage>(
     storage: S,
     chunk: &Chunk,
-) -> Result<Option<Vec<u8>>, S::Error> {
+) -> Result<Option<Blob>, S::Error> {
     storage
         .load_blob(chunk.summary().blob_meta().digest())
         .await
@@ -134,10 +164,14 @@ pub async fn load_chunk_data<S: Storage>(
 mod error {
     use crate::Digest;
 
+    /// Errors that can occur when loading tree data (commits or chunks)
     #[derive(Debug, thiserror::Error)]
     pub enum LoadTreeData {
+        /// An error occurred in the storage subsystem itself.
         #[error("error from storage: {0}")]
         Storage(String),
+
+        /// A blob is missing.
         #[error("missing blob: {0}")]
         MissingBlob(Digest),
     }

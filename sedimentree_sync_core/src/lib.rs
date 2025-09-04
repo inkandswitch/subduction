@@ -24,8 +24,8 @@
 )]
 #![forbid(unsafe_code)]
 
+pub mod connection;
 pub mod message;
-pub mod network;
 pub mod payload;
 pub mod peer;
 pub mod storage;

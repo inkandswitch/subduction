@@ -12,6 +12,32 @@
 //!
 //! [Sedimentree]: https://github.com/inkandswitch/keyhive/blob/main/design/sedimentree.md
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+#![warn(
+    clippy::dbg_macro,
+    clippy::expect_used,
+    clippy::missing_const_for_fn,
+    clippy::panic,
+    clippy::todo,
+    clippy::unwrap_used,
+    future_incompatible,
+    let_underscore,
+    missing_copy_implementations,
+    missing_debug_implementations,
+    missing_docs,
+    nonstandard_style,
+    rust_2021_compatibility
+)]
+#![deny(
+    clippy::all,
+    clippy::cargo,
+    clippy::pedantic,
+    rust_2018_idioms,
+    unreachable_pub,
+    unused_extern_crates
+)]
+#![forbid(unsafe_code)]
+
 use nonempty::{nonempty, NonEmpty};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
@@ -69,14 +95,6 @@ impl std::fmt::Display for SedimentreeId {
     }
 }
 
-/// All of the Sedimentree metadata about all the chunks for a series of payload.
-#[derive(Clone, PartialEq, Eq, Default, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Sedimentree {
-    chunks: BTreeSet<Chunk>,
-    commits: BTreeSet<LooseCommit>,
-}
-
 /// A less detailed representation of a Sedimentree that omits strata checkpoints.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -86,7 +104,8 @@ pub struct SedimentreeSummary {
 }
 
 impl SedimentreeSummary {
-    pub fn from_raw(
+    /// Constructor for a [`SedimentreeSummary`].
+    pub fn new(
         chunk_summaries: BTreeSet<ChunkSummary>,
         commits: BTreeSet<LooseCommit>,
     ) -> SedimentreeSummary {
@@ -107,7 +126,7 @@ impl SedimentreeSummary {
     }
 
     /// Create a [`RemoteDiff`] with empty local chunks and commits.
-    pub fn as_remote_diff(&self) -> RemoteDiff {
+    pub fn as_remote_diff(&self) -> RemoteDiff<'_> {
         RemoteDiff {
             remote_chunk_summaries: self.chunk_summaries.iter().collect(),
             remote_commits: self.commits.iter().collect(),
@@ -141,15 +160,15 @@ impl SedimentreeSummary {
 /// Depth 2 │               7 commits               │
 ///         └───────────────────────────────────────┘
 /// ```
-#[derive(Copy, Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Depth(pub u32);
+pub struct Depth(pub u32); // TODO why not u8?
 
-impl Default for Depth {
-    fn default() -> Self {
-        Self(2)
-    }
-}
+// impl Default for Depth {
+//     fn default() -> Self {
+//         Self(2)
+//     }
+// }
 
 impl<'a> From<&'a Digest> for Depth {
     fn from(hash: &'a Digest) -> Self {
@@ -203,6 +222,7 @@ pub struct Chunk {
 }
 
 impl Chunk {
+    /// Constructor for a [`Chunk`].
     pub fn new(
         start: Digest,
         ends: NonEmpty<Digest>,
@@ -400,6 +420,14 @@ pub struct RemoteDiff<'a> {
     pub local_commits: Vec<&'a LooseCommit>,
 }
 
+/// All of the Sedimentree metadata about all the chunks for a series of payload.
+#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct Sedimentree {
+    chunks: BTreeSet<Chunk>,
+    commits: BTreeSet<LooseCommit>,
+}
+
 impl Sedimentree {
     pub fn new(chunks: Vec<Chunk>, commits: Vec<LooseCommit>) -> Self {
         Self {
@@ -486,9 +514,16 @@ impl Sedimentree {
         self.chunks.iter()
     }
 
-    #[allow(dead_code)]
     pub fn loose_commits(&self) -> impl Iterator<Item = &LooseCommit> {
         self.commits.iter()
+    }
+
+    pub fn has_loose_commit(&self, digest: Digest) -> bool {
+        self.loose_commits().any(|c| c.digest() == digest)
+    }
+
+    pub fn has_chunk_starting_with(&self, digest: Digest) -> bool {
+        self.heads().contains(&digest)
     }
 
     pub fn minimize(&self) -> Sedimentree {
@@ -592,7 +627,7 @@ impl Sedimentree {
         all_bundles
     }
 
-    pub fn as_local_diff(&self) -> RemoteDiff {
+    pub fn as_local_diff(&self) -> RemoteDiff<'_> {
         RemoteDiff {
             remote_chunk_summaries: Vec::new(),
             remote_commits: Vec::new(),

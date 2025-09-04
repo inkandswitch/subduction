@@ -1,5 +1,30 @@
 use std::str::FromStr;
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct Blob(Vec<u8>);
+
+impl Blob {
+    /// Create a new blob from the given contents.
+    pub fn new(contents: Vec<u8>) -> Self {
+        Blob(contents)
+    }
+
+    /// The contents of the blob.
+    pub fn contents(&self) -> &[u8] {
+        &self.0
+    }
+
+    /// Consume the blob and return its contents.
+    pub fn into_contents(self) -> Vec<u8> {
+        self.0
+    }
+
+    /// Get metadata for the blob.
+    pub fn meta(&self) -> BlobMeta {
+        BlobMeta::new(&self.0)
+    }
+}
+
 /// Metadata for the underlying payload data itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -11,7 +36,7 @@ pub struct BlobMeta {
 impl BlobMeta {
     /// Generate metadata for the given contents.
     pub fn new(contents: &[u8]) -> Self {
-        let digest = Digest::new(contents);
+        let digest = Digest::hash(contents);
         let size_bytes = contents.len() as u64;
         Self { digest, size_bytes }
     }
@@ -35,7 +60,7 @@ impl BlobMeta {
 }
 
 /// A 32-byte digest.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Digest([u8; 32]);
 
@@ -47,10 +72,10 @@ impl std::fmt::Debug for Digest {
 
 impl Digest {
     /// Create a new digest for the given data.
-    pub fn new(data: &[u8]) -> Self {
-        let hash = blake3::hash(data);
+    pub fn hash(data: &[u8]) -> Self {
+        let b3_digest = blake3::hash(data);
         let mut bytes = [0; 32];
-        bytes.copy_from_slice(hash.as_bytes());
+        bytes.copy_from_slice(b3_digest.as_bytes());
         Self(bytes)
     }
 
