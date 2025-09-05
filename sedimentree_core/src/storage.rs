@@ -7,6 +7,7 @@ pub use error::LoadTreeData;
 
 /// Abstraction over storage for `Sedimentree` data.
 pub trait Storage {
+    /// The error type for storage operations.
     type Error: core::error::Error;
 
     /// Load all loose commits from storage.

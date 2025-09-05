@@ -1,3 +1,5 @@
+//! # Sedimentree Sync
+
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(
     clippy::dbg_macro,
@@ -25,8 +27,7 @@
 #![forbid(unsafe_code)]
 
 pub mod connection;
-pub mod message;
-pub mod payload;
+// FIXME remove? pub mod payload;
 pub mod peer;
 pub mod storage;
 pub mod sync;

@@ -1,5 +1,10 @@
+//! Binary objects.
+
 use std::str::FromStr;
 
+/// A binary object.
+///
+/// Just a wrapper around a `Vec<u8>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Blob(Vec<u8>);
 
@@ -120,14 +125,17 @@ mod error {
     use thiserror::Error;
 
     /// An error parsing a digest.
-    #[derive(Clone, PartialEq, Error)]
+    #[derive(Clone, Copy, PartialEq, Error)]
     pub enum InvalidDigest {
+        /// Not enough input.
         #[error("Not enough input")]
         NotEnoughInput,
 
+        /// Invalid hex encoding.
         #[error("Invalid hex: {0}")]
         InvalidHex(hex::FromHexError),
 
+        /// Invalid length.
         #[error("Invalid length")]
         InvalidLength,
     }

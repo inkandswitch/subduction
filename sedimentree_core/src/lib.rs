@@ -256,6 +256,7 @@ impl Chunk {
         }
     }
 
+    /// Constructor for a [`Chunk`] from its raw components, including its digest.
     pub fn from_raw(summary: ChunkSummary, checkpoints: Vec<Digest>, digest: Digest) -> Self {
         Chunk {
             summary,
@@ -264,6 +265,7 @@ impl Chunk {
         }
     }
 
+    /// Returns true if this chunk supports the given chunk summary.
     pub fn supports(&self, other: &ChunkSummary) -> bool {
         if &self.summary == other {
             return true;
@@ -296,26 +298,32 @@ impl Chunk {
         false
     }
 
-    pub fn supports_block(&self, block_end: Digest) -> bool {
-        self.checkpoints.contains(&block_end) || self.summary.ends.contains(&block_end)
+    /// Returns true if this [`Chunk`] covers the given [`Digest`].
+    pub fn supports_block(&self, chunk_end: Digest) -> bool {
+        self.checkpoints.contains(&chunk_end) || self.summary.ends.contains(&chunk_end)
     }
 
+    /// Convert to a [`ChunkSummary`].
     pub fn summary(&self) -> &ChunkSummary {
         &self.summary
     }
 
+    /// The depth of this stratum, determined by the number of leading zeros.
     pub fn depth(&self) -> Depth {
         self.summary.depth()
     }
 
+    /// The head of the chunk.
     pub fn start(&self) -> Digest {
         self.summary.start
     }
 
+    /// The (possibly ragged) end(s) of the chunk.
     pub fn ends(&self) -> &NonEmpty<Digest> {
         &self.summary.ends
     }
 
+    /// The inner checkpopoints of the chunk.
     pub fn checkpoints(&self) -> &[Digest] {
         &self.checkpoints
     }
@@ -383,6 +391,7 @@ pub struct LooseCommit {
 }
 
 impl LooseCommit {
+    /// Constructor for a [`LooseCommit`].
     pub fn new(digest: Digest, parents: Vec<Digest>, blob: BlobMeta) -> Self {
         Self {
             digest,
@@ -391,32 +400,51 @@ impl LooseCommit {
         }
     }
 
+    /// The unique [`Digest`] of this [`LooseCommit`], derived from its content.
     pub fn digest(&self) -> Digest {
         self.digest
     }
 
+    /// The (possibly empty) list of parent commits.
     pub fn parents(&self) -> &[Digest] {
         &self.parents
     }
 
+    /// Metadata about the payload blob.
     pub fn blob(&self) -> &BlobMeta {
         &self.blob
     }
 }
 
 /// The difference between two [`Sedimentree`]s.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diff<'a> {
+    /// Chunks present in the right tree but not the left.
     pub left_missing_chunks: Vec<&'a Chunk>,
+
+    /// Commits present in the right tree but not the left.
     pub left_missing_commits: Vec<&'a LooseCommit>,
+
+    /// Chunks present in the left tree but not the right.
     pub right_missing_chunks: Vec<&'a Chunk>,
+
+    /// Commits present in the left tree but not the right.
     pub right_missing_commits: Vec<&'a LooseCommit>,
 }
 
 /// The difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RemoteDiff<'a> {
+    /// Chunks present in the remote tree but not the local.
     pub remote_chunk_summaries: Vec<&'a ChunkSummary>,
+
+    /// Commits present in the remote tree but not the local.
     pub remote_commits: Vec<&'a LooseCommit>,
+
+    /// Chunks present in the local tree but not the remote.
     pub local_chunks: Vec<&'a Chunk>,
+
+    /// Commits present in the local tree but not the remote.
     pub local_commits: Vec<&'a LooseCommit>,
 }
 
@@ -429,6 +457,7 @@ pub struct Sedimentree {
 }
 
 impl Sedimentree {
+    /// Constructor for a [`Sedimentree`].
     pub fn new(chunks: Vec<Chunk>, commits: Vec<LooseCommit>) -> Self {
         Self {
             chunks: chunks.into_iter().collect(),
@@ -436,6 +465,7 @@ impl Sedimentree {
         }
     }
 
+    /// The minimal ordered hash of this [`Sedimentree`].
     pub fn minimal_hash(&self) -> MinimalTreeHash {
         let minimal = self.minimize();
         let mut hashes = minimal
@@ -456,16 +486,21 @@ impl Sedimentree {
         MinimalTreeHash(*hasher.finalize().as_bytes())
     }
 
-    // Returns true if the stratum was not already present
+    /// Add a chunk to the [`Sedimentree`].
+    ///
+    /// Returns `true` if the stratum was not already present
     pub fn add_chunk(&mut self, chunk: Chunk) -> bool {
         self.chunks.insert(chunk)
     }
 
-    // Returns true if the commit was not already present
+    /// Add a loose commit to the [`Sedimentree`].
+    ///
+    /// Returns `true` if the commit was not already present
     pub fn add_commit(&mut self, commit: LooseCommit) -> bool {
         self.commits.insert(commit)
     }
 
+    /// Compute the difference between two local [`Sedimentree`]s.
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
         let our_chunks = HashSet::<&Chunk>::from_iter(self.chunks.iter());
         let their_chunks = HashSet::from_iter(other.chunks.iter());
@@ -485,6 +520,7 @@ impl Sedimentree {
         }
     }
 
+    /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
         let our_chunks_meta =
             HashSet::<&ChunkSummary>::from_iter(self.chunks.iter().map(|s| &s.summary));
@@ -510,22 +546,31 @@ impl Sedimentree {
         }
     }
 
+    /// Iterate over all chunks in this [`Sedimentree`].
     pub fn chunks(&self) -> impl Iterator<Item = &Chunk> {
         self.chunks.iter()
     }
 
+    /// Iterate over all loose commits in this [`Sedimentree`].
     pub fn loose_commits(&self) -> impl Iterator<Item = &LooseCommit> {
         self.commits.iter()
     }
 
+    /// Returns true if this [`Sedimentree`] has a chunk with the given digest.
     pub fn has_loose_commit(&self, digest: Digest) -> bool {
         self.loose_commits().any(|c| c.digest() == digest)
     }
 
+    /// Returns true if this [`Sedimentree`] has a chunk starting with the given digest.
     pub fn has_chunk_starting_with(&self, digest: Digest) -> bool {
         self.heads().contains(&digest)
     }
 
+    /// Prune a [`Sedimentree`].
+    ///
+    /// Minimize the [`Sedimentree`] by removing any chunks that are
+    /// fully supported by other chunks, and removing any loose commits
+    /// that are not needed to support the remaining chunks.
     pub fn minimize(&self) -> Sedimentree {
         // First sort chunks by depth, then for each stratum below the lowest
         // level, discard that stratum if it is supported by any of the stratum
@@ -558,6 +603,10 @@ impl Sedimentree {
         Sedimentree::new(minimized_chunks, commits)
     }
 
+    /// Create a [`SedimentreeSummary`] from this [`Sedimentree`].
+    ///
+    /// This omits the checkpoints from each chunk.
+    /// It is useful for sending over the wire.
     pub fn summarize(&self) -> SedimentreeSummary {
         SedimentreeSummary {
             chunk_summaries: self
@@ -591,6 +640,7 @@ impl Sedimentree {
         heads
     }
 
+    /// Consume this [`Sedimentree`] and return an iterator over all its items.
     pub fn into_items(self) -> impl Iterator<Item = CommitOrChunk> {
         self.chunks
             .into_iter()
@@ -598,6 +648,7 @@ impl Sedimentree {
             .chain(self.commits.into_iter().map(CommitOrChunk::Commit))
     }
 
+    /// Given a SedimentreeId, return the [`Chunk`]s that are missing to fill in the gaps.
     pub fn missing_chunks(&self, id: SedimentreeId) -> Vec<ChunkSpec> {
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level = BTreeMap::<Depth, (Digest, Vec<Digest>)>::new();
@@ -627,6 +678,7 @@ impl Sedimentree {
         all_bundles
     }
 
+    /// Create a [`RemoteDiff`] with empty remote chunks and commits.
     pub fn as_local_diff(&self) -> RemoteDiff<'_> {
         RemoteDiff {
             remote_chunk_summaries: Vec::new(),
@@ -647,18 +699,22 @@ pub struct ChunkSpec {
 }
 
 impl ChunkSpec {
+    /// Constructor for a [`ChunkSpec`].
     pub fn id(&self) -> SedimentreeId {
         self.id
     }
 
+    /// The head of the chunk.
     pub fn start(&self) -> Digest {
         self.start
     }
 
+    /// The (possibly ragged) end(s) of the chunk.
     pub fn ends(&self) -> &NonEmpty<Digest> {
         &self.ends
     }
 
+    /// The inner checkpopoints of the chunk.
     pub fn checkpoints(&self) -> &[Digest] {
         &self.checkpoints
     }
@@ -667,7 +723,10 @@ impl ChunkSpec {
 /// An enum over either a [`LooseCommit`] or a [`Chunk`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CommitOrChunk {
+    /// A loose commit.
     Commit(LooseCommit),
+
+    /// A chunk.
     Chunk(Chunk),
 }
 
@@ -707,6 +766,7 @@ impl std::fmt::Debug for Sedimentree {
 pub struct MinimalTreeHash([u8; 32]);
 
 impl MinimalTreeHash {
+    /// The bytes of this [`MinimalTreeHash`].
     pub fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }

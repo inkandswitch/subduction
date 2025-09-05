@@ -1,14 +1,19 @@
+//! Storage identifiers.
+
 use serde::{Deserialize, Serialize};
 
+/// A simple newtype for storage identifiers.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct StorageId(String);
 
 impl StorageId {
+    /// Create a new [`StorageId`].
     pub fn new(id: String) -> Self {
         Self(id)
     }
 
+    /// Get the string representation of the [`StorageId`].
     pub fn as_str(&self) -> &str {
         &self.0
     }
