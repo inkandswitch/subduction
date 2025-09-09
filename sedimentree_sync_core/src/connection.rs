@@ -2,14 +2,16 @@
 
 use crate::peer::{id::PeerId, metadata::PeerMetadata};
 use futures::Future;
-use sedimentree_core::{Blob, Chunk, ChunkSummary, Digest, LooseCommit, SedimentreeSummary};
+use sedimentree_core::{
+    Blob, Chunk, ChunkSummary, Digest, LooseCommit, SedimentreeId, SedimentreeSummary,
+};
 use thiserror::Error;
 
 /// A trait representing a connection to a peer in the network.
 ///
 /// It is assumed that a [`Connection`] is authenticated to a particular peer.
 /// Encrypting this channel is also strongly recommended.
-pub trait Connection {
+pub trait Connection: Clone {
     /// A problem when interacting with the network connection.
     type Error: core::error::Error;
 
@@ -32,57 +34,64 @@ pub trait Connection {
     /// Disconnect from the peer gracefully.
     fn disconnect(&mut self) -> impl Future<Output = Result<(), Self::DisconnectionError>>;
 
-    /// Send an incremental update to the peer.
-    ///
-    /// This is the low-level primitive for sending incremental updates.
-    fn send_incremental_update(
-        &self,
-        commits: &[&LooseCommit],
-        chunks: &[&Chunk],
-    ) -> impl Future<Output = Result<(), Self::Error>>;
+    /// Send a message.
+    fn send<'a>(&self, message: ToSend<'a>) -> impl Future<Output = Result<(), Self::Error>>; // FIXME err type
 
-    /// Send a single loose commit to the peer.
-    fn send_loose_commit(
-        &self,
-        commit: &LooseCommit,
-    ) -> impl Future<Output = Result<(), Self::Error>> {
-        async { self.send_incremental_update(&[commit], &[]).await }
-    }
+    /// Receive a message.
+    fn recv(&self) -> impl Future<Output = Result<Receive, Self::Error>>; // FIXME err type
 
-    /// Send a single chunk to the peer.
-    fn send_chunk(&self, chunk: &Chunk) -> impl Future<Output = Result<(), Self::Error>> {
-        async { self.send_incremental_update(&[], &[chunk]).await }
-    }
+    // /// Send an incremental update to the peer.
+    // ///
+    // /// This is the low-level primitive for sending incremental updates.
+    // fn send_incremental_update(
+    //     &self,
+    //     commits: &[&LooseCommit],
+    //     chunks: &[&Chunk],
+    // ) -> impl Future<Output = Result<(), Self::Error>>;
 
-    /// Receive an incremental update from the peer.
-    ///
-    /// This is the low-level primitive for receiving incremental updates.
-    fn recv_incremental_update(
-        &self,
-        commits: &[LooseCommit],
-        chunk_summaries: &[ChunkSummary],
-    ) -> impl Future<Output = Result<(), Self::Error>>;
+    // /// Send a single loose commit to the peer.
+    // fn send_loose_commit(
+    //     &self,
+    //     commit: &LooseCommit,
+    // ) -> impl Future<Output = Result<(), Self::Error>> {
+    //     async { self.send_incremental_update(&[commit], &[]).await }
+    // }
+
+    // /// Send a single chunk to the peer.
+    // fn send_chunk(&self, chunk: &Chunk) -> impl Future<Output = Result<(), Self::Error>> {
+    //     async { self.send_incremental_update(&[], &[chunk]).await }
+    // }
+
+    // /// Receive an incremental update from the peer.
+    // ///
+    // /// This is the low-level primitive for receiving incremental updates.
+    // fn recv_incremental_update(
+    //     &self,
+    //     commits: &[LooseCommit],
+    //     chunk_summaries: &[ChunkSummary],
+    // ) -> impl Future<Output = Result<(), Self::Error>>;
 
     /// Request a batch sync over this connection.
     fn request_batch_sync(
         &self,
+        id: SedimentreeId,
         our_sedimentree_summary: &SedimentreeSummary,
     ) -> impl Future<Output = Result<SyncDiff<'_>, Self::Error>>;
 
-    /// Receive a batch sync over this connection.
-    fn recv_batch_sync(
-        &self,
-        their_sedimentree_summary: &SedimentreeSummary,
-    ) -> impl Future<Output = Result<SyncDiff<'_>, Self::Error>>;
+    // /// Receive a batch sync over this connection.
+    // fn recv_batch_sync(
+    //     &self,
+    //     their_sedimentree_summary: &SedimentreeSummary,
+    // ) -> impl Future<Output = Result<SyncDiff<'_>, Self::Error>>;
 
-    /// Request blobs over this connection.
-    fn request_blobs(
-        &self,
-        digests: &[Digest],
-    ) -> impl Future<Output = Result<Vec<Blob>, Self::Error>>;
+    // /// Request blobs over this connection.
+    // fn request_blobs(
+    //     &self,
+    //     digests: &[Digest],
+    // ) -> impl Future<Output = Result<Vec<Blob>, Self::Error>>;
 
-    /// Receive blobs over this connection.
-    fn recv_blobs(&self, blobs: &[Blob]) -> impl Future<Output = Result<(), Self::Error>>;
+    // /// Receive blobs over this connection.
+    // fn recv_blobs(&self, blobs: &[Blob]) -> impl Future<Output = Result<(), Self::Error>>;
 }
 
 /// A policy for allowing or disallowing connections from peers.
@@ -117,4 +126,57 @@ pub struct SyncDiff<'a> {
 
     /// Chunks that we are missing and need to request from the peer.
     pub missing_chunks: &'a [(Chunk, Blob)],
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum Receive {
+    LooseCommit {
+        id: SedimentreeId,
+        commit: LooseCommit,
+        blob: Blob,
+    },
+    Chunk {
+        id: SedimentreeId,
+        chunk: Chunk,
+        blob: Blob,
+    },
+    BatchSyncRequest {
+        id: SedimentreeId,
+        sedimentree_summary: SedimentreeSummary,
+    },
+    BatchSyncResponse {
+        id: SedimentreeId,
+        diff: SyncDiff<'static>, // FIXME 'static
+    },
+    BlobRequest {
+        digests: Vec<Digest>,
+    },
+    BlobResponse {
+        blobs: Vec<Blob>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ToSend<'a> {
+    LooseCommit {
+        id: SedimentreeId,
+        commit: &'a LooseCommit,
+        blob: &'a Blob,
+    },
+    Chunk {
+        id: SedimentreeId,
+        chunk: &'a Chunk,
+        blob: &'a Blob,
+    },
+    BatchSyncRequest {
+        id: SedimentreeId,
+        sedimentree_summary: &'a SedimentreeSummary,
+    },
+    BatchSyncResponse {
+        id: SedimentreeId,
+        diff: SyncDiff<'a>,
+    },
+    Blobs {
+        blobs: &'a [Blob],
+    },
 }
