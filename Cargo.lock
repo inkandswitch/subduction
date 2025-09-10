@@ -1482,7 +1482,11 @@ version = "0.1.0"
 dependencies = [
  "automerge 0.6.1",
  "clap",
+ "futures",
  "futures-util",
+ "sedimentree_core",
+ "sedimentree_sync_core",
+ "thiserror 2.0.14",
  "tokio",
  "tokio-tungstenite",
  "tungstenite",

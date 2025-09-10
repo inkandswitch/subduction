@@ -6,7 +6,11 @@ edition.workspace = true
 [dependencies]
 automerge = "0.6.1" # FIXME use workspace version
 clap = { version = "4.5", features = ["derive"] }
+futures = "0.3.31"
 futures-util = "0.3.31"
+sedimentree_core = { path = "../sedimentree_core" }
+sedimentree_sync_core = { path = "../sedimentree_sync_core" }
+thiserror = { workspace = true }
 tokio = { version = "1.46", features = ["full"] }
 tokio-tungstenite = { version = "0.27.0", features = ["tokio-native-tls"] }
 tungstenite = "0.27"

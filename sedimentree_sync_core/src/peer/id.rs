@@ -7,6 +7,18 @@ use serde::{Deserialize, Serialize};
 #[serde(transparent)]
 pub struct PeerId([u8; 32]); // FIXME shoudl be ed25519 VK?
 
+impl PeerId {
+    /// Create a new [`PeerId`].
+    pub fn new(id: [u8; 32]) -> Self {
+        Self(id)
+    }
+
+    /// Get the byte array representation of the [`PeerId`].
+    pub fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 // impl PeerId {
 //     /// Create a new [`PeerId`].
 //     pub fn new(id: String) -> Self {

@@ -2,9 +2,7 @@
 
 use crate::peer::{id::PeerId, metadata::PeerMetadata};
 use futures::Future;
-use sedimentree_core::{
-    Blob, Chunk, ChunkSummary, Digest, LooseCommit, SedimentreeId, SedimentreeSummary,
-};
+use sedimentree_core::{Blob, Chunk, Digest, LooseCommit, SedimentreeId, SedimentreeSummary};
 use thiserror::Error;
 
 /// A trait representing a connection to a peer in the network.
@@ -72,11 +70,13 @@ pub trait Connection: Clone {
     // ) -> impl Future<Output = Result<(), Self::Error>>;
 
     /// Request a batch sync over this connection.
-    fn request_batch_sync(
+    async fn request_batch_sync(
         &self,
         id: SedimentreeId,
         our_sedimentree_summary: &SedimentreeSummary,
-    ) -> impl Future<Output = Result<SyncDiff<'_>, Self::Error>>;
+    ) -> Result<SyncDiff<'_>, Self::Error>;
+
+    // fn call(&self, msg: &ToSend<'_>) -> impl Future<Output = Result<Response, Self::Error>>;
 
     // /// Receive a batch sync over this connection.
     // fn recv_batch_sync(
