@@ -1,5 +1,7 @@
 //! Storage abstraction for `Sedimentree` data.
 
+use std::collections::HashMap;
+
 use crate::{Blob, Digest};
 
 use super::{Chunk, CommitOrChunk, Diff, LooseCommit, Sedimentree};
@@ -34,6 +36,59 @@ pub trait Storage {
         blob_digest: Digest,
     ) -> impl Future<Output = Result<Option<Blob>, Self::Error>>;
 }
+
+// pub struct MemoryStorage {
+//     chunks: HashMap<Digest, Chunk>,
+//     commits: HashMap<Digest, LooseCommit>,
+//     blobs: HashMap<Digest, Blob>,
+// }
+//
+// impl<T: Storage> Storage for Arc<Mutex<T>> {
+//
+// }
+//
+// impl Storage for MemoryStorage {
+//     type Error = std::convert::Infallible;
+//
+//     fn load_loose_commits(&self) -> impl Future<Output = Result<Vec<LooseCommit>, Self::Error>> {
+//         let commits = self.commits.values().cloned().collect();
+//         async move { Ok(commits) }
+//     }
+//
+//     fn save_loose_commit(
+//         &self,
+//         loose_commit: LooseCommit,
+//     ) -> impl Future<Output = Result<(), Self::Error>> {
+//         let digest = loose_commit.blob().digest();
+//         self.commits.insert(digest, loose_commit);
+//         async move { Ok(()) }
+//     }
+//
+//     fn save_chunk(&self, chunk: Chunk) -> impl Future<Output = Result<(), Self::Error>> {
+//         let digest = chunk.summary().blob_meta().digest();
+//         self.chunks.insert(digest, chunk);
+//         async move { Ok(()) }
+//     }
+//
+//     fn load_chunks(&self) -> impl Future<Output = Result<Vec<Chunk>, Self::Error>> {
+//         let chunks = self.chunks.values().cloned().collect();
+//         async move { Ok(chunks) }
+//     }
+//
+//     fn save_blob(&self, blob: Blob) -> impl Future<Output = Result<Digest, Self::Error>> {
+//         let digest = blob.digest();
+//         self.blobs.insert(digest, blob);
+//         async move { Ok(digest) }
+//     }
+//
+//     fn load_blob(
+//         &self,
+//         blob_digest: Digest,
+//     ) -> impl Future<Output = Result<Option<Blob>, Self::Error>> {
+//         let blob = self.blobs.get(&blob_digest).cloned();
+//         async move { Ok(blob) }
+//     }
+// }
 
 /// Load the local `Sedimentree` state from storage.
 #[tracing::instrument(skip(storage))]

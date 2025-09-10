@@ -4,8 +4,14 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+arbitrary = { workspace = true, optional = true, features = ["derive"] }
 futures = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core" }
-serde = { version = "1.0" , features = ["derive"] }
+sedimentree_core = { path = "../sedimentree_core", features = ["serde"] } # FIXME
+serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
+
+[features]
+default = ["serde"] # FIXME
+arbitrary = ["dep:arbitrary"]
+serde = ["dep:serde"]

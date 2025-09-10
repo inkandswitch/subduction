@@ -74,7 +74,7 @@ pub trait Connection: Clone {
         &self,
         id: SedimentreeId,
         our_sedimentree_summary: &SedimentreeSummary,
-    ) -> Result<SyncDiff<'_>, Self::Error>;
+    ) -> Result<SyncDiff, Self::Error>;
 
     // fn call(&self, msg: &ToSend<'_>) -> impl Future<Output = Result<Response, Self::Error>>;
 
@@ -118,17 +118,22 @@ pub trait PeerChallenge {
     fn verify_challenge(&self, peer_id: &PeerId, signature: [u8; 32]) -> bool; // FIXME ed25519_dalek::signature
 }
 
+// FIXME shoukd have a borrowed version?
 /// The calculated difference for the remote peer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct SyncDiff<'a> {
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SyncDiff {
     /// Commits that we are missing and need to request from the peer.
-    pub missing_commits: &'a [(LooseCommit, Blob)],
+    pub missing_commits: Vec<(LooseCommit, Blob)>,
 
     /// Chunks that we are missing and need to request from the peer.
-    pub missing_chunks: &'a [(Chunk, Blob)],
+    pub missing_chunks: Vec<(Chunk, Blob)>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Receive {
     LooseCommit {
         id: SedimentreeId,
@@ -146,7 +151,7 @@ pub enum Receive {
     },
     BatchSyncResponse {
         id: SedimentreeId,
-        diff: SyncDiff<'static>, // FIXME 'static
+        diff: SyncDiff,
     },
     BlobRequest {
         digests: Vec<Digest>,
@@ -157,6 +162,8 @@ pub enum Receive {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub enum ToSend<'a> {
     LooseCommit {
         id: SedimentreeId,
@@ -174,7 +181,7 @@ pub enum ToSend<'a> {
     },
     BatchSyncResponse {
         id: SedimentreeId,
-        diff: SyncDiff<'a>,
+        diff: SyncDiff,
     },
     Blobs {
         blobs: &'a [Blob],

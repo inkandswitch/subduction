@@ -5,9 +5,11 @@ edition.workspace = true
 
 [dependencies]
 automerge = "0.6.1" # FIXME use workspace version
+bincode = { version = "2.0", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.31"
 futures-util = "0.3.31"
+serde = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core" }
 sedimentree_sync_core = { path = "../sedimentree_sync_core" }
 thiserror = { workspace = true }

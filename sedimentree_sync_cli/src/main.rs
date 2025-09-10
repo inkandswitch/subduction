@@ -4,7 +4,9 @@ use sedimentree_core::{SedimentreeId, SedimentreeSummary};
 use sedimentree_sync_core::{
     connection::{Connection, Receive, SyncDiff, ToSend},
     peer::{id::PeerId, metadata::PeerMetadata},
+    SedimentreeSync,
 };
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     sync::{Arc, RwLock},
@@ -21,31 +23,46 @@ use tokio_tungstenite::{accept_async, WebSocketStream};
 #[tokio::main]
 async fn main() {
     let args = Arguments::parse();
-    let listener = TcpListener::bind(&args.ws).await.expect("Failed to bind");
+    let tcp_listener = TcpListener::bind(&args.ws).await.expect("Failed to bind");
 
     println!("WebSocket server listening on ws://{}", args.ws);
 
-    while let Ok((stream, _)) = listener.accept().await {
-        tokio::spawn(async move {
-            let ws_stream = accept_async(stream)
-                .await
-                .expect("WebSocket handshake failed");
+    let ws = WebSocket::new(
+        accept_async(tcp_listener.accept().await.expect("Failed to accept").0)
+            .await
+            .expect("WebSocket handshake failed"),
+        Duration::from_secs(10),
+        PeerId::new([0u8; 32]),
+        0,
+    )
+    .await;
 
-            println!("New WebSocket connection");
+    // FIXME switch to builder?
+    let syncer = SedimentreeSync::new(HashMap::new(), todo!(), HashMap::new());
+    syncer.attach_connection(ws).await;
+    syncer.listen().await;
 
-            let (mut write, mut read) = ws_stream.split();
+    // while let Ok((stream, _)) = listener.accept().await {
+    //     tokio::spawn(async move {
+    //         let ws_stream = accept_async(stream)
+    //             .await
+    //             .expect("WebSocket handshake failed");
 
-            while let Some(Ok(msg)) = read.next().await {
-                if msg.is_text() || msg.is_binary() {
-                    println!("Received: {:?}", msg);
-                    let blank_am = automerge::Automerge::new().save();
-                    write.send(blank_am.into()).await.expect("Failed to send");
-                }
-            }
+    //         println!("New WebSocket connection");
 
-            println!("Connection closed");
-        });
-    }
+    //         let (mut write, mut read) = ws_stream.split();
+
+    //         while let Some(Ok(msg)) = read.next().await {
+    //             if msg.is_text() || msg.is_binary() {
+    //                 println!("Received: {:?}", msg);
+    //                 let blank_am = automerge::Automerge::new().save();
+    //                 write.send(blank_am.into()).await.expect("Failed to send");
+    //             }
+    //         }
+
+    //         println!("Connection closed");
+    //     });
+    // }
 }
 
 #[derive(Debug, Parser)]
@@ -57,10 +74,10 @@ struct Arguments {
     ws: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct MsgId(usize);
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct WsMessage<T> {
     msg_id: MsgId,
     payload: T,
@@ -104,8 +121,12 @@ impl WebSocket {
                 while let Some(msg) = ws_reader.next().await {
                     match msg {
                         Ok(tungstenite::Message::Binary(bytes)) => {
-                            let WsMessage { msg_id, payload } =
-                                parse_response(&bytes).expect("FIXME");
+                            let (WsMessage { msg_id, payload }, _size) =
+                                bincode::serde::decode_from_slice(
+                                    &bytes,
+                                    bincode::config::standard(),
+                                )
+                                .expect("FIXME");
 
                             if let Some(waiting) = pending.write().expect("FIXME").remove(&msg_id) {
                                 waiting.send(WsMessage { msg_id, payload }).expect("FIXME");
@@ -157,10 +178,6 @@ impl WebSocket {
     }
 }
 
-fn parse_response(_bytes: &impl AsRef<[u8]>) -> Option<WsMessage<Receive>> {
-    todo!()
-}
-
 impl Connection for WebSocket {
     type Error = FixmeErr;
     type DisconnectionError = FixmeErr;
@@ -187,7 +204,11 @@ impl Connection for WebSocket {
         self.writer
             .lock()
             .await
-            .send(tungstenite::Message::Binary(b"FIXME".to_vec().into()))
+            .send(tungstenite::Message::Binary(
+                bincode::serde::encode_to_vec(&req, bincode::config::standard())
+                    .expect("FIXME")
+                    .into(),
+            ))
             .await
             .expect("FIXME");
 
@@ -208,7 +229,7 @@ impl Connection for WebSocket {
         &self,
         _id: SedimentreeId,
         _our_sedimentree_summary: &SedimentreeSummary,
-    ) -> Result<SyncDiff<'_>, Self::Error> {
+    ) -> Result<SyncDiff, Self::Error> {
         let msg_id = self.get_msg_id().await;
 
         // Pre-register waiter to avoid races

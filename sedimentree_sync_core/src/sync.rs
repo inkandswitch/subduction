@@ -486,8 +486,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         conn.send(ToSend::BatchSyncResponse {
             id,
             diff: SyncDiff {
-                missing_commits: &missing_commits,
-                missing_chunks: &missing_chunks,
+                missing_commits: missing_commits,
+                missing_chunks: missing_chunks,
             },
         })
         .await
@@ -500,15 +500,15 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         &mut self,
         from: &PeerId,
         id: SedimentreeId,
-        diff: &SyncDiff<'_>,
+        diff: &SyncDiff,
     ) -> Result<(), IoError<S, C>> {
-        for (commit, blob) in diff.missing_commits {
+        for (commit, blob) in diff.missing_commits.iter() {
             self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning
                 .await
                 .map_err(IoError::Storage)?;
         }
 
-        for (chunk, blob) in diff.missing_chunks {
+        for (chunk, blob) in diff.missing_chunks.iter() {
             self.insert_chunk_locally(id, chunk.clone(), blob.clone())
                 .await
                 .map_err(IoError::Storage)?;

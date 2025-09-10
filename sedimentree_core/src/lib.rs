@@ -56,6 +56,8 @@ pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 
 /// A unique identifier for some data managed by Sedimentree.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SedimentreeId([u8; 32]);
 
 /// An error indicating that a SedimentreeId could not be parsed from a string.
@@ -98,6 +100,7 @@ impl std::fmt::Display for SedimentreeId {
 /// A less detailed representation of a Sedimentree that omits strata checkpoints.
 #[derive(Clone, Debug, PartialEq, Eq, Default, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SedimentreeSummary {
     chunk_summaries: BTreeSet<ChunkSummary>,
     commits: BTreeSet<LooseCommit>,
@@ -215,6 +218,7 @@ impl Ord for Depth {
 /// metadata about the the content to aid in deduplication and synchronization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Chunk {
     summary: ChunkSummary,
     checkpoints: Vec<Digest>,
@@ -337,6 +341,7 @@ impl Chunk {
 /// The minimal data for a [`Chunk`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChunkSummary {
     start: Digest,
     ends: NonEmpty<Digest>,
@@ -384,6 +389,7 @@ impl ChunkSummary {
 /// It includes the digest of the data, plus pointers to any (causal) parents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
     digest: Digest,
     parents: Vec<Digest>,

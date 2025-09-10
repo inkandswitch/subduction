@@ -6,6 +6,8 @@ use std::str::FromStr;
 ///
 /// Just a wrapper around a `Vec<u8>`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Blob(Vec<u8>);
 
 impl Blob {
@@ -33,6 +35,7 @@ impl Blob {
 /// Metadata for the underlying payload data itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlobMeta {
     digest: Digest,
     size_bytes: u64,
@@ -67,6 +70,7 @@ impl BlobMeta {
 /// A 32-byte digest.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Digest([u8; 32]);
 
 impl std::fmt::Debug for Digest {
