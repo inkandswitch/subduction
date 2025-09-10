@@ -34,6 +34,7 @@ pub struct SedimentreeSync<S: Storage, C: Connection> {
 }
 
 impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
+    #[tracing::instrument(skip(self))]
     pub async fn listen(&mut self) -> Result<(), IoError<S, C>> {
         // FIXME key: usize shoudl be newtyped
         async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Receive), K::Error> {
@@ -47,7 +48,9 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             futs.push(fut);
         }
 
+        tracing::info!("Listening for messages from {} connections", futs.len());
         while let Some(res) = futs.next().await {
+            tracing::info!("Received a message from a connection");
             match res {
                 Ok((conn, message)) => {
                     let idx = conn.connection_id();
@@ -60,6 +63,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     } else {
                         tracing::warn!("No connection found for FIXME");
                     }
+
+                    tracing::info!("Received message from peer {:?}: {:?}", from, message);
 
                     match message {
                         Receive::LooseCommit { id, commit, blob } => {
@@ -143,7 +148,10 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
      ***************/
 
     /// Attach a new [`Connection`] and immediately syncs all known [`Sedimentree`]s.
+    #[tracing::instrument(skip(self, conn))]
     pub async fn attach_connection(&mut self, conn: C) -> Result<(), IoError<S, C>> {
+        tracing::info!("Attaching connection to peer {:?}", conn.peer_id());
+
         let peer_id = conn.peer_id();
         self.register_connection(conn)?;
 

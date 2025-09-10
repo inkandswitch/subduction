@@ -70,11 +70,11 @@ pub trait Connection: Clone {
     // ) -> impl Future<Output = Result<(), Self::Error>>;
 
     /// Request a batch sync over this connection.
-    async fn request_batch_sync(
+    fn request_batch_sync(
         &self,
         id: SedimentreeId,
         our_sedimentree_summary: &SedimentreeSummary,
-    ) -> Result<SyncDiff, Self::Error>;
+    ) -> impl Future<Output = Result<SyncDiff, Self::Error>>;
 
     // fn call(&self, msg: &ToSend<'_>) -> impl Future<Output = Result<Response, Self::Error>>;
 

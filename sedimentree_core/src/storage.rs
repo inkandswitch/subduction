@@ -1,7 +1,5 @@
 //! Storage abstraction for `Sedimentree` data.
 
-use std::collections::HashMap;
-
 use crate::{Blob, Digest};
 
 use super::{Chunk, CommitOrChunk, Diff, LooseCommit, Sedimentree};
@@ -36,59 +34,6 @@ pub trait Storage {
         blob_digest: Digest,
     ) -> impl Future<Output = Result<Option<Blob>, Self::Error>>;
 }
-
-// pub struct MemoryStorage {
-//     chunks: HashMap<Digest, Chunk>,
-//     commits: HashMap<Digest, LooseCommit>,
-//     blobs: HashMap<Digest, Blob>,
-// }
-//
-// impl<T: Storage> Storage for Arc<Mutex<T>> {
-//
-// }
-//
-// impl Storage for MemoryStorage {
-//     type Error = std::convert::Infallible;
-//
-//     fn load_loose_commits(&self) -> impl Future<Output = Result<Vec<LooseCommit>, Self::Error>> {
-//         let commits = self.commits.values().cloned().collect();
-//         async move { Ok(commits) }
-//     }
-//
-//     fn save_loose_commit(
-//         &self,
-//         loose_commit: LooseCommit,
-//     ) -> impl Future<Output = Result<(), Self::Error>> {
-//         let digest = loose_commit.blob().digest();
-//         self.commits.insert(digest, loose_commit);
-//         async move { Ok(()) }
-//     }
-//
-//     fn save_chunk(&self, chunk: Chunk) -> impl Future<Output = Result<(), Self::Error>> {
-//         let digest = chunk.summary().blob_meta().digest();
-//         self.chunks.insert(digest, chunk);
-//         async move { Ok(()) }
-//     }
-//
-//     fn load_chunks(&self) -> impl Future<Output = Result<Vec<Chunk>, Self::Error>> {
-//         let chunks = self.chunks.values().cloned().collect();
-//         async move { Ok(chunks) }
-//     }
-//
-//     fn save_blob(&self, blob: Blob) -> impl Future<Output = Result<Digest, Self::Error>> {
-//         let digest = blob.digest();
-//         self.blobs.insert(digest, blob);
-//         async move { Ok(digest) }
-//     }
-//
-//     fn load_blob(
-//         &self,
-//         blob_digest: Digest,
-//     ) -> impl Future<Output = Result<Option<Blob>, Self::Error>> {
-//         let blob = self.blobs.get(&blob_digest).cloned();
-//         async move { Ok(blob) }
-//     }
-// }
 
 /// Load the local `Sedimentree` state from storage.
 #[tracing::instrument(skip(storage))]
@@ -130,17 +75,17 @@ pub async fn update<S: Storage + Clone>(
         .unwrap_or_else(|| (new.chunks.iter().collect(), new.commits.iter().collect()));
 
     let save_chunks = new_chunks.into_iter().map(|chunk| {
-        let storage = storage.clone();
+        let inner_storage = storage.clone();
         async move {
-            storage.save_chunk(chunk.clone()).await?;
+            inner_storage.save_chunk(chunk.clone()).await?;
             Ok(())
         }
     });
 
     let save_commits = new_commits.into_iter().map(|commit| {
-        let storage = storage.clone();
+        let inner_storage = storage.clone();
         async move {
-            storage.save_loose_commit(commit.clone()).await?;
+            inner_storage.save_loose_commit(commit.clone()).await?;
             Ok(())
         }
     });
@@ -153,6 +98,7 @@ pub async fn update<S: Storage + Clone>(
     Ok(())
 }
 
+// FIXME why not a trait method?
 /// Stream the data for all commits and chunks in a `Sedimentree`.
 pub fn data<S: Storage + Clone>(
     storage: S,
