@@ -33,10 +33,10 @@ pub trait Connection: Clone {
     fn disconnect(&mut self) -> impl Future<Output = Result<(), Self::DisconnectionError>>;
 
     /// Send a message.
-    fn send<'a>(&self, message: ToSend<'a>) -> impl Future<Output = Result<(), Self::Error>>; // FIXME err type
+    fn send(&self, message: Message) -> impl Future<Output = Result<(), Self::Error>>; // FIXME err type
 
     /// Receive a message.
-    fn recv(&self) -> impl Future<Output = Result<Receive, Self::Error>>; // FIXME err type
+    fn recv(&self) -> impl Future<Output = Result<Message, Self::Error>>; // FIXME err type
 
     // /// Send an incremental update to the peer.
     // ///
@@ -134,7 +134,7 @@ pub struct SyncDiff {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Receive {
+pub enum Message {
     LooseCommit {
         id: SedimentreeId,
         commit: LooseCommit,
@@ -146,44 +146,42 @@ pub enum Receive {
         blob: Blob,
     },
     BatchSyncRequest {
+        req_id: RequestId,
         id: SedimentreeId,
         sedimentree_summary: SedimentreeSummary,
     },
     BatchSyncResponse {
+        req_id: RequestId,
         id: SedimentreeId,
         diff: SyncDiff,
     },
     BlobRequest {
+        req_id: RequestId,
         digests: Vec<Digest>,
     },
     BlobResponse {
+        req_id: RequestId,
         blobs: Vec<Blob>,
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+impl Message {
+    /// Get the request ID for this message, if any.
+    pub fn request_id(&self) -> Option<RequestId> {
+        match self {
+            Message::BatchSyncRequest { req_id, .. } => Some(*req_id),
+            Message::BatchSyncResponse { req_id, .. } => Some(*req_id),
+            Message::BlobRequest { req_id, .. } => Some(*req_id),
+            Message::BlobResponse { req_id, .. } => Some(*req_id),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub enum ToSend<'a> {
-    LooseCommit {
-        id: SedimentreeId,
-        commit: &'a LooseCommit,
-        blob: &'a Blob,
-    },
-    Chunk {
-        id: SedimentreeId,
-        chunk: &'a Chunk,
-        blob: &'a Blob,
-    },
-    BatchSyncRequest {
-        id: SedimentreeId,
-        sedimentree_summary: &'a SedimentreeSummary,
-    },
-    BatchSyncResponse {
-        id: SedimentreeId,
-        diff: SyncDiff,
-    },
-    Blobs {
-        blobs: &'a [Blob],
-    },
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RequestId {
+    pub requestor: PeerId,
+    pub nonce: u32,
 }

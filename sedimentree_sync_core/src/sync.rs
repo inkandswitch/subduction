@@ -1,7 +1,9 @@
 //! The main synchronization logic and bookkeeping for [`Sedimentree`].
 
 use crate::{
-    connection::{Connection, ConnectionDisallowed, ConnectionPolicy, Receive, SyncDiff, ToSend},
+    connection::{
+        Connection, ConnectionDisallowed, ConnectionPolicy, Message, RequestId, SyncDiff,
+    },
     peer::id::PeerId,
 };
 use futures::{stream::FuturesUnordered, StreamExt};
@@ -37,7 +39,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     #[tracing::instrument(skip(self))]
     pub async fn listen(&mut self) -> Result<(), IoError<S, C>> {
         // FIXME key: usize shoudl be newtyped
-        async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Receive), K::Error> {
+        async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::Error> {
             tracing::debug!("THERE");
             let msg = conn.recv().await?;
             tracing::info!("HERE");
@@ -51,6 +53,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 conn.connection_id()
             );
             let fut = indexed_listen(conn.clone());
+            tracing::debug!("LISTENING");
             futs.push(fut);
         }
 
@@ -73,30 +76,31 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     tracing::info!("Received message from peer {:?}: {:?}", from, message);
 
                     match message {
-                        Receive::LooseCommit { id, commit, blob } => {
+                        Message::LooseCommit { id, commit, blob } => {
                             self.recv_commit(&from, id, &commit, blob).await?
                         }
-                        Receive::Chunk { id, chunk, blob } => {
+                        Message::Chunk { id, chunk, blob } => {
                             self.recv_chunk(&from, id, &chunk, blob).await?
                         }
-                        Receive::BatchSyncRequest {
+                        Message::BatchSyncRequest {
                             id,
                             sedimentree_summary,
+                            req_id,
                         } => {
-                            self.recv_batch_sync_request(id, &sedimentree_summary, &conn)
+                            self.recv_batch_sync_request(id, &sedimentree_summary, req_id, &conn)
                                 .await?
                         }
-                        Receive::BatchSyncResponse { id, diff } => {
+                        Message::BatchSyncResponse { id, diff, .. } => {
                             self.recv_batch_sync_response(&from, id, &diff).await?
                         }
-                        Receive::BlobRequest { digests } => {
+                        Message::BlobRequest { req_id, digests } => {
                             if self.connections.contains_key(&idx) {
-                                self.recv_blob_request(&conn, &digests).await?
+                                self.recv_blob_request(&conn, req_id, &digests).await?
                             } else {
                                 tracing::warn!("No connection found for FIXME");
                             }
                         }
-                        Receive::BlobResponse { blobs } => {
+                        Message::BlobResponse { blobs, .. } => {
                             for blob in blobs {
                                 self.storage
                                     .save_blob(blob)
@@ -161,9 +165,9 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         let peer_id = conn.peer_id();
         self.register_connection(conn)?;
 
-        for tree_id in self.sedimentrees.keys().copied().collect::<Vec<_>>() {
-            self.request_peer_batch_sync(&peer_id, tree_id).await?;
-        }
+        // for tree_id in self.sedimentrees.keys().copied().collect::<Vec<_>>() {
+        //     self.request_peer_batch_sync(&peer_id, tree_id).await?;
+        // }
 
         Ok(())
     }
@@ -302,6 +306,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     pub async fn recv_blob_request(
         &mut self,
         conn: &C,
+        req_id: RequestId,
         digests: &[Digest],
     ) -> Result<(), IoError<S, C>> {
         let mut blobs = Vec::new();
@@ -317,7 +322,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             }
         }
 
-        conn.send(ToSend::Blobs { blobs: &blobs })
+        conn.send(Message::BlobResponse { blobs, req_id })
             .await
             .map_err(IoError::Connection)?;
 
@@ -342,10 +347,10 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .map_err(IoError::Storage)?;
 
         for conn in self.connections.values() {
-            conn.send(ToSend::LooseCommit {
+            conn.send(Message::LooseCommit {
                 id,
-                commit,
-                blob: &blob,
+                commit: commit.clone(),
+                blob: blob.clone(),
             })
             .await
             .map_err(IoError::Connection)?
@@ -376,10 +381,10 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .map_err(IoError::Storage)?;
 
         for conn in self.connections.values() {
-            conn.send(ToSend::Chunk {
+            conn.send(Message::Chunk {
                 id,
-                chunk,
-                blob: &blob,
+                chunk: chunk.clone(),
+                blob: blob.clone(),
             })
             .await
             .map_err(IoError::Connection)?
@@ -408,10 +413,10 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
         for conn in self.connections.values() {
             if conn.peer_id() != *from {
-                conn.send(ToSend::LooseCommit {
+                conn.send(Message::LooseCommit {
                     id,
-                    commit,
-                    blob: &blob,
+                    commit: commit.clone(),
+                    blob: blob.clone(),
                 })
                 .await
                 .map_err(IoError::Connection)?;
@@ -437,10 +442,10 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
         for conn in self.connections.values() {
             if conn.peer_id() != *from {
-                conn.send(ToSend::Chunk {
+                conn.send(Message::Chunk {
                     id,
-                    chunk,
-                    blob: &blob,
+                    chunk: chunk.clone(),
+                    blob: blob.clone(),
                 })
                 .await
                 .map_err(IoError::Connection)?;
@@ -458,6 +463,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         &mut self,
         id: SedimentreeId,
         their_summary: &SedimentreeSummary,
+        req_id: RequestId,
         conn: &C,
     ) -> Result<(), IoError<S, C>> {
         let mut missing_commits = Vec::new();
@@ -512,8 +518,9 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             missing_commits.len(),
             missing_chunks.len()
         );
-        conn.send(ToSend::BatchSyncResponse {
+        conn.send(Message::BatchSyncResponse {
             id,
+            req_id,
             diff: SyncDiff {
                 missing_commits: missing_commits,
                 missing_chunks: missing_chunks,
