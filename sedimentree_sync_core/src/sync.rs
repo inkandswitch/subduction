@@ -2,7 +2,8 @@
 
 use crate::{
     connection::{
-        Connection, ConnectionDisallowed, ConnectionPolicy, Message, RequestId, SyncDiff,
+        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionDisallowed, ConnectionPolicy,
+        Message, RequestId, SyncDiff,
     },
     peer::id::PeerId,
 };
@@ -40,9 +41,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     pub async fn listen(&mut self) -> Result<(), IoError<S, C>> {
         // FIXME key: usize shoudl be newtyped
         async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::Error> {
-            tracing::debug!("THERE");
             let msg = conn.recv().await?;
-            tracing::info!("HERE");
             Ok((conn, msg))
         }
 
@@ -53,7 +52,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 conn.connection_id()
             );
             let fut = indexed_listen(conn.clone());
-            tracing::debug!("LISTENING");
             futs.push(fut);
         }
 
@@ -82,20 +80,20 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         Message::Chunk { id, chunk, blob } => {
                             self.recv_chunk(&from, id, &chunk, blob).await?
                         }
-                        Message::BatchSyncRequest {
+                        Message::BatchSyncRequest(BatchSyncRequest {
                             id,
                             sedimentree_summary,
                             req_id,
-                        } => {
+                        }) => {
                             self.recv_batch_sync_request(id, &sedimentree_summary, req_id, &conn)
                                 .await?
                         }
-                        Message::BatchSyncResponse { id, diff, .. } => {
+                        Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
                             self.recv_batch_sync_response(&from, id, &diff).await?
                         }
-                        Message::BlobRequest { req_id, digests } => {
+                        Message::BlobRequest { digests } => {
                             if self.connections.contains_key(&idx) {
-                                self.recv_blob_request(&conn, req_id, &digests).await?
+                                self.recv_blob_request(&conn, &digests).await?
                             } else {
                                 tracing::warn!("No connection found for FIXME");
                             }
@@ -306,7 +304,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     pub async fn recv_blob_request(
         &mut self,
         conn: &C,
-        req_id: RequestId,
         digests: &[Digest],
     ) -> Result<(), IoError<S, C>> {
         let mut blobs = Vec::new();
@@ -322,7 +319,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             }
         }
 
-        conn.send(Message::BlobResponse { blobs, req_id })
+        conn.send(Message::BlobResponse { blobs })
             .await
             .map_err(IoError::Connection)?;
 
@@ -510,7 +507,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 }
             }
         }
-        tracing::info!("DONE FINDING DIFF");
 
         tracing::info!(
             "Sending batch sync response for sedimentree {:?} with {} missing commits and {} missing chunks",
@@ -518,18 +514,19 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             missing_commits.len(),
             missing_chunks.len()
         );
-        conn.send(Message::BatchSyncResponse {
-            id,
-            req_id,
-            diff: SyncDiff {
-                missing_commits: missing_commits,
-                missing_chunks: missing_chunks,
-            },
-        })
+        conn.send(
+            BatchSyncResponse {
+                id,
+                req_id,
+                diff: SyncDiff {
+                    missing_commits: missing_commits,
+                    missing_chunks: missing_chunks,
+                },
+            }
+            .into(),
+        )
         .await
         .map_err(IoError::Connection)?;
-
-        tracing::info!("DONE SENDING DIFF");
 
         Ok(())
     }
@@ -588,7 +585,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 .map(|s| s.summarize())
                 .unwrap_or_default();
 
-            tracing::info!("BEFORE");
             let SyncDiff {
                 missing_commits,
                 missing_chunks,
@@ -596,7 +592,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 .request_batch_sync(id, &summary)
                 .await
                 .map_err(IoError::Connection)?;
-            tracing::info!("AFTER");
 
             for (commit, blob) in missing_commits {
                 self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning

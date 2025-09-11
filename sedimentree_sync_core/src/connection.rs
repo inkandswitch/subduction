@@ -38,37 +38,6 @@ pub trait Connection: Clone {
     /// Receive a message.
     fn recv(&self) -> impl Future<Output = Result<Message, Self::Error>>; // FIXME err type
 
-    // /// Send an incremental update to the peer.
-    // ///
-    // /// This is the low-level primitive for sending incremental updates.
-    // fn send_incremental_update(
-    //     &self,
-    //     commits: &[&LooseCommit],
-    //     chunks: &[&Chunk],
-    // ) -> impl Future<Output = Result<(), Self::Error>>;
-
-    // /// Send a single loose commit to the peer.
-    // fn send_loose_commit(
-    //     &self,
-    //     commit: &LooseCommit,
-    // ) -> impl Future<Output = Result<(), Self::Error>> {
-    //     async { self.send_incremental_update(&[commit], &[]).await }
-    // }
-
-    // /// Send a single chunk to the peer.
-    // fn send_chunk(&self, chunk: &Chunk) -> impl Future<Output = Result<(), Self::Error>> {
-    //     async { self.send_incremental_update(&[], &[chunk]).await }
-    // }
-
-    // /// Receive an incremental update from the peer.
-    // ///
-    // /// This is the low-level primitive for receiving incremental updates.
-    // fn recv_incremental_update(
-    //     &self,
-    //     commits: &[LooseCommit],
-    //     chunk_summaries: &[ChunkSummary],
-    // ) -> impl Future<Output = Result<(), Self::Error>>;
-
     /// Request a batch sync over this connection.
     fn request_batch_sync(
         &self,
@@ -76,22 +45,8 @@ pub trait Connection: Clone {
         our_sedimentree_summary: &SedimentreeSummary,
     ) -> impl Future<Output = Result<SyncDiff, Self::Error>>;
 
-    // fn call(&self, msg: &ToSend<'_>) -> impl Future<Output = Result<Response, Self::Error>>;
-
-    // /// Receive a batch sync over this connection.
-    // fn recv_batch_sync(
-    //     &self,
-    //     their_sedimentree_summary: &SedimentreeSummary,
-    // ) -> impl Future<Output = Result<SyncDiff<'_>, Self::Error>>;
-
-    // /// Request blobs over this connection.
-    // fn request_blobs(
-    //     &self,
-    //     digests: &[Digest],
-    // ) -> impl Future<Output = Result<Vec<Blob>, Self::Error>>;
-
-    // /// Receive blobs over this connection.
-    // fn recv_blobs(&self, blobs: &[Blob]) -> impl Future<Output = Result<(), Self::Error>>;
+    // Make a call that expects a response.
+    // fn call(&self, msg: &Message) -> impl Future<Output = Result<Message, Self::Error>>;
 }
 
 /// A policy for allowing or disallowing connections from peers.
@@ -145,36 +100,54 @@ pub enum Message {
         chunk: Chunk,
         blob: Blob,
     },
-    BatchSyncRequest {
-        req_id: RequestId,
-        id: SedimentreeId,
-        sedimentree_summary: SedimentreeSummary,
-    },
-    BatchSyncResponse {
-        req_id: RequestId,
-        id: SedimentreeId,
-        diff: SyncDiff,
-    },
     BlobRequest {
-        req_id: RequestId,
         digests: Vec<Digest>,
     },
     BlobResponse {
-        req_id: RequestId,
         blobs: Vec<Blob>,
     },
+    BatchSyncRequest(BatchSyncRequest),
+    BatchSyncResponse(BatchSyncResponse),
 }
 
 impl Message {
     /// Get the request ID for this message, if any.
     pub fn request_id(&self) -> Option<RequestId> {
         match self {
-            Message::BatchSyncRequest { req_id, .. } => Some(*req_id),
-            Message::BatchSyncResponse { req_id, .. } => Some(*req_id),
-            Message::BlobRequest { req_id, .. } => Some(*req_id),
-            Message::BlobResponse { req_id, .. } => Some(*req_id),
+            Message::BatchSyncRequest(BatchSyncRequest { req_id, .. }) => Some(*req_id),
+            Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BatchSyncRequest {
+    pub id: SedimentreeId,
+    pub req_id: RequestId,
+    pub sedimentree_summary: SedimentreeSummary,
+}
+
+impl From<BatchSyncRequest> for Message {
+    fn from(req: BatchSyncRequest) -> Self {
+        Message::BatchSyncRequest(req)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct BatchSyncResponse {
+    pub req_id: RequestId,
+    pub id: SedimentreeId,
+    pub diff: SyncDiff,
+}
+
+impl From<BatchSyncResponse> for Message {
+    fn from(resp: BatchSyncResponse) -> Self {
+        Message::BatchSyncResponse(resp)
     }
 }
 

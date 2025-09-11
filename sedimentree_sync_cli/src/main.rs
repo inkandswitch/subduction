@@ -5,20 +5,15 @@ use sedimentree_core::{
     SedimentreeSummary,
 };
 use sedimentree_sync_core::{
-    connection::{Connection, Message, RequestId, SyncDiff},
+    connection::{BatchSyncRequest, BatchSyncResponse, Connection, Message, RequestId, SyncDiff},
     peer::{id::PeerId, metadata::PeerMetadata},
     SedimentreeSync,
 };
-use serde::{Deserialize, Serialize};
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc::UnboundedReceiver, oneshot, Mutex},
+    sync::{mpsc::UnboundedReceiver, oneshot, Mutex, RwLock},
     time::timeout,
 };
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
@@ -33,7 +28,7 @@ async fn main() {
 
     let sed = Sedimentree::new(vec![], vec![]);
     let sed_id = SedimentreeId::new([0u8; 32]);
-    let mut syncer = Arc::new(Mutex::new(SedimentreeSync::new(
+    let syncer = Arc::new(Mutex::new(SedimentreeSync::new(
         HashMap::from_iter([(sed_id, sed)]),
         MemoryStorage::default(),
         HashMap::new(),
@@ -120,10 +115,9 @@ pub struct WebSocket {
     req_id_counter: Arc<Mutex<u32>>,
     timeout: Duration,
 
-    // FIXME renae ws_writer
-    writer: Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Message>>>,
-    pending: Arc<RwLock<HashMap<RequestId, oneshot::Sender<Message>>>>,
-
+    outbound:
+        Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Message>>>,
+    pending: Arc<RwLock<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
     inbound: Arc<Mutex<UnboundedReceiver<Message>>>,
 }
 
@@ -135,94 +129,88 @@ impl WebSocket {
         conn_id: usize,
     ) -> Self {
         let (ws_writer, mut ws_reader) = ws.split();
-        let pending = Arc::new(RwLock::new(
-            HashMap::<RequestId, oneshot::Sender<Message>>::new(),
-        ));
+        let pending = Arc::new(RwLock::new(HashMap::<
+            RequestId,
+            oneshot::Sender<BatchSyncResponse>,
+        >::new()));
+        let loop_pending = pending.clone();
 
         let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let outbound = Arc::new(Mutex::new(ws_writer));
+        let loop_outbound = outbound.clone();
 
-        let writer = Arc::new(Mutex::new(ws_writer));
-        let loop_writer = writer.clone();
+        tokio::spawn(async move {
+            while let Some(msg) = ws_reader.next().await {
+                match msg {
+                    Ok(tungstenite::Message::Binary(bytes)) => {
+                        let result: Result<(Message, usize), _> =
+                            bincode::serde::decode_from_slice(&bytes, bincode::config::standard());
 
-        // Reader task: demux frames -> pending or events
-        {
-            let pending = Arc::clone(&pending);
-            // let events_tx = events_tx.clone();
-            tokio::spawn(async move {
-                // FIXME arc the reader?
-                while let Some(msg) = ws_reader.next().await {
-                    match msg {
-                        Ok(tungstenite::Message::Binary(bytes)) => {
-                            let result: Result<(Message, usize), _> =
-                                bincode::serde::decode_from_slice(
-                                    &bytes,
-                                    bincode::config::standard(),
-                                );
-
-                            match result {
-                                Ok((msg, _size)) => {
-                                    if let Some(req_id) = msg.request_id() {
-                                        tracing::info!("received message id {:?}", req_id);
+                        match result {
+                            Ok((msg, _size)) => {
+                                match msg {
+                                    Message::BatchSyncResponse(resp) => {
+                                        tracing::info!("dispatching to waiter {:?}", resp.req_id);
                                         if let Some(waiting) =
-                                            pending.write().expect("FIXME").remove(&req_id)
+                                            loop_pending.write().await.remove(&resp.req_id)
                                         {
-                                            tracing::info!("dispatching to waiter {:?}", req_id);
-                                            waiting.send(msg).expect("FIXME");
+                                            tracing::info!(
+                                                "dispatching to waiter {:?}",
+                                                resp.req_id
+                                            );
+                                            waiting.send(resp).expect("FIXME");
                                         } else {
                                             tracing::info!(
                                                 "dispatching to inbound channel {:?}",
-                                                req_id
+                                                resp.req_id
                                             );
-                                            inbound_tx.send(msg).expect("FIXME");
+                                            inbound_tx
+                                                .send(Message::BatchSyncResponse(resp))
+                                                .expect("FIXME");
                                         }
-                                    } else {
-                                        inbound_tx.send(msg).expect("FIXME");
                                     }
-                                }
-                                Err(e) => {
-                                    tracing::error!("failed to decode message: {}", e);
+                                    other => {
+                                        inbound_tx.send(other).expect("FIXME");
+                                    } // FIXME
                                 }
                             }
-                        }
-                        Ok(tungstenite::Message::Text(text)) => {
-                            tracing::warn!("unexpected text message: {}", text);
-                        }
-                        Ok(tungstenite::Message::Ping(p)) => {
-                            tracing::info!("received ping: {:x?}", p);
-                            // loop_writer
-                            //     .lock()
-                            //     .await
-                            //     .send(tungstenite::Message::Pong(p))
-                            //     .await
-                            //     .unwrap_or_else(|_| {
-                            //         tracing::error!("failed to send pong");
-                            //     });
-                        }
-                        Ok(tungstenite::Message::Pong(p)) => {
-                            tracing::warn!("unexpected pong message: {:x?}", p);
-                        }
-                        Ok(tungstenite::Message::Frame(f)) => {
-                            tracing::warn!("unexpected frame: {:x?}", f);
-                        }
-                        Ok(tungstenite::Message::Close(_)) => {
-                            // fail all pending
-                            let muts = std::mem::take(&mut *pending.write().expect("FIXME"));
-                            for (_msg_id, _tx) in muts {
-                                todo!()
-                                // let _ = tx.send(WsMessage {
-                                //     req_id: 0, /* mark error */
-                                // });
+                            Err(e) => {
+                                tracing::error!("failed to decode message: {}", e);
                             }
-                            break;
-                        }
-                        Err(e) => {
-                            // FIXME err chan?
-                            tracing::error!("WebSocket error: {}", e);
                         }
                     }
+                    Ok(tungstenite::Message::Text(text)) => {
+                        tracing::warn!("unexpected text message: {}", text);
+                    }
+                    Ok(tungstenite::Message::Ping(p)) => {
+                        tracing::info!("received ping: {:x?}", p);
+                        loop_outbound
+                            .lock()
+                            .await
+                            .send(tungstenite::Message::Pong(p))
+                            .await
+                            .unwrap_or_else(|_| {
+                                tracing::error!("failed to send pong");
+                            });
+                    }
+                    Ok(tungstenite::Message::Pong(p)) => {
+                        tracing::warn!("unexpected pong message: {:x?}", p);
+                    }
+                    Ok(tungstenite::Message::Frame(f)) => {
+                        tracing::warn!("unexpected frame: {:x?}", f);
+                    }
+                    Ok(tungstenite::Message::Close(_)) => {
+                        // fail all pending
+                        std::mem::take(&mut *loop_pending.write().await);
+                        break;
+                    }
+                    Err(e) => {
+                        // FIXME err chan?
+                        tracing::error!("WebSocket error: {}", e);
+                    }
                 }
-            });
-        }
+            }
+        });
 
         let starting_counter = rand::random::<u32>();
 
@@ -233,7 +221,7 @@ impl WebSocket {
             req_id_counter: Arc::new(Mutex::new(starting_counter)),
             timeout,
 
-            writer,
+            outbound,
             pending,
             inbound: Arc::new(Mutex::new(inbound_rx)),
         }
@@ -270,10 +258,9 @@ impl Connection for WebSocket {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     async fn send(&self, message: Message) -> Result<(), Self::Error> {
-        // FIXME still use this: let msg_id = self.get_req_id().await;
-
-        self.writer
+        self.outbound
             .lock()
             .await
             .send(tungstenite::Message::Binary(
@@ -287,24 +274,11 @@ impl Connection for WebSocket {
         Ok(())
     }
 
+    #[tracing::instrument(skip(self))]
     async fn recv(&self) -> Result<Message, Self::Error> {
-        tracing::debug!(">>>>>>>>>>>>>>>> 1");
         let mut chan = self.inbound.lock().await;
-        tracing::debug!(">>>>>>>>>>>>>>>> 2");
         let msg = chan.recv().await.ok_or(FixmeErr)?;
         tracing::info!("received inbound message id {:?}", msg.request_id());
-        match msg {
-            Message::BatchSyncRequest { .. } => {
-                tracing::info!("sync REQUEST");
-            }
-            Message::BatchSyncResponse { .. } => {
-                tracing::info!("sync RESPONSE");
-            }
-            _ => {
-                tracing::error!("unexpected message on recv: {:?}", msg);
-            } // FIXME
-        }
-        tracing::info!("dispatching to caller {:?}", msg.request_id());
         Ok(msg)
     }
 
@@ -315,59 +289,42 @@ impl Connection for WebSocket {
         id: SedimentreeId,
         our_sedimentree_summary: &SedimentreeSummary,
     ) -> Result<SyncDiff, Self::Error> {
-        tracing::debug!("requesting batch sync");
         let req_id = self.get_req_id().await;
 
-        // Pre-register waiter to avoid races
+        // Pre-register channel
         let (tx, rx) = oneshot::channel();
-        self.pending.write().expect("FIXME").insert(req_id, tx);
+        self.pending.write().await.insert(req_id, tx);
 
-        tracing::debug!("INSIDE");
-
-        let mut w = self.writer.lock().await;
-        w.send(tungstenite::Message::Binary(
-            bincode::serde::encode_to_vec(
-                &Message::BatchSyncRequest {
-                    id,
-                    req_id,
-                    sedimentree_summary: our_sedimentree_summary.clone(),
-                },
-                bincode::config::standard(),
-            )
-            .expect("FIXME")
-            .into(),
-        ))
-        .await
-        .expect("FIXME");
-        drop(w); // FIXME shouldn't need
-
-        tracing::debug!("OUTSIDE");
-        tracing::debug!("sent batch sync request, waiting for response");
+        self.outbound
+            .lock()
+            .await
+            .send(tungstenite::Message::Binary(
+                bincode::serde::encode_to_vec(
+                    &Message::BatchSyncRequest(BatchSyncRequest {
+                        id,
+                        req_id,
+                        sedimentree_summary: our_sedimentree_summary.clone(),
+                    }),
+                    bincode::config::standard(),
+                )
+                .expect("FIXME")
+                .into(),
+            ))
+            .await
+            .expect("FIXME");
 
         // await response with timeout & cleanup
         // FIXME make timeout adjustable
         // match timeout(self.timeout, rx).await {
         match timeout(self.timeout, rx).await {
-            Ok(Ok(msg)) => {
-                match msg {
-                    Message::BatchSyncResponse { diff, .. } => Ok(diff),
-                    Message::BatchSyncRequest { .. } => {
-                        tracing::error!("just a request again");
-                        todo!();
-                    }
-                    _ => {
-                        tracing::error!("unexpected response to batch sync request: {:?}", msg);
-                        todo!("FIXME");
-                    } // FIXME
-                }
-            }
+            Ok(Ok(BatchSyncResponse { diff, .. })) => Ok(diff),
             Ok(Err(e)) => {
                 tracing::error!("request {:?} oneshot recv error: {:?}", req_id, e);
                 todo!("fixme");
             }
             Err(_elapsed) => {
                 tracing::error!("request {:?} timed out", req_id);
-                // self.pending.write().expect("FIXME").remove(&msg_id);
+                self.pending.write().await.remove(&req_id);
                 Err(FixmeErr)
             }
         }
@@ -389,50 +346,39 @@ impl Storage for MemoryStorage {
     type Error = std::convert::Infallible;
 
     fn load_loose_commits(&self) -> impl Future<Output = Result<Vec<LooseCommit>, Self::Error>> {
-        let commits = self
-            .commits
-            .read()
-            .expect("FIXME")
-            .values()
-            .cloned()
-            .collect();
-        async move { Ok(commits) }
+        async {
+            let commits = self.commits.read().await.values().cloned().collect();
+            Ok(commits)
+        }
     }
 
     async fn save_loose_commit(&self, loose_commit: LooseCommit) -> Result<(), Self::Error> {
         let digest = loose_commit.blob().digest();
-        self.commits
-            .write()
-            .expect("FIXME")
-            .insert(digest, loose_commit);
+        self.commits.write().await.insert(digest, loose_commit);
         Ok(())
     }
 
     async fn save_chunk(&self, chunk: Chunk) -> Result<(), Self::Error> {
         let digest = chunk.summary().blob_meta().digest();
-        self.chunks.write().expect("FIXME").insert(digest, chunk);
+        self.chunks.write().await.insert(digest, chunk);
         Ok(())
     }
 
     fn load_chunks(&self) -> impl Future<Output = Result<Vec<Chunk>, Self::Error>> {
-        let chunks = self
-            .chunks
-            .read()
-            .expect("FIXME")
-            .values()
-            .cloned()
-            .collect();
-        async move { Ok(chunks) }
+        async {
+            let chunks = self.chunks.read().await.values().cloned().collect();
+            Ok(chunks)
+        }
     }
 
     async fn save_blob(&self, blob: Blob) -> Result<Digest, Self::Error> {
         let digest = Digest::hash(blob.contents()); // FIXME hash should take anything that can be serialized
-        self.blobs.write().expect("FIXME").insert(digest, blob);
+        self.blobs.write().await.insert(digest, blob);
         Ok(digest)
     }
 
     async fn load_blob(&self, blob_digest: Digest) -> Result<Option<Blob>, Self::Error> {
-        let maybe_blob = self.blobs.read().expect("FIXME").get(&blob_digest).cloned();
+        let maybe_blob = self.blobs.read().await.get(&blob_digest).cloned();
         Ok(maybe_blob)
     }
 }
