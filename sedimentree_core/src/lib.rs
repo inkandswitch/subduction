@@ -60,6 +60,14 @@ pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SedimentreeId([u8; 32]);
 
+impl SedimentreeId {
+    // FIXME added for demo conveniece
+    /// Constructor for a [`SedimentreeId`].
+    pub fn new(id: [u8; 32]) -> Self {
+        Self(id)
+    }
+}
+
 /// An error indicating that a SedimentreeId could not be parsed from a string.
 #[derive(Debug, Clone, Copy)]
 pub struct BadSedimentreeId;
