@@ -1,5 +1,7 @@
 //! Manage connections to peers in the network.
 
+use std::time::Duration;
+
 use crate::peer::{id::PeerId, metadata::PeerMetadata};
 use futures::Future;
 use sedimentree_core::{Blob, Chunk, Digest, LooseCommit, SedimentreeId, SedimentreeSummary};
@@ -38,12 +40,20 @@ pub trait Connection: Clone {
     /// Receive a message.
     fn recv(&self) -> impl Future<Output = Result<Message, Self::Error>>; // FIXME err type
 
-    /// Request a batch sync over this connection.
-    fn request_batch_sync(
+    fn next_request_id(&self) -> impl Future<Output = RequestId>;
+
+    fn call(
         &self,
-        id: SedimentreeId,
-        our_sedimentree_summary: &SedimentreeSummary,
-    ) -> impl Future<Output = Result<SyncDiff, Self::Error>>;
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> impl Future<Output = Result<BatchSyncResponse, Self::Error>>;
+
+    // /// Request a batch sync over this connection.
+    // fn request_batch_sync(
+    //     &self,
+    //     id: SedimentreeId,
+    //     our_sedimentree_summary: &SedimentreeSummary,
+    // ) -> impl Future<Output = Result<SyncDiff, Self::Error>>;
 
     // Make a call that expects a response.
     // fn call(&self, msg: &Message) -> impl Future<Output = Result<Message, Self::Error>>;

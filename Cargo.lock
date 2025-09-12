@@ -1591,6 +1591,7 @@ dependencies = [
  "clap",
  "futures",
  "futures-util",
+ "nonempty",
  "rand",
  "sedimentree_core",
  "sedimentree_sync_core",

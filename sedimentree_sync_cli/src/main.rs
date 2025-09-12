@@ -1,11 +1,13 @@
+mod black_box;
+
+use self::black_box::BlackBox;
 use clap::Parser;
 use futures_util::{stream::SplitSink, SinkExt, StreamExt};
 use sedimentree_core::{
     storage::Storage, Blob, Chunk, Digest, LooseCommit, Sedimentree, SedimentreeId,
-    SedimentreeSummary,
 };
 use sedimentree_sync_core::{
-    connection::{BatchSyncRequest, BatchSyncResponse, Connection, Message, RequestId, SyncDiff},
+    connection::{BatchSyncRequest, BatchSyncResponse, Connection, Message, RequestId},
     peer::{id::PeerId, metadata::PeerMetadata},
     SedimentreeSync,
 };
@@ -28,13 +30,11 @@ async fn main() {
 
     let sed = Sedimentree::new(vec![], vec![]);
     let sed_id = SedimentreeId::new([0u8; 32]);
-    let syncer = Arc::new(Mutex::new(SedimentreeSync::new(
+    let mut syncer = SedimentreeSync::new(
         HashMap::from_iter([(sed_id, sed)]),
         MemoryStorage::default(),
         HashMap::new(),
-    )));
-
-    // let tcp_listener = TcpListener::bind(&args.ws).await.expect("FIXME");
+    );
 
     match args.command.as_deref() {
         Some("start") => {
@@ -48,22 +48,22 @@ async fn main() {
                 .expect("FIXME");
             tracing::info!("WebSocket server listening on {}", args.ws);
 
-            // FIXME also add them when they connect to you!!
             let ws =
                 WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([0u8; 32]), 0).await;
 
-            let s2 = syncer.clone();
-            tokio::spawn(async move { s2.lock().await.listen().await });
+            syncer.attach(ws).await.expect("FIXME"); // FIXME renmae to just attach?
 
-            tracing::info!("Attaching connection to syncer");
-            syncer
-                .lock()
-                .await
-                .attach_connection(ws) // FIXME rename to attach?
-                .await
-                .expect("FIXME"); // FIXME renmae to just attach?
+            // for i in 0..999 {
+            //     let blob = Blob::new([0, i].to_vec());
+            //     let commit = LooseCommit::new(blob.meta().digest(), parents, blob.meta().clone());
 
-            syncer.lock().await.listen().await.expect("FIXME");
+            //     syncer
+            //         .add_commit(sed_id, commit, blob)
+            //         .await
+            //         .expect("FIXME");
+            // }
+
+            syncer.listen().await.expect("FIXME");
         }
         Some("connect") => {
             tracing::info!("Connecting to WebSocket server at {}", args.ws);
@@ -77,19 +77,12 @@ async fn main() {
             let ws =
                 WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([1u8; 32]), 0).await;
 
-            let s2 = syncer.clone();
-
-            tokio::spawn(async move { s2.lock().await.listen().await });
-
-            tracing::info!("Attaching connection to syncer");
-            let mut sy = syncer.lock().await;
-            sy.attach_connection(ws).await.expect("FIXME"); // FIXME renmae to just attach?
-            sy.request_all_batch_sync(SedimentreeId::new([0u8; 32]))
+            syncer.attach(ws).await.expect("FIXME"); // FIXME renmae to just attach?
+            syncer
+                .request_all_batch_sync(SedimentreeId::new([0u8; 32]), None)
                 .await
                 .expect("FIXME");
-            sy.listen().await.expect("FIXME");
-
-            // s2.lock().await.listen().await.expect("FIXME");
+            syncer.listen().await.expect("FIXME");
         }
         _ => {
             eprintln!("Please specify either 'start' or 'connect' command");
@@ -226,16 +219,6 @@ impl WebSocket {
             inbound: Arc::new(Mutex::new(inbound_rx)),
         }
     }
-
-    async fn get_req_id(&self) -> RequestId {
-        let mut counter = self.req_id_counter.lock().await;
-        *counter = counter.wrapping_add(1);
-        tracing::info!("generated message id {:?}", *counter);
-        RequestId {
-            requestor: self.peer_id,
-            nonce: *counter,
-        }
-    }
 }
 
 impl Connection for WebSocket {
@@ -252,6 +235,16 @@ impl Connection for WebSocket {
 
     fn peer_metadata(&self) -> Option<PeerMetadata> {
         None
+    }
+
+    async fn next_request_id(&self) -> RequestId {
+        let mut counter = self.req_id_counter.lock().await;
+        *counter = counter.wrapping_add(1);
+        tracing::info!("generated message id {:?}", *counter);
+        RequestId {
+            requestor: self.peer_id,
+            nonce: *counter,
+        }
     }
 
     async fn disconnect(&mut self) -> Result<(), Self::DisconnectionError> {
@@ -282,14 +275,13 @@ impl Connection for WebSocket {
         Ok(msg)
     }
 
-    // FIXME rename call or ask?
-    // FIXME include timeout field?
-    async fn request_batch_sync(
+    #[tracing::instrument(skip(self, req), fields(req_id = ?req.req_id))]
+    async fn call(
         &self,
-        id: SedimentreeId,
-        our_sedimentree_summary: &SedimentreeSummary,
-    ) -> Result<SyncDiff, Self::Error> {
-        let req_id = self.get_req_id().await;
+        req: BatchSyncRequest,
+        override_timeout: Option<Duration>,
+    ) -> Result<BatchSyncResponse, Self::Error> {
+        let req_id = req.req_id;
 
         // Pre-register channel
         let (tx, rx) = oneshot::channel();
@@ -300,11 +292,7 @@ impl Connection for WebSocket {
             .await
             .send(tungstenite::Message::Binary(
                 bincode::serde::encode_to_vec(
-                    &Message::BatchSyncRequest(BatchSyncRequest {
-                        id,
-                        req_id,
-                        sedimentree_summary: our_sedimentree_summary.clone(),
-                    }),
+                    &Message::BatchSyncRequest(req),
                     bincode::config::standard(),
                 )
                 .expect("FIXME")
@@ -313,18 +301,18 @@ impl Connection for WebSocket {
             .await
             .expect("FIXME");
 
+        let req_timeout = override_timeout.unwrap_or(self.timeout);
+
         // await response with timeout & cleanup
         // FIXME make timeout adjustable
-        // match timeout(self.timeout, rx).await {
-        match timeout(self.timeout, rx).await {
-            Ok(Ok(BatchSyncResponse { diff, .. })) => Ok(diff),
+        match timeout(req_timeout, rx).await {
+            Ok(Ok(resp)) => Ok(resp),
             Ok(Err(e)) => {
-                tracing::error!("request {:?} oneshot recv error: {:?}", req_id, e);
-                todo!("fixme");
+                tracing::error!("request {:?} failed to receive response: {}", req_id, e);
+                Err(FixmeErr)
             }
             Err(_elapsed) => {
                 tracing::error!("request {:?} timed out", req_id);
-                self.pending.write().await.remove(&req_id);
                 Err(FixmeErr)
             }
         }

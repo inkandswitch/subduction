@@ -26,6 +26,11 @@ impl Blob {
         self.0
     }
 
+    /// Get the contents of the blob as a slice.
+    pub fn as_slice(&self) -> &[u8] {
+        &self.0
+    }
+
     /// Get metadata for the blob.
     pub fn meta(&self) -> BlobMeta {
         BlobMeta::new(&self.0)
