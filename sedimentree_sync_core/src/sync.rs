@@ -7,7 +7,7 @@ use crate::{
     },
     peer::id::PeerId,
 };
-use futures::{stream::FuturesUnordered, StreamExt};
+use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use sedimentree_core::{
     storage::Storage, Blob, Chunk, Depth, Digest, LooseCommit, Sedimentree, SedimentreeId,
     SedimentreeSummary,
@@ -15,6 +15,7 @@ use sedimentree_core::{
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
+    sync::Arc,
     time::Duration,
 };
 use thiserror::Error;
@@ -32,14 +33,14 @@ pub struct ChunkRequested {
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
 pub struct SedimentreeSync<S: Storage, C: Connection> {
-    sedimentrees: HashMap<SedimentreeId, Sedimentree>,
+    sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
+    connections: Arc<Mutex<HashMap<usize, C>>>,
     storage: S,
-    connections: HashMap<usize, C>,
 }
 
 impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     #[tracing::instrument(skip(self))]
-    pub async fn listen(&mut self) -> Result<(), IoError<S, C>> {
+    pub async fn listen(&self) -> Result<(), IoError<S, C>> {
         // FIXME key: usize shoudl be newtyped
         async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::Error> {
             let msg = conn.recv().await?;
@@ -47,7 +48,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         }
 
         let mut futs = FuturesUnordered::new();
-        for conn in self.connections.values() {
+        for conn in self.connections.lock().await.values() {
             tracing::info!(
                 "Spawning listener for connection {:?}",
                 conn.connection_id()
@@ -56,7 +57,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             futs.push(fut);
         }
 
-        tracing::info!("Listening for messages from {} connections", futs.len());
+        tracing::info!("Listening for messages from {} connection(s)", futs.len());
         while let Some(res) = futs.next().await {
             tracing::info!("Received a message from a connection");
             match res {
@@ -66,7 +67,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
                     // FIXME probably want a global queue for new dynamic connections
                     // Re-enque if that connection is still active at the top-level
-                    if self.connections.contains_key(&idx) {
+                    if self.connections.lock().await.contains_key(&idx) {
                         futs.push(indexed_listen(conn.clone()));
                     } else {
                         tracing::warn!("No connection found for FIXME");
@@ -86,6 +87,11 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                             sedimentree_summary,
                             req_id,
                         }) => {
+                            tracing::info!(
+                                "Received batch sync request for sedimentree {:?} from peer {:?}",
+                                id,
+                                from
+                            );
                             self.recv_batch_sync_request(id, &sedimentree_summary, req_id, &conn)
                                 .await?
                         }
@@ -93,7 +99,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                             self.recv_batch_sync_response(&from, id, &diff).await?
                         }
                         Message::BlobRequest { digests } => {
-                            if self.connections.contains_key(&idx) {
+                            if self.connections.lock().await.contains_key(&idx) {
                                 self.recv_blob_request(&conn, &digests).await?
                             } else {
                                 tracing::warn!("No connection found for FIXME");
@@ -124,16 +130,23 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         connections: HashMap<usize, C>,
     ) -> Self {
         Self {
-            sedimentrees,
+            sedimentrees: Arc::new(Mutex::new(sedimentrees)),
+            connections: Arc::new(Mutex::new(connections)),
             storage,
-            connections,
         }
     }
 
     /// The storage backend used for persisting sedimentree data.
-    pub async fn hydrate(&mut self) -> Result<(), S::Error> {
-        for tree_id in self.sedimentrees.keys().copied().collect::<Vec<_>>() {
-            if let Some(sedimentree) = self.sedimentrees.get_mut(&tree_id) {
+    pub async fn hydrate(&self) -> Result<(), S::Error> {
+        for tree_id in self
+            .sedimentrees
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            if let Some(sedimentree) = self.sedimentrees.lock().await.get_mut(&tree_id) {
                 for commit in self.storage.load_loose_commits().await? {
                     tracing::trace!("Loaded commit {:?}", commit.digest());
                     sedimentree.add_commit(commit);
@@ -158,13 +171,20 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
     /// Attach a new [`Connection`] and immediately syncs all known [`Sedimentree`]s.
     #[tracing::instrument(skip(self, conn))]
-    pub async fn attach(&mut self, conn: C) -> Result<(), IoError<S, C>> {
+    pub async fn attach(&self, conn: C) -> Result<(), IoError<S, C>> {
         tracing::info!("Attaching connection to peer {:?}", conn.peer_id());
 
         let peer_id = conn.peer_id();
-        self.register(conn)?;
+        self.register(conn).await?;
 
-        for tree_id in self.sedimentrees.keys().copied().collect::<Vec<_>>() {
+        for tree_id in self
+            .sedimentrees
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
+        {
             self.request_peer_batch_sync(&peer_id, tree_id).await?;
         }
 
@@ -172,8 +192,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     }
 
     /// Gracefully shut down a connection.
-    pub async fn disconnect(&mut self, conn: &C) -> Result<bool, C::DisconnectionError> {
-        if let Some(mut conn) = self.connections.remove(&conn.connection_id()) {
+    pub async fn disconnect(&self, conn: &C) -> Result<bool, C::DisconnectionError> {
+        if let Some(mut conn) = self.connections.lock().await.remove(&conn.connection_id()) {
             conn.disconnect().await.map(|()| true)
         } else {
             Ok(false)
@@ -186,7 +206,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         peer_id: &PeerId,
     ) -> Result<bool, C::DisconnectionError> {
         let mut labels_to_remove = Vec::new();
-        for (label, conn) in self.connections.iter() {
+        for (label, conn) in self.connections.lock().await.iter() {
             if conn.peer_id() == *peer_id {
                 labels_to_remove.push(label.clone());
             }
@@ -197,7 +217,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         }
 
         for label in labels_to_remove {
-            if let Some(mut conn) = self.connections.remove(&label) {
+            if let Some(mut conn) = self.connections.lock().await.remove(&label) {
                 conn.disconnect().await?;
             }
         }
@@ -212,21 +232,33 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     /// Low-level registration of a new connection.
     ///
     /// This does not perform any synchronization.
-    pub fn register(&mut self, conn: C) -> Result<bool, ConnectionDisallowed> {
-        if self.connections.contains_key(&conn.connection_id()) {
+    pub async fn register(&self, conn: C) -> Result<bool, ConnectionDisallowed> {
+        if self
+            .connections
+            .lock()
+            .await
+            .contains_key(&conn.connection_id())
+        {
             return Ok(false);
         }
 
         self.allowed_to_connect(&conn.peer_id())?;
-        self.connections.insert(conn.connection_id(), conn);
+        self.connections
+            .lock()
+            .await
+            .insert(conn.connection_id(), conn);
         Ok(true)
     }
 
     /// Low-level unregistration of a connection.
     ///
     /// This does not perform any disconnection.
-    pub fn unregister(&mut self, conn: &C) -> bool {
-        self.connections.remove(&conn.connection_id()).is_some()
+    pub async fn unregister(&mut self, conn: &C) -> bool {
+        self.connections
+            .lock()
+            .await
+            .remove(&conn.connection_id())
+            .is_some()
     }
 
     /*********
@@ -246,7 +278,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     /// Get all blobs associated with a given sedimentree ID from local storage.
     #[tracing::instrument(skip(self))]
     pub async fn get_local_blobs(&self, id: SedimentreeId) -> Result<Option<Vec<Blob>>, S::Error> {
-        if let Some(sedimentree) = self.sedimentrees.get(&id) {
+        if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
             tracing::info!("Found sedimentree with id {:?}", id);
 
             let mut results = Vec::new();
@@ -282,16 +314,22 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     /// If none are found locally, it will attempt to fetch them from connected peers.
     #[tracing::instrument(skip(self))]
     pub async fn fetch_blobs(
-        &mut self,
+        &self,
         id: SedimentreeId,
         timeout: Option<Duration>,
     ) -> Result<Option<Vec<Blob>>, IoError<S, C>> {
         if let Some(blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(blobs))
         } else {
-            if let Some(tree) = self.sedimentrees.get(&id) {
+            if let Some(tree) = self.sedimentrees.lock().await.get(&id) {
                 let summary = tree.summarize();
-                let conns = self.connections.values().cloned().collect::<Vec<_>>();
+                let conns = self
+                    .connections
+                    .lock()
+                    .await
+                    .values()
+                    .cloned()
+                    .collect::<Vec<_>>();
 
                 for conn in conns {
                     let req_id = conn.next_request_id().await;
@@ -325,7 +363,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     }
 
     pub async fn recv_blob_request(
-        &mut self,
+        &self,
         conn: &C,
         digests: &[Digest],
     ) -> Result<(), IoError<S, C>> {
@@ -365,7 +403,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::Storage)?;
 
-        for conn in self.connections.values() {
+        for conn in self.connections.lock().await.values() {
             conn.send(Message::LooseCommit {
                 id,
                 commit: commit.clone(),
@@ -396,20 +434,22 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     /// we assume this is a good chunk at the right depth
     #[tracing::instrument(skip(self))]
     pub async fn add_chunk(
-        &mut self,
+        &self,
         id: SedimentreeId,
         chunk: &Chunk,
         blob: Blob,
     ) -> Result<(), IoError<S, C>> {
-        let tree = self.sedimentrees.entry(id).or_default();
+        let mut sed = self.sedimentrees.lock().await;
+        let tree = sed.entry(id).or_default();
         tree.add_chunk(chunk.clone());
+        drop(sed);
 
         self.storage
             .save_blob(blob.clone()) // FIXME clone
             .await
             .map_err(IoError::Storage)?;
 
-        for conn in self.connections.values() {
+        for conn in self.connections.lock().await.values() {
             conn.send(Message::Chunk {
                 id,
                 chunk: chunk.clone(),
@@ -430,7 +470,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     ///
     /// Also propagates it to all other connected peers.
     pub async fn recv_commit(
-        &mut self,
+        &self,
         from: &PeerId,
         id: SedimentreeId,
         commit: &LooseCommit,
@@ -440,7 +480,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::Storage)?;
 
-        for conn in self.connections.values() {
+        for conn in self.connections.lock().await.values() {
             if conn.peer_id() != *from {
                 conn.send(Message::LooseCommit {
                     id,
@@ -459,7 +499,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     ///
     /// Also propagates it to all other connected peers.
     pub async fn recv_chunk(
-        &mut self,
+        &self,
         from: &PeerId,
         id: SedimentreeId,
         chunk: &Chunk,
@@ -469,7 +509,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::Storage)?;
 
-        for conn in self.connections.values() {
+        for conn in self.connections.lock().await.values() {
             if conn.peer_id() != *from {
                 conn.send(Message::Chunk {
                     id,
@@ -488,8 +528,9 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
      * BATCH SYNCHRONIZE *
      *********************/
 
+    #[tracing::instrument(skip(self, their_summary, conn))]
     pub async fn recv_batch_sync_request(
-        &mut self,
+        &self,
         id: SedimentreeId,
         their_summary: &SedimentreeSummary,
         req_id: RequestId,
@@ -499,7 +540,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         let mut missing_chunks = Vec::new();
 
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
-        if let Some(sedimentree) = self.sedimentrees.get(&id) {
+        if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
             // FIXME let our_summary = sedimentree.summarize();
 
             tracing::info!(
@@ -564,11 +605,18 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     }
 
     pub async fn recv_batch_sync_response(
-        &mut self,
+        &self,
         from: &PeerId,
         id: SedimentreeId,
         diff: &SyncDiff,
     ) -> Result<(), IoError<S, C>> {
+        tracing::info!(
+            "Received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing chunks",
+            id,
+            from,
+            diff.missing_commits.len(),
+            diff.missing_chunks.len()
+        );
         for (commit, blob) in diff.missing_commits.iter() {
             self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning
                 .await
@@ -587,7 +635,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     // Request a batch sync from a given peer for a given sedimentree ID.
     #[tracing::instrument(skip(self))]
     pub async fn request_peer_batch_sync(
-        &mut self,
+        &self,
         to_ask: &PeerId,
         id: SedimentreeId,
     ) -> Result<bool, IoError<S, C>> {
@@ -599,9 +647,12 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
         let peer_conns = self
             .connections
+            .lock()
+            .await
             .values()
             .filter(|conn| conn.peer_id() == *to_ask)
-            .cloned();
+            .cloned()
+            .collect::<Vec<_>>();
 
         let mut had_success = false;
 
@@ -613,6 +664,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             );
             let summary = self
                 .sedimentrees
+                .lock()
+                .await
                 .get(&id)
                 .map(|s| s.summarize())
                 .unwrap_or_default();
@@ -658,12 +711,23 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     }
 
     /// Request a batch sync from all connected peer for a given sedimentree ID.
+    #[tracing::instrument(skip(self))]
     pub async fn request_all_batch_sync(
-        &mut self,
+        &self,
         id: SedimentreeId,
         timeout: Option<Duration>,
     ) -> Result<bool, IoError<S, C>> {
-        let peer_conns = self.connections.values().cloned();
+        tracing::info!(
+            "Requesting batch sync for sedimentree {:?} from all peers",
+            id
+        );
+        let peer_conns = self
+            .connections
+            .lock()
+            .await
+            .values()
+            .cloned()
+            .collect::<Vec<_>>();
 
         let mut peers: HashMap<PeerId, Vec<C>> = HashMap::new();
         for conn in peer_conns.into_iter() {
@@ -677,6 +741,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             'inner: for conn in peer_conns {
                 let summary = self
                     .sedimentrees
+                    .lock()
+                    .await
                     .get(&id)
                     .map(|s| s.summarize())
                     .unwrap_or_default();
@@ -721,13 +787,39 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         Ok(had_success)
     }
 
+    pub async fn request_all_batch_sync_all(
+        &self,
+        timeout: Option<Duration>,
+    ) -> Result<bool, IoError<S, C>> {
+        let tree_ids = self
+            .sedimentrees
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>();
+        let mut had_success = false;
+        for id in tree_ids {
+            let success = self.request_all_batch_sync(id, timeout).await?;
+            if success {
+                had_success = true;
+            }
+        }
+        Ok(had_success)
+    }
+
     /********************
      * PUBLIC UTILITIES *
      ********************/
 
     /// Get an iterator over all known sedimentree IDs.
-    pub fn sedimentree_ids(&self) -> impl Iterator<Item = &SedimentreeId> {
-        self.sedimentrees.keys()
+    pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
+        self.sedimentrees
+            .lock()
+            .await
+            .keys()
+            .copied()
+            .collect::<Vec<_>>()
     }
 
     /*******************
@@ -735,15 +827,17 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
      *******************/
 
     async fn insert_commit_locally(
-        &mut self,
+        &self,
         id: SedimentreeId,
         commit: LooseCommit,
         blob: Blob,
     ) -> Result<(), S::Error> {
-        let tree = self.sedimentrees.entry(id).or_default();
+        let mut sed = self.sedimentrees.lock().await;
+        let tree = sed.entry(id).or_default();
         if !tree.add_commit(commit.clone()) {
             return Ok(());
         }
+        drop(sed);
 
         self.storage.save_loose_commit(commit).await?;
         self.storage.save_blob(blob).await?;
@@ -753,15 +847,17 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
     // NOTE no integrity checking, we assume that they made a good chunk at the right depth
     async fn insert_chunk_locally(
-        &mut self,
+        &self,
         id: SedimentreeId,
         chunk: Chunk,
         blob: Blob,
     ) -> Result<(), S::Error> {
-        let tree = self.sedimentrees.entry(id).or_default();
+        let mut sed = self.sedimentrees.lock().await;
+        let tree = sed.entry(id).or_default();
         if !tree.add_chunk(chunk.clone()) {
             return Ok(());
         }
+        drop(sed);
 
         self.storage.save_chunk(chunk).await?;
         self.storage.save_blob(blob).await?;

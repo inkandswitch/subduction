@@ -30,7 +30,7 @@ async fn main() {
 
     let sed = Sedimentree::new(vec![], vec![]);
     let sed_id = SedimentreeId::new([0u8; 32]);
-    let mut syncer = SedimentreeSync::new(
+    let syncer = SedimentreeSync::new(
         HashMap::from_iter([(sed_id, sed)]),
         MemoryStorage::default(),
         HashMap::new(),
@@ -51,19 +51,20 @@ async fn main() {
             let ws =
                 WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([0u8; 32]), 0).await;
 
-            syncer.attach(ws).await.expect("FIXME"); // FIXME renmae to just attach?
+            syncer.register(ws).await.expect("FIXME");
+            loop {
+                syncer.listen().await.expect("FIXME");
+            }
 
-            // for i in 0..999 {
+            // for i in 0..99 {
             //     let blob = Blob::new([0, i].to_vec());
-            //     let commit = LooseCommit::new(blob.meta().digest(), parents, blob.meta().clone());
+            //     let commit = LooseCommit::new(blob.meta().digest(), vec![], blob.meta().clone());
 
             //     syncer
-            //         .add_commit(sed_id, commit, blob)
+            //         .add_commit(sed_id, &commit, blob)
             //         .await
             //         .expect("FIXME");
             // }
-
-            syncer.listen().await.expect("FIXME");
         }
         Some("connect") => {
             tracing::info!("Connecting to WebSocket server at {}", args.ws);
@@ -77,12 +78,16 @@ async fn main() {
             let ws =
                 WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([1u8; 32]), 0).await;
 
-            syncer.attach(ws).await.expect("FIXME"); // FIXME renmae to just attach?
+            syncer.register(ws).await.expect("FIXME");
+            let listen = syncer.listen();
             syncer
-                .request_all_batch_sync(SedimentreeId::new([0u8; 32]), None)
+                .request_all_batch_sync_all(None)
                 .await
                 .expect("FIXME");
-            syncer.listen().await.expect("FIXME");
+            listen.await.expect("FIXME");
+            loop {
+                syncer.listen().await.expect("FIXME");
+            }
         }
         _ => {
             eprintln!("Please specify either 'start' or 'connect' command");
@@ -134,6 +139,7 @@ impl WebSocket {
 
         tokio::spawn(async move {
             while let Some(msg) = ws_reader.next().await {
+                tracing::debug!("received ws message");
                 match msg {
                     Ok(tungstenite::Message::Binary(bytes)) => {
                         let result: Result<(Message, usize), _> =
@@ -269,6 +275,7 @@ impl Connection for WebSocket {
 
     #[tracing::instrument(skip(self))]
     async fn recv(&self) -> Result<Message, Self::Error> {
+        tracing::debug!("waiting for inbound message");
         let mut chan = self.inbound.lock().await;
         let msg = chan.recv().await.ok_or(FixmeErr)?;
         tracing::info!("received inbound message id {:?}", msg.request_id());
@@ -306,7 +313,10 @@ impl Connection for WebSocket {
         // await response with timeout & cleanup
         // FIXME make timeout adjustable
         match timeout(req_timeout, rx).await {
-            Ok(Ok(resp)) => Ok(resp),
+            Ok(Ok(resp)) => {
+                tracing::info!("request {:?} completed", req_id);
+                Ok(resp)
+            }
             Ok(Err(e)) => {
                 tracing::error!("request {:?} failed to receive response: {}", req_id, e);
                 Err(FixmeErr)
