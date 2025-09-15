@@ -12,8 +12,14 @@ use thiserror::Error;
 /// It is assumed that a [`Connection`] is authenticated to a particular peer.
 /// Encrypting this channel is also strongly recommended.
 pub trait Connection: Clone {
-    /// A problem when interacting with the network connection.
-    type Error: core::error::Error;
+    /// A problem when sending a message.
+    type SendError: core::error::Error;
+
+    /// A problem when receiving a message.
+    type RecvError: core::error::Error;
+
+    /// A problem with a roundtrip call.
+    type CallError: core::error::Error;
 
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
@@ -35,10 +41,10 @@ pub trait Connection: Clone {
     fn disconnect(&mut self) -> impl Future<Output = Result<(), Self::DisconnectionError>>;
 
     /// Send a message.
-    fn send(&self, message: Message) -> impl Future<Output = Result<(), Self::Error>>; // FIXME err type
+    fn send(&self, message: Message) -> impl Future<Output = Result<(), Self::SendError>>;
 
     /// Receive a message.
-    fn recv(&self) -> impl Future<Output = Result<Message, Self::Error>>; // FIXME err type
+    fn recv(&self) -> impl Future<Output = Result<Message, Self::RecvError>>;
 
     fn next_request_id(&self) -> impl Future<Output = RequestId>;
 
@@ -46,17 +52,7 @@ pub trait Connection: Clone {
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
-    ) -> impl Future<Output = Result<BatchSyncResponse, Self::Error>>;
-
-    // /// Request a batch sync over this connection.
-    // fn request_batch_sync(
-    //     &self,
-    //     id: SedimentreeId,
-    //     our_sedimentree_summary: &SedimentreeSummary,
-    // ) -> impl Future<Output = Result<SyncDiff, Self::Error>>;
-
-    // Make a call that expects a response.
-    // fn call(&self, msg: &Message) -> impl Future<Output = Result<Message, Self::Error>>;
+    ) -> impl Future<Output = Result<BatchSyncResponse, Self::CallError>>;
 }
 
 /// A policy for allowing or disallowing connections from peers.

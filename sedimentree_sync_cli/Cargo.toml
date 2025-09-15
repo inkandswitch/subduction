@@ -4,6 +4,7 @@ version = "0.1.0"
 edition.workspace = true
 
 [dependencies]
+anyhow = "1.0"
 automerge = "0.6.1" # FIXME use workspace version
 bincode = { version = "2.0", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }

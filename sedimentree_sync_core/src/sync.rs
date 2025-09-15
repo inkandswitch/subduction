@@ -39,10 +39,22 @@ pub struct SedimentreeSync<S: Storage, C: Connection> {
 }
 
 impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
+    pub async fn listen_forever(&self) -> Result<(), IoError<S, C>> {
+        loop {
+            self.listen().await?
+        }
+    }
+
     #[tracing::instrument(skip(self))]
     pub async fn listen(&self) -> Result<(), IoError<S, C>> {
+        loop {
+            self.inner_listen().await?
+        }
+    }
+
+    async fn inner_listen(&self) -> Result<(), IoError<S, C>> {
         // FIXME key: usize shoudl be newtyped
-        async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::Error> {
+        async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::RecvError> {
             let msg = conn.recv().await?;
             Ok((conn, msg))
         }
@@ -347,7 +359,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                             timeout,
                         )
                         .await
-                        .map_err(IoError::Connection)?;
+                        .map_err(IoError::ConnCall)?;
 
                     debug_assert_eq!(req_id, resp_batch_id);
 
@@ -382,7 +394,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
         conn.send(Message::BlobResponse { blobs })
             .await
-            .map_err(IoError::Connection)?;
+            .map_err(IoError::ConnSend)?;
 
         Ok(())
     }
@@ -410,7 +422,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 blob: blob.clone(),
             })
             .await
-            .map_err(IoError::Connection)?
+            .map_err(IoError::ConnSend)?
         }
 
         let mut maybe_requested_chunk = None;
@@ -456,7 +468,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 blob: blob.clone(),
             })
             .await
-            .map_err(IoError::Connection)?
+            .map_err(IoError::ConnSend)?
         }
 
         Ok(())
@@ -488,7 +500,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     blob: blob.clone(),
                 })
                 .await
-                .map_err(IoError::Connection)?;
+                .map_err(IoError::ConnSend)?;
             }
         }
 
@@ -517,7 +529,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     blob: blob.clone(),
                 })
                 .await
-                .map_err(IoError::Connection)?;
+                .map_err(IoError::ConnSend)?;
             }
         }
 
@@ -599,7 +611,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .into(),
         )
         .await
-        .map_err(IoError::Connection)?;
+        .map_err(IoError::ConnSend)?;
 
         Ok(())
     }
@@ -689,7 +701,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     Some(Duration::from_secs(30)),
                 )
                 .await
-                .map_err(IoError::Connection)?;
+                .map_err(IoError::ConnCall)?;
 
             for (commit, blob) in missing_commits {
                 self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning
@@ -764,7 +776,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         timeout,
                     )
                     .await
-                    .map_err(IoError::Connection)?;
+                    .map_err(IoError::ConnCall)?;
 
                 for (commit, blob) in missing_commits {
                     self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning
@@ -880,11 +892,19 @@ pub enum IoError<S: Storage, C: Connection> {
     #[error(transparent)]
     Storage(S::Error),
 
-    /// An error occurred while using a network connection.
+    /// An error occurred while sending data on the connection.
     #[error(transparent)]
-    Connection(C::Error),
+    ConnSend(C::SendError),
+
+    /// An error occurred while receiving data from the connection.
+    #[error(transparent)]
+    ConnRecv(C::RecvError),
+
+    /// An error occurred during a roundtrip call on the connection.
+    #[error(transparent)]
+    ConnCall(C::CallError),
 
     /// The connection was disallowed by the [`ConnectionPolicy`] policy.
     #[error(transparent)]
-    Policy(#[from] ConnectionDisallowed),
+    ConnPolicy(#[from] ConnectionDisallowed),
 }

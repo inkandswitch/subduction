@@ -1586,6 +1586,7 @@ dependencies = [
 name = "sedimentree_sync_cli"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "automerge 0.6.1",
  "bincode",
  "clap",

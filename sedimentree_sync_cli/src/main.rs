@@ -2,7 +2,10 @@ mod black_box;
 
 use self::black_box::BlackBox;
 use clap::Parser;
-use futures_util::{stream::SplitSink, SinkExt, StreamExt};
+use futures_util::{
+    stream::{SplitSink, SplitStream},
+    SinkExt, StreamExt,
+};
 use sedimentree_core::{
     storage::Storage, Blob, Chunk, Digest, LooseCommit, Sedimentree, SedimentreeId,
 };
@@ -15,13 +18,16 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use thiserror::Error;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{mpsc::UnboundedReceiver, oneshot, Mutex, RwLock},
+    sync::{
+        mpsc::{UnboundedReceiver, UnboundedSender},
+        oneshot, Mutex, RwLock,
+    },
     time::timeout,
 };
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 #[tokio::main]
-async fn main() {
+async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
@@ -40,60 +46,41 @@ async fn main() {
         Some("start") => {
             tracing::info!("Starting WebSocket server on {}", args.ws);
 
-            let listener = TcpListener::bind(args.ws.clone()).await.expect("FIXME");
-            let (tcp, _peer) = listener.accept().await.expect("FIXME");
+            let listener = TcpListener::bind(args.ws.clone()).await?;
+            let (tcp, _peer) = listener.accept().await?;
             let stream = MaybeTlsStream::Plain(tcp);
-            let ws_stream = tokio_tungstenite::accept_async(stream)
-                .await
-                .expect("FIXME");
+            let ws_stream = tokio_tungstenite::accept_async(stream).await?;
             tracing::info!("WebSocket server listening on {}", args.ws);
 
             let ws =
                 WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([0u8; 32]), 0).await;
 
-            syncer.register(ws).await.expect("FIXME");
-            loop {
-                syncer.listen().await.expect("FIXME");
-            }
-
-            // for i in 0..99 {
-            //     let blob = Blob::new([0, i].to_vec());
-            //     let commit = LooseCommit::new(blob.meta().digest(), vec![], blob.meta().clone());
-
-            //     syncer
-            //         .add_commit(sed_id, &commit, blob)
-            //         .await
-            //         .expect("FIXME");
-            // }
+            syncer.register(ws).await?;
+            syncer.listen().await?;
         }
         Some("connect") => {
             tracing::info!("Connecting to WebSocket server at {}", args.ws);
 
-            let (ws_stream, _) = tokio_tungstenite::connect_async(&args.ws)
-                .await
-                .expect("FIXME");
+            let (ws_stream, _) = tokio_tungstenite::connect_async(&args.ws).await?;
 
             tracing::info!("WebSocket server listening on {}", args.ws);
 
             let ws =
                 WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([1u8; 32]), 0).await;
 
-            syncer.register(ws).await.expect("FIXME");
+            syncer.register(ws).await?;
             let listen = syncer.listen();
-            syncer
-                .request_all_batch_sync_all(None)
-                .await
-                .expect("FIXME");
-            listen.await.expect("FIXME");
-            loop {
-                syncer.listen().await.expect("FIXME");
-            }
+            syncer.request_all_batch_sync_all(None).await?;
+            listen.await?;
+            syncer.listen().await?;
         }
         _ => {
             eprintln!("Please specify either 'start' or 'connect' command");
             std::process::exit(1);
         }
     }
+
+    Ok(())
 }
 
 #[derive(Debug, Parser)]
@@ -113,10 +100,14 @@ pub struct WebSocket {
     req_id_counter: Arc<Mutex<u32>>,
     timeout: Duration,
 
+    ws_reader: Arc<Mutex<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
     outbound:
         Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Message>>>,
+
     pending: Arc<RwLock<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
-    inbound: Arc<Mutex<UnboundedReceiver<Message>>>,
+
+    inbound_writer: UnboundedSender<Message>, // NOTE mspc
+    inbound_reader: Arc<Mutex<UnboundedReceiver<Message>>>,
 }
 
 impl WebSocket {
@@ -126,91 +117,13 @@ impl WebSocket {
         peer_id: PeerId,
         conn_id: usize,
     ) -> Self {
-        let (ws_writer, mut ws_reader) = ws.split();
+        let (ws_writer, ws_reader_owned) = ws.split();
         let pending = Arc::new(RwLock::new(HashMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
-        let loop_pending = pending.clone();
-
-        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
-        let outbound = Arc::new(Mutex::new(ws_writer));
-        let loop_outbound = outbound.clone();
-
-        tokio::spawn(async move {
-            while let Some(msg) = ws_reader.next().await {
-                tracing::debug!("received ws message");
-                match msg {
-                    Ok(tungstenite::Message::Binary(bytes)) => {
-                        let result: Result<(Message, usize), _> =
-                            bincode::serde::decode_from_slice(&bytes, bincode::config::standard());
-
-                        match result {
-                            Ok((msg, _size)) => {
-                                match msg {
-                                    Message::BatchSyncResponse(resp) => {
-                                        tracing::info!("dispatching to waiter {:?}", resp.req_id);
-                                        if let Some(waiting) =
-                                            loop_pending.write().await.remove(&resp.req_id)
-                                        {
-                                            tracing::info!(
-                                                "dispatching to waiter {:?}",
-                                                resp.req_id
-                                            );
-                                            waiting.send(resp).expect("FIXME");
-                                        } else {
-                                            tracing::info!(
-                                                "dispatching to inbound channel {:?}",
-                                                resp.req_id
-                                            );
-                                            inbound_tx
-                                                .send(Message::BatchSyncResponse(resp))
-                                                .expect("FIXME");
-                                        }
-                                    }
-                                    other => {
-                                        inbound_tx.send(other).expect("FIXME");
-                                    } // FIXME
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("failed to decode message: {}", e);
-                            }
-                        }
-                    }
-                    Ok(tungstenite::Message::Text(text)) => {
-                        tracing::warn!("unexpected text message: {}", text);
-                    }
-                    Ok(tungstenite::Message::Ping(p)) => {
-                        tracing::info!("received ping: {:x?}", p);
-                        loop_outbound
-                            .lock()
-                            .await
-                            .send(tungstenite::Message::Pong(p))
-                            .await
-                            .unwrap_or_else(|_| {
-                                tracing::error!("failed to send pong");
-                            });
-                    }
-                    Ok(tungstenite::Message::Pong(p)) => {
-                        tracing::warn!("unexpected pong message: {:x?}", p);
-                    }
-                    Ok(tungstenite::Message::Frame(f)) => {
-                        tracing::warn!("unexpected frame: {:x?}", f);
-                    }
-                    Ok(tungstenite::Message::Close(_)) => {
-                        // fail all pending
-                        std::mem::take(&mut *loop_pending.write().await);
-                        break;
-                    }
-                    Err(e) => {
-                        // FIXME err chan?
-                        tracing::error!("WebSocket error: {}", e);
-                    }
-                }
-            }
-        });
-
+        let (inbound_writer, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let ws_reader = Arc::new(Mutex::new(ws_reader_owned));
         let starting_counter = rand::random::<u32>();
 
         Self {
@@ -220,16 +133,88 @@ impl WebSocket {
             req_id_counter: Arc::new(Mutex::new(starting_counter)),
             timeout,
 
-            outbound,
+            ws_reader,
+            outbound: Arc::new(Mutex::new(ws_writer)),
             pending,
-            inbound: Arc::new(Mutex::new(inbound_rx)),
+            inbound_writer,
+            inbound_reader: Arc::new(Mutex::new(inbound_rx)),
         }
+    }
+
+    pub async fn run(&self) -> Result<(), tokio::sync::mpsc::error::SendError<Message>> {
+        let pending = self.pending.clone();
+        while let Some(msg) = self.ws_reader.lock().await.next().await {
+            tracing::debug!("received ws message");
+            match msg {
+                Ok(tungstenite::Message::Binary(bytes)) => {
+                    let result: Result<(Message, usize), _> =
+                        bincode::serde::decode_from_slice(&bytes, bincode::config::standard());
+
+                    match result {
+                        Ok((msg, _size)) => match msg {
+                            Message::BatchSyncResponse(resp) => {
+                                tracing::info!("dispatching to waiter {:?}", resp.req_id);
+                                if let Some(waiting) = pending.write().await.remove(&resp.req_id) {
+                                    tracing::info!("dispatching to waiter {:?}", resp.req_id);
+                                    let _fixme = waiting.send(resp);
+                                } else {
+                                    tracing::info!(
+                                        "dispatching to inbound channel {:?}",
+                                        resp.req_id
+                                    );
+                                    self.inbound_writer.send(Message::BatchSyncResponse(resp))?;
+                                }
+                            }
+                            other => {
+                                self.inbound_writer.send(other)?;
+                            }
+                        },
+                        Err(e) => {
+                            tracing::error!("failed to decode message: {}", e);
+                        }
+                    }
+                }
+                Ok(tungstenite::Message::Text(text)) => {
+                    tracing::warn!("unexpected text message: {}", text);
+                }
+                Ok(tungstenite::Message::Ping(p)) => {
+                    tracing::info!("received ping: {:x?}", p);
+                    self.outbound
+                        .lock()
+                        .await
+                        .send(tungstenite::Message::Pong(p))
+                        .await
+                        .unwrap_or_else(|_| {
+                            tracing::error!("failed to send pong");
+                        });
+                }
+                Ok(tungstenite::Message::Pong(p)) => {
+                    tracing::warn!("unexpected pong message: {:x?}", p);
+                }
+                Ok(tungstenite::Message::Frame(f)) => {
+                    tracing::warn!("unexpected frame: {:x?}", f);
+                }
+                Ok(tungstenite::Message::Close(_)) => {
+                    // fail all pending
+                    std::mem::take(&mut *pending.write().await);
+                    break;
+                }
+                Err(e) => {
+                    // FIXME err chan?
+                    tracing::error!("WebSocket error: {}", e);
+                }
+            }
+        }
+
+        Ok(())
     }
 }
 
 impl Connection for WebSocket {
-    type Error = FixmeErr;
-    type DisconnectionError = FixmeErr;
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type CallError = CallError;
+    type DisconnectionError = DisconnectionError;
 
     fn connection_id(&self) -> usize {
         self.conn_id
@@ -258,26 +243,23 @@ impl Connection for WebSocket {
     }
 
     #[tracing::instrument(skip(self))]
-    async fn send(&self, message: Message) -> Result<(), Self::Error> {
+    async fn send(&self, message: Message) -> Result<(), SendError> {
         self.outbound
             .lock()
             .await
             .send(tungstenite::Message::Binary(
-                bincode::serde::encode_to_vec(&message, bincode::config::standard())
-                    .expect("FIXME")
-                    .into(),
+                bincode::serde::encode_to_vec(&message, bincode::config::standard())?.into(),
             ))
-            .await
-            .expect("FIXME");
+            .await?;
 
         Ok(())
     }
 
     #[tracing::instrument(skip(self))]
-    async fn recv(&self) -> Result<Message, Self::Error> {
+    async fn recv(&self) -> Result<Message, Self::RecvError> {
         tracing::debug!("waiting for inbound message");
-        let mut chan = self.inbound.lock().await;
-        let msg = chan.recv().await.ok_or(FixmeErr)?;
+        let mut chan = self.inbound_reader.lock().await;
+        let msg = chan.recv().await.ok_or(RecvError::ReadFromClosed)?;
         tracing::info!("received inbound message id {:?}", msg.request_id());
         Ok(msg)
     }
@@ -287,7 +269,7 @@ impl Connection for WebSocket {
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
-    ) -> Result<BatchSyncResponse, Self::Error> {
+    ) -> Result<BatchSyncResponse, Self::CallError> {
         let req_id = req.req_id;
 
         // Pre-register channel
@@ -301,17 +283,14 @@ impl Connection for WebSocket {
                 bincode::serde::encode_to_vec(
                     &Message::BatchSyncRequest(req),
                     bincode::config::standard(),
-                )
-                .expect("FIXME")
+                )?
                 .into(),
             ))
-            .await
-            .expect("FIXME");
+            .await?;
 
         let req_timeout = override_timeout.unwrap_or(self.timeout);
 
         // await response with timeout & cleanup
-        // FIXME make timeout adjustable
         match timeout(req_timeout, rx).await {
             Ok(Ok(resp)) => {
                 tracing::info!("request {:?} completed", req_id);
@@ -319,19 +298,15 @@ impl Connection for WebSocket {
             }
             Ok(Err(e)) => {
                 tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                Err(FixmeErr)
+                Err(CallError::ChanError(e))
             }
-            Err(_elapsed) => {
+            Err(elapsed) => {
                 tracing::error!("request {:?} timed out", req_id);
-                Err(FixmeErr)
+                Err(CallError::Timeout(elapsed))
             }
         }
     }
 }
-
-#[derive(Debug, Error)]
-#[error("FIXME Error")]
-pub struct FixmeErr;
 
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStorage {
@@ -380,3 +355,40 @@ impl Storage for MemoryStorage {
         Ok(maybe_blob)
     }
 }
+
+#[derive(Debug, Error)]
+pub enum SendError {
+    #[error("WebSocket error: {0}")]
+    WebSocket(#[from] tungstenite::Error),
+
+    #[error("Bincode error: {0}")]
+    Bincode(#[from] bincode::error::EncodeError),
+}
+
+#[derive(Debug, Error)]
+pub enum CallError {
+    #[error("WebSocket error: {0}")]
+    WebSocket(#[from] tungstenite::Error),
+
+    #[error("Bincode error: {0}")]
+    Bincode(#[from] bincode::error::EncodeError),
+
+    #[error("Channel receive error: {0}")]
+    ChanError(#[from] oneshot::error::RecvError),
+
+    #[error("Timed out waiting for response: {0}")]
+    Timeout(#[from] tokio::time::error::Elapsed),
+}
+
+#[derive(Debug, Error)]
+pub enum RecvError {
+    #[error("Channel receive error: {0}")]
+    ChanError(#[from] oneshot::error::RecvError),
+
+    #[error("Attempted to read from closed channel")]
+    ReadFromClosed,
+}
+
+#[derive(Debug, Error)]
+#[error("Disconnected")]
+pub struct DisconnectionError;
