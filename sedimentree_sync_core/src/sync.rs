@@ -39,12 +39,10 @@ pub struct SedimentreeSync<S: Storage, C: Connection> {
 }
 
 impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
-    pub async fn listen_forever(&self) -> Result<(), IoError<S, C>> {
-        loop {
-            self.listen().await?
-        }
-    }
-
+    /// Listen for incoming messages from all connections and handle them appropriately.
+    ///
+    /// This method runs indefinitely, processing messages as they arrive.
+    /// If no peers are connected, it will wait until a peer connects.
     #[tracing::instrument(skip(self))]
     pub async fn listen(&self) -> Result<(), IoError<S, C>> {
         loop {
@@ -110,14 +108,14 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
                             self.recv_batch_sync_response(&from, id, &diff).await?
                         }
-                        Message::BlobRequest { digests } => {
+                        Message::BlobsRequest(digests) => {
                             if self.connections.lock().await.contains_key(&idx) {
                                 self.recv_blob_request(&conn, &digests).await?
                             } else {
                                 tracing::warn!("No connection found for FIXME");
                             }
                         }
-                        Message::BlobResponse { blobs, .. } => {
+                        Message::BlobsResponse(blobs) => {
                             for blob in blobs {
                                 self.storage
                                     .save_blob(blob)
@@ -374,6 +372,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         }
     }
 
+    /// Handle receiving a blob request from a peer.
     pub async fn recv_blob_request(
         &self,
         conn: &C,
@@ -392,7 +391,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             }
         }
 
-        conn.send(Message::BlobResponse { blobs })
+        conn.send(Message::BlobsResponse(blobs))
             .await
             .map_err(IoError::ConnSend)?;
 
@@ -540,6 +539,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
      * BATCH SYNCHRONIZE *
      *********************/
 
+    /// Handle receiving a batch sync request from a peer.
     #[tracing::instrument(skip(self, their_summary, conn))]
     pub async fn recv_batch_sync_request(
         &self,
@@ -616,6 +616,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         Ok(())
     }
 
+    /// Handle receiving a batch sync response from a peer.
     pub async fn recv_batch_sync_response(
         &self,
         from: &PeerId,
@@ -644,7 +645,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         Ok(())
     }
 
-    // Request a batch sync from a given peer for a given sedimentree ID.
+    /// Request a batch sync from a given peer for a given sedimentree ID.
     #[tracing::instrument(skip(self))]
     pub async fn request_peer_batch_sync(
         &self,
@@ -799,6 +800,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         Ok(had_success)
     }
 
+    /// Request a batch sync from all connected peers for all known sedimentree IDs.
     pub async fn request_all_batch_sync_all(
         &self,
         timeout: Option<Duration>,
