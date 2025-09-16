@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
             let (ws_stream, _) = tokio_tungstenite::connect_async(&args.ws).await?;
 
-            tracing::info!("WebSocket server listening on {}", args.ws);
+            tracing::info!("Connected to WebSocket server at {}", args.ws);
 
             let ws = WebSocket::new(
                 ws_stream,
