@@ -909,7 +909,7 @@ mod tests {
                 let lower_end_hash = hash_with_trailing_zeros(u, 10, 10)?;
 
                 #[allow(clippy::enum_variant_names)]
-                #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+                #[derive(arbitrary::Arbitrary)]
                 enum HigherDepthType {
                     StartsAtStartEndsAtCheckpoint,
                     StartsAtCheckpointEndsAtEnd,

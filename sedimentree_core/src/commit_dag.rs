@@ -442,7 +442,7 @@ mod tests {
 
     use crate::{blob::BlobMeta, Digest};
 
-    pub fn hash_with_trailing_zeros<R: rand::Rng>(
+    fn hash_with_trailing_zeros<R: rand::Rng>(
         rng: &mut R,
         base: u32,
         trailing_zeros: u32,
