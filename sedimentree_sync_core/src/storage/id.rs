@@ -8,11 +8,14 @@ pub struct StorageId(String);
 
 impl StorageId {
     /// Create a new [`StorageId`].
-    pub fn new(id: String) -> Self {
+    #[must_use]
+    pub const fn new(id: String) -> Self {
         Self(id)
     }
 
     /// Get the string representation of the [`StorageId`].
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn as_str(&self) -> &str {
         &self.0
     }

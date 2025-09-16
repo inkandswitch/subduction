@@ -82,6 +82,10 @@ pub trait Reconnection: Connection {
 /// A policy for allowing or disallowing connections from peers.
 pub trait ConnectionPolicy {
     /// Check if a connection from the given peer is allowed.
+    ///
+    /// # Errors
+    ///
+    /// * Returns [`ConnectionDisallowed`] if the connection is not allowed.
     fn allowed_to_connect(&self, peer: &PeerId) -> Result<(), ConnectionDisallowed>;
 }
 
@@ -147,10 +151,11 @@ pub enum Message {
 
 impl Message {
     /// Get the request ID for this message, if any.
+    #[must_use]
     pub const fn request_id(&self) -> Option<RequestId> {
         match self {
-            Message::BatchSyncRequest(BatchSyncRequest { req_id, .. }) => Some(*req_id),
-            Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
+            Message::BatchSyncRequest(BatchSyncRequest { req_id, .. })
+            | Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
             _ => None,
         }
     }
@@ -218,11 +223,13 @@ pub struct ConnectionId(usize);
 
 impl ConnectionId {
     /// Create a new [`ConnectionId`] from a `usize`.
-    pub fn new(id: usize) -> Self {
+    #[must_use]
+    pub const fn new(id: usize) -> Self {
         Self(id)
     }
 
     /// Get the inner `usize` representation of the [`ConnectionId`].
+    #[must_use]
     pub const fn as_usize(&self) -> usize {
         self.0
     }

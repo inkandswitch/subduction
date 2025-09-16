@@ -31,7 +31,8 @@ impl Blob {
 
     /// Get the contents of the blob as a slice.
     #[must_use]
-    pub const fn as_slice(&self) -> &Vec<u8> {
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
 

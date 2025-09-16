@@ -10,21 +10,25 @@ pub struct StorageKey(Vec<String>);
 
 impl StorageKey {
     /// Create a new storage key from its path segments or other identifier.
-    pub fn new(key: Vec<String>) -> Self {
+    #[must_use]
+    pub const fn new(key: Vec<String>) -> Self {
         Self(key)
     }
 
     /// Get the storage key as a slice of strings.
+    #[must_use]
     pub fn as_slice(&self) -> &[String] {
         self.0.as_slice()
     }
 
     /// Get the storage key as a vector of strings.
+    #[must_use]
     pub fn to_vec(&self) -> Vec<String> {
         self.0.clone()
     }
 
     /// Consume the storage key and return its segments.
+    #[must_use]
     pub fn into_vec(self) -> Vec<String> {
         self.0
     }

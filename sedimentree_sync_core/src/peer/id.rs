@@ -10,16 +10,20 @@ pub struct PeerId([u8; 32]);
 
 impl PeerId {
     /// Create a new [`PeerId`].
-    pub fn new(id: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn new(id: [u8; 32]) -> Self {
         Self(id)
     }
 
     /// Get the byte array representation of the [`PeerId`].
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 
     /// Get the slice representation of the [`PeerId`].
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }
@@ -39,7 +43,7 @@ impl std::fmt::Debug for PeerId {
 fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
-        write!(&mut s, "{:02x}", b).expect("preallocated length should be sufficient");
+        write!(&mut s, "{b:02x}").expect("preallocated length should be sufficient");
     }
     s
 }

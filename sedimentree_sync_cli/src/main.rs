@@ -222,7 +222,7 @@ impl Connection for WebSocket {
             .await
             .send(tungstenite::Message::Binary(
                 bincode::serde::encode_to_vec(
-                    &Message::BatchSyncRequest(req),
+                    Message::BatchSyncRequest(req),
                     bincode::config::standard(),
                 )?
                 .into(),
@@ -342,11 +342,9 @@ pub struct MemoryStorage {
 impl Storage for MemoryStorage {
     type Error = std::convert::Infallible;
 
-    fn load_loose_commits(&self) -> impl Future<Output = Result<Vec<LooseCommit>, Self::Error>> {
-        async {
-            let commits = self.commits.read().await.values().cloned().collect();
-            Ok(commits)
-        }
+    async fn load_loose_commits(&self) -> Result<Vec<LooseCommit>, Self::Error> {
+        let commits = self.commits.read().await.values().cloned().collect();
+        Ok(commits)
     }
 
     async fn save_loose_commit(&self, loose_commit: LooseCommit) -> Result<(), Self::Error> {
@@ -361,11 +359,9 @@ impl Storage for MemoryStorage {
         Ok(())
     }
 
-    fn load_chunks(&self) -> impl Future<Output = Result<Vec<Chunk>, Self::Error>> {
-        async {
-            let chunks = self.chunks.read().await.values().cloned().collect();
-            Ok(chunks)
-        }
+    async fn load_chunks(&self) -> Result<Vec<Chunk>, Self::Error> {
+        let chunks = self.chunks.read().await.values().cloned().collect();
+        Ok(chunks)
     }
 
     async fn save_blob(&self, blob: Blob) -> Result<Digest, Self::Error> {
