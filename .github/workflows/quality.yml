@@ -20,8 +20,8 @@ jobs:
     - name: Build
       run: cargo build --verbose
     - name: Build with Test Utils
-      run: cargo build --verbose --features=test_utils
+      run: cargo build --verbose --all-features
     - name: Check
-      run: cargo check --verbose --features=test_utils
+      run: cargo check --verbose --all-features
     - name: Clippy
-      run: cargo clippy --all-targets --features=test_utils -- -D warnings
+      run: cargo clippy --all-targets --all-features -- -D warnings
