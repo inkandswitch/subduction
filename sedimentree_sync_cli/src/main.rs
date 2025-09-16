@@ -1,6 +1,6 @@
-mod black_box;
+// FIXME mod black_box;
 
-use self::black_box::BlackBox;
+// FIXME use self::black_box::BlackBox;
 use clap::Parser;
 use futures_util::{
     stream::{SplitSink, SplitStream},
@@ -11,9 +11,10 @@ use sedimentree_core::{
 };
 use sedimentree_sync_core::{
     connection::{
-        BatchSyncRequest, BatchSyncResponse, Connection, Message, Reconnection, RequestId,
+        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionId, Message, Reconnection,
+        RequestId,
     },
-    peer::{id::PeerId, metadata::PeerMetadata},
+    peer::id::PeerId,
     SedimentreeSync,
 };
 use std::{collections::HashMap, sync::Arc, time::Duration};
@@ -54,8 +55,13 @@ async fn main() -> anyhow::Result<()> {
             let ws_stream = tokio_tungstenite::accept_async(stream).await?;
             tracing::info!("WebSocket server listening on {}", args.ws);
 
-            let ws =
-                WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([0u8; 32]), 0).await;
+            let ws = WebSocket::new(
+                ws_stream,
+                Duration::from_secs(5),
+                PeerId::new([0u8; 32]),
+                0.into(),
+            )
+            .await;
 
             syncer.register(ws).await?;
             syncer.listen().await?;
@@ -67,8 +73,13 @@ async fn main() -> anyhow::Result<()> {
 
             tracing::info!("WebSocket server listening on {}", args.ws);
 
-            let ws =
-                WebSocket::new(ws_stream, Duration::from_secs(5), PeerId::new([1u8; 32]), 0).await;
+            let ws = WebSocket::new(
+                ws_stream,
+                Duration::from_secs(5),
+                PeerId::new([1u8; 32]),
+                0.into(),
+            )
+            .await;
 
             syncer.register(ws).await?;
             let listen = syncer.listen();
@@ -96,7 +107,7 @@ struct Arguments {
 
 #[derive(Debug, Clone)]
 pub struct WebSocket {
-    conn_id: usize,
+    conn_id: ConnectionId,
     peer_id: PeerId,
 
     req_id_counter: Arc<Mutex<u128>>,
@@ -117,7 +128,7 @@ impl WebSocket {
         ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
         timeout: Duration,
         peer_id: PeerId,
-        conn_id: usize,
+        conn_id: ConnectionId,
     ) -> Self {
         let (ws_writer, ws_reader_owned) = ws.split();
         let pending = Arc::new(RwLock::new(HashMap::<
@@ -150,16 +161,12 @@ impl Connection for WebSocket {
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn connection_id(&self) -> usize {
+    fn connection_id(&self) -> ConnectionId {
         self.conn_id
     }
 
     fn peer_id(&self) -> PeerId {
         self.peer_id
-    }
-
-    fn peer_metadata(&self) -> Option<PeerMetadata> {
-        None
     }
 
     async fn next_request_id(&self) -> RequestId {
@@ -251,7 +258,7 @@ impl Reconnection for WebSocket {
         addr: Self::Address,
         timeout: Duration,
         peer_id: PeerId,
-        conn_id: usize,
+        conn_id: ConnectionId,
     ) -> Result<Box<Self>, Self::ConnectError> {
         let (ws_stream, _) = tokio_tungstenite::connect_async(addr).await?;
         Ok(Box::new(

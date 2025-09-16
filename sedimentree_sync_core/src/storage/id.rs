@@ -1,10 +1,9 @@
 //! Storage identifiers.
 
-use serde::{Deserialize, Serialize};
-
 /// A simple newtype for storage identifiers.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct StorageId(String);
 
 impl StorageId {

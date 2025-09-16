@@ -2,8 +2,8 @@
 
 use crate::{
     connection::{
-        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionDisallowed, ConnectionPolicy,
-        Message, RequestId, SyncDiff,
+        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionDisallowed, ConnectionId,
+        ConnectionPolicy, Message, RequestId, SyncDiff,
     },
     peer::id::PeerId,
 };
@@ -34,7 +34,7 @@ pub struct ChunkRequested {
 #[derive(Debug, Clone)]
 pub struct SedimentreeSync<S: Storage, C: Connection> {
     sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
-    connections: Arc<Mutex<HashMap<usize, C>>>,
+    connections: Arc<Mutex<HashMap<ConnectionId, C>>>,
     storage: S,
 }
 
@@ -50,14 +50,11 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         }
     }
 
-    async fn inner_listen(&self) -> Result<(), IoError<S, C>> {
-        // FIXME key: usize shoudl be newtyped
-        async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::RecvError> {
-            let msg = conn.recv().await?;
-            Ok((conn, msg))
-        }
+    // FIXME fn reconnnect
 
+    async fn inner_listen(&self) -> Result<(), IoError<S, C>> {
         let mut futs = FuturesUnordered::new();
+        // FIXME add new connections to the global futs
         for conn in self.connections.lock().await.values() {
             tracing::info!(
                 "Spawning listener for connection {:?}",
@@ -75,15 +72,12 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     let idx = conn.connection_id();
                     let from = conn.peer_id();
 
-                    // FIXME probably want a global queue for new dynamic connections
+                    tracing::info!("Received message from peer {:?}: {:?}", from, message);
+
                     // Re-enque if that connection is still active at the top-level
                     if self.connections.lock().await.contains_key(&idx) {
                         futs.push(indexed_listen(conn.clone()));
-                    } else {
-                        tracing::warn!("No connection found for FIXME");
                     }
-
-                    tracing::info!("Received message from peer {:?}: {:?}", from, message);
 
                     match message {
                         Message::LooseCommit { id, commit, blob } => {
@@ -110,9 +104,19 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         }
                         Message::BlobsRequest(digests) => {
                             if self.connections.lock().await.contains_key(&idx) {
-                                self.recv_blob_request(&conn, &digests).await?
+                                match self.recv_blob_request(&conn, &digests).await {
+                                    Ok(()) => {}
+                                    Err(BlobRequestErr::IoError(e)) => Err(e)?,
+                                    Err(BlobRequestErr::MissingBlobs(missing)) => {
+                                        tracing::warn!(
+                                            "Missing blobs for request from peer {:?}: {:?}",
+                                            from,
+                                            missing
+                                        );
+                                    }
+                                }
                             } else {
-                                tracing::warn!("No connection found for FIXME");
+                                tracing::warn!("No open connection for request ({:?})", idx);
                             }
                         }
                         Message::BlobsResponse(blobs) => {
@@ -125,7 +129,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         }
                     }
                 }
-                Err(e) => { /* decide whether to bail or keep going */ }
+                Err(e) => Err(IoError::ConnRecv(e))?,
             }
         }
 
@@ -137,7 +141,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     pub fn new(
         sedimentrees: HashMap<SedimentreeId, Sedimentree>,
         storage: S,
-        connections: HashMap<usize, C>,
+        connections: HashMap<ConnectionId, C>,
     ) -> Self {
         Self {
             sedimentrees: Arc::new(Mutex::new(sedimentrees)),
@@ -166,9 +170,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     tracing::trace!("Loaded chunk {:?}", chunk.digest());
                     sedimentree.add_chunk(chunk);
                 }
-
-                // FIXME controversial!
-                *sedimentree = sedimentree.minimize();
             }
         }
 
@@ -289,8 +290,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     #[tracing::instrument(skip(self))]
     pub async fn get_local_blobs(&self, id: SedimentreeId) -> Result<Option<Vec<Blob>>, S::Error> {
         if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
-            tracing::info!("Found sedimentree with id {:?}", id);
-
+            tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
 
             for digest in sedimentree
@@ -302,14 +302,12 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         .map(|chunk| chunk.summary().blob_meta().digest()),
                 )
             {
-                // FIXME should be different for range queries?
-                // let storage_key = StorageKey::new(vec![digest.to_string()]);
+                // TODO include impl for range queries
 
                 if let Some(blob) = self.storage.load_blob(digest).await? {
                     results.push(blob);
-                    break;
                 } else {
-                    todo!("FIXME can't find blob in storage")
+                    tracing::warn!("Missing blob for digest {:?}", digest);
                 }
             }
 
@@ -377,8 +375,9 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         &self,
         conn: &C,
         digests: &[Digest],
-    ) -> Result<(), IoError<S, C>> {
+    ) -> Result<(), BlobRequestErr<S, C>> {
         let mut blobs = Vec::new();
+        let mut missing = Vec::new();
         for digest in digests {
             if let Some(blob) = self
                 .get_local_blob(*digest)
@@ -387,7 +386,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             {
                 blobs.push(blob);
             } else {
-                todo!("FIXME can't find blob in storage")
+                missing.push(*digest);
             }
         }
 
@@ -395,7 +394,11 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::ConnSend)?;
 
-        Ok(())
+        if missing.is_empty() {
+            Ok(())
+        } else {
+            Err(BlobRequestErr::MissingBlobs(missing))
+        }
     }
 
     /***********************
@@ -410,7 +413,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         commit: &LooseCommit,
         blob: Blob,
     ) -> Result<Option<ChunkRequested>, IoError<S, C>> {
-        self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME clone
+        self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
@@ -456,7 +459,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         drop(sed);
 
         self.storage
-            .save_blob(blob.clone()) // FIXME clone
+            .save_blob(blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
@@ -516,7 +519,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         chunk: &Chunk,
         blob: Blob,
     ) -> Result<(), IoError<S, C>> {
-        self.insert_chunk_locally(id, chunk.clone(), blob.clone()) // FIXME clone
+        self.insert_chunk_locally(id, chunk.clone(), blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
@@ -570,7 +573,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         .await
                         .map_err(IoError::Storage)?
                     {
-                        missing_commits.push((commit.clone(), blob)); // FIXME clone
+                        missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
                     } else {
                         todo!()
                     }
@@ -585,7 +588,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         .await
                         .map_err(IoError::Storage)?
                     {
-                        missing_chunks.push((chunk.clone(), blob)); // FIXME clone
+                        missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
                     } else {
                         todo!()
                     }
@@ -631,7 +634,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             diff.missing_chunks.len()
         );
         for (commit, blob) in diff.missing_commits.iter() {
-            self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning
+            self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                 .await
                 .map_err(IoError::Storage)?;
         }
@@ -705,7 +708,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 .map_err(IoError::ConnCall)?;
 
             for (commit, blob) in missing_commits {
-                self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning
+                self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                     .await
                     .map_err(IoError::Storage)?;
             }
@@ -780,7 +783,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     .map_err(IoError::ConnCall)?;
 
                 for (commit, blob) in missing_commits {
-                    self.insert_commit_locally(id, commit.clone(), blob.clone()) // FIXME so much cloning
+                    self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                         .await
                         .map_err(IoError::Storage)?;
                 }
@@ -909,4 +912,21 @@ pub enum IoError<S: Storage, C: Connection> {
     /// The connection was disallowed by the [`ConnectionPolicy`] policy.
     #[error(transparent)]
     ConnPolicy(#[from] ConnectionDisallowed),
+}
+
+/// An error that can occur while handling a blob request.
+#[derive(Debug, Error)]
+pub enum BlobRequestErr<S: Storage, C: Connection> {
+    /// An IO error occurred while handling the blob request.
+    #[error("IO error: {0}")]
+    IoError(#[from] IoError<S, C>),
+
+    /// Some requested blobs were missing locally.
+    #[error("Missing blobs: {0:?}")]
+    MissingBlobs(Vec<Digest>),
+}
+
+async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::RecvError> {
+    let msg = conn.recv().await?;
+    Ok((conn, msg))
 }

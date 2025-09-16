@@ -1,4 +1,4 @@
 //! Peers
 
 pub mod id;
-pub mod metadata;
+// TODO? pub mod metadata;

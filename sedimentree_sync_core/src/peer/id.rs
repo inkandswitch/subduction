@@ -1,10 +1,11 @@
 //! A simple wrapper around a String to represent a Peer ID.
 
-use serde::{Deserialize, Serialize};
+use std::fmt::Write;
 
 /// A Peer ID.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PeerId([u8; 32]);
 
 impl PeerId {
@@ -26,14 +27,19 @@ impl PeerId {
 
 impl std::fmt::Display for PeerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let b58 = base58::ToBase58::to_base58(self.as_slice());
-        b58.fmt(f)
+        to_hex(self.as_slice()).fmt(f)
     }
 }
 
 impl std::fmt::Debug for PeerId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let b58 = base58::ToBase58::to_base58(self.as_slice());
-        b58.fmt(f)
+        std::fmt::Display::fmt(self, f)
     }
+}
+fn to_hex(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        write!(&mut s, "{:02x}", b).expect("preallocated length should be sufficient");
+    }
+    s
 }

@@ -4,7 +4,7 @@ members = [
   "sedimentree_core",
   "sedimentree_sync_cli",
   "sedimentree_sync_core",
-  "sedimentree_sync_wasm"
+  # TODO "sedimentree_sync_wasm"
 ]
 
 [workspace.package]

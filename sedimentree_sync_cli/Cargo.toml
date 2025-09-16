@@ -5,7 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow = "1.0"
-automerge = "0.6.1" # FIXME use workspace version
+automerge = { workspace = true }
 bincode = { version = "2.0", features = ["serde"] }
 clap = { version = "4.5", features = ["derive"] }
 futures = "0.3.31"
@@ -13,8 +13,8 @@ futures-util = "0.3.31"
 nonempty = { workspace = true }
 rand = "0.9.2"
 serde = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core" }
-sedimentree_sync_core = { path = "../sedimentree_sync_core" }
+sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
+sedimentree_sync_core = { path = "../sedimentree_sync_core", features = ["serde"] }
 thiserror = { workspace = true }
 tokio = { version = "1.46", features = ["full"] }
 tokio-tungstenite = { version = "0.27.0", features = ["tokio-native-tls"] }

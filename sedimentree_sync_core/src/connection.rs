@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use crate::peer::{id::PeerId, metadata::PeerMetadata};
+use crate::peer::id::PeerId;
 use futures::Future;
 use sedimentree_core::{Blob, Chunk, Digest, LooseCommit, SedimentreeId, SedimentreeSummary};
 use thiserror::Error;
@@ -29,13 +29,10 @@ pub trait Connection: Clone {
     /// This number should be a counter or random number.
     /// We assume that the smae ID is never reused for different connections.
     /// For this reason, it is not recommended to use or derive from the peer ID on its own.
-    fn connection_id(&self) -> usize;
+    fn connection_id(&self) -> ConnectionId;
 
     /// The peer ID of the remote peer.
     fn peer_id(&self) -> PeerId;
-
-    /// The metadata of the remote peer, if any.
-    fn peer_metadata(&self) -> Option<PeerMetadata>;
 
     /// Disconnect from the peer gracefully.
     fn disconnect(&mut self) -> impl Future<Output = Result<(), Self::DisconnectionError>>;
@@ -75,7 +72,7 @@ pub trait Reconnection: Connection {
         addr: Self::Address,
         timeout: Duration,
         peer_id: PeerId,
-        conn_id: usize,
+        conn_id: ConnectionId,
     ) -> impl Future<Output = Result<Box<Self>, Self::ConnectError>>;
 
     /// Run the connection send/receive loop.
@@ -93,20 +90,7 @@ pub trait ConnectionPolicy {
 #[error("Connection disallowed")]
 pub struct ConnectionDisallowed;
 
-/// A random challenge to be signed by a peer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct Challenge([u8; 32]);
-
-/// A trait for generating and verifying challenges for peers.
-pub trait PeerChallenge {
-    /// Generate a random challenge for the given peer.
-    fn generate_challenge(&self, peer_id: &PeerId) -> Challenge; // NOTE store this locally in e.g. ring buffer + expiry
-
-    /// Verify a signed challenge from the given peer.
-    fn verify_challenge(&self, peer_id: &PeerId, signature: [u8; 32]) -> bool; // FIXME ed25519_dalek::signature
-}
-
-// FIXME shoukd have a borrowed version?
+// TODO also make a version for the sender that is borrowed instead of owned.
 /// The calculated difference for the remote peer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -224,4 +208,40 @@ pub struct RequestId {
 
     /// A nonce unique to this user and connection.
     pub nonce: u128,
+}
+
+/// A unique identifier for a particular connection.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct ConnectionId(usize);
+
+impl ConnectionId {
+    /// Create a new [`ConnectionId`] from a `usize`.
+    pub fn new(id: usize) -> Self {
+        Self(id)
+    }
+
+    /// Get the inner `usize` representation of the [`ConnectionId`].
+    pub fn as_usize(&self) -> usize {
+        self.0
+    }
+}
+
+impl From<usize> for ConnectionId {
+    fn from(value: usize) -> Self {
+        Self(value)
+    }
+}
+
+impl From<ConnectionId> for usize {
+    fn from(value: ConnectionId) -> Self {
+        value.0
+    }
+}
+
+impl std::fmt::Display for ConnectionId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "conn-{}", self.0)
+    }
 }
