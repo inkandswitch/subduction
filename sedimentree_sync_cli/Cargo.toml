@@ -1,7 +1,17 @@
 [package]
 name = "sedimentree_sync_cli"
 version = "0.1.0"
+description = "CLI tool for running Sedimentree Sync with WebSockets"
+
+categories = ["command-line-utilities", "web-programming"]
+keywords = ["sedimentree-sync"]
+readme = "./README.md"
+
+authors.workspace = true
 edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 anyhow = "1.0"

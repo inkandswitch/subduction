@@ -64,7 +64,7 @@ async fn main() -> anyhow::Result<()> {
             .await;
 
             syncer.register(ws).await?;
-            syncer.listen().await?;
+            syncer.run().await?;
         }
         Some("connect") => {
             tracing::info!("Connecting to WebSocket server at {}", args.ws);
@@ -82,10 +82,10 @@ async fn main() -> anyhow::Result<()> {
             .await;
 
             syncer.register(ws).await?;
-            let listen = syncer.listen();
+            let listen = syncer.run();
             syncer.request_all_batch_sync_all(None).await?;
             listen.await?;
-            syncer.listen().await?;
+            syncer.run().await?;
         }
         _ => {
             eprintln!("Please specify either 'start' or 'connect' command");

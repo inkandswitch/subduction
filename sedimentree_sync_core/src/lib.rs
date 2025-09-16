@@ -27,7 +27,6 @@
 #![forbid(unsafe_code)]
 
 pub mod connection;
-// FIXME remove? pub mod payload;
 pub mod peer;
 pub mod storage;
 pub mod sync;

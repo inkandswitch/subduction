@@ -44,15 +44,15 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     /// This method runs indefinitely, processing messages as they arrive.
     /// If no peers are connected, it will wait until a peer connects.
     #[tracing::instrument(skip(self))]
-    pub async fn listen(&self) -> Result<(), ListenError<S, C>> {
+    pub async fn run(&self) -> Result<(), ListenError<S, C>> {
         loop {
-            self.inner_listen().await?
+            self.listen().await?
         }
     }
 
     // FIXME fn reconnnect
 
-    async fn inner_listen(&self) -> Result<(), ListenError<S, C>> {
+    async fn listen(&self) -> Result<(), ListenError<S, C>> {
         let mut pump = FuturesUnordered::new();
         // FIXME add new connections to the global futs
         {
@@ -832,7 +832,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     .lock()
                     .await
                     .get(&id)
-                    .map(|s| s.summarize())
+                    .map(Sedimentree::summarize)
                     .unwrap_or_default();
 
                 let BatchSyncResponse {
@@ -876,6 +876,15 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     }
 
     /// Request a batch sync from all connected peers for all known sedimentree IDs.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(true)` if at least one sync was successful.
+    /// * `Ok(false)` if no syncs were performed (e.g., no sedimentrees or no peers).
+    ///
+    /// # Errors
+    ///
+    /// * `Err(IoError)` if any I/O error occurs during the sync process.
     pub async fn request_all_batch_sync_all(
         &self,
         timeout: Option<Duration>,

@@ -12,26 +12,31 @@ pub struct Blob(Vec<u8>);
 
 impl Blob {
     /// Create a new blob from the given contents.
-    pub fn new(contents: Vec<u8>) -> Self {
+    #[must_use]
+    pub const fn new(contents: Vec<u8>) -> Self {
         Blob(contents)
     }
 
     /// The contents of the blob.
-    pub fn contents(&self) -> &[u8] {
+    #[must_use]
+    pub const fn contents(&self) -> &Vec<u8> {
         &self.0
     }
 
     /// Consume the blob and return its contents.
+    #[must_use]
     pub fn into_contents(self) -> Vec<u8> {
         self.0
     }
 
     /// Get the contents of the blob as a slice.
-    pub fn as_slice(&self) -> &[u8] {
+    #[must_use]
+    pub const fn as_slice(&self) -> &Vec<u8> {
         &self.0
     }
 
     /// Get metadata for the blob.
+    #[must_use]
     pub fn meta(&self) -> BlobMeta {
         BlobMeta::new(&self.0)
     }
@@ -48,6 +53,7 @@ pub struct BlobMeta {
 
 impl BlobMeta {
     /// Generate metadata for the given contents.
+    #[must_use]
     pub fn new(contents: &[u8]) -> Self {
         let digest = Digest::hash(contents);
         let size_bytes = contents.len() as u64;
@@ -57,17 +63,20 @@ impl BlobMeta {
     /// Manually create metadata from a digest and size.
     ///
     /// Since this is manual, it may be incorrect.
-    pub fn from_digest_size(digest: Digest, size_bytes: u64) -> Self {
+    #[must_use]
+    pub const fn from_digest_size(digest: Digest, size_bytes: u64) -> Self {
         BlobMeta { digest, size_bytes }
     }
 
     /// The digest of the blob.
-    pub fn digest(&self) -> Digest {
+    #[must_use]
+    pub const fn digest(&self) -> Digest {
         self.digest
     }
 
     /// The size of the blob in bytes.
-    pub fn size_bytes(&self) -> u64 {
+    #[must_use]
+    pub const fn size_bytes(&self) -> u64 {
         self.size_bytes
     }
 }
@@ -86,6 +95,7 @@ impl std::fmt::Debug for Digest {
 
 impl Digest {
     /// Create a new digest for the given data.
+    #[must_use]
     pub fn hash(data: &[u8]) -> Self {
         let b3_digest = blake3::hash(data);
         let mut bytes = [0; 32];
@@ -94,12 +104,14 @@ impl Digest {
     }
 
     /// Wrap a raw 32-byte array as a digest.
-    pub fn from_raw_bytes(bytes: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn from_raw_bytes(bytes: [u8; 32]) -> Self {
         Digest(bytes)
     }
 
     /// Get the raw bytes of the digest.
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }

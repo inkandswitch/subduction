@@ -61,14 +61,14 @@ pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 pub struct SedimentreeId([u8; 32]);
 
 impl SedimentreeId {
-    // FIXME added for demo conveniece
     /// Constructor for a [`SedimentreeId`].
-    pub fn new(id: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn new(id: [u8; 32]) -> Self {
         Self(id)
     }
 }
 
-/// An error indicating that a SedimentreeId could not be parsed from a string.
+/// An error indicating that a [`SedimentreeId`] could not be parsed from a string.
 #[derive(Debug, Clone, Copy)]
 pub struct BadSedimentreeId;
 
@@ -81,27 +81,28 @@ impl FromStr for SedimentreeId {
             .into_vec()
             .map_err(|_| BadSedimentreeId)?;
 
-        if bytes.len() != 32 {
-            Err(BadSedimentreeId)
-        } else {
+        if bytes.len() == 32 {
             let mut arr = [0; 32];
             arr.copy_from_slice(&bytes);
             Ok(SedimentreeId(arr))
+        } else {
+            Err(BadSedimentreeId)
         }
     }
 }
 
+// FIXME hex
 impl std::fmt::Debug for SedimentreeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let as_string = bs58::encode(&self.0).with_check().into_string();
-        write!(f, "{}", as_string)
+        write!(f, "{as_string}")
     }
 }
 
 impl std::fmt::Display for SedimentreeId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let as_string = bs58::encode(&self.0).with_check().into_string();
-        write!(f, "{}", as_string)
+        write!(f, "{as_string}")
     }
 }
 
@@ -116,7 +117,8 @@ pub struct SedimentreeSummary {
 
 impl SedimentreeSummary {
     /// Constructor for a [`SedimentreeSummary`].
-    pub fn new(
+    #[must_use]
+    pub const fn new(
         chunk_summaries: BTreeSet<ChunkSummary>,
         commits: BTreeSet<LooseCommit>,
     ) -> SedimentreeSummary {
@@ -127,16 +129,19 @@ impl SedimentreeSummary {
     }
 
     /// The set of chunk summaries in this [`SedimentreeSummary`].
-    pub fn chunk_summaries(&self) -> &BTreeSet<ChunkSummary> {
+    #[must_use]
+    pub const fn chunk_summaries(&self) -> &BTreeSet<ChunkSummary> {
         &self.chunk_summaries
     }
 
     /// The set of loose commits in this [`SedimentreeSummary`].
-    pub fn loose_commits(&self) -> &BTreeSet<LooseCommit> {
+    #[must_use]
+    pub const fn loose_commits(&self) -> &BTreeSet<LooseCommit> {
         &self.commits
     }
 
     /// Create a [`RemoteDiff`] with empty local chunks and commits.
+    #[must_use]
     pub fn as_remote_diff(&self) -> RemoteDiff<'_> {
         RemoteDiff {
             remote_chunk_summaries: self.chunk_summaries.iter().collect(),
@@ -235,6 +240,7 @@ pub struct Chunk {
 
 impl Chunk {
     /// Constructor for a [`Chunk`].
+    #[must_use]
     pub fn new(
         start: Digest,
         ends: NonEmpty<Digest>,
@@ -269,7 +275,8 @@ impl Chunk {
     }
 
     /// Constructor for a [`Chunk`] from its raw components, including its digest.
-    pub fn from_raw(summary: ChunkSummary, checkpoints: Vec<Digest>, digest: Digest) -> Self {
+    #[must_use]
+    pub const fn from_raw(summary: ChunkSummary, checkpoints: Vec<Digest>, digest: Digest) -> Self {
         Chunk {
             summary,
             checkpoints,
@@ -278,6 +285,7 @@ impl Chunk {
     }
 
     /// Returns true if this chunk supports the given chunk summary.
+    #[must_use]
     pub fn supports(&self, other: &ChunkSummary) -> bool {
         if &self.summary == other {
             return true;
@@ -288,8 +296,11 @@ impl Chunk {
         }
 
         if self.summary.start == other.start
-            && HashSet::<&Digest>::from_iter(self.checkpoints.iter())
-                .is_superset(&HashSet::from_iter(other.ends.iter()))
+            && self
+                .checkpoints
+                .iter()
+                .collect::<HashSet<_>>()
+                .is_superset(&other.ends.iter().collect::<HashSet<_>>())
         {
             return true;
         }
@@ -301,8 +312,12 @@ impl Chunk {
         }
 
         if self.checkpoints.contains(&other.start)
-            && HashSet::<&Digest>::from_iter(self.summary.ends.iter())
-                .is_superset(&HashSet::from_iter(other.ends.iter()))
+            && self
+                .summary
+                .ends
+                .iter()
+                .collect::<HashSet<_>>()
+                .is_superset(&other.ends.iter().collect::<HashSet<_>>())
         {
             return true;
         }
@@ -311,37 +326,44 @@ impl Chunk {
     }
 
     /// Returns true if this [`Chunk`] covers the given [`Digest`].
+    #[must_use]
     pub fn supports_block(&self, chunk_end: Digest) -> bool {
         self.checkpoints.contains(&chunk_end) || self.summary.ends.contains(&chunk_end)
     }
 
     /// Convert to a [`ChunkSummary`].
-    pub fn summary(&self) -> &ChunkSummary {
+    #[must_use]
+    pub const fn summary(&self) -> &ChunkSummary {
         &self.summary
     }
 
     /// The depth of this stratum, determined by the number of leading zeros.
+    #[must_use]
     pub fn depth(&self) -> Depth {
         self.summary.depth()
     }
 
     /// The head of the chunk.
-    pub fn start(&self) -> Digest {
+    #[must_use]
+    pub const fn start(&self) -> Digest {
         self.summary.start
     }
 
     /// The (possibly ragged) end(s) of the chunk.
-    pub fn ends(&self) -> &NonEmpty<Digest> {
+    #[must_use]
+    pub const fn ends(&self) -> &NonEmpty<Digest> {
         &self.summary.ends
     }
 
     /// The inner checkpopoints of the chunk.
-    pub fn checkpoints(&self) -> &[Digest] {
+    #[must_use]
+    pub const fn checkpoints(&self) -> &Vec<Digest> {
         &self.checkpoints
     }
 
     /// The unique [`Digest`] of this [`Chunk`], derived from its content.
-    pub fn digest(&self) -> Digest {
+    #[must_use]
+    pub const fn digest(&self) -> Digest {
         self.digest
     }
 }
@@ -358,7 +380,8 @@ pub struct ChunkSummary {
 
 impl ChunkSummary {
     /// Constructor for a [`ChunkSummary`].
-    pub fn new(start: Digest, ends: NonEmpty<Digest>, blob_meta: BlobMeta) -> Self {
+    #[must_use]
+    pub const fn new(start: Digest, ends: NonEmpty<Digest>, blob_meta: BlobMeta) -> Self {
         Self {
             start,
             ends,
@@ -367,21 +390,25 @@ impl ChunkSummary {
     }
 
     /// The head of the chunk.
-    pub fn start(&self) -> Digest {
+    #[must_use]
+    pub const fn start(&self) -> Digest {
         self.start
     }
 
     /// The (possibly ragged) end(s) of the chunk.
-    pub fn ends(&self) -> &NonEmpty<Digest> {
+    #[must_use]
+    pub const fn ends(&self) -> &NonEmpty<Digest> {
         &self.ends
     }
 
     /// Basic information about the payload blob.
-    pub fn blob_meta(&self) -> BlobMeta {
+    #[must_use]
+    pub const fn blob_meta(&self) -> BlobMeta {
         self.blob_meta
     }
 
     /// The depth of this stratum, determined by the number of leading zeros.
+    #[must_use]
     pub fn depth(&self) -> Depth {
         // TODO at least in theory this should ALWAYS be the head, right? -BZ
         let start_level = trailing_zeros_in_base(self.start.as_bytes(), 10);
@@ -406,7 +433,8 @@ pub struct LooseCommit {
 
 impl LooseCommit {
     /// Constructor for a [`LooseCommit`].
-    pub fn new(digest: Digest, parents: Vec<Digest>, blob: BlobMeta) -> Self {
+    #[must_use]
+    pub const fn new(digest: Digest, parents: Vec<Digest>, blob: BlobMeta) -> Self {
         Self {
             digest,
             parents,
@@ -415,17 +443,20 @@ impl LooseCommit {
     }
 
     /// The unique [`Digest`] of this [`LooseCommit`], derived from its content.
-    pub fn digest(&self) -> Digest {
+    #[must_use]
+    pub const fn digest(&self) -> Digest {
         self.digest
     }
 
     /// The (possibly empty) list of parent commits.
-    pub fn parents(&self) -> &[Digest] {
+    #[must_use]
+    pub const fn parents(&self) -> &Vec<Digest> {
         &self.parents
     }
 
     /// Metadata about the payload blob.
-    pub fn blob(&self) -> &BlobMeta {
+    #[must_use]
+    pub const fn blob(&self) -> &BlobMeta {
         &self.blob
     }
 }
@@ -472,6 +503,7 @@ pub struct Sedimentree {
 
 impl Sedimentree {
     /// Constructor for a [`Sedimentree`].
+    #[must_use]
     pub fn new(chunks: Vec<Chunk>, commits: Vec<LooseCommit>) -> Self {
         Self {
             chunks: chunks.into_iter().collect(),
@@ -480,6 +512,7 @@ impl Sedimentree {
     }
 
     /// The minimal ordered hash of this [`Sedimentree`].
+    #[must_use]
     pub fn minimal_hash(&self) -> MinimalTreeHash {
         let minimal = self.minimize();
         let mut hashes = minimal
@@ -489,15 +522,15 @@ impl Sedimentree {
                     .chain(s.ends().iter().copied())
                     .chain(s.checkpoints().iter().copied())
             })
-            .chain(minimal.commits.iter().map(|c| c.digest()))
+            .chain(minimal.commits.iter().map(LooseCommit::digest))
             .collect::<Vec<_>>();
         hashes.sort();
 
-        let mut hasher = blake3::Hasher::new();
+        let mut h = blake3::Hasher::new();
         for hash in hashes {
-            hasher.update(hash.as_bytes());
+            h.update(hash.as_bytes());
         }
-        MinimalTreeHash(*hasher.finalize().as_bytes())
+        MinimalTreeHash(*h.finalize().as_bytes())
     }
 
     /// Add a chunk to the [`Sedimentree`].
@@ -515,14 +548,15 @@ impl Sedimentree {
     }
 
     /// Compute the difference between two local [`Sedimentree`]s.
+    #[must_use]
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
-        let our_chunks = HashSet::<&Chunk>::from_iter(self.chunks.iter());
-        let their_chunks = HashSet::from_iter(other.chunks.iter());
+        let our_chunks = self.chunks.iter().collect::<HashSet<_>>();
+        let their_chunks = other.chunks.iter().collect();
         let left_missing_chunks = our_chunks.difference(&their_chunks);
         let right_missing_chunks = their_chunks.difference(&our_chunks);
 
-        let our_commits = HashSet::<&LooseCommit>::from_iter(self.commits.iter());
-        let their_commits = HashSet::from_iter(other.commits.iter());
+        let our_commits = self.commits.iter().collect::<HashSet<_>>();
+        let their_commits = other.commits.iter().collect();
         let left_missing_commits = our_commits.difference(&their_commits);
         let right_missing_commits = their_commits.difference(&our_commits);
 
@@ -535,27 +569,34 @@ impl Sedimentree {
     }
 
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
+    #[must_use]
     pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
-        let our_chunks_meta =
-            HashSet::<&ChunkSummary>::from_iter(self.chunks.iter().map(|s| &s.summary));
-        let their_chunks = HashSet::from_iter(remote.chunk_summaries.iter());
-        let local_chunks = our_chunks_meta.difference(&their_chunks).map(|m| {
-            self.chunks
-                .iter()
-                .find(|s| s.start() == m.start && *s.ends() == m.ends && s.depth() == m.depth())
-                .unwrap()
-        });
+        let our_chunks_meta = self
+            .chunks
+            .iter()
+            .map(|s| &s.summary)
+            .collect::<HashSet<&ChunkSummary>>();
+        let their_chunks = remote.chunk_summaries.iter().collect::<HashSet<_>>();
+        let mut local_chunks = Vec::new();
+        for m in our_chunks_meta.difference(&their_chunks) {
+            for s in &self.chunks {
+                if s.start() == m.start && *s.ends() == m.ends && s.depth() == m.depth() {
+                    local_chunks.push(s);
+                    break;
+                }
+            }
+        }
         let remote_chunks = their_chunks.difference(&our_chunks_meta);
 
-        let our_commits = HashSet::<&LooseCommit>::from_iter(self.commits.iter());
-        let their_commits = HashSet::from_iter(remote.commits.iter());
+        let our_commits = self.commits.iter().collect::<HashSet<&LooseCommit>>();
+        let their_commits = remote.commits.iter().collect();
         let local_commits = our_commits.difference(&their_commits);
         let remote_commits = their_commits.difference(&our_commits);
 
         RemoteDiff {
             remote_chunk_summaries: remote_chunks.into_iter().copied().collect(),
             remote_commits: remote_commits.into_iter().copied().collect(),
-            local_chunks: local_chunks.into_iter().collect(),
+            local_chunks,
             local_commits: local_commits.into_iter().copied().collect(),
         }
     }
@@ -571,11 +612,13 @@ impl Sedimentree {
     }
 
     /// Returns true if this [`Sedimentree`] has a chunk with the given digest.
+    #[must_use]
     pub fn has_loose_commit(&self, digest: Digest) -> bool {
         self.loose_commits().any(|c| c.digest() == digest)
     }
 
     /// Returns true if this [`Sedimentree`] has a chunk starting with the given digest.
+    #[must_use]
     pub fn has_chunk_starting_with(&self, digest: Digest) -> bool {
         self.heads().contains(&digest)
     }
@@ -585,6 +628,7 @@ impl Sedimentree {
     /// Minimize the [`Sedimentree`] by removing any chunks that are
     /// fully supported by other chunks, and removing any loose commits
     /// that are not needed to support the remaining chunks.
+    #[must_use]
     pub fn minimize(&self) -> Sedimentree {
         // First sort chunks by depth, then for each stratum below the lowest
         // level, discard that stratum if it is supported by any of the stratum
@@ -621,6 +665,7 @@ impl Sedimentree {
     ///
     /// This omits the checkpoints from each chunk.
     /// It is useful for sending over the wire.
+    #[must_use]
     pub fn summarize(&self) -> SedimentreeSummary {
         SedimentreeSummary {
             chunk_summaries: self
@@ -636,11 +681,12 @@ impl Sedimentree {
     /// not the start of any other strata or supported by any lower stratum
     /// and which do not appear in the [`LooseCommit`] graph, plus the heads of
     /// the loose commit graph.
+    #[must_use]
     pub fn heads(&self) -> Vec<Digest> {
         let minimized = self.minimize();
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.iter());
         let mut heads = Vec::<Digest>::new();
-        for chunk in minimized.chunks.iter() {
+        for chunk in &minimized.chunks {
             if !minimized
                 .chunks
                 .iter()
@@ -662,29 +708,30 @@ impl Sedimentree {
             .chain(self.commits.into_iter().map(CommitOrChunk::Commit))
     }
 
-    /// Given a SedimentreeId, return the [`Chunk`]s that are missing to fill in the gaps.
+    /// Given a [`SedimentreeId`], return the [`Chunk`]s that are missing to fill in the gaps.
+    #[must_use]
     pub fn missing_chunks(&self, id: SedimentreeId) -> Vec<ChunkSpec> {
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level = BTreeMap::<Depth, (Digest, Vec<Digest>)>::new();
         let mut all_bundles = Vec::new();
         for commit_hash in dag.canonical_sequence(self.chunks.iter()) {
             let level = Depth::from(commit_hash);
-            for (run_level, (_start, checkpoints)) in runs_by_level.iter_mut() {
+            for (run_level, (_start, checkpoints)) in &mut runs_by_level {
                 if run_level < &level {
                     checkpoints.push(commit_hash);
                 }
             }
             if level <= crate::MAX_STRATA_DEPTH {
                 if let Some((start, checkpoints)) = runs_by_level.remove(&level) {
-                    if !self.chunks.iter().any(|s| s.supports_block(commit_hash)) {
+                    if self.chunks.iter().any(|s| s.supports_block(commit_hash)) {
+                        runs_by_level.insert(level, (commit_hash, Vec::new()));
+                    } else {
                         all_bundles.push(ChunkSpec {
                             id,
                             start,
                             ends: nonempty![commit_hash], // FIXME could be more than one, right?
                             checkpoints: checkpoints.clone(),
                         });
-                    } else {
-                        runs_by_level.insert(level, (commit_hash, Vec::new()));
                     }
                 }
             }
@@ -693,6 +740,7 @@ impl Sedimentree {
     }
 
     /// Create a [`RemoteDiff`] with empty remote chunks and commits.
+    #[must_use]
     pub fn as_local_diff(&self) -> RemoteDiff<'_> {
         RemoteDiff {
             remote_chunk_summaries: Vec::new(),
@@ -714,22 +762,26 @@ pub struct ChunkSpec {
 
 impl ChunkSpec {
     /// Constructor for a [`ChunkSpec`].
-    pub fn id(&self) -> SedimentreeId {
+    #[must_use]
+    pub const fn id(&self) -> SedimentreeId {
         self.id
     }
 
     /// The head of the chunk.
-    pub fn start(&self) -> Digest {
+    #[must_use]
+    pub const fn start(&self) -> Digest {
         self.start
     }
 
     /// The (possibly ragged) end(s) of the chunk.
-    pub fn ends(&self) -> &NonEmpty<Digest> {
+    #[must_use]
+    pub const fn ends(&self) -> &NonEmpty<Digest> {
         &self.ends
     }
 
     /// The inner checkpopoints of the chunk.
-    pub fn checkpoints(&self) -> &[Digest] {
+    #[must_use]
+    pub const fn checkpoints(&self) -> &Vec<Digest> {
         &self.checkpoints
     }
 }
@@ -749,7 +801,10 @@ fn trailing_zeros_in_base(arr: &[u8; 32], base: u32) -> u32 {
     let bytes = num::BigInt::from_bytes_be(num::bigint::Sign::Plus, arr)
         .to_radix_be(base)
         .1;
-    bytes.into_iter().rev().take_while(|&i| i == 0).count() as u32
+
+    #[allow(clippy::expect_used)]
+    u32::try_from(bytes.into_iter().rev().take_while(|&i| i == 0).count())
+        .expect("u32 is big enough")
 }
 
 impl std::fmt::Debug for Sedimentree {
@@ -781,7 +836,8 @@ pub struct MinimalTreeHash([u8; 32]);
 
 impl MinimalTreeHash {
     /// The bytes of this [`MinimalTreeHash`].
-    pub fn as_bytes(&self) -> &[u8; 32] {
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
 }

@@ -36,6 +36,15 @@ pub trait Storage {
 }
 
 /// Load the local `Sedimentree` state from storage.
+///
+/// # Returns
+///
+/// * `Ok(None)` if no commits or chunks are found in storage.
+/// * `Ok(Some(tree))` if commits or chunks are found in storage.
+///
+/// # Errors
+///
+/// * Returns [`S::Error`] if the storage backend encounters an problem loading commits or chunks.
 #[tracing::instrument(skip(storage))]
 pub async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>, S::Error> {
     let chunks = {
@@ -57,22 +66,26 @@ pub async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>,
 }
 
 /// Update storage to reflect the new state of the `Sedimentree`.
+///
+/// # Errors
+///
+/// * Returns [`S::Error`] if the storage backend encounters an problem saving commits or chunks.
 pub async fn update<S: Storage + Clone>(
     storage: S,
     original: Option<&Sedimentree>,
     new: &Sedimentree,
 ) -> Result<(), S::Error> {
-    let (new_chunks, new_commits) = original
-        .map(|o| {
-            let Diff {
-                left_missing_chunks: _deleted_chunks,
-                left_missing_commits: _deleted_commits,
-                right_missing_chunks: new_chunks,
-                right_missing_commits: new_commits,
-            } = o.diff(new);
-            (new_chunks, new_commits)
-        })
-        .unwrap_or_else(|| (new.chunks.iter().collect(), new.commits.iter().collect()));
+    let (new_chunks, new_commits) = if let Some(o) = original {
+        let Diff {
+            left_missing_chunks: _deleted_chunks,
+            left_missing_commits: _deleted_commits,
+            right_missing_chunks: new_chunks,
+            right_missing_commits: new_commits,
+        } = o.diff(new);
+        (new_chunks, new_commits)
+    } else {
+        (new.chunks.iter().collect(), new.commits.iter().collect())
+    };
 
     let save_chunks = new_chunks.into_iter().map(|chunk| {
         let inner_storage = storage.clone();
@@ -101,7 +114,7 @@ pub async fn update<S: Storage + Clone>(
 // FIXME why not a trait method?
 /// Stream the data for all commits and chunks in a `Sedimentree`.
 pub fn data<S: Storage + Clone>(
-    storage: S,
+    storage: &S,
     tree: Sedimentree,
 ) -> impl futures::Stream<Item = Result<(CommitOrChunk, Blob), LoadTreeData>> {
     let items = tree.into_items().map(|item| {
@@ -129,10 +142,14 @@ pub fn data<S: Storage + Clone>(
             }
         }
     });
-    futures::stream::FuturesUnordered::from_iter(items)
+    items.collect::<futures::stream::FuturesUnordered<_>>()
 }
 
 /// Write a [`LooseCommit`] to storage.
+///
+/// # Errors
+///
+/// * Returns [`S::Error`] if the storage backend encounters an problem saving the commit.
 pub async fn write_loose_commit<S: Storage>(
     storage: S,
     commit: &LooseCommit,
@@ -141,11 +158,24 @@ pub async fn write_loose_commit<S: Storage>(
 }
 
 /// Write a [`Chunk`] to storage.
+///
+/// # Errors
+///
+/// * Returns [`S::Error`] if the storage backend encounters an problem saving the chunk.
 pub async fn write_chunk<S: Storage>(storage: S, chunk: Chunk) -> Result<(), S::Error> {
     storage.save_chunk(chunk).await
 }
 
 /// Load the data for a [`LooseCommit`].
+///
+/// # Returns
+///
+/// * `Ok(None)` if the blob for the commit is not found in storage.
+/// * `Ok(Some(blob))` if the blob for the commit is found in storage.
+///
+/// # Errors
+///
+/// * Returns [`S::Error`] if the storage backend encounters an problem loading the blob.
 pub async fn load_loose_commit_data<S: Storage>(
     storage: S,
     commit: &LooseCommit,
@@ -154,6 +184,10 @@ pub async fn load_loose_commit_data<S: Storage>(
 }
 
 /// Load the data for a [`Chunk`].
+///
+/// # Errors
+///
+/// * Returns an error if the storage backend encounters an problem loading the blob.
 pub async fn load_chunk_data<S: Storage>(
     storage: S,
     chunk: &Chunk,

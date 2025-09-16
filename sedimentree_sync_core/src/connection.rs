@@ -147,7 +147,7 @@ pub enum Message {
 
 impl Message {
     /// Get the request ID for this message, if any.
-    pub fn request_id(&self) -> Option<RequestId> {
+    pub const fn request_id(&self) -> Option<RequestId> {
         match self {
             Message::BatchSyncRequest(BatchSyncRequest { req_id, .. }) => Some(*req_id),
             Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
@@ -223,7 +223,7 @@ impl ConnectionId {
     }
 
     /// Get the inner `usize` representation of the [`ConnectionId`].
-    pub fn as_usize(&self) -> usize {
+    pub const fn as_usize(&self) -> usize {
         self.0
     }
 }

@@ -1,11 +1,16 @@
 [package]
 name = "sedimentree_core"
+version = "0.1.0"
+description = "Core data types for the Sedimentree protocol."
+
 authors.workspace = true
+categories = ["data-structures"]
 edition.workspace = true
+keywords = ["set-reconcilliation"]
 license.workspace = true
+readme = "./README.md"
 repository.workspace = true
 rust-version.workspace = true
-version = "0.1.0"
 
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
