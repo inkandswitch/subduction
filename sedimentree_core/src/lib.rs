@@ -988,6 +988,7 @@ mod tests {
                     while num_parents > 0 {
                         let parent = u.choose(&parent_choices)?;
                         parents.push(**parent);
+                        #[allow(clippy::unwrap_used)]
                         parent_choices
                             .remove(parent_choices.iter().position(|p| p == parent).unwrap());
                         num_parents -= 1;
@@ -1009,6 +1010,6 @@ mod tests {
                 let tree = super::Sedimentree::new(vec![], commits.clone());
                 let minimized = tree.minimize();
                 assert_eq!(tree, minimized);
-            })
+            });
     }
 }

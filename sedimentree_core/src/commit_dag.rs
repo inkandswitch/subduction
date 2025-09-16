@@ -451,10 +451,12 @@ mod tests {
         assert!(base <= 10, "Base must be less than 10");
 
         let zero_str = "0".repeat(trailing_zeros as usize);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let num_digits = (256.0 / (base as f64).log2()).floor() as u64;
 
         let mut num_str = zero_str;
         num_str.push('1');
+        #[allow(clippy::cast_possible_truncation)]
         while num_str.len() < num_digits as usize {
             let digit = rng.random_range(0..=base - 1);
             num_str.push_str(&digit.to_string());
@@ -496,10 +498,10 @@ mod tests {
             let mut parents = HashMap::new();
             for (parent, child) in edges {
                 let Some(child_hash) = nodes.get(child) else {
-                    panic!("Child node not found: {}", child);
+                    panic!("Child node not found: {child}");
                 };
                 let Some(parent_hash) = nodes.get(parent) else {
-                    panic!("Parent node not found: {}", parent);
+                    panic!("Parent node not found: {parent}");
                 };
                 parents
                     .entry(*child_hash)
@@ -516,12 +518,13 @@ mod tests {
         fn commits(&self) -> Vec<LooseCommit> {
             let mut commits = Vec::new();
             for hash in self.nodes.values() {
+                #[allow(clippy::unwrap_used)]
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
                 commits.push(LooseCommit {
                     blob: *self.commits.get(hash).unwrap(),
                     digest: *hash,
                     parents,
-                })
+                });
             }
             commits
         }
