@@ -622,7 +622,7 @@ mod tests {
             .map(|h| {
                 name_map
                     .get(h)
-                    .map_or_else(|| h.to_string(), |s| s.to_string())
+                    .map_or_else(|| h.to_string(), ToString::to_string)
             })
             .collect()
     }
