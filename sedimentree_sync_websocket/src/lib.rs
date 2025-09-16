@@ -220,7 +220,6 @@ impl Reconnection for WebSocket {
                     match msg {
                         Message::BatchSyncResponse(resp) => {
                             let req_id = resp.req_id;
-                            tracing::info!("dispatching to waiter {:?}", req_id);
                             if let Some(waiting) = pending.write().await.remove(&req_id) {
                                 tracing::info!("dispatching to waiter {:?}", req_id);
                                 let result = waiting.send(resp);
