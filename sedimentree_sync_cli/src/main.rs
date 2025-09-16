@@ -63,7 +63,6 @@ async fn main() -> anyhow::Result<()> {
             let listen = syncer.run();
             syncer.request_all_batch_sync_all(None).await?;
             listen.await?;
-            syncer.run().await?;
         }
         _ => {
             eprintln!("Please specify either 'start' or 'connect' command");
