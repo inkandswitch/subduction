@@ -1,4 +1,4 @@
-name: Test Default Features on Host
+name: Test All Features on Host
 
 on:
   push:
@@ -17,5 +17,5 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Test Default
-      run: cargo test --features arbitrary
+    - name: Test All Features
+      run: cargo test --all-features
