@@ -554,7 +554,8 @@ mod tests {
         let mut last_commit = None;
         for (name, level) in names {
             loop {
-                let hash = hash_with_trailing_zeros(rng, 10, u32::from(level));
+                #[allow(clippy::cast_possible_truncation)]
+                let hash = hash_with_trailing_zeros(rng, 10, level as u32);
                 if let Some(last_commit_hash) = last_commit {
                     if hash > last_commit_hash {
                         last_commit = Some(hash);

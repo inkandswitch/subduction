@@ -881,7 +881,7 @@ mod tests {
             if unstructured.is_empty() {
                 return Err(arbitrary::Error::NotEnoughData);
             }
-            let digit = unstructured.int_in_range(0..base)?;
+            let digit = unstructured.int_in_range(0..=base - 1)?;
             num_str.push_str(&digit.to_string());
         }
         // reverse the string to get the correct representation
