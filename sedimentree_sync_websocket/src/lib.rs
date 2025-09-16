@@ -25,6 +25,7 @@
     unused_extern_crates
 )]
 #![forbid(unsafe_code)]
+#![allow(clippy::multiple_crate_versions)]
 
 use futures_util::{
     stream::{SplitSink, SplitStream},
