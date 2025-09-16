@@ -115,7 +115,7 @@ impl Connection for WebSocket {
     async fn next_request_id(&self) -> RequestId {
         let mut counter = self.req_id_counter.lock().await;
         *counter = counter.wrapping_add(1);
-        tracing::info!("generated message id {:?}", *counter);
+        tracing::debug!("generated message id {:?}", *counter);
         RequestId {
             requestor: self.peer_id,
             nonce: *counter,
