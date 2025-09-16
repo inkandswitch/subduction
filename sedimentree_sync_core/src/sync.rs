@@ -901,7 +901,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         Ok(had_success)
     }
 
-    /// Request a batch sync from all connected peer for a given sedimentree ID.
+    /// Request a batch sync from all connected peers for a given sedimentree ID.
     ///
     /// # Returns
     ///
