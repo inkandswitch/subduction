@@ -451,7 +451,11 @@ mod tests {
         assert!(base <= 10, "Base must be less than 10");
 
         let zero_str = "0".repeat(trailing_zeros as usize);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        #[allow(
+            clippy::cast_possible_truncation,
+            clippy::cast_sign_loss,
+            clippy::cast_lossless
+        )]
         let num_digits = (256.0 / (base as f64).log2()).floor() as u64;
 
         let mut num_str = zero_str;
