@@ -17,6 +17,7 @@ impl StorageKey {
 
     /// Get the storage key as a slice of strings.
     #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn as_slice(&self) -> &[String] {
         self.0.as_slice()
     }

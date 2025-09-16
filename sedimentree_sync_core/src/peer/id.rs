@@ -43,6 +43,7 @@ impl std::fmt::Debug for PeerId {
 fn to_hex(bytes: &[u8]) -> String {
     let mut s = String::with_capacity(bytes.len() * 2);
     for b in bytes {
+        #[allow(clippy::expect_used)]
         write!(&mut s, "{b:02x}").expect("preallocated length should be sufficient");
     }
     s
