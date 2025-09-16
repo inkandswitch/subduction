@@ -871,7 +871,7 @@ mod tests {
         assert!(base <= 10, "Base must be less than 10");
 
         let zero_str = "0".repeat(trailing_zeros as usize);
-        #[allow(clippy::cast_possible_truncation)]
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let num_digits = (256.0 / f64::from(base).log2()).floor() as u64;
 
         let mut num_str = zero_str;
@@ -881,6 +881,7 @@ mod tests {
             if unstructured.is_empty() {
                 return Err(arbitrary::Error::NotEnoughData);
             }
+            #[allow(clippy::range_minus_one)]
             let digit = unstructured.int_in_range(0..=base - 1)?;
             num_str.push_str(&digit.to_string());
         }
