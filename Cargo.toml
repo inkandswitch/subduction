@@ -4,6 +4,7 @@ members = [
   "sedimentree_core",
   "sedimentree_sync_cli",
   "sedimentree_sync_core",
+  "sedimentree_sync_websocket",
   # TODO "sedimentree_sync_wasm"
 ]
 
@@ -19,11 +20,9 @@ authors = [
 
 [workspace.dependencies]
 arbitrary = "1.4"
-automerge = "0.6.1"
 blake3 = "1.8"
 bolero = "0.13.4"
 futures = "0.3.31"
-getrandom = "0.3.3"
 hex = "0.4.3"
 nonempty = "0.12.0"
 num = "0.4.3"

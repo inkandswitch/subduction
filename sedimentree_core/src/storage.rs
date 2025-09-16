@@ -1,5 +1,8 @@
 //! Storage abstraction for `Sedimentree` data.
 
+use futures::lock::Mutex;
+use std::{collections::HashMap, sync::Arc};
+
 use crate::{Blob, Digest};
 
 use super::{Chunk, CommitOrChunk, Diff, LooseCommit, Sedimentree};
@@ -210,5 +213,50 @@ mod error {
         /// A blob is missing.
         #[error("missing blob: {0}")]
         MissingBlob(Digest),
+    }
+}
+
+/// An in-memory storage backend.
+#[derive(Debug, Clone, Default)]
+pub struct MemoryStorage {
+    chunks: Arc<Mutex<HashMap<Digest, Chunk>>>,
+    commits: Arc<Mutex<HashMap<Digest, LooseCommit>>>,
+    blobs: Arc<Mutex<HashMap<Digest, Blob>>>,
+}
+
+impl Storage for MemoryStorage {
+    type Error = std::convert::Infallible;
+
+    async fn load_loose_commits(&self) -> Result<Vec<LooseCommit>, Self::Error> {
+        let commits = self.commits.lock().await.values().cloned().collect();
+        Ok(commits)
+    }
+
+    async fn save_loose_commit(&self, loose_commit: LooseCommit) -> Result<(), Self::Error> {
+        let digest = loose_commit.blob().digest();
+        self.commits.lock().await.insert(digest, loose_commit);
+        Ok(())
+    }
+
+    async fn save_chunk(&self, chunk: Chunk) -> Result<(), Self::Error> {
+        let digest = chunk.summary().blob_meta().digest();
+        self.chunks.lock().await.insert(digest, chunk);
+        Ok(())
+    }
+
+    async fn load_chunks(&self) -> Result<Vec<Chunk>, Self::Error> {
+        let chunks = self.chunks.lock().await.values().cloned().collect();
+        Ok(chunks)
+    }
+
+    async fn save_blob(&self, blob: Blob) -> Result<Digest, Self::Error> {
+        let digest = Digest::hash(blob.contents());
+        self.blobs.lock().await.insert(digest, blob);
+        Ok(digest)
+    }
+
+    async fn load_blob(&self, blob_digest: Digest) -> Result<Option<Blob>, Self::Error> {
+        let maybe_blob = self.blobs.lock().await.get(&blob_digest).cloned();
+        Ok(maybe_blob)
     }
 }

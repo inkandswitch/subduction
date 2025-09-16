@@ -797,6 +797,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             diff.missing_commits.len(),
             diff.missing_chunks.len()
         );
+
         for (commit, blob) in &diff.missing_commits {
             self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                 .await
