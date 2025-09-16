@@ -452,17 +452,18 @@ mod tests {
 
         let zero_str = "0".repeat(trailing_zeros as usize);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let num_digits = (256.0 / (base as f64).log2()).floor() as u64;
+        let num_digits = (256.0 / f64::from(base)).log2().floor() as u64;
 
         let mut num_str = zero_str;
         num_str.push('1');
         #[allow(clippy::cast_possible_truncation)]
         while num_str.len() < num_digits as usize {
-            let digit = rng.random_range(0..=base - 1);
+            let digit = rng.random_range(0..base);
             num_str.push_str(&digit.to_string());
         }
         // reverse the string to get the correct representation
         num_str = num_str.chars().rev().collect();
+        #[allow(clippy::unwrap_used)]
         let num = num::BigInt::from_str_radix(&num_str, base).unwrap();
 
         let (_, mut bytes) = num.to_bytes_be();
@@ -471,6 +472,7 @@ mod tests {
             padded_bytes.extend(bytes);
             bytes = padded_bytes;
         }
+        #[allow(clippy::unwrap_used)]
         let byte_arr: [u8; 32] = bytes.try_into().unwrap();
         Digest::from(byte_arr)
     }
@@ -496,6 +498,7 @@ mod tests {
                 nodes.insert(commit_name.to_string(), commit_hash);
             }
             let mut parents = HashMap::new();
+            #[allow(clippy::panic)]
             for (parent, child) in edges {
                 let Some(child_hash) = nodes.get(child) else {
                     panic!("Child node not found: {child}");
@@ -521,6 +524,7 @@ mod tests {
                 #[allow(clippy::unwrap_used)]
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
                 commits.push(LooseCommit {
+                    #[allow(clippy::unwrap_used)]
                     blob: *self.commits.get(hash).unwrap(),
                     digest: *hash,
                     parents,
@@ -530,6 +534,7 @@ mod tests {
         }
 
         fn node_hash(&self, node: &str) -> Digest {
+            #[allow(clippy::unwrap_used)]
             *self.nodes.get(node).unwrap()
         }
 
@@ -549,7 +554,7 @@ mod tests {
         let mut last_commit = None;
         for (name, level) in names {
             loop {
-                let hash = hash_with_trailing_zeros(rng, 10, level as u32);
+                let hash = hash_with_trailing_zeros(rng, 10, u32::from(level));
                 if let Some(last_commit_hash) = last_commit {
                     if hash > last_commit_hash {
                         last_commit = Some(hash);
@@ -616,8 +621,7 @@ mod tests {
             .map(|h| {
                 name_map
                     .get(h)
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| h.to_string())
+                    .map_or_else(|| h.to_string(), |s| s.to_string())
             })
             .collect()
     }

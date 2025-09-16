@@ -872,7 +872,7 @@ mod tests {
 
         let zero_str = "0".repeat(trailing_zeros as usize);
         #[allow(clippy::cast_possible_truncation)]
-        let num_digits = (256.0 / (base as f64).log2()).floor() as u64;
+        let num_digits = (256.0 / f64::from(base).log2()).floor() as u64;
 
         let mut num_str = zero_str;
         num_str.push('1');
@@ -881,7 +881,7 @@ mod tests {
             if unstructured.is_empty() {
                 return Err(arbitrary::Error::NotEnoughData);
             }
-            let digit = unstructured.int_in_range(0..=base - 1)?;
+            let digit = unstructured.int_in_range(0..base)?;
             num_str.push_str(&digit.to_string());
         }
         // reverse the string to get the correct representation
@@ -909,9 +909,6 @@ mod tests {
         }
         impl<'a> arbitrary::Arbitrary<'a> for Scenario {
             fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-                let start_hash = hash_with_trailing_zeros(u, 10, 10)?;
-                let lower_end_hash = hash_with_trailing_zeros(u, 10, 10)?;
-
                 #[allow(clippy::enum_variant_names)]
                 #[derive(arbitrary::Arbitrary)]
                 enum HigherDepthType {
@@ -919,6 +916,9 @@ mod tests {
                     StartsAtCheckpointEndsAtEnd,
                     StartsAtCheckpointEndsAtCheckpoint,
                 }
+
+                let start_hash = hash_with_trailing_zeros(u, 10, 10)?;
+                let lower_end_hash = hash_with_trailing_zeros(u, 10, 10)?;
 
                 let higher_start_hash: Digest;
                 let higher_end_hash: Digest;
