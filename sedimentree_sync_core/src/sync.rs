@@ -54,7 +54,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         }
     }
 
-    // FIXME fn reconnnect
+    // FIXME fn reconnect
 
     async fn listen(&self) -> Result<(), ListenError<S, C>> {
         let mut pump = FuturesUnordered::new();
