@@ -27,7 +27,7 @@ pub trait Connection: Clone {
     /// A unique identifier for this connection.
     ///
     /// This number should be a counter or random number.
-    /// We assume that the smae ID is never reused for different connections.
+    /// We assume that the same ID is never reused for different connections.
     /// For this reason, it is not recommended to use or derive from the peer ID on its own.
     fn connection_id(&self) -> ConnectionId;
 
