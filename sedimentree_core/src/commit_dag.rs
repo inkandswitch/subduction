@@ -452,7 +452,7 @@ mod tests {
 
         let zero_str = "0".repeat(trailing_zeros as usize);
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let num_digits = (256.0 / f64::from(base)).log2().floor() as u64;
+        let num_digits = (256.0 / (base as f64).log2()).floor() as u64;
 
         let mut num_str = zero_str;
         num_str.push('1');
