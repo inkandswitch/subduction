@@ -44,7 +44,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     /// This method runs indefinitely, processing messages as they arrive.
     /// If no peers are connected, it will wait until a peer connects.
     #[tracing::instrument(skip(self))]
-    pub async fn listen(&self) -> Result<(), IoError<S, C>> {
+    pub async fn listen(&self) -> Result<(), ListenError<S, C>> {
         loop {
             self.inner_listen().await?
         }
@@ -52,8 +52,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
     // FIXME fn reconnnect
 
-    async fn inner_listen(&self) -> Result<(), IoError<S, C>> {
-        let mut futs = FuturesUnordered::new();
+    async fn inner_listen(&self) -> Result<(), ListenError<S, C>> {
+        let mut pump = FuturesUnordered::new();
         // FIXME add new connections to the global futs
         for conn in self.connections.lock().await.values() {
             tracing::info!(
@@ -61,78 +61,85 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 conn.connection_id()
             );
             let fut = indexed_listen(conn.clone());
-            futs.push(fut);
+            pump.push(fut);
         }
 
-        tracing::info!("Listening for messages from {} connection(s)", futs.len());
-        while let Some(res) = futs.next().await {
+        while let Some(res) = pump.next().await {
             tracing::info!("Received a message from a connection");
             match res {
                 Ok((conn, message)) => {
-                    let idx = conn.connection_id();
-                    let from = conn.peer_id();
-
-                    tracing::info!("Received message from peer {:?}: {:?}", from, message);
-
-                    // Re-enque if that connection is still active at the top-level
-                    if self.connections.lock().await.contains_key(&idx) {
-                        futs.push(indexed_listen(conn.clone()));
+                    if self
+                        .connections
+                        .lock()
+                        .await
+                        .contains_key(&conn.connection_id())
+                    {
+                        // Re-enque if that connection is still active at the top-level
+                        pump.push(indexed_listen(conn.clone()));
                     }
-
-                    match message {
-                        Message::LooseCommit { id, commit, blob } => {
-                            self.recv_commit(&from, id, &commit, blob).await?
-                        }
-                        Message::Chunk { id, chunk, blob } => {
-                            self.recv_chunk(&from, id, &chunk, blob).await?
-                        }
-                        Message::BatchSyncRequest(BatchSyncRequest {
-                            id,
-                            sedimentree_summary,
-                            req_id,
-                        }) => {
-                            tracing::info!(
-                                "Received batch sync request for sedimentree {:?} from peer {:?}",
-                                id,
-                                from
-                            );
-                            self.recv_batch_sync_request(id, &sedimentree_summary, req_id, &conn)
-                                .await?
-                        }
-                        Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
-                            self.recv_batch_sync_response(&from, id, &diff).await?
-                        }
-                        Message::BlobsRequest(digests) => {
-                            if self.connections.lock().await.contains_key(&idx) {
-                                match self.recv_blob_request(&conn, &digests).await {
-                                    Ok(()) => {}
-                                    Err(BlobRequestErr::IoError(e)) => Err(e)?,
-                                    Err(BlobRequestErr::MissingBlobs(missing)) => {
-                                        tracing::warn!(
-                                            "Missing blobs for request from peer {:?}: {:?}",
-                                            from,
-                                            missing
-                                        );
-                                    }
-                                }
-                            } else {
-                                tracing::warn!("No open connection for request ({:?})", idx);
-                            }
-                        }
-                        Message::BlobsResponse(blobs) => {
-                            for blob in blobs {
-                                self.storage
-                                    .save_blob(blob)
-                                    .await
-                                    .map_err(IoError::Storage)?;
-                            }
-                        }
-                    }
+                    self.dispatch(conn, message).await?;
                 }
                 Err(e) => Err(IoError::ConnRecv(e))?,
             }
         }
 
+        Ok(())
+    }
+
+    async fn dispatch(&self, conn: C, message: Message) -> Result<(), ListenError<S, C>> {
+        let idx = conn.connection_id();
+        let from = conn.peer_id();
+
+        tracing::info!("Received message from peer {:?}: {:?}", from, message);
+
+        match message {
+            Message::LooseCommit { id, commit, blob } => {
+                self.recv_commit(&from, id, &commit, blob).await?
+            }
+            Message::Chunk { id, chunk, blob } => self.recv_chunk(&from, id, &chunk, blob).await?,
+            Message::BatchSyncRequest(BatchSyncRequest {
+                id,
+                sedimentree_summary,
+                req_id,
+            }) => {
+                tracing::info!(
+                    "Received batch sync request for sedimentree {:?} from peer {:?}",
+                    id,
+                    from
+                );
+                self.recv_batch_sync_request(id, &sedimentree_summary, req_id, &conn)
+                    .await?
+            }
+            Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
+                self.recv_batch_sync_response(&from, id, &diff).await?
+            }
+            Message::BlobsRequest(digests) => {
+                if self.connections.lock().await.contains_key(&idx) {
+                    match self.recv_blob_request(&conn, &digests).await {
+                        Ok(()) => { // FIXME
+                        }
+                        Err(BlobRequestErr::IoError(e)) => Err(e)?,
+                        Err(BlobRequestErr::MissingBlobs(missing)) => {
+                            tracing::warn!(
+                                "Missing blobs for request from peer {:?}: {:?}",
+                                from,
+                                missing
+                            );
+                        }
+                    }
+                } else {
+                    tracing::warn!("No open connection for request ({:?})", idx);
+                }
+            }
+            Message::BlobsResponse(blobs) => {
+                for blob in blobs {
+                    self.storage
+                        .save_blob(blob)
+                        .await
+                        .map_err(IoError::Storage)?;
+                }
+            }
+        }
         Ok(())
     }
 
@@ -550,23 +557,22 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         their_summary: &SedimentreeSummary,
         req_id: RequestId,
         conn: &C,
-    ) -> Result<(), IoError<S, C>> {
+    ) -> Result<(), ListenError<S, C>> {
         let mut missing_commits = Vec::new();
         let mut missing_chunks = Vec::new();
+        let mut missing_blobs = Vec::new();
 
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
         if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
-            // FIXME let our_summary = sedimentree.summarize();
-
             tracing::info!(
                 "Received batch sync request for sedimentree {:?} with {} commits and {} chunks",
                 id,
-                their_summary.commits().len(),
+                their_summary.loose_commits().len(),
                 their_summary.chunk_summaries().len()
             );
 
             for commit in sedimentree.loose_commits() {
-                if !their_summary.commits().contains(&commit) {
+                if !their_summary.loose_commits().contains(&commit) {
                     if let Some(blob) = self
                         .storage
                         .load_blob(commit.blob().digest())
@@ -575,7 +581,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     {
                         missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
                     } else {
-                        todo!()
+                        missing_blobs.push(commit.blob().digest());
                     }
                 }
             }
@@ -590,7 +596,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     {
                         missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
                     } else {
-                        todo!()
+                        missing_blobs.push(chunk.summary().blob_meta().digest());
                     }
                 }
             }
@@ -607,8 +613,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 id,
                 req_id,
                 diff: SyncDiff {
-                    missing_commits: missing_commits,
-                    missing_chunks: missing_chunks,
+                    missing_commits,
+                    missing_chunks,
                 },
             }
             .into(),
@@ -616,7 +622,11 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         .await
         .map_err(IoError::ConnSend)?;
 
-        Ok(())
+        if missing_blobs.is_empty() {
+            Ok(())
+        } else {
+            Err(ListenError::MissingBlobs(missing_blobs))
+        }
     }
 
     /// Handle receiving a batch sync response from a peer.
@@ -923,6 +933,18 @@ pub enum BlobRequestErr<S: Storage, C: Connection> {
 
     /// Some requested blobs were missing locally.
     #[error("Missing blobs: {0:?}")]
+    MissingBlobs(Vec<Digest>),
+}
+
+/// An error that can occur while handling a batch sync request.
+#[derive(Debug, Error)]
+pub enum ListenError<S: Storage, C: Connection> {
+    /// An IO error occurred while handling the batch sync request.
+    #[error(transparent)]
+    IoError(#[from] IoError<S, C>),
+
+    /// Missing blobs associated with local chunks or commits.
+    #[error("Missing blobs associated to local chunks & commits: {0:?}")]
     MissingBlobs(Vec<Digest>),
 }
 

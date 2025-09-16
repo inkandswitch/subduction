@@ -132,7 +132,7 @@ impl SedimentreeSummary {
     }
 
     /// The set of loose commits in this [`SedimentreeSummary`].
-    pub fn commits(&self) -> &BTreeSet<LooseCommit> {
+    pub fn loose_commits(&self) -> &BTreeSet<LooseCommit> {
         &self.commits
     }
 
