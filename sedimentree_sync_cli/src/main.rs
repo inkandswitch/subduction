@@ -6,7 +6,7 @@ use sedimentree_core::{storage::MemoryStorage, Sedimentree, SedimentreeId};
 use sedimentree_sync_core::{peer::id::PeerId, SedimentreeSync};
 use sedimentree_sync_websocket::WebSocket;
 use std::{collections::HashMap, time::Duration};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 use tokio_tungstenite::MaybeTlsStream;
 
 #[tokio::main]
@@ -52,7 +52,7 @@ async fn main() -> anyhow::Result<()> {
 
             tracing::info!("Connected to WebSocket server at {}", args.ws);
 
-            let ws = WebSocket::new(
+            let ws: WebSocket<MaybeTlsStream<TcpStream>> = WebSocket::new(
                 ws_stream,
                 Duration::from_secs(5),
                 PeerId::new([1u8; 32]),

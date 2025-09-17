@@ -27,10 +27,14 @@
 #![forbid(unsafe_code)]
 #![allow(clippy::multiple_crate_versions)]
 
-use futures_util::{
-    stream::{SplitSink, SplitStream},
-    SinkExt, StreamExt,
+use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
+use futures::{
+    channel::{mpsc, oneshot},
+    future,
+    lock::Mutex,
 };
+use futures_timer::Delay;
+use futures_util::{AsyncRead, AsyncWrite, SinkExt, StreamExt};
 use sedimentree_sync_core::{
     connection::{
         BatchSyncRequest, BatchSyncResponse, Connection, ConnectionId, Message, Reconnection,
@@ -40,46 +44,39 @@ use sedimentree_sync_core::{
 };
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use thiserror::Error;
-use tokio::{
-    net::TcpStream,
-    sync::{mpsc, oneshot, Mutex, RwLock},
-    time::timeout,
-};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 /// A WebSocket implementation for [`Connection`].
-#[derive(Debug, Clone)]
-pub struct WebSocket {
+#[derive(Debug)]
+pub struct WebSocket<TcpStream: AsyncRead + AsyncWrite + Unpin> {
     conn_id: ConnectionId,
     peer_id: PeerId,
 
     req_id_counter: Arc<Mutex<u128>>,
     timeout: Duration,
 
-    ws_reader: Arc<Mutex<SplitStream<WebSocketStream<MaybeTlsStream<TcpStream>>>>>,
-    outbound:
-        Arc<Mutex<SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, tungstenite::Message>>>,
+    ws_reader: Arc<Mutex<WebSocketReceiver<TcpStream>>>,
+    outbound: Arc<Mutex<WebSocketSender<TcpStream>>>,
 
-    pending: Arc<RwLock<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
+    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
     inbound_writer: mpsc::UnboundedSender<Message>,
     inbound_reader: Arc<Mutex<mpsc::UnboundedReceiver<Message>>>,
 }
 
-impl WebSocket {
+impl<TcpStream: AsyncRead + AsyncWrite + Unpin> WebSocket<TcpStream> {
     /// Create a new WebSocket connection.
     pub fn new(
-        ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
+        ws: WebSocketStream<TcpStream>,
         timeout: Duration,
         peer_id: PeerId,
         conn_id: ConnectionId,
     ) -> Self {
         let (ws_writer, ws_reader_owned) = ws.split();
-        let pending = Arc::new(RwLock::new(HashMap::<
+        let pending = Arc::new(Mutex::new(HashMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
-        let (inbound_writer, inbound_rx) = tokio::sync::mpsc::unbounded_channel();
+        let (inbound_writer, inbound_rx) = mpsc::unbounded();
         let ws_reader = Arc::new(Mutex::new(ws_reader_owned));
         let starting_counter = rand::random::<u128>();
 
@@ -99,7 +96,7 @@ impl WebSocket {
     }
 }
 
-impl Connection for WebSocket {
+impl<TcpStream: AsyncRead + AsyncWrite + Unpin> Connection for WebSocket<TcpStream> {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -144,7 +141,7 @@ impl Connection for WebSocket {
     async fn recv(&self) -> Result<Message, Self::RecvError> {
         tracing::debug!("waiting for inbound message");
         let mut chan = self.inbound_reader.lock().await;
-        let msg = chan.recv().await.ok_or(RecvError::ReadFromClosed)?;
+        let msg = chan.next().await.ok_or(RecvError::ReadFromClosed)?;
         tracing::info!("received inbound message id {:?}", msg.request_id());
         Ok(msg)
     }
@@ -159,7 +156,7 @@ impl Connection for WebSocket {
 
         // Pre-register channel
         let (tx, rx) = oneshot::channel();
-        self.pending.write().await.insert(req_id, tx);
+        self.pending.lock().await.insert(req_id, tx);
 
         self.outbound
             .lock()
@@ -184,33 +181,50 @@ impl Connection for WebSocket {
             }
             Ok(Err(e)) => {
                 tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                Err(CallError::ChanError(e))
+                Err(CallError::ChanCanceled(e))
             }
-            Err(elapsed) => {
+            Err(TimedOut) => {
                 tracing::error!("request {:?} timed out", req_id);
-                Err(CallError::Timeout(elapsed))
+                Err(CallError::Timeout)
             }
         }
     }
 }
 
-impl Reconnection for WebSocket {
+#[derive(Debug, Clone, Copy)]
+struct TimedOut;
+
+async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Result<T, TimedOut> {
+    match future::select(fut, Delay::new(dur)).await {
+        future::Either::Left((val, _delay)) => Ok(val),
+        future::Either::Right(_) => Err(TimedOut),
+    }
+}
+
+impl<TcpStream: AsyncRead + AsyncWrite + Unpin> Reconnection for WebSocket<TcpStream> {
     type Address = String;
     type ConnectError = tungstenite::Error;
     type RunError = RunError;
 
-    async fn connect(
-        addr: Self::Address,
-        timeout: Duration,
-        peer_id: PeerId,
-        conn_id: ConnectionId,
-    ) -> Result<Box<Self>, Self::ConnectError> {
-        let (ws_stream, _) = tokio_tungstenite::connect_async(addr).await?;
-        Ok(Box::new(Self::new(ws_stream, timeout, peer_id, conn_id)))
+    fn timeout(&self) -> Duration {
+        self.timeout
+    }
+
+    fn address(&self) -> &Self::Address {
+        // This is a bit of a hack, but we don't store the address in the struct.
+        // Instead, we assume that the peer ID can be converted to a string address.
+        // In a real implementation, you would store the address separately.
+        todo!("Store and return the actual address");
+    }
+
+    async fn reconnect(&mut self) -> Result<Self, Self::ConnectError> {
+        let (ws_stream, _) = async_tungstenite::async_std::connect_async(self.address())
+            .await
+            .expect("FIXME");
+        todo!("FIXME") // self.
     }
 
     async fn run(&self) -> Result<(), RunError> {
-        let pending = self.pending.clone();
         while let Some(msg) = self.ws_reader.lock().await.next().await {
             tracing::debug!("received ws message");
             match msg {
@@ -221,7 +235,7 @@ impl Reconnection for WebSocket {
                     match msg {
                         Message::BatchSyncResponse(resp) => {
                             let req_id = resp.req_id;
-                            if let Some(waiting) = pending.write().await.remove(&req_id) {
+                            if let Some(waiting) = self.pending.lock().await.remove(&req_id) {
                                 tracing::info!("dispatching to waiter {:?}", req_id);
                                 let result = waiting.send(resp);
                                 debug_assert!(result.is_ok());
@@ -233,11 +247,14 @@ impl Reconnection for WebSocket {
                                 }
                             } else {
                                 tracing::info!("dispatching to inbound channel {:?}", resp.req_id);
-                                self.inbound_writer.send(Message::BatchSyncResponse(resp))?;
+                                self.inbound_writer
+                                    .clone()
+                                    .send(Message::BatchSyncResponse(resp))
+                                    .await?;
                             }
                         }
                         other => {
-                            self.inbound_writer.send(other)?;
+                            self.inbound_writer.clone().send(other).await?;
                         }
                     }
                 }
@@ -263,7 +280,8 @@ impl Reconnection for WebSocket {
                 }
                 Ok(tungstenite::Message::Close(_)) => {
                     // fail all pending
-                    std::mem::take(&mut *pending.write().await);
+                    std::mem::take(&mut *self.pending.lock().await);
+                    // FIXME reconnect instead ^^
                     break;
                 }
                 Err(e) => Err(e)?,
@@ -298,12 +316,12 @@ pub enum CallError {
     Serialization(bincode::error::EncodeError),
 
     /// Problem receiving on the internal channel.
-    #[error("Channel receive error: {0}")]
-    ChanError(#[from] oneshot::error::RecvError),
+    #[error("Channel canceled: {0}")]
+    ChanCanceled(#[from] oneshot::Canceled),
 
     /// Timed out waiting for response.
-    #[error("Timed out waiting for response: {0}")]
-    Timeout(#[from] tokio::time::error::Elapsed),
+    #[error("Timed out waiting for response")]
+    Timeout,
 }
 
 /// Problem while attempting to receive a message.
@@ -311,7 +329,7 @@ pub enum CallError {
 pub enum RecvError {
     /// Problem receiving on the internal channel.
     #[error("Channel receive error: {0}")]
-    ChanError(#[from] oneshot::error::RecvError),
+    ChanCanceled(#[from] oneshot::Canceled),
 
     /// Attempted to read from a closed channel.
     #[error("Attempted to read from closed channel")]
@@ -328,7 +346,7 @@ pub struct DisconnectionError;
 pub enum RunError {
     /// Internal MPSC channel error.
     #[error("Channel send error: {0}")]
-    ChanSend(#[from] tokio::sync::mpsc::error::SendError<Message>),
+    ChanSend(#[from] futures::channel::mpsc::SendError),
 
     /// WebSocket error.
     #[error("WebSocket error: {0}")]

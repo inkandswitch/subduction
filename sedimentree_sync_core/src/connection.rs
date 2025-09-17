@@ -11,7 +11,7 @@ use thiserror::Error;
 ///
 /// It is assumed that a [`Connection`] is authenticated to a particular peer.
 /// Encrypting this channel is also strongly recommended.
-pub trait Connection: Clone {
+pub trait Connection {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 
@@ -55,7 +55,7 @@ pub trait Connection: Clone {
 }
 
 /// A trait for connections that can be re-established if they drop.
-pub trait Reconnection: Connection {
+pub trait Reconnection: Connection + Sized {
     /// The address type used to connect to the peer.
     ///
     /// For example, this may be a string, a handle, a public key, and so on.
@@ -67,13 +67,11 @@ pub trait Reconnection: Connection {
     /// A problem when running the connection.
     type RunError: core::error::Error;
 
+    fn timeout(&self) -> Duration;
+    fn address(&self) -> &Self::Address;
+
     /// Setup the connection, but don't run it.
-    fn connect(
-        addr: Self::Address,
-        timeout: Duration,
-        peer_id: PeerId,
-        conn_id: ConnectionId,
-    ) -> impl Future<Output = Result<Box<Self>, Self::ConnectError>>;
+    fn reconnect(&mut self) -> impl Future<Output = Result<Self, Self::ConnectError>>;
 
     /// Run the connection send/receive loop.
     fn run(&self) -> impl Future<Output = Result<(), Self::RunError>>;

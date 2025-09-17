@@ -14,14 +14,15 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-tungstenite = { version = "0.31.0", features = ["async-native-tls"] }
 bincode = { version = "2.0", features = ["serde"] }
-futures-util = "0.3.31"
+futures = { workspace = true }
+futures-timer = { workspace = true }
+futures-util = { workspace = true }
 rand = { workspace = true }
-serde = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
 sedimentree_sync_core = { path = "../sedimentree_sync_core", features = ["serde"] }
+serde = { workspace = true }
 thiserror = { workspace = true }
-tokio = { version = "1.46" }
-tokio-tungstenite = { version = "0.27.0", features = ["tokio-native-tls"] }
 tracing = { workspace = true }
 tungstenite = "0.27"

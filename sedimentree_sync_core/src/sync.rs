@@ -54,11 +54,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         }
     }
 
-    // FIXME fn reconnect
-
     async fn listen(&self) -> Result<(), ListenError<S, C>> {
         let mut pump = FuturesUnordered::new();
-        // FIXME add new connections to the global futs
         {
             let mut locked = self.conn_manager.lock().await;
             let unstarted = locked.unstarted.drain().collect::<Vec<_>>();
@@ -308,16 +305,16 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
     pub async fn register(&self, conn: C) -> Result<bool, ConnectionDisallowed> {
-        let mut locked = self.conn_manager.lock().await;
-
-        if locked.connections.contains_key(&conn.connection_id()) {
-            return Ok(false);
-        }
-
         self.allowed_to_connect(&conn.peer_id())?;
-        locked.unstarted.insert(conn.connection_id());
-        locked.connections.insert(conn.connection_id(), conn);
-        Ok(true)
+
+        let mut locked = self.conn_manager.lock().await;
+        if locked.connections.contains_key(&conn.connection_id()) {
+            Ok(false)
+        } else {
+            locked.unstarted.insert(conn.connection_id());
+            locked.connections.insert(conn.connection_id(), conn);
+            Ok(true)
+        }
     }
 
     /// Low-level unregistration of a connection.
