@@ -16,7 +16,7 @@ use sedimentree_sync_core::{
 use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 
-/// A WebSocketServer implementation for [`Connection`].
+/// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug)]
 pub struct TokioWebSocketServer {
     address: SocketAddr,
@@ -24,7 +24,12 @@ pub struct TokioWebSocketServer {
 }
 
 impl TokioWebSocketServer {
-    /// Create a new WebSocketServer connection.
+    /// Create a new [`WebSocketServer`] connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the socket could not be bound,
+    /// or if the connection could not be established.
     pub async fn new(
         address: SocketAddr,
         timeout: Duration,
@@ -88,7 +93,7 @@ impl Reconnection for TokioWebSocketServer {
 
     async fn reconnect(&mut self) -> Result<(), Self::ConnectError> {
         *self = TokioWebSocketServer::new(
-            self.address.clone(),
+            self.address,
             self.socket.timeout,
             self.socket.peer_id,
             self.connection_id(),

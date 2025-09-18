@@ -116,7 +116,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 sedimentree_summary,
                 req_id,
             }) => {
-                self.recv_batch_sync_request(id, &sedimentree_summary, req_id, &conn)
+                self.recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
                     .await?;
             }
             Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
@@ -130,7 +130,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     .connections
                     .contains_key(&idx)
                 {
-                    match self.recv_blob_request(&conn, &digests).await {
+                    match self.recv_blob_request(conn, &digests).await {
                         Ok(()) => {
                             tracing::info!(
                                 "Successfully handled blob request from peer {:?}",
@@ -274,14 +274,14 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         let conn_meta = locked
             .connections
             .iter()
-            .map(|(id, conn)| (*id, conn.peer_id().clone()))
+            .map(|(id, conn)| (*id, conn.peer_id()))
             .collect::<Vec<_>>();
 
         for (id, conn_peer_id) in &conn_meta {
             if *conn_peer_id == *peer_id {
                 touched = true;
-                locked.unstarted.remove(&id);
-                if let Some(mut conn) = locked.connections.remove(&id) {
+                locked.unstarted.remove(id);
+                if let Some(mut conn) = locked.connections.remove(id) {
                     conn.disconnect().await?;
                 }
             }
@@ -310,6 +310,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         self.allowed_to_connect(&conn.peer_id())?;
 
         let mut locked = self.conn_manager.lock().await;
+        #[allow(clippy::map_entry)]
         if locked.connections.contains_key(&conn.connection_id()) {
             Ok(false)
         } else {

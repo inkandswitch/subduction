@@ -69,6 +69,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     }
 
     /// Listen for incoming messages and dispatch them appropriately.
+    ///
+    /// # Errors
+    ///
+    /// If there is an error reading from the WebSocket or processing messages.
     pub async fn listen(&self) -> Result<(), RunError> {
         while let Some(msg) = self.ws_reader.lock().await.next().await {
             tracing::debug!("received ws message");

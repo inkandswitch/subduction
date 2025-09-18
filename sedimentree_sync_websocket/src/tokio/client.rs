@@ -1,4 +1,4 @@
-//! # Sedimentree Sync WebSocket client for Tokio
+//! # Sedimentree Sync [`WebSocket`] client for Tokio
 
 use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
@@ -15,7 +15,7 @@ use sedimentree_sync_core::{
 use std::time::Duration;
 use tungstenite::http::Uri;
 
-/// A WebSocketClient implementation for [`Connection`].
+/// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug)]
 pub struct TokioWebSocketClient {
     address: Uri,
@@ -23,7 +23,11 @@ pub struct TokioWebSocketClient {
 }
 
 impl TokioWebSocketClient {
-    /// Create a new WebSocketClient connection.
+    /// Create a new [`WebSocketClient`] connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection could not be established.
     pub async fn new(
         address: Uri,
         timeout: Duration,

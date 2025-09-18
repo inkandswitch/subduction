@@ -1,4 +1,4 @@
-//! Tokio WebSockets
+//! Tokio implementations for [`WebSocket`][crate::websocket::WebSocket]s.
 
 #[cfg(feature = "tokio_client")]
 pub mod client;
