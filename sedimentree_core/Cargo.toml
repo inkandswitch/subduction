@@ -15,7 +15,6 @@ rust-version.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 blake3 = { workspace = true }
-bs58 = { version = "0.5.1", features = ["check"] }
 futures = { workspace = true }
 hex = { workspace = true }
 nonempty = { workspace = true, features = ["arbitrary", "serialize"] }

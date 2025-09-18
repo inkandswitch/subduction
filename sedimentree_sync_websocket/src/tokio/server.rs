@@ -8,8 +8,9 @@ use async_tungstenite::tokio::{accept_async, TokioAdapter};
 use core::net::SocketAddr;
 use sedimentree_sync_core::{
     connection::{
-        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionId, Message, Reconnection,
-        RequestId,
+        id::ConnectionId,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Reconnection,
     },
     peer::id::PeerId,
 };

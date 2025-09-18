@@ -12,7 +12,9 @@ use futures_timer::Delay;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_sync_core::{
     connection::{
-        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionId, Message, RequestId,
+        id::ConnectionId,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };

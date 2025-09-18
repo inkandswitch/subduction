@@ -114,7 +114,6 @@ pub async fn update<S: Storage + Clone>(
     Ok(())
 }
 
-// FIXME why not a trait method?
 /// Stream the data for all commits and chunks in a `Sedimentree`.
 pub fn data<S: Storage + Clone>(
     storage: &S,

@@ -2,8 +2,9 @@
 
 use crate::{
     connection::{
-        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionDisallowed, ConnectionId,
-        ConnectionPolicy, Message, RequestId, SyncDiff,
+        id::ConnectionId,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
+        Connection, ConnectionDisallowed, ConnectionPolicy,
     },
     peer::id::PeerId,
 };

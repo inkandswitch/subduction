@@ -1,10 +1,16 @@
 //! Manage connections to peers in the network.
 
-use std::time::Duration;
+pub mod id;
+pub mod message;
 
+use std::{sync::Arc, time::Duration};
+
+use self::{
+    id::ConnectionId,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+};
 use crate::peer::id::PeerId;
-use futures::Future;
-use sedimentree_core::{Blob, Chunk, Digest, LooseCommit, SedimentreeId, SedimentreeSummary};
+use futures::{executor::block_on, lock::Mutex, Future};
 use thiserror::Error;
 
 /// A trait representing a connection to a peer in the network.
@@ -84,161 +90,61 @@ pub trait ConnectionPolicy {
 #[error("Connection disallowed")]
 pub struct ConnectionDisallowed;
 
-// TODO also make a version for the sender that is borrowed instead of owned.
-/// The calculated difference for the remote peer.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SyncDiff {
-    /// Commits that we are missing and need to request from the peer.
-    pub missing_commits: Vec<(LooseCommit, Blob)>,
+impl<T: Connection> Connection for Arc<Mutex<T>> {
+    type DisconnectionError = T::DisconnectionError;
+    type SendError = T::SendError;
+    type RecvError = T::RecvError;
+    type CallError = T::CallError;
 
-    /// Chunks that we are missing and need to request from the peer.
-    pub missing_chunks: Vec<(Chunk, Blob)>,
-}
+    fn connection_id(&self) -> ConnectionId {
+        block_on(self.lock()).connection_id()
+    }
 
-/// The API contact messages to be sent over a [`Connection`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Message {
-    /// A single loose commit being sent for a particular [`Sedimentree`].
-    LooseCommit {
-        /// The ID of the [`Sedimentree`] that this commit belongs to.
-        id: SedimentreeId,
+    fn peer_id(&self) -> PeerId {
+        block_on(self.lock()).peer_id()
+    }
 
-        /// The [`LooseCommit`] being sent.
-        commit: LooseCommit,
+    async fn disconnect(&mut self) -> Result<(), Self::DisconnectionError> {
+        let conn = self.clone();
+        conn.lock().await.disconnect().await
+    }
 
-        /// The [`Blob`] containing the commit data.
-        blob: Blob,
-    },
+    async fn send(&self, message: Message) -> Result<(), Self::SendError> {
+        let conn = self.clone();
+        conn.lock().await.send(message).await
+    }
 
-    /// A single chunk being sent for a particular [`Sedimentree`].
-    Chunk {
-        /// The ID of the [`Sedimentree`] that this chunk belongs to.
-        id: SedimentreeId,
+    async fn recv(&self) -> Result<Message, Self::RecvError> {
+        let conn = self.clone();
+        conn.lock().await.recv().await
+    }
 
-        /// The [`Chunk`] being sent.
-        chunk: Chunk,
+    async fn next_request_id(&self) -> RequestId {
+        let conn = self.clone();
+        conn.lock().await.next_request_id().await
+    }
 
-        /// The [`Blob`] containing the chunk data.
-        blob: Blob,
-    },
-
-    /// A request for blobs by their [`Digest`]s.
-    BlobsRequest(Vec<Digest>),
-
-    /// A response to a [`BlobRequest`].
-    BlobsResponse(Vec<Blob>),
-
-    /// A request to "batch sync" an entire [`Sedimentree`].
-    BatchSyncRequest(BatchSyncRequest),
-
-    /// A response to a [`BatchSyncRequest`].
-    BatchSyncResponse(BatchSyncResponse),
-}
-
-impl Message {
-    /// Get the request ID for this message, if any.
-    #[must_use]
-    pub const fn request_id(&self) -> Option<RequestId> {
-        match self {
-            Message::BatchSyncRequest(BatchSyncRequest { req_id, .. })
-            | Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
-            _ => None,
-        }
+    async fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> Result<BatchSyncResponse, Self::CallError> {
+        let conn = self.clone();
+        conn.lock().await.call(req, timeout).await
     }
 }
 
-/// A request to sync a sedimentree in batch.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BatchSyncRequest {
-    /// The ID of the sedimentree to sync.
-    pub id: SedimentreeId,
+impl<T: Reconnection> Reconnection for Arc<Mutex<T>> {
+    type ConnectError = T::ConnectError;
+    type RunError = T::RunError;
 
-    /// The unique ID of the request.
-    pub req_id: RequestId,
-
-    /// The summary of the sedimentree that the requester has.
-    pub sedimentree_summary: SedimentreeSummary,
-}
-
-impl From<BatchSyncRequest> for Message {
-    fn from(req: BatchSyncRequest) -> Self {
-        Message::BatchSyncRequest(req)
-    }
-}
-
-/// A response to a [`BatchSyncRequest`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct BatchSyncResponse {
-    /// The ID of the request that this is a response to.
-    pub req_id: RequestId,
-
-    /// The ID of the sedimentree that was synced.
-    pub id: SedimentreeId,
-
-    /// The diff for the remote peer.
-    pub diff: SyncDiff,
-}
-
-impl From<BatchSyncResponse> for Message {
-    fn from(resp: BatchSyncResponse) -> Self {
-        Message::BatchSyncResponse(resp)
-    }
-}
-
-/// A unique identifier for a particular request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct RequestId {
-    /// ID for the peer that initiated the request.
-    pub requestor: PeerId,
-
-    /// A nonce unique to this user and connection.
-    pub nonce: u128,
-}
-
-/// A unique identifier for a particular connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct ConnectionId(usize);
-
-impl ConnectionId {
-    /// Create a new [`ConnectionId`] from a `usize`.
-    #[must_use]
-    pub const fn new(id: usize) -> Self {
-        Self(id)
+    async fn reconnect(&mut self) -> Result<(), Self::ConnectError> {
+        let conn = self.clone();
+        conn.lock().await.reconnect().await
     }
 
-    /// Get the inner `usize` representation of the [`ConnectionId`].
-    #[must_use]
-    pub const fn as_usize(&self) -> usize {
-        self.0
-    }
-}
-
-impl From<usize> for ConnectionId {
-    fn from(value: usize) -> Self {
-        Self(value)
-    }
-}
-
-impl From<ConnectionId> for usize {
-    fn from(value: ConnectionId) -> Self {
-        value.0
-    }
-}
-
-impl std::fmt::Display for ConnectionId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "conn-{}", self.0)
+    async fn run(&mut self) -> Result<(), Self::RunError> {
+        let conn = self.clone();
+        conn.lock().await.run().await
     }
 }

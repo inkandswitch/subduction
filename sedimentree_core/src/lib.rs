@@ -76,10 +76,14 @@ impl FromStr for SedimentreeId {
     type Err = BadSedimentreeId;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = bs58::decode(s)
-            .with_check(None)
-            .into_vec()
-            .map_err(|_| BadSedimentreeId)?;
+        if s.len() % 2 != 0 {
+            return Err(BadSedimentreeId);
+        }
+
+        let bytes = (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| BadSedimentreeId))
+            .collect::<Result<Vec<u8>, BadSedimentreeId>>()?;
 
         if bytes.len() == 32 {
             let mut arr = [0; 32];
@@ -91,18 +95,21 @@ impl FromStr for SedimentreeId {
     }
 }
 
-// FIXME hex
 impl std::fmt::Debug for SedimentreeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let as_string = bs58::encode(&self.0).with_check().into_string();
-        write!(f, "{as_string}")
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
     }
 }
 
 impl std::fmt::Display for SedimentreeId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let as_string = bs58::encode(&self.0).with_check().into_string();
-        write!(f, "{as_string}")
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
     }
 }
 

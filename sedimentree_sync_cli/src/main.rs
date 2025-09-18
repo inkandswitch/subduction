@@ -1,6 +1,3 @@
-// FIXME mod black_box;
-
-// FIXME use self::black_box::BlackBox;
 use clap::Parser;
 use sedimentree_core::{storage::MemoryStorage, Sedimentree, SedimentreeId};
 use sedimentree_sync_core::{peer::id::PeerId, SedimentreeSync};

@@ -7,8 +7,9 @@ use crate::{
 use async_tungstenite::tokio::{connect_async, ConnectStream};
 use sedimentree_sync_core::{
     connection::{
-        BatchSyncRequest, BatchSyncResponse, Connection, ConnectionId, Message, Reconnection,
-        RequestId,
+        id::ConnectionId,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Reconnection,
     },
     peer::id::PeerId,
 };
