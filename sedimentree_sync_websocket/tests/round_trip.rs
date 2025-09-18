@@ -91,7 +91,12 @@ async fn it_does_the_thing() -> TestResult {
         }
     });
 
+    assert_eq!(client.peer_count().await, 1);
+    assert_eq!(server.peer_count().await, 1);
+
+    tracing::debug!("WAITING FOR SYNC");
     let batch = client.request_all_batch_sync_all(None).await?;
+    tracing::debug!("DONE");
 
     let server_sed = server.sedimentree_snapshot(server_sed_id).await.unwrap();
     let server_updated = server_sed.loose_commits().cloned().collect::<Vec<_>>();

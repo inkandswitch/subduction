@@ -21,7 +21,7 @@ use std::time::Duration;
 use tokio::net::{TcpListener, TcpStream};
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokioWebSocketServer {
     address: SocketAddr,
     socket: WebSocket<TokioAdapter<TcpStream>>,
@@ -37,6 +37,7 @@ impl TokioWebSocketServer {
         ws_stream: WebSocketStream<TokioAdapter<TcpStream>>,
     ) -> Self {
         let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id);
+        tracing::info!("Accepting WebSocket connections at {address}");
         TokioWebSocketServer { address, socket }
     }
 
@@ -82,22 +83,22 @@ impl Connection for TokioWebSocketServer {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
     async fn send(&self, message: Message) -> Result<(), Self::SendError> {
+        tracing::debug!("Server sending message: {:?}", message);
         self.socket.send(message).await
     }
 
-    #[tracing::instrument(skip(self))]
     async fn recv(&self) -> Result<Message, Self::RecvError> {
+        tracing::debug!("Server waiting to receive message");
         self.socket.recv().await
     }
 
-    #[tracing::instrument(skip(self, req), fields(req_id = ?req.req_id))]
     async fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
     ) -> Result<BatchSyncResponse, Self::CallError> {
+        tracing::debug!("Server making call with request: {:?}", req);
         self.socket.call(req, override_timeout).await
     }
 }

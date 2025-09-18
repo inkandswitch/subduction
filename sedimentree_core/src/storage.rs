@@ -48,7 +48,6 @@ pub trait Storage {
 /// # Errors
 ///
 /// * Returns [`S::Error`] if the storage backend encounters an problem loading commits or chunks.
-#[tracing::instrument(skip(storage))]
 pub async fn load<S: Storage + Clone>(storage: S) -> Result<Option<Sedimentree>, S::Error> {
     let chunks = {
         let storage = storage.clone();

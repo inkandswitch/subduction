@@ -17,7 +17,7 @@ use std::time::Duration;
 use tungstenite::http::Uri;
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokioWebSocketClient {
     address: Uri,
     socket: WebSocket<ConnectStream>,
@@ -66,22 +66,22 @@ impl Connection for TokioWebSocketClient {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
     async fn send(&self, message: Message) -> Result<(), Self::SendError> {
+        tracing::debug!("Client sending message: {:?}", message);
         self.socket.send(message).await
     }
 
-    #[tracing::instrument(skip(self))]
     async fn recv(&self) -> Result<Message, Self::RecvError> {
+        tracing::debug!("Client waiting to receive message");
         self.socket.recv().await
     }
 
-    #[tracing::instrument(skip(self, req), fields(req_id = ?req.req_id))]
     async fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
     ) -> Result<BatchSyncResponse, Self::CallError> {
+        tracing::debug!("Client making call with request: {:?}", req);
         self.socket.call(req, override_timeout).await
     }
 }

@@ -3,21 +3,21 @@
 pub mod id;
 pub mod message;
 
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use self::{
     id::ConnectionId,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use crate::peer::id::PeerId;
-use futures::{executor::block_on, lock::Mutex, Future};
+use futures::Future;
 use thiserror::Error;
 
 /// A trait representing a connection to a peer in the network.
 ///
 /// It is assumed that a [`Connection`] is authenticated to a particular peer.
 /// Encrypting this channel is also strongly recommended.
-pub trait Connection {
+pub trait Connection: Clone {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 
@@ -82,69 +82,13 @@ pub trait ConnectionPolicy {
     /// # Errors
     ///
     /// * Returns [`ConnectionDisallowed`] if the connection is not allowed.
-    fn allowed_to_connect(&self, peer: &PeerId) -> Result<(), ConnectionDisallowed>;
+    fn allowed_to_connect(
+        &self,
+        peer: &PeerId,
+    ) -> impl Future<Output = Result<(), ConnectionDisallowed>>;
 }
 
 /// An error indicating that a connection is disallowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Hash)]
 #[error("Connection disallowed")]
 pub struct ConnectionDisallowed;
-
-impl<T: Connection> Connection for Arc<Mutex<T>> {
-    type DisconnectionError = T::DisconnectionError;
-    type SendError = T::SendError;
-    type RecvError = T::RecvError;
-    type CallError = T::CallError;
-
-    fn connection_id(&self) -> ConnectionId {
-        block_on(self.lock()).connection_id()
-    }
-
-    fn peer_id(&self) -> PeerId {
-        block_on(self.lock()).peer_id()
-    }
-
-    async fn disconnect(&mut self) -> Result<(), Self::DisconnectionError> {
-        let conn = self.clone();
-        conn.lock().await.disconnect().await
-    }
-
-    async fn send(&self, message: Message) -> Result<(), Self::SendError> {
-        let conn = self.clone();
-        conn.lock().await.send(message).await
-    }
-
-    async fn recv(&self) -> Result<Message, Self::RecvError> {
-        let conn = self.clone();
-        conn.lock().await.recv().await
-    }
-
-    async fn next_request_id(&self) -> RequestId {
-        let conn = self.clone();
-        conn.lock().await.next_request_id().await
-    }
-
-    async fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> Result<BatchSyncResponse, Self::CallError> {
-        let conn = self.clone();
-        conn.lock().await.call(req, timeout).await
-    }
-}
-
-impl<T: Reconnect> Reconnect for Arc<Mutex<T>> {
-    type ConnectError = T::ConnectError;
-    type RunError = T::RunError;
-
-    async fn reconnect(&mut self) -> Result<(), Self::ConnectError> {
-        let conn = self.clone();
-        conn.lock().await.reconnect().await
-    }
-
-    async fn run(&mut self) -> Result<(), Self::RunError> {
-        let conn = self.clone();
-        conn.lock().await.run().await
-    }
-}

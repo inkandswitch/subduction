@@ -142,6 +142,22 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     }
 }
 
+impl<T: AsyncRead + AsyncWrite + Unpin> Clone for WebSocket<T> {
+    fn clone(&self) -> Self {
+        Self {
+            conn_id: self.conn_id,
+            peer_id: self.peer_id,
+            req_id_counter: self.req_id_counter.clone(),
+            timeout: self.timeout,
+            ws_reader: self.ws_reader.clone(),
+            outbound: self.outbound.clone(),
+            pending: self.pending.clone(),
+            inbound_writer: self.inbound_writer.clone(),
+            inbound_reader: self.inbound_reader.clone(),
+        }
+    }
+}
+
 impl<T: AsyncRead + AsyncWrite + Unpin> Connection for WebSocket<T> {
     type SendError = SendError;
     type RecvError = RecvError;
@@ -170,8 +186,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Connection for WebSocket<T> {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
     async fn send(&self, message: Message) -> Result<(), Self::SendError> {
+        tracing::debug!("sending outbound message id {:?}", message.request_id());
         self.outbound
             .lock()
             .await
@@ -183,21 +199,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Connection for WebSocket<T> {
         Ok(())
     }
 
-    #[tracing::instrument(skip(self))]
     async fn recv(&self) -> Result<Message, Self::RecvError> {
-        tracing::debug!("waiting for inbound message");
+        tracing::debug!("Waiting for inbound message");
         let mut chan = self.inbound_reader.lock().await;
         let msg = chan.next().await.ok_or(RecvError::ReadFromClosed)?;
-        tracing::info!("received inbound message id {:?}", msg.request_id());
+        tracing::info!("Received inbound message id {:?}", msg.request_id());
         Ok(msg)
     }
 
-    #[tracing::instrument(skip(self, req), fields(req_id = ?req.req_id))]
     async fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
     ) -> Result<BatchSyncResponse, Self::CallError> {
+        tracing::debug!("making call with request id {:?}", req.req_id);
         let req_id = req.req_id;
 
         // Pre-register channel
@@ -216,6 +231,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Connection for WebSocket<T> {
                 .into(),
             ))
             .await?;
+
+        tracing::info!("sent request {:?}", req_id);
 
         let req_timeout = override_timeout.unwrap_or(self.timeout);
 
