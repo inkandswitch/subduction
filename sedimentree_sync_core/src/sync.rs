@@ -4,7 +4,7 @@ use crate::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
-        Connection, ConnectionDisallowed, ConnectionPolicy,
+        ConnectionDisallowed, ConnectionError, ConnectionPolicy, LocalConnection,
     },
     peer::id::PeerId,
 };
@@ -33,13 +33,13 @@ pub struct ChunkRequested {
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
-pub struct SedimentreeSync<S: Storage, C: Connection> {
+pub struct SedimentreeSync<S: Storage, C: ConnectionError> {
     sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
     conn_manager: Arc<Mutex<ConnectionManager<C>>>,
     storage: S,
 }
 
-impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
+impl<S: Storage, C: LocalConnection> SedimentreeSync<S, C> {
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -60,8 +60,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         let mut pump = FuturesUnordered::new();
         {
             let mut locked = self.conn_manager.lock().await;
-            let unstarted = locked.unstarted.drain().collect::<Vec<_>>();
-            for conn_id in unstarted {
+            let mut unstarted = locked.unstarted.drain().collect::<Vec<_>>();
+            for conn_id in unstarted.drain(..) {
                 tracing::info!("Spawning listener for connection {:?}", conn_id);
                 #[allow(clippy::expect_used)]
                 let fut = indexed_listen(
@@ -72,7 +72,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                         .clone(),
                 );
                 pump.push(fut);
-                locked.unstarted.remove(&conn_id);
             }
         }
 
@@ -538,8 +537,6 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         Ok(maybe_requested_chunk)
     }
 
-    // TODO find next bounary using an iterator?
-
     /// Add a new (incremental) chunk locally and propagate it to all connected peers.
     ///
     /// NOTE this performs no integrity checks;
@@ -687,16 +684,37 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
             for commit in sedimentree.loose_commits() {
                 if !their_summary.loose_commits().contains(commit) {
+                    tracing::debug!(
+                        "Peer is missing commit {:?} at depth {:?}",
+                        commit.digest(),
+                        Depth::from(commit.digest())
+                    );
                     if let Some(blob) = self
                         .storage
                         .load_blob(commit.blob().digest())
                         .await
                         .map_err(IoError::Storage)?
                     {
+                        tracing::debug!(
+                            "Found blob for commit {:?} at depth {:?}",
+                            commit.digest(),
+                            Depth::from(commit.digest())
+                        );
                         missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
                     } else {
+                        tracing::warn!(
+                            "Missing blob for commit {:?} at depth {:?}",
+                            commit.digest(),
+                            Depth::from(commit.digest())
+                        );
                         missing_blobs.push(commit.blob().digest());
                     }
+                } else {
+                    tracing::trace!(
+                        "Peer already has commit {:?} at depth {:?}",
+                        commit.digest(),
+                        Depth::from(commit.digest())
+                    );
                 }
             }
 
@@ -896,13 +914,11 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
         );
-        let mut peers: HashMap<PeerId, Vec<C>> = HashMap::new();
-        {
-            let locked = self.conn_manager.lock().await;
-            for conn in locked.connections.values() {
-                peers.entry(conn.peer_id()).or_default().push(conn.clone());
-            }
-        };
+        let mut peers: HashMap<PeerId, Vec<&C>> = HashMap::new();
+        let locked = self.conn_manager.lock().await; // TODO held long, inefficient!
+        for conn in locked.connections.values() {
+            peers.entry(conn.peer_id()).or_default().push(conn);
+        }
 
         let mut had_success = false;
 
@@ -1038,6 +1054,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         commit: LooseCommit,
         blob: Blob,
     ) -> Result<(), S::Error> {
+        tracing::debug!("Inserting commit {:?} locally", commit.digest());
         {
             let mut sed = self.sedimentrees.lock().await;
             let tree = sed.entry(id).or_default();
@@ -1073,7 +1090,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     }
 }
 
-impl<S: Storage, C: Connection> ConnectionPolicy for SedimentreeSync<S, C> {
+impl<S: Storage, C: LocalConnection> ConnectionPolicy for SedimentreeSync<S, C> {
     async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
         Ok(()) // TODO currently allows all
     }
@@ -1083,7 +1100,7 @@ impl<S: Storage, C: Connection> ConnectionPolicy for SedimentreeSync<S, C> {
 ///
 /// This covers storage and network connection errors.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
-pub enum IoError<S: Storage, C: Connection> {
+pub enum IoError<S: Storage, C: ConnectionError> {
     /// An error occurred while using storage.
     #[error(transparent)]
     Storage(S::Error),
@@ -1107,7 +1124,7 @@ pub enum IoError<S: Storage, C: Connection> {
 
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
-pub enum BlobRequestErr<S: Storage, C: Connection> {
+pub enum BlobRequestErr<S: Storage, C: ConnectionError> {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
     IoError(#[from] IoError<S, C>),
@@ -1119,7 +1136,7 @@ pub enum BlobRequestErr<S: Storage, C: Connection> {
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<S: Storage, C: Connection> {
+pub enum ListenError<S: Storage, C: ConnectionError> {
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
     IoError(#[from] IoError<S, C>),
@@ -1129,14 +1146,14 @@ pub enum ListenError<S: Storage, C: Connection> {
     MissingBlobs(Vec<Digest>),
 }
 
-async fn indexed_listen<C: Connection>(conn: C) -> Result<(C, Message), C::RecvError> {
+async fn indexed_listen<C: LocalConnection>(conn: C) -> Result<(C, Message), C::RecvError> {
     let msg = conn.recv().await?;
     tracing::debug!("Resolved message we were waiting on: {:?}", msg);
     Ok((conn, msg))
 }
 
 #[derive(Debug, Default)]
-struct ConnectionManager<C: Connection> {
+struct ConnectionManager<C> {
     connections: HashMap<ConnectionId, C>,
     unstarted: HashSet<ConnectionId>,
 }

@@ -9,11 +9,12 @@ use sedimentree_sync_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, Reconnect,
+        Connection, ConnectionError, LocalConnection, Reconnect,
     },
     peer::id::PeerId,
 };
 use std::time::Duration;
+use tokio::task::JoinHandle;
 use tungstenite::http::Uri;
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
@@ -42,14 +43,25 @@ impl TokioWebSocketClient {
             socket: WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id),
         })
     }
+
+    pub fn start(&self) -> JoinHandle<Result<(), RunError>> {
+        let inner = self.clone();
+        tokio::spawn(async move { inner.socket.listen().await })
+    }
+
+    pub async fn listen(&self) -> Result<(), RunError> {
+        self.socket.listen().await
+    }
 }
 
-impl Connection for TokioWebSocketClient {
+impl ConnectionError for TokioWebSocketClient {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
+}
 
+impl LocalConnection for TokioWebSocketClient {
     fn connection_id(&self) -> ConnectionId {
         self.socket.connection_id()
     }

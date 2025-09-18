@@ -14,7 +14,7 @@ use sedimentree_sync_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection,
+        ConnectionError, LocalConnection,
     },
     peer::id::PeerId,
 };
@@ -46,13 +46,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
         peer_id: PeerId,
         conn_id: ConnectionId,
     ) -> Self {
-        let (ws_writer, ws_reader_owned) = ws.split();
+        let (ws_writer, ws_reader) = ws.split();
         let pending = Arc::new(Mutex::new(HashMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
         let (inbound_writer, inbound_rx) = mpsc::unbounded();
-        let ws_reader = Arc::new(Mutex::new(ws_reader_owned));
         let starting_counter = rand::random::<u128>();
 
         Self {
@@ -62,7 +61,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
             req_id_counter: Arc::new(Mutex::new(starting_counter)),
             timeout,
 
-            ws_reader,
+            ws_reader: Arc::new(Mutex::new(ws_reader)),
             outbound: Arc::new(Mutex::new(ws_writer)),
             pending,
             inbound_writer,
@@ -158,12 +157,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Clone for WebSocket<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> Connection for WebSocket<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin> ConnectionError for WebSocket<T> {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
+}
 
+impl<T: AsyncRead + AsyncWrite + Unpin> LocalConnection for WebSocket<T> {
     fn connection_id(&self) -> ConnectionId {
         self.conn_id
     }

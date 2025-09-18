@@ -13,11 +13,7 @@ use crate::peer::id::PeerId;
 use futures::Future;
 use thiserror::Error;
 
-/// A trait representing a connection to a peer in the network.
-///
-/// It is assumed that a [`Connection`] is authenticated to a particular peer.
-/// Encrypting this channel is also strongly recommended.
-pub trait Connection: Clone {
+pub trait ConnectionError {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 
@@ -29,7 +25,48 @@ pub trait Connection: Clone {
 
     /// A problem with a roundtrip call.
     type CallError: core::error::Error;
+}
 
+/// A trait representing a connection to a peer in the network.
+///
+/// It is assumed that a [`Connection`] is authenticated to a particular peer.
+/// Encrypting this channel is also strongly recommended.
+pub trait Connection: Clone + Send + ConnectionError {
+    /// A unique identifier for this connection.
+    ///
+    /// This number should be a counter or random number.
+    /// We assume that the same ID is never reused for different connections.
+    /// For this reason, it is not recommended to use or derive from the peer ID on its own.
+    fn connection_id(&self) -> ConnectionId;
+
+    /// The peer ID of the remote peer.
+    fn peer_id(&self) -> PeerId;
+
+    /// Disconnect from the peer gracefully.
+    fn disconnect(&mut self) -> impl Future<Output = Result<(), Self::DisconnectionError>> + Send;
+
+    /// Send a message.
+    fn send(&self, message: Message) -> impl Future<Output = Result<(), Self::SendError>> + Send;
+
+    /// Receive a message.
+    fn recv(&self) -> impl Future<Output = Result<Message, Self::RecvError>> + Send;
+
+    /// Get the next request ID e.g. for a [`call`].
+    fn next_request_id(&self) -> impl Future<Output = RequestId> + Send;
+
+    /// Make a synchronous call to the peer, expecting a response.
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> impl Future<Output = Result<BatchSyncResponse, Self::CallError>> + Send;
+}
+
+/// A trait representing a connection to a peer in the network.
+///
+/// It is assumed that a [`Connection`] is authenticated to a particular peer.
+/// Encrypting this channel is also strongly recommended.
+pub trait LocalConnection: Clone + ConnectionError {
     /// A unique identifier for this connection.
     ///
     /// This number should be a counter or random number.
@@ -61,7 +98,7 @@ pub trait Connection: Clone {
 }
 
 /// A trait for connections that can be re-established if they drop.
-pub trait Reconnect: Connection + Sized {
+pub trait Reconnect: Sized {
     /// A problem when creating the connection.
     type ConnectError: core::error::Error;
 
