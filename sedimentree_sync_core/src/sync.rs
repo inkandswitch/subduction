@@ -65,9 +65,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 let fut = indexed_listen(
                     locked
                         .connections
-                        .get(&conn_id)
-                        .expect("connections with IDs should be present")
-                        .clone(),
+                        .remove(&conn_id)
+                        .expect("connections with IDs should be present"),
                 );
                 pump.push(fut);
                 locked.unstarted.remove(&conn_id);
@@ -79,22 +78,20 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             match res {
                 Ok((conn, message)) => {
                     {
-                        {
-                            let mut locked = self.conn_manager.lock().await;
-                            if locked.connections.contains_key(&conn.connection_id()) {
-                                // Re-enque if that connection is still active at the top-level
-                                pump.push(indexed_listen(conn.clone()));
-                            }
+                        self.dispatch(&conn, message).await?;
+                        let mut locked = self.conn_manager.lock().await;
+                        if locked.connections.contains_key(&conn.connection_id()) {
+                            // Re-enque if that connection is still active at the top-level
+                            pump.push(indexed_listen(conn));
+                        }
 
-                            let unstarted_ids = locked.unstarted.drain().collect::<Vec<_>>();
-                            for conn_id in unstarted_ids {
-                                if let Some(unstarted) = locked.connections.get(&conn_id) {
-                                    pump.push(indexed_listen(unstarted.clone()));
-                                }
+                        let unstarted_ids = locked.unstarted.drain().collect::<Vec<_>>();
+                        for conn_id in unstarted_ids {
+                            if let Some(unstarted) = locked.connections.remove(&conn_id) {
+                                pump.push(indexed_listen(unstarted));
                             }
                         }
                     }
-                    self.dispatch(conn, message).await?;
                 }
                 Err(e) => Err(IoError::ConnRecv(e))?,
             }
@@ -103,7 +100,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         Ok(())
     }
 
-    async fn dispatch(&self, conn: C, message: Message) -> Result<(), ListenError<S, C>> {
+    async fn dispatch(&self, conn: &C, message: Message) -> Result<(), ListenError<S, C>> {
         let idx = conn.connection_id();
         let from = conn.peer_id();
 
@@ -274,12 +271,17 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         let mut touched = false;
         let mut locked = self.conn_manager.lock().await;
 
-        let conns = locked.connections.clone();
-        for (id, conn) in &conns {
-            if conn.peer_id() == *peer_id {
+        let conn_meta = locked
+            .connections
+            .iter()
+            .map(|(id, conn)| (*id, conn.peer_id().clone()))
+            .collect::<Vec<_>>();
+
+        for (id, conn_peer_id) in &conn_meta {
+            if *conn_peer_id == *peer_id {
                 touched = true;
-                locked.unstarted.remove(id);
-                if let Some(mut conn) = locked.connections.remove(id) {
+                locked.unstarted.remove(&id);
+                if let Some(mut conn) = locked.connections.remove(&id) {
                     conn.disconnect().await?;
                 }
             }
@@ -412,17 +414,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         } else {
             if let Some(tree) = self.sedimentrees.lock().await.get(&id) {
                 let summary = tree.summarize();
-                let conns = {
-                    self.conn_manager
-                        .lock()
-                        .await
-                        .connections
-                        .values()
-                        .cloned()
-                        .collect::<Vec<_>>()
-                };
-
-                for conn in conns {
+                let locked = self.conn_manager.lock().await;
+                for conn in locked.connections.values() {
                     let req_id = conn.next_request_id().await;
                     let BatchSyncResponse {
                         id,
@@ -515,24 +508,18 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::Storage)?;
 
-        let conns = {
-            self.conn_manager
-                .lock()
+        {
+            let locked = self.conn_manager.lock().await;
+            let conns = locked.connections.values().collect::<Vec<_>>();
+            for conn in conns {
+                conn.send(Message::LooseCommit {
+                    id,
+                    commit: commit.clone(),
+                    blob: blob.clone(),
+                })
                 .await
-                .connections
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-
-        for conn in conns {
-            conn.send(Message::LooseCommit {
-                id,
-                commit: commit.clone(),
-                blob: blob.clone(),
-            })
-            .await
-            .map_err(IoError::ConnSend)?;
+                .map_err(IoError::ConnSend)?;
+            }
         }
 
         let mut maybe_requested_chunk = None;
@@ -576,24 +563,18 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::Storage)?;
 
-        let conns = {
-            self.conn_manager
-                .lock()
+        {
+            let locked = self.conn_manager.lock().await;
+            let conns = locked.connections.values().collect::<Vec<_>>();
+            for conn in conns {
+                conn.send(Message::Chunk {
+                    id,
+                    chunk: chunk.clone(),
+                    blob: blob.clone(),
+                })
                 .await
-                .connections
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-
-        for conn in conns {
-            conn.send(Message::Chunk {
-                id,
-                chunk: chunk.clone(),
-                blob: blob.clone(),
-            })
-            .await
-            .map_err(IoError::ConnSend)?;
+                .map_err(IoError::ConnSend)?;
+            }
         }
 
         Ok(())
@@ -621,16 +602,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::Storage)?;
 
-        let conns = {
-            self.conn_manager
-                .lock()
-                .await
-                .connections
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        for conn in conns {
+        let locked = self.conn_manager.lock().await;
+        for conn in locked.connections.values() {
             if conn.peer_id() != *from {
                 conn.send(Message::LooseCommit {
                     id,
@@ -663,17 +636,8 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .await
             .map_err(IoError::Storage)?;
 
-        let conns = {
-            self.conn_manager
-                .lock()
-                .await
-                .connections
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-
-        for conn in conns {
+        let locked = self.conn_manager.lock().await;
+        for conn in locked.connections.values() {
             if conn.peer_id() != *from {
                 conn.send(Message::Chunk {
                     id,
@@ -832,19 +796,12 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             to_ask
         );
 
-        let peer_conns = {
-            self.conn_manager
-                .lock()
-                .await
-                .connections
-                .values()
-                .filter(|conn| conn.peer_id() == *to_ask)
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-
         let mut had_success = false;
-
+        let locked = self.conn_manager.lock().await;
+        let peer_conns = locked
+            .connections
+            .values()
+            .filter(|conn| conn.peer_id() == *to_ask);
         for conn in peer_conns {
             tracing::info!(
                 "Using connection {:?} to peer {:?}",
@@ -918,18 +875,9 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
         );
-        let peer_conns = {
-            self.conn_manager
-                .lock()
-                .await
-                .connections
-                .values()
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-
-        let mut peers: HashMap<PeerId, Vec<C>> = HashMap::new();
-        for conn in peer_conns {
+        let mut peers: HashMap<PeerId, Vec<&C>> = HashMap::new();
+        let locked = self.conn_manager.lock().await;
+        for conn in locked.connections.values() {
             peers.entry(conn.peer_id()).or_default().push(conn);
         }
 

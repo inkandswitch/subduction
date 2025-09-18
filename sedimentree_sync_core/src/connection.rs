@@ -56,22 +56,14 @@ pub trait Connection {
 
 /// A trait for connections that can be re-established if they drop.
 pub trait Reconnection: Connection + Sized {
-    /// The address type used to connect to the peer.
-    ///
-    /// For example, this may be a string, a handle, a public key, and so on.
-    type Address;
-
     /// A problem when creating the connection.
     type ConnectError: core::error::Error;
 
     /// A problem when running the connection.
     type RunError: core::error::Error;
 
-    fn timeout(&self) -> Duration;
-    fn address(&self) -> &Self::Address;
-
     /// Setup the connection, but don't run it.
-    fn reconnect(&mut self) -> impl Future<Output = Result<Self, Self::ConnectError>>;
+    fn reconnect(&mut self) -> impl Future<Output = Result<(), Self::ConnectError>>;
 
     /// Run the connection send/receive loop.
     fn run(&self) -> impl Future<Output = Result<(), Self::RunError>>;
