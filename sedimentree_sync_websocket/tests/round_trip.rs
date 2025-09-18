@@ -23,12 +23,12 @@ static TRACING: OnceLock<()> = OnceLock::new();
 
 fn init_tracing() {
     TRACING.get_or_init(|| {
-        tracing_subscriber::fmt().with_env_filter("debug").init();
+        tracing_subscriber::fmt().with_env_filter("warn").init();
     });
 }
 
 #[tokio::test]
-async fn round_trips() -> TestResult {
+async fn rend_receive() -> TestResult {
     init_tracing();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
@@ -76,7 +76,7 @@ async fn round_trips() -> TestResult {
 }
 
 #[tokio::test]
-async fn it_does_the_thing() -> TestResult {
+async fn batch_sync() -> TestResult {
     init_tracing();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;

@@ -695,11 +695,6 @@ impl<S: Storage, C: LocalConnection> SedimentreeSync<S, C> {
                         .await
                         .map_err(IoError::Storage)?
                     {
-                        tracing::debug!(
-                            "Found blob for commit {:?} at depth {:?}",
-                            commit.digest(),
-                            Depth::from(commit.digest())
-                        );
                         missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
                     } else {
                         tracing::warn!(
@@ -709,12 +704,6 @@ impl<S: Storage, C: LocalConnection> SedimentreeSync<S, C> {
                         );
                         missing_blobs.push(commit.blob().digest());
                     }
-                } else {
-                    tracing::trace!(
-                        "Peer already has commit {:?} at depth {:?}",
-                        commit.digest(),
-                        Depth::from(commit.digest())
-                    );
                 }
             }
 
@@ -728,6 +717,11 @@ impl<S: Storage, C: LocalConnection> SedimentreeSync<S, C> {
                     {
                         missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
                     } else {
+                        tracing::warn!(
+                            "Missing blob for chunk {:?} at depth {:?}",
+                            chunk.digest(),
+                            chunk.summary().depth()
+                        );
                         missing_blobs.push(chunk.summary().blob_meta().digest());
                     }
                 }
