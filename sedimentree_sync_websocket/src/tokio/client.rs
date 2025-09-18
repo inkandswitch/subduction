@@ -9,7 +9,7 @@ use sedimentree_sync_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, Reconnection,
+        Connection, Reconnect,
     },
     peer::id::PeerId,
 };
@@ -86,7 +86,7 @@ impl Connection for TokioWebSocketClient {
     }
 }
 
-impl Reconnection for TokioWebSocketClient {
+impl Reconnect for TokioWebSocketClient {
     type ConnectError = tungstenite::Error;
     type RunError = RunError;
 

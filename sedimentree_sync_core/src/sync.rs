@@ -50,12 +50,14 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
     /// * Returns `ListenError` if a storage or network error occurs.
     #[tracing::instrument(skip(self))]
     pub async fn run(&self) -> Result<(), ListenError<S, C>> {
+        tracing::debug!("Starting SedimentreeSync run loop");
         loop {
             self.listen().await?;
         }
     }
 
     async fn listen(&self) -> Result<(), ListenError<S, C>> {
+        tracing::info!("Listening for messages from connections");
         let mut pump = FuturesUnordered::new();
         {
             let mut locked = self.conn_manager.lock().await;
@@ -117,8 +119,12 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                 sedimentree_summary,
                 req_id,
             }) => {
-                self.recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
-                    .await?;
+                if let Err(ListenError::MissingBlobs(missing)) = self
+                    .recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
+                    .await
+                {
+                    self.request_blobs(missing).await;
+                }
             }
             Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
                 self.recv_batch_sync_response(&from, id, &diff).await?;
@@ -676,43 +682,51 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         let mut missing_blobs = Vec::new();
 
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
-        if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
-            tracing::info!(
-                "Received batch sync request for sedimentree {:?} with {} commits and {} chunks",
-                id,
-                their_summary.loose_commits().len(),
-                their_summary.chunk_summaries().len()
-            );
+        let mut guard = self.sedimentrees.lock().await;
+        let sedimentree = guard.entry(id).or_default();
+        tracing::info!(
+            "Received batch sync request for sedimentree {:?} with {} commits and {} chunks",
+            id,
+            their_summary.loose_commits().len(),
+            their_summary.chunk_summaries().len()
+        );
 
-            for commit in sedimentree.loose_commits() {
-                if !their_summary.loose_commits().contains(commit) {
-                    if let Some(blob) = self
-                        .storage
-                        .load_blob(commit.blob().digest())
-                        .await
-                        .map_err(IoError::Storage)?
-                    {
-                        missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
-                    } else {
-                        missing_blobs.push(commit.blob().digest());
-                    }
+        for commit in sedimentree.loose_commits() {
+            if !their_summary.loose_commits().contains(commit) {
+                if let Some(blob) = self
+                    .storage
+                    .load_blob(commit.blob().digest())
+                    .await
+                    .map_err(IoError::Storage)?
+                {
+                    missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
+                } else {
+                    missing_blobs.push(commit.blob().digest());
                 }
             }
+        }
 
-            for chunk in sedimentree.chunks() {
-                if !their_summary.chunk_summaries().contains(chunk.summary()) {
-                    if let Some(blob) = self
-                        .storage
-                        .load_blob(chunk.summary().blob_meta().digest())
-                        .await
-                        .map_err(IoError::Storage)?
-                    {
-                        missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
-                    } else {
-                        missing_blobs.push(chunk.summary().blob_meta().digest());
-                    }
+        for chunk in sedimentree.chunks() {
+            if !their_summary.chunk_summaries().contains(chunk.summary()) {
+                if let Some(blob) = self
+                    .storage
+                    .load_blob(chunk.summary().blob_meta().digest())
+                    .await
+                    .map_err(IoError::Storage)?
+                {
+                    missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
+                } else {
+                    missing_blobs.push(chunk.summary().blob_meta().digest());
                 }
             }
+        }
+
+        for commit in their_summary.loose_commits() {
+            sedimentree.add_commit(commit.clone());
+        }
+
+        for chunk in their_summary.chunk_summaries() {
+            // FIXME sedimentree.add_chunk(chunk.clone());
         }
 
         tracing::info!(
@@ -774,6 +788,20 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         }
 
         Ok(())
+    }
+
+    pub async fn request_blobs(&self, digests: Vec<Digest>) {
+        let locked = self.conn_manager.lock().await;
+        for conn in locked.connections.values() {
+            if let Err(e) = conn.send(Message::BlobsRequest(digests.clone())).await {
+                tracing::error!(
+                    "Error requesting blobs {:?} from peer {:?}: {:?}",
+                    digests,
+                    conn.peer_id(),
+                    e
+                );
+            }
+        }
     }
 
     /// Request a batch sync from a given peer for a given sedimentree ID.
@@ -885,8 +913,21 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
 
         let mut had_success = false;
 
+        tracing::debug!("Found {} peers", peers.len());
         for peer_conns in peers.values() {
+            tracing::debug!(
+                "Requesting batch sync for sedimentree {:?} from {} connections to peer {:?}",
+                id,
+                peer_conns.len(),
+                peer_conns.first().map(|c| c.peer_id())
+            );
+            tracing::debug!(">>>>>>>>>>>>>> {:?}", peer_conns.len());
             for conn in peer_conns {
+                tracing::debug!(
+                    "Using connection {:?} to peer {:?}",
+                    conn.connection_id(),
+                    conn.peer_id()
+                );
                 let summary = self
                     .sedimentrees
                     .lock()
@@ -913,6 +954,14 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
                     )
                     .await
                     .map_err(IoError::ConnCall)?;
+
+                tracing::debug!(
+                    "Received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing chunks",
+                    id,
+                    conn.peer_id(),
+                    missing_commits.len(),
+                    missing_chunks.len()
+                );
 
                 for (commit, blob) in missing_commits {
                     self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
@@ -947,6 +996,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
         &self,
         timeout: Option<Duration>,
     ) -> Result<bool, IoError<S, C>> {
+        tracing::info!("Requesting batch sync for all sedimentrees from all peers");
         let tree_ids = self
             .sedimentrees
             .lock()
@@ -956,6 +1006,7 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .collect::<Vec<_>>();
         let mut had_success = false;
         for id in tree_ids {
+            tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
             let success = self.request_all_batch_sync(id, timeout).await?;
             if success {
                 had_success = true;
@@ -976,6 +1027,10 @@ impl<S: Storage, C: Connection> SedimentreeSync<S, C> {
             .keys()
             .copied()
             .collect::<Vec<_>>()
+    }
+
+    pub async fn sedimentree_snapshot(&self, id: SedimentreeId) -> Option<Sedimentree> {
+        self.sedimentrees.lock().await.get(&id).cloned()
     }
 
     /*******************
@@ -1084,7 +1139,7 @@ async fn indexed_listen<K: Connection>(conn: K) -> Result<(K, Message), K::RecvE
     Ok((conn, msg))
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 struct ConnectionManager<C: Connection> {
     connections: HashMap<ConnectionId, C>,
     unstarted: HashSet<ConnectionId>,

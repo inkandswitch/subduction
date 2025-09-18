@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
 
             let ws: TokioWebSocketServer = {
                 let addr = args.ws.parse()?;
-                TokioWebSocketServer::new(
+                TokioWebSocketServer::setup(
                     addr,
                     Duration::from_secs(5),
                     PeerId::new([0; 32]),

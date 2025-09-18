@@ -185,13 +185,7 @@ impl SedimentreeSummary {
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Depth(pub u32); // TODO why not u8?
-
-// impl Default for Depth {
-//     fn default() -> Self {
-//         Self(2)
-//     }
-// }
+pub struct Depth(pub u32);
 
 impl<'a> From<&'a Digest> for Depth {
     fn from(hash: &'a Digest) -> Self {
@@ -803,11 +797,10 @@ pub enum CommitOrChunk {
     Chunk(Chunk),
 }
 
-fn trailing_zeros_in_base(arr: &[u8; 32], base: u32) -> u32 {
+fn trailing_zeros_in_base(arr: &[u8; 32], base: u8) -> u32 {
     assert!(base > 1, "Base must be greater than 1");
-    let bytes = num::BigInt::from_bytes_be(num::bigint::Sign::Plus, arr)
-        .to_radix_be(base)
-        .1;
+    let (_, bytes) =
+        num::BigInt::from_bytes_be(num::bigint::Sign::Plus, arr).to_radix_be(base.into());
 
     #[allow(clippy::expect_used)]
     u32::try_from(bytes.into_iter().rev().take_while(|&i| i == 0).count())

@@ -61,7 +61,7 @@ pub trait Connection {
 }
 
 /// A trait for connections that can be re-established if they drop.
-pub trait Reconnection: Connection + Sized {
+pub trait Reconnect: Connection + Sized {
     /// A problem when creating the connection.
     type ConnectError: core::error::Error;
 
@@ -134,7 +134,7 @@ impl<T: Connection> Connection for Arc<Mutex<T>> {
     }
 }
 
-impl<T: Reconnection> Reconnection for Arc<Mutex<T>> {
+impl<T: Reconnect> Reconnect for Arc<Mutex<T>> {
     type ConnectError = T::ConnectError;
     type RunError = T::RunError;
 

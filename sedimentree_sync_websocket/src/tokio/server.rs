@@ -4,13 +4,16 @@ use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     websocket::WebSocket,
 };
-use async_tungstenite::tokio::{accept_async, TokioAdapter};
+use async_tungstenite::{
+    tokio::{accept_async, TokioAdapter},
+    WebSocketStream,
+};
 use core::net::SocketAddr;
 use sedimentree_sync_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, Reconnection,
+        Connection, Reconnect,
     },
     peer::id::PeerId,
 };
@@ -25,13 +28,25 @@ pub struct TokioWebSocketServer {
 }
 
 impl TokioWebSocketServer {
+    /// Create a new [`WebSocketServer`] connection from an accepted TCP stream.
+    pub fn new(
+        address: SocketAddr,
+        timeout: Duration,
+        peer_id: PeerId,
+        conn_id: ConnectionId,
+        ws_stream: WebSocketStream<TokioAdapter<TcpStream>>,
+    ) -> Self {
+        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id);
+        TokioWebSocketServer { address, socket }
+    }
+
     /// Create a new [`WebSocketServer`] connection.
     ///
     /// # Errors
     ///
     /// Returns an error if the socket could not be bound,
     /// or if the connection could not be established.
-    pub async fn new(
+    pub async fn setup(
         address: SocketAddr,
         timeout: Duration,
         peer_id: PeerId,
@@ -41,8 +56,7 @@ impl TokioWebSocketServer {
         let listener = TcpListener::bind(address).await?;
         let (tcp, _peer) = listener.accept().await?;
         let ws_stream = accept_async(tcp).await?;
-        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id);
-        Ok(TokioWebSocketServer { address, socket })
+        Ok(Self::new(address, timeout, peer_id, conn_id, ws_stream))
     }
 }
 
@@ -88,12 +102,12 @@ impl Connection for TokioWebSocketServer {
     }
 }
 
-impl Reconnection for TokioWebSocketServer {
+impl Reconnect for TokioWebSocketServer {
     type ConnectError = tungstenite::Error;
     type RunError = RunError;
 
     async fn reconnect(&mut self) -> Result<(), Self::ConnectError> {
-        *self = TokioWebSocketServer::new(
+        *self = TokioWebSocketServer::setup(
             self.address,
             self.socket.timeout,
             self.socket.peer_id,
