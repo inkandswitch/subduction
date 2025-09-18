@@ -97,7 +97,10 @@ impl Reconnection for TokioWebSocketClient {
         Ok(())
     }
 
-    async fn run(&self) -> Result<(), Self::RunError> {
-        self.socket.run().await
+    async fn run(&mut self) -> Result<(), Self::RunError> {
+        loop {
+            self.socket.listen().await?;
+            self.reconnect().await?;
+        }
     }
 }

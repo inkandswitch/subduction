@@ -66,7 +66,7 @@ pub trait Reconnection: Connection + Sized {
     fn reconnect(&mut self) -> impl Future<Output = Result<(), Self::ConnectError>>;
 
     /// Run the connection send/receive loop.
-    fn run(&self) -> impl Future<Output = Result<(), Self::RunError>>;
+    fn run(&mut self) -> impl Future<Output = Result<(), Self::RunError>>;
 }
 
 /// A policy for allowing or disallowing connections from peers.

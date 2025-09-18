@@ -1,4 +1,4 @@
-//! # Sedimentree Sync WebSocket Connection
+//! # Generic WebSocket connection for Sedimentree Sync
 
 use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
@@ -68,7 +68,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
         }
     }
 
-    pub async fn run(&self) -> Result<(), RunError> {
+    /// Listen for incoming messages and dispatch them appropriately.
+    pub async fn listen(&self) -> Result<(), RunError> {
         while let Some(msg) = self.ws_reader.lock().await.next().await {
             tracing::debug!("received ws message");
             match msg {
@@ -125,7 +126,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                 Ok(tungstenite::Message::Close(_)) => {
                     // fail all pending
                     std::mem::take(&mut *self.pending.lock().await);
-                    // FIXME reconnect instead ^^
                     break;
                 }
                 Err(e) => Err(e)?,

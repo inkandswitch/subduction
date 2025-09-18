@@ -1,3 +1,5 @@
+//! Tokio WebSockets
+
 #[cfg(feature = "tokio_client")]
 pub mod client;
 

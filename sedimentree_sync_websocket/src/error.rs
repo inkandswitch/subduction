@@ -1,3 +1,5 @@
+//! Error types.
+
 use futures::channel::oneshot;
 use thiserror::Error;
 
@@ -34,7 +36,7 @@ pub enum CallError {
 }
 
 /// Problem while attempting to receive a message.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Copy, Error)]
 pub enum RecvError {
     /// Problem receiving on the internal channel.
     #[error("Channel receive error: {0}")]
