@@ -9,11 +9,13 @@ use async_tungstenite::{
     WebSocketStream,
 };
 use core::net::SocketAddr;
+use futures::{future::BoxFuture, FutureExt};
+use sedimentree_core::future::Sendable;
 use sedimentree_sync_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, ConnectionError, LocalConnection, Reconnect,
+        Connection, Reconnect,
     },
     peer::id::PeerId,
 };
@@ -22,6 +24,8 @@ use tokio::{
     net::{TcpListener, TcpStream},
     task::JoinHandle,
 };
+
+use super::start::{Start, Unstarted};
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug, Clone)]
@@ -38,10 +42,10 @@ impl TokioWebSocketServer {
         peer_id: PeerId,
         conn_id: ConnectionId,
         ws_stream: WebSocketStream<TokioAdapter<TcpStream>>,
-    ) -> Self {
+    ) -> Unstarted<Self> {
         let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id);
         tracing::info!("Accepting WebSocket connections at {address}");
-        TokioWebSocketServer { address, socket }
+        Unstarted(TokioWebSocketServer { address, socket })
     }
 
     /// Create a new [`WebSocketServer`] connection.
@@ -55,7 +59,7 @@ impl TokioWebSocketServer {
         timeout: Duration,
         peer_id: PeerId,
         conn_id: ConnectionId,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Unstarted<Self>, tungstenite::Error> {
         tracing::info!("Starting WebSocket server on {address}");
         let listener = TcpListener::bind(address).await?;
         let (tcp, _peer) = listener.accept().await?;
@@ -63,80 +67,97 @@ impl TokioWebSocketServer {
         Ok(Self::new(address, timeout, peer_id, conn_id, ws_stream))
     }
 
-    pub fn start(&self) -> JoinHandle<Result<(), RunError>> {
-        let inner = self.clone();
-        tokio::spawn(async move { inner.socket.listen().await })
-    }
-
+    /// Start listening for incoming messages.
     pub async fn listen(&self) -> Result<(), RunError> {
         self.socket.listen().await
     }
 }
 
-impl ConnectionError for TokioWebSocketServer {
+impl Start for TokioWebSocketServer {
+    fn start(&self) -> JoinHandle<Result<(), RunError>> {
+        let inner = self.clone();
+        tokio::spawn(async move { inner.socket.listen().await })
+    }
+}
+
+impl Connection<Sendable> for TokioWebSocketServer {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-}
 
-impl LocalConnection for TokioWebSocketServer {
     fn connection_id(&self) -> ConnectionId {
-        self.socket.connection_id()
+        Connection::<Sendable>::connection_id(&self.socket)
     }
 
     fn peer_id(&self) -> PeerId {
-        self.socket.peer_id()
+        Connection::<Sendable>::peer_id(&self.socket)
     }
 
-    async fn next_request_id(&self) -> RequestId {
-        self.socket.next_request_id().await
+    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
+        async { Connection::<Sendable>::next_request_id(&self.socket).await }.boxed()
     }
 
-    async fn disconnect(&mut self) -> Result<(), Self::DisconnectionError> {
-        Ok(())
+    fn disconnect(&mut self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed()
     }
 
-    async fn send(&self, message: Message) -> Result<(), Self::SendError> {
-        tracing::debug!("Server sending message: {:?}", message);
-        self.socket.send(message).await
+    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        async {
+            tracing::debug!("Server sending message: {:?}", message);
+            Connection::<Sendable>::send(&self.socket, message).await
+        }
+        .boxed()
     }
 
-    async fn recv(&self) -> Result<Message, Self::RecvError> {
-        tracing::debug!("Server waiting to receive message");
-        self.socket.recv().await
+    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+        async {
+            tracing::debug!("Server waiting to receive message");
+            Connection::<Sendable>::recv(&self.socket).await
+        }
+        .boxed()
     }
 
-    async fn call(
+    fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
-    ) -> Result<BatchSyncResponse, Self::CallError> {
-        tracing::debug!("Server making call with request: {:?}", req);
-        self.socket.call(req, override_timeout).await
+    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+        async move {
+            tracing::debug!("Server making call with request: {:?}", req);
+            Connection::<Sendable>::call(&self.socket, req, override_timeout).await
+        }
+        .boxed()
     }
 }
 
-impl Reconnect for TokioWebSocketServer {
+impl Reconnect<Sendable> for TokioWebSocketServer {
     type ConnectError = tungstenite::Error;
     type RunError = RunError;
 
-    async fn reconnect(&mut self) -> Result<(), Self::ConnectError> {
-        *self = TokioWebSocketServer::setup(
-            self.address,
-            self.socket.timeout,
-            self.socket.peer_id,
-            self.connection_id(),
-        )
-        .await?;
+    fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ConnectError>> {
+        async {
+            *self = TokioWebSocketServer::setup(
+                self.address,
+                self.socket.timeout,
+                self.socket.peer_id,
+                Connection::<Sendable>::connection_id(self),
+            )
+            .await?
+            .start();
 
-        Ok(())
+            Ok(())
+        }
+        .boxed()
     }
 
-    async fn run(&mut self) -> Result<(), Self::RunError> {
-        loop {
-            self.socket.listen().await?;
-            self.reconnect().await?;
+    fn run(&mut self) -> BoxFuture<'_, Result<(), Self::RunError>> {
+        async {
+            loop {
+                self.socket.listen().await?;
+                Reconnect::<Sendable>::reconnect(self).await?;
+            }
         }
+        .boxed()
     }
 }

@@ -47,6 +47,7 @@ use std::{
 
 mod blob;
 mod commit_dag;
+pub mod future;
 pub mod storage;
 
 pub use blob::*;

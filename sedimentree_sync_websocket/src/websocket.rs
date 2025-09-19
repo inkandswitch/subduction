@@ -4,17 +4,18 @@ use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use futures::{
     channel::{mpsc, oneshot},
-    future,
+    future::{self, BoxFuture, LocalBoxFuture},
     lock::Mutex,
-    SinkExt,
+    FutureExt, SinkExt,
 };
 use futures_timer::Delay;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
+use sedimentree_core::future::{Local, Sendable};
 use sedimentree_sync_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        ConnectionError, LocalConnection,
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -157,14 +158,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Clone for WebSocket<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> ConnectionError for WebSocket<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin> Connection<Local> for WebSocket<T> {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-}
 
-impl<T: AsyncRead + AsyncWrite + Unpin> LocalConnection for WebSocket<T> {
     fn connection_id(&self) -> ConnectionId {
         self.conn_id
     }
@@ -173,85 +172,205 @@ impl<T: AsyncRead + AsyncWrite + Unpin> LocalConnection for WebSocket<T> {
         self.peer_id
     }
 
-    async fn next_request_id(&self) -> RequestId {
-        let mut counter = self.req_id_counter.lock().await;
-        *counter = counter.wrapping_add(1);
-        tracing::debug!("generated message id {:?}", *counter);
-        RequestId {
-            requestor: self.peer_id,
-            nonce: *counter,
+    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
+        async {
+            let mut counter = self.req_id_counter.lock().await;
+            *counter = counter.wrapping_add(1);
+            tracing::debug!("generated message id {:?}", *counter);
+            RequestId {
+                requestor: self.peer_id,
+                nonce: *counter,
+            }
         }
+        .boxed_local()
     }
 
-    async fn disconnect(&mut self) -> Result<(), Self::DisconnectionError> {
-        Ok(())
+    fn disconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed_local()
     }
 
-    async fn send(&self, message: Message) -> Result<(), Self::SendError> {
-        tracing::debug!("sending outbound message id {:?}", message.request_id());
-        self.outbound
-            .lock()
-            .await
-            .send(tungstenite::Message::Binary(
-                bincode::serde::encode_to_vec(&message, bincode::config::standard())?.into(),
-            ))
-            .await?;
+    fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        async move {
+            tracing::debug!("sending outbound message id {:?}", message.request_id());
+            self.outbound
+                .lock()
+                .await
+                .send(tungstenite::Message::Binary(
+                    bincode::serde::encode_to_vec(&message, bincode::config::standard())?.into(),
+                ))
+                .await?;
 
-        Ok(())
+            Ok(())
+        }
+        .boxed_local()
     }
 
-    async fn recv(&self) -> Result<Message, Self::RecvError> {
-        tracing::debug!("Waiting for inbound message");
-        let mut chan = self.inbound_reader.lock().await;
-        let msg = chan.next().await.ok_or(RecvError::ReadFromClosed)?;
-        tracing::info!("Received inbound message id {:?}", msg.request_id());
-        Ok(msg)
+    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+        async {
+            tracing::debug!("Waiting for inbound message");
+            let mut chan = self.inbound_reader.lock().await;
+            let msg = chan.next().await.ok_or(RecvError::ReadFromClosed)?;
+            tracing::info!("Received inbound message id {:?}", msg.request_id());
+            Ok(msg)
+        }
+        .boxed_local()
     }
 
-    async fn call(
+    fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
-    ) -> Result<BatchSyncResponse, Self::CallError> {
-        tracing::debug!("making call with request id {:?}", req.req_id);
-        let req_id = req.req_id;
+    ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+        async move {
+            tracing::debug!("making call with request id {:?}", req.req_id);
+            let req_id = req.req_id;
 
-        // Pre-register channel
-        let (tx, rx) = oneshot::channel();
-        self.pending.lock().await.insert(req_id, tx);
+            // Pre-register channel
+            let (tx, rx) = oneshot::channel();
+            self.pending.lock().await.insert(req_id, tx);
 
-        self.outbound
-            .lock()
-            .await
-            .send(tungstenite::Message::Binary(
-                bincode::serde::encode_to_vec(
-                    Message::BatchSyncRequest(req),
-                    bincode::config::standard(),
-                )
-                .map_err(CallError::Serialization)?
-                .into(),
-            ))
-            .await?;
+            self.outbound
+                .lock()
+                .await
+                .send(tungstenite::Message::Binary(
+                    bincode::serde::encode_to_vec(
+                        Message::BatchSyncRequest(req),
+                        bincode::config::standard(),
+                    )
+                    .map_err(CallError::Serialization)?
+                    .into(),
+                ))
+                .await?;
 
-        tracing::info!("sent request {:?}", req_id);
+            tracing::info!("sent request {:?}", req_id);
 
-        let req_timeout = override_timeout.unwrap_or(self.timeout);
+            let req_timeout = override_timeout.unwrap_or(self.timeout);
 
-        // await response with timeout & cleanup
-        match timeout(req_timeout, rx).await {
-            Ok(Ok(resp)) => {
-                tracing::info!("request {:?} completed", req_id);
-                Ok(resp)
-            }
-            Ok(Err(e)) => {
-                tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                Err(CallError::ChanCanceled(e))
-            }
-            Err(TimedOut) => {
-                tracing::error!("request {:?} timed out", req_id);
-                Err(CallError::Timeout)
+            // await response with timeout & cleanup
+            match timeout(req_timeout, rx).await {
+                Ok(Ok(resp)) => {
+                    tracing::info!("request {:?} completed", req_id);
+                    Ok(resp)
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
+                    Err(CallError::ChanCanceled(e))
+                }
+                Err(TimedOut) => {
+                    tracing::error!("request {:?} timed out", req_id);
+                    Err(CallError::Timeout)
+                }
             }
         }
+        .boxed_local()
+    }
+}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocket<T> {
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type CallError = CallError;
+    type DisconnectionError = DisconnectionError;
+
+    fn connection_id(&self) -> ConnectionId {
+        self.conn_id
+    }
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
+        async {
+            let mut counter = self.req_id_counter.lock().await;
+            *counter = counter.wrapping_add(1);
+            tracing::debug!("generated message id {:?}", *counter);
+            RequestId {
+                requestor: self.peer_id,
+                nonce: *counter,
+            }
+        }
+        .boxed()
+    }
+
+    fn disconnect(&mut self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        async move {
+            tracing::debug!("sending outbound message id {:?}", message.request_id());
+            self.outbound
+                .lock()
+                .await
+                .send(tungstenite::Message::Binary(
+                    bincode::serde::encode_to_vec(&message, bincode::config::standard())?.into(),
+                ))
+                .await?;
+
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+        async {
+            tracing::debug!("Waiting for inbound message");
+            let mut chan = self.inbound_reader.lock().await;
+            let msg = chan.next().await.ok_or(RecvError::ReadFromClosed)?;
+            tracing::info!("Received inbound message id {:?}", msg.request_id());
+            Ok(msg)
+        }
+        .boxed()
+    }
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        override_timeout: Option<Duration>,
+    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+        async move {
+            tracing::debug!("making call with request id {:?}", req.req_id);
+            let req_id = req.req_id;
+
+            // Pre-register channel
+            let (tx, rx) = oneshot::channel();
+            self.pending.lock().await.insert(req_id, tx);
+
+            self.outbound
+                .lock()
+                .await
+                .send(tungstenite::Message::Binary(
+                    bincode::serde::encode_to_vec(
+                        Message::BatchSyncRequest(req),
+                        bincode::config::standard(),
+                    )
+                    .map_err(CallError::Serialization)?
+                    .into(),
+                ))
+                .await?;
+
+            tracing::info!("sent request {:?}", req_id);
+
+            let req_timeout = override_timeout.unwrap_or(self.timeout);
+
+            // await response with timeout & cleanup
+            match timeout(req_timeout, rx).await {
+                Ok(Ok(resp)) => {
+                    tracing::info!("request {:?} completed", req_id);
+                    Ok(resp)
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
+                    Err(CallError::ChanCanceled(e))
+                }
+                Err(TimedOut) => {
+                    tracing::error!("request {:?} timed out", req_id);
+                    Err(CallError::Timeout)
+                }
+            }
+        }
+        .boxed()
     }
 }
 

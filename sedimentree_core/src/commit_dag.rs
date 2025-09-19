@@ -691,7 +691,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_consevutive_block_boundary_commits_without_chunks() {
+    fn simplify_consecutive_block_boundary_commits_without_chunks() {
         simplify_test!(
             rng => &mut rand::rng(),
             nodes => | node | level |

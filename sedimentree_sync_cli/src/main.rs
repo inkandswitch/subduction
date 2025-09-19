@@ -35,6 +35,7 @@ async fn main() -> anyhow::Result<()> {
                     0.into(),
                 )
                 .await?
+                .start()
             };
 
             syncer.register(ws).await?;
@@ -53,7 +54,8 @@ async fn main() -> anyhow::Result<()> {
                 PeerId::new([0; 32]),
                 0.into(),
             )
-            .await?;
+            .await?
+            .start();
 
             syncer.register(ws).await?;
             let listen = syncer.run();

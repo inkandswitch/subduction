@@ -11,9 +11,14 @@ use self::{
 };
 use crate::peer::id::PeerId;
 use futures::Future;
+use sedimentree_core::future::FutureKind;
 use thiserror::Error;
 
-pub trait ConnectionError {
+/// A trait representing a connection to a peer in the network.
+///
+/// It is assumed that a [`Connection`] is authenticated to a particular peer.
+/// Encrypting this channel is also strongly recommended.
+pub trait Connection<K: FutureKind>: Clone {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 
@@ -25,13 +30,7 @@ pub trait ConnectionError {
 
     /// A problem with a roundtrip call.
     type CallError: core::error::Error;
-}
 
-/// A trait representing a connection to a peer in the network.
-///
-/// It is assumed that a [`Connection`] is authenticated to a particular peer.
-/// Encrypting this channel is also strongly recommended.
-pub trait Connection: Clone + Send + ConnectionError {
     /// A unique identifier for this connection.
     ///
     /// This number should be a counter or random number.
@@ -41,64 +40,28 @@ pub trait Connection: Clone + Send + ConnectionError {
 
     /// The peer ID of the remote peer.
     fn peer_id(&self) -> PeerId;
-
     /// Disconnect from the peer gracefully.
-    fn disconnect(&mut self) -> impl Future<Output = Result<(), Self::DisconnectionError>> + Send;
+    fn disconnect(&mut self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
 
     /// Send a message.
-    fn send(&self, message: Message) -> impl Future<Output = Result<(), Self::SendError>> + Send;
+    fn send(&self, message: Message) -> K::Future<'_, Result<(), Self::SendError>>;
 
     /// Receive a message.
-    fn recv(&self) -> impl Future<Output = Result<Message, Self::RecvError>> + Send;
+    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>>;
 
     /// Get the next request ID e.g. for a [`call`].
-    fn next_request_id(&self) -> impl Future<Output = RequestId> + Send;
+    fn next_request_id(&self) -> K::Future<'_, RequestId>;
 
     /// Make a synchronous call to the peer, expecting a response.
     fn call(
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
-    ) -> impl Future<Output = Result<BatchSyncResponse, Self::CallError>> + Send;
-}
-
-/// A trait representing a connection to a peer in the network.
-///
-/// It is assumed that a [`Connection`] is authenticated to a particular peer.
-/// Encrypting this channel is also strongly recommended.
-pub trait LocalConnection: Clone + ConnectionError {
-    /// A unique identifier for this connection.
-    ///
-    /// This number should be a counter or random number.
-    /// We assume that the same ID is never reused for different connections.
-    /// For this reason, it is not recommended to use or derive from the peer ID on its own.
-    fn connection_id(&self) -> ConnectionId;
-
-    /// The peer ID of the remote peer.
-    fn peer_id(&self) -> PeerId;
-
-    /// Disconnect from the peer gracefully.
-    fn disconnect(&mut self) -> impl Future<Output = Result<(), Self::DisconnectionError>>;
-
-    /// Send a message.
-    fn send(&self, message: Message) -> impl Future<Output = Result<(), Self::SendError>>;
-
-    /// Receive a message.
-    fn recv(&self) -> impl Future<Output = Result<Message, Self::RecvError>>;
-
-    /// Get the next request ID e.g. for a [`call`].
-    fn next_request_id(&self) -> impl Future<Output = RequestId>;
-
-    /// Make a synchronous call to the peer, expecting a response.
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> impl Future<Output = Result<BatchSyncResponse, Self::CallError>>;
+    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>>;
 }
 
 /// A trait for connections that can be re-established if they drop.
-pub trait Reconnect: Sized {
+pub trait Reconnect<K: FutureKind>: Connection<K> {
     /// A problem when creating the connection.
     type ConnectError: core::error::Error;
 
@@ -106,10 +69,10 @@ pub trait Reconnect: Sized {
     type RunError: core::error::Error;
 
     /// Setup the connection, but don't run it.
-    fn reconnect(&mut self) -> impl Future<Output = Result<(), Self::ConnectError>>;
+    fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ConnectError>>;
 
     /// Run the connection send/receive loop.
-    fn run(&mut self) -> impl Future<Output = Result<(), Self::RunError>>;
+    fn run(&mut self) -> K::Future<'_, Result<(), Self::RunError>>;
 }
 
 /// A policy for allowing or disallowing connections from peers.
