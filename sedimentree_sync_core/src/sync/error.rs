@@ -1,3 +1,5 @@
+//! Error types for the top-level `SedimentreeSync`.
+
 use sedimentree_core::{future::FutureKind, storage::Storage, Digest};
 use thiserror::Error;
 

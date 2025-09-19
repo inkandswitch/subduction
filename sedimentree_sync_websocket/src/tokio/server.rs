@@ -68,6 +68,13 @@ impl TokioWebSocketServer {
     }
 
     /// Start listening for incoming messages.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// * the connection drops unexpectedly
+    /// * a message could not be sent or received
+    /// * a message could not be parsed
     pub async fn listen(&self) -> Result<(), RunError> {
         self.socket.listen().await
     }
@@ -141,7 +148,7 @@ impl Reconnect<Sendable> for TokioWebSocketServer {
                 self.address,
                 self.socket.timeout,
                 self.socket.peer_id,
-                Connection::<Sendable>::connection_id(self),
+                self.connection_id(),
             )
             .await?
             .start();
@@ -155,7 +162,7 @@ impl Reconnect<Sendable> for TokioWebSocketServer {
         async {
             loop {
                 self.socket.listen().await?;
-                Reconnect::<Sendable>::reconnect(self).await?;
+                self.reconnect().await?;
             }
         }
         .boxed()

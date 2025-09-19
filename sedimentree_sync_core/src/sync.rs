@@ -272,8 +272,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> SedimentreeSync<F, S, C> {
         let mut locked = self.conn_manager.lock().await;
 
         let mut conn_meta = Vec::new();
-        for (id, conn) in locked.connections.iter() {
-            conn_meta.push((*id, conn.peer_id()))
+        for (id, conn) in &locked.connections {
+            conn_meta.push((*id, conn.peer_id()));
         }
 
         for (id, conn_peer_id) in &conn_meta {
@@ -1052,7 +1052,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> SedimentreeSync<F, S, C> {
             .await
             .connections
             .values()
-            .map(|conn| conn.peer_id())
+            .map(Connection::peer_id)
             .collect()
     }
 
