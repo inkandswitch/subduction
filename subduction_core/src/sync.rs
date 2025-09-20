@@ -58,6 +58,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
             let mut locked = self.conn_manager.lock().await;
             let mut unstarted = locked.unstarted.drain().collect::<Vec<_>>();
             for conn_id in unstarted.drain(..) {
+                #[allow(clippy::expect_used)]
                 let conn = locked
                     .connections
                     .get(&conn_id)
@@ -65,7 +66,6 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
                     .clone();
 
                 tracing::info!("Spawning listener for connection {:?}", conn_id);
-                #[allow(clippy::expect_used)]
                 pump.push(self.fire_once(conn));
             }
         }
@@ -81,7 +81,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
             let unstarted_ids = locked.unstarted.drain().collect::<Vec<_>>();
             for conn_id in unstarted_ids {
                 if let Some(unstarted) = locked.connections.get(&conn_id) {
-                    pump.push(self.fire_once(unstarted.clone()))
+                    pump.push(self.fire_once(unstarted.clone()));
                 }
             }
         }
