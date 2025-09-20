@@ -1,4 +1,4 @@
-//! # Sedimentree Sync
+//! # Subduction
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(

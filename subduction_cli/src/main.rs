@@ -70,7 +70,7 @@ async fn main() -> anyhow::Result<()> {
 }
 
 #[derive(Debug, Parser)]
-#[command(author = "Ink & Switch", version, about = "CLI for Sedimentree Sync")]
+#[command(author = "Ink & Switch", version, about = "CLI for Subduction")]
 struct Arguments {
     command: Option<String>,
 

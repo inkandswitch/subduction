@@ -1,10 +1,10 @@
 [package]
 name = "subduction_websocket"
 version = "0.1.0"
-description = "WebSocket implementation for Sedimentree Sync"
+description = "WebSocket implementation for Subduction"
 
 categories = ["web-programming"]
-keywords = ["sedimentree-sync", "websocket"]
+keywords = ["websocket", "sync", "subduction"]
 readme = "./README.md"
 
 authors.workspace = true

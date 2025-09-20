@@ -1,10 +1,10 @@
 [package]
 name = "subduction_core"
 version = "0.1.0"
-description = "Core implementation and traits for the Sedimentree Sync protocol"
+description = "Core implementation and traits for the Subduction protocol"
 
 categories = ["web-programming"]
-keywords = ["synchronization", "sedimentree-sync"]
+keywords = ["sync", "subduction"]
 readme = "./README.md"
 
 edition.workspace = true

@@ -1,4 +1,4 @@
-//! # Sedimentree Sync [`WebSocket`] client for Tokio
+//! # Subduction [`WebSocket`] client for Tokio
 
 use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},

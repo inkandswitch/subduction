@@ -1,4 +1,4 @@
-//! # Sedimentree Sync WebSocket
+//! # Suduction WebSocket
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(
