@@ -402,11 +402,8 @@ impl ChunkSummary {
     /// The depth of this stratum, determined by the number of leading zeros.
     #[must_use]
     pub fn depth(&self) -> Depth {
-        let start_level = trailing_zeros_in_base(self.start.as_bytes(), 10);
-        let lowest_level = self.ends.iter().fold(start_level, |acc, end| {
-            std::cmp::min(acc, trailing_zeros_in_base(end.as_bytes(), 10))
-        });
-        Depth(lowest_level)
+        let level = trailing_zeros_in_base(self.start.as_bytes(), 10);
+        Depth(level)
     }
 }
 
