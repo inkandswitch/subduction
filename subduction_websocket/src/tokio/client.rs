@@ -1,17 +1,15 @@
-//! # Sedimentree Sync WebSocket server for Tokio
+//! # Sedimentree Sync [`WebSocket`] client for Tokio
 
 use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    tokio::start::Unstarted,
     websocket::WebSocket,
 };
-use async_tungstenite::{
-    tokio::{accept_async, TokioAdapter},
-    WebSocketStream,
-};
-use core::net::SocketAddr;
+use async_tungstenite::tokio::{connect_async, ConnectStream};
 use futures::{future::BoxFuture, FutureExt};
 use sedimentree_core::future::Sendable;
-use sedimentree_sync_core::{
+use std::time::Duration;
+use subduction_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -19,52 +17,36 @@ use sedimentree_sync_core::{
     },
     peer::id::PeerId,
 };
-use std::time::Duration;
-use tokio::{
-    net::{TcpListener, TcpStream},
-    task::JoinHandle,
-};
+use tokio::task::JoinHandle;
+use tungstenite::http::Uri;
 
-use super::start::{Start, Unstarted};
+use super::start::Start;
 
-/// A Tokio-flavoured [`WebSocket`] server implementation.
+/// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug, Clone)]
-pub struct TokioWebSocketServer {
-    address: SocketAddr,
-    socket: WebSocket<TokioAdapter<TcpStream>>,
+pub struct TokioWebSocketClient {
+    address: Uri,
+    socket: WebSocket<ConnectStream>,
 }
 
-impl TokioWebSocketServer {
-    /// Create a new [`WebSocketServer`] connection from an accepted TCP stream.
-    pub fn new(
-        address: SocketAddr,
-        timeout: Duration,
-        peer_id: PeerId,
-        conn_id: ConnectionId,
-        ws_stream: WebSocketStream<TokioAdapter<TcpStream>>,
-    ) -> Unstarted<Self> {
-        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id);
-        tracing::info!("Accepting WebSocket connections at {address}");
-        Unstarted(TokioWebSocketServer { address, socket })
-    }
-
-    /// Create a new [`WebSocketServer`] connection.
+impl TokioWebSocketClient {
+    /// Create a new [`WebSocketClient`] connection.
     ///
     /// # Errors
     ///
-    /// Returns an error if the socket could not be bound,
-    /// or if the connection could not be established.
-    pub async fn setup(
-        address: SocketAddr,
+    /// Returns an error if the connection could not be established.
+    pub async fn new(
+        address: Uri,
         timeout: Duration,
         peer_id: PeerId,
         conn_id: ConnectionId,
     ) -> Result<Unstarted<Self>, tungstenite::Error> {
-        tracing::info!("Starting WebSocket server on {address}");
-        let listener = TcpListener::bind(address).await?;
-        let (tcp, _peer) = listener.accept().await?;
-        let ws_stream = accept_async(tcp).await?;
-        Ok(Self::new(address, timeout, peer_id, conn_id, ws_stream))
+        tracing::info!("Connecting to WebSocket server at {address}");
+        let (ws_stream, _resp) = connect_async(address.clone()).await?;
+        Ok(Unstarted(TokioWebSocketClient {
+            address,
+            socket: WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id),
+        }))
     }
 
     /// Start listening for incoming messages.
@@ -80,14 +62,14 @@ impl TokioWebSocketServer {
     }
 }
 
-impl Start for TokioWebSocketServer {
+impl Start for TokioWebSocketClient {
     fn start(&self) -> JoinHandle<Result<(), RunError>> {
         let inner = self.clone();
         tokio::spawn(async move { inner.socket.listen().await })
     }
 }
 
-impl Connection<Sendable> for TokioWebSocketServer {
+impl Connection<Sendable> for TokioWebSocketClient {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -111,7 +93,7 @@ impl Connection<Sendable> for TokioWebSocketServer {
 
     fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
         async {
-            tracing::debug!("Server sending message: {:?}", message);
+            tracing::debug!("Client sending message: {:?}", message);
             Connection::<Sendable>::send(&self.socket, message).await
         }
         .boxed()
@@ -119,7 +101,7 @@ impl Connection<Sendable> for TokioWebSocketServer {
 
     fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            tracing::debug!("Server waiting to receive message");
+            tracing::debug!("Client waiting to receive message");
             Connection::<Sendable>::recv(&self.socket).await
         }
         .boxed()
@@ -131,21 +113,21 @@ impl Connection<Sendable> for TokioWebSocketServer {
         override_timeout: Option<Duration>,
     ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         async move {
-            tracing::debug!("Server making call with request: {:?}", req);
+            tracing::debug!("Client making call with request: {:?}", req);
             Connection::<Sendable>::call(&self.socket, req, override_timeout).await
         }
         .boxed()
     }
 }
 
-impl Reconnect<Sendable> for TokioWebSocketServer {
+impl Reconnect<Sendable> for TokioWebSocketClient {
     type ConnectError = tungstenite::Error;
     type RunError = RunError;
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ConnectError>> {
-        async {
-            *self = TokioWebSocketServer::setup(
-                self.address,
+        async move {
+            *self = TokioWebSocketClient::new(
+                self.address.clone(),
                 self.socket.timeout,
                 self.socket.peer_id,
                 self.connection_id(),
@@ -159,7 +141,7 @@ impl Reconnect<Sendable> for TokioWebSocketServer {
     }
 
     fn run(&mut self) -> BoxFuture<'_, Result<(), Self::RunError>> {
-        async {
+        async move {
             loop {
                 self.socket.listen().await?;
                 self.reconnect().await?;

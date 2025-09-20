@@ -1,4 +1,4 @@
-//! # Generic WebSocket connection for Sedimentree Sync
+//! # Generic WebSocket connection for Subduction
 
 use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
@@ -11,7 +11,8 @@ use futures::{
 use futures_timer::Delay;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::future::{Local, Sendable};
-use sedimentree_sync_core::{
+use std::{collections::HashMap, sync::Arc, time::Duration};
+use subduction_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -19,7 +20,6 @@ use sedimentree_sync_core::{
     },
     peer::id::PeerId,
 };
-use std::{collections::HashMap, sync::Arc, time::Duration};
 
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]

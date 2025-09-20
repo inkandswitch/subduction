@@ -31,4 +31,4 @@ pub mod peer;
 pub mod storage;
 pub mod sync;
 
-pub use sync::SedimentreeSync;
+pub use sync::Subduction;

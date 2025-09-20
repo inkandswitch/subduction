@@ -9,14 +9,12 @@ use sedimentree_core::{
     storage::{MemoryStorage, Storage},
     Blob, BlobMeta, Digest, LooseCommit, Sedimentree,
 };
-use sedimentree_sync_core::{
+use subduction_core::{
     connection::{id::ConnectionId, message::Message, Connection, Reconnect},
     peer::id::PeerId,
-    SedimentreeSync,
+    Subduction,
 };
-use sedimentree_sync_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer,
-};
+use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
 use tokio::{net::TcpListener, sync::oneshot};
 use tracing_subscriber;
 
@@ -46,7 +44,7 @@ async fn rend_receive() -> TestResult {
                 bound,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
-                ConnectionId::from(0),
+                ConnectionId::generate(),
                 ws_stream,
             )
             .start();
@@ -60,10 +58,14 @@ async fn rend_receive() -> TestResult {
     });
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let mut client_ws =
-        TokioWebSocketClient::new(uri, Duration::from_secs(5), PeerId::new([1; 32]), 0.into())
-            .await?
-            .start();
+    let mut client_ws = TokioWebSocketClient::new(
+        uri,
+        Duration::from_secs(5),
+        PeerId::new([1; 32]),
+        ConnectionId::generate(),
+    )
+    .await?
+    .start();
 
     let expected = Message::BlobsRequest(Vec::new());
     client_ws.send(expected).await?;
@@ -98,21 +100,20 @@ async fn batch_sync() -> TestResult {
     let commit3 = LooseCommit::new(commit_digest3, vec![], BlobMeta::new(blob3.as_slice()));
 
     let server_storage = MemoryStorage::default();
-    server_storage.save_loose_commit(commit1.clone()).await?;
-    server_storage.save_blob(blob1.clone()).await?;
+    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&server_storage, commit1.clone())
+        .await?;
+    <MemoryStorage as Storage<Sendable>>::save_blob(&server_storage, blob1.clone()).await?;
 
     let server_tree = Sedimentree::new(vec![], vec![commit1.clone()]);
     let sed_id = sedimentree_core::SedimentreeId::new([0u8; 32]);
 
-    let server = Arc::new(SedimentreeSync::<
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketServer,
-    >::new(
-        HashMap::from_iter([(sed_id, server_tree)]),
-        server_storage,
-        HashMap::new(),
-    ));
+    let server = Arc::new(
+        Subduction::<Sendable, MemoryStorage, TokioWebSocketServer>::new(
+            HashMap::from_iter([(sed_id, server_tree)]),
+            server_storage,
+            HashMap::new(),
+        ),
+    );
 
     let (tx, rx) = oneshot::channel();
     tokio::spawn({
@@ -125,7 +126,7 @@ async fn batch_sync() -> TestResult {
                 bound,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
-                ConnectionId::from(0),
+                ConnectionId::generate(),
                 ws_stream,
             )
             .start();
@@ -141,12 +142,14 @@ async fn batch_sync() -> TestResult {
     let client_sed_id = sedimentree_core::SedimentreeId::new([0u8; 32]);
 
     let client_storage = MemoryStorage::default();
-    client_storage.save_loose_commit(commit2.clone()).await?;
-    client_storage.save_blob(blob2.clone()).await?;
-    client_storage.save_loose_commit(commit3.clone()).await?;
-    client_storage.save_blob(blob3.clone()).await?;
+    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&client_storage, commit2.clone())
+        .await?;
+    <MemoryStorage as Storage<Sendable>>::save_blob(&client_storage, blob2.clone()).await?;
+    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&client_storage, commit3.clone())
+        .await?;
+    <MemoryStorage as Storage<Sendable>>::save_blob(&client_storage, blob3.clone()).await?;
 
-    let client = Arc::new(SedimentreeSync::new(
+    let client = Arc::new(Subduction::new(
         HashMap::from_iter([(client_sed_id, client_tree)]),
         client_storage,
         HashMap::new(),

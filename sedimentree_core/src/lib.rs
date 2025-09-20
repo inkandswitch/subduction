@@ -357,7 +357,7 @@ impl Chunk {
         &self.summary.ends
     }
 
-    /// The inner checkpopoints of the chunk.
+    /// The inner checkpoints of the chunk.
     #[must_use]
     pub const fn checkpoints(&self) -> &Vec<Digest> {
         &self.checkpoints

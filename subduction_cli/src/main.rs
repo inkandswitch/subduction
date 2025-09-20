@@ -1,10 +1,8 @@
 use clap::Parser;
 use sedimentree_core::{storage::MemoryStorage, Sedimentree, SedimentreeId};
-use sedimentree_sync_core::{peer::id::PeerId, SedimentreeSync};
-use sedimentree_sync_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer,
-};
 use std::{collections::HashMap, time::Duration};
+use subduction_core::{connection::id::ConnectionId, peer::id::PeerId, Subduction};
+use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
 use tungstenite::http::Uri;
 
 #[tokio::main]
@@ -20,7 +18,7 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command.as_deref() {
         Some("start") => {
-            let syncer = SedimentreeSync::new(
+            let syncer = Subduction::new(
                 HashMap::from_iter([(sed_id, sed)]),
                 MemoryStorage::default(),
                 HashMap::new(),
@@ -32,7 +30,7 @@ async fn main() -> anyhow::Result<()> {
                     addr,
                     Duration::from_secs(5),
                     PeerId::new([0; 32]),
-                    0.into(),
+                    ConnectionId::generate(),
                 )
                 .await?
                 .start()
@@ -42,7 +40,7 @@ async fn main() -> anyhow::Result<()> {
             syncer.run().await?;
         }
         Some("connect") => {
-            let syncer = SedimentreeSync::new(
+            let syncer = Subduction::new(
                 HashMap::from_iter([(sed_id, sed)]),
                 MemoryStorage::default(),
                 HashMap::new(),
@@ -52,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
                 Uri::try_from(&args.ws)?,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
-                0.into(),
+                ConnectionId::generate(),
             )
             .await?
             .start();

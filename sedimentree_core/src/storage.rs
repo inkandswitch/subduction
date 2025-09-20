@@ -2,10 +2,14 @@
 
 use std::{collections::HashMap, sync::Arc};
 
-use futures::{future::BoxFuture, lock::Mutex, FutureExt};
+use futures::{
+    future::{BoxFuture, LocalBoxFuture},
+    lock::Mutex,
+    FutureExt,
+};
 
 use crate::{
-    future::{FutureKind, Sendable},
+    future::{FutureKind, Local, Sendable},
     Blob, Digest,
 };
 
@@ -113,5 +117,66 @@ impl Storage<Sendable> for MemoryStorage {
             Ok(maybe_blob)
         }
         .boxed()
+    }
+}
+
+impl Storage<Local> for MemoryStorage {
+    type Error = std::convert::Infallible;
+
+    fn load_loose_commits(&self) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        async move {
+            let commits = self.commits.lock().await.values().cloned().collect();
+            Ok(commits)
+        }
+        .boxed_local()
+    }
+
+    fn save_loose_commit(
+        &self,
+        loose_commit: LooseCommit,
+    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            let digest = loose_commit.blob().digest();
+            self.commits.lock().await.insert(digest, loose_commit);
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn save_chunk(&self, chunk: Chunk) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            let digest = chunk.summary().blob_meta().digest();
+            self.chunks.lock().await.insert(digest, chunk);
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn load_chunks(&self) -> LocalBoxFuture<'_, Result<Vec<Chunk>, Self::Error>> {
+        async move {
+            let chunks = self.chunks.lock().await.values().cloned().collect();
+            Ok(chunks)
+        }
+        .boxed_local()
+    }
+
+    fn save_blob(&self, blob: Blob) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
+        async move {
+            let digest = Digest::hash(blob.contents());
+            self.blobs.lock().await.insert(digest, blob);
+            Ok(digest)
+        }
+        .boxed_local()
+    }
+
+    fn load_blob(
+        &self,
+        blob_digest: Digest,
+    ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
+        async move {
+            let maybe_blob = self.blobs.lock().await.get(&blob_digest).cloned();
+            Ok(maybe_blob)
+        }
+        .boxed_local()
     }
 }

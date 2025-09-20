@@ -1,5 +1,5 @@
 [package]
-name = "sedimentree_sync_core"
+name = "subduction_core"
 version = "0.1.0"
 description = "Core implementation and traits for the Sedimentree Sync protocol"
 

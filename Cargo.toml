@@ -2,17 +2,17 @@
 resolver = "3"
 members = [
   "sedimentree_core",
-  "sedimentree_sync_cli",
-  "sedimentree_sync_core",
-  "sedimentree_sync_websocket",
-  # TODO "sedimentree_sync_wasm"
+  "subduction_cli",
+  "subduction_core",
+  "subduction_wasm",
+  "subduction_websocket"
 ]
 
 [workspace.package]
 edition = "2024"
 rust-version = "1.86"
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/inkandswitch/sedimentree"
+repository = "https://github.com/inkandswitch/subduction" # FIXME ON GIT
 authors = [
   "Alex Good <alex@patternist.xyz>",
   "Brooklyn Zelenka <hello@brooklynzelenka.com>"

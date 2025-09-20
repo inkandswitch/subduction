@@ -28,26 +28,26 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{future::LocalBoxFuture, lock::Mutex, FutureExt};
 use sedimentree_core::{future::Local, storage::MemoryStorage};
-use sedimentree_sync_core::{
+use subduction_core::{
     connection::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
     },
     peer::id::PeerId,
-    SedimentreeSync,
+    Subduction,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-#[wasm_bindgen(js_name = SedimentreeSync)]
-pub struct JsSedimentreeSync(SedimentreeSync<Local, MemoryStorage, JsWebSocket>);
+#[wasm_bindgen(js_name = Subduction)]
+pub struct JsSubduction(Subduction<Local, MemoryStorage, JsWebSocket>);
 
 #[wasm_bindgen]
-impl JsSedimentreeSync {
+impl JsSubduction {
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
-        Self(SedimentreeSync::new(
+        Self(Subduction::new(
             HashMap::new(),
             MemoryStorage::default(),
             HashMap::new(),
