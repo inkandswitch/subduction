@@ -108,7 +108,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
             Message::LooseCommit { id, commit, blob } => {
                 self.recv_commit(&from, id, &commit, blob).await?;
             }
-            Message::Chunk { id, chunk, blob } => self.recv_chunk(&from, id, &chunk, blob).await?,
+            Message::Chunk { id, chunk, blob } => {
+                self.recv_chunk(&from, id, &chunk, blob).await?;
+            }
             Message::BatchSyncRequest(BatchSyncRequest {
                 id,
                 sedimentree_summary,
@@ -594,25 +596,28 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
         id: SedimentreeId,
         commit: &LooseCommit,
         blob: Blob,
-    ) -> Result<(), IoError<F, S, C>> {
-        self.insert_commit_locally(id, commit.clone(), blob.clone())
+    ) -> Result<bool, IoError<F, S, C>> {
+        let was_new = self
+            .insert_commit_locally(id, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
-        let locked = self.conn_manager.lock().await;
-        for conn in locked.connections.values() {
-            if conn.peer_id() != *from {
-                conn.send(Message::LooseCommit {
-                    id,
-                    commit: commit.clone(),
-                    blob: blob.clone(),
-                })
-                .await
-                .map_err(IoError::ConnSend)?;
+        if was_new {
+            let locked = self.conn_manager.lock().await;
+            for conn in locked.connections.values() {
+                if conn.peer_id() != *from {
+                    conn.send(Message::LooseCommit {
+                        id,
+                        commit: commit.clone(),
+                        blob: blob.clone(),
+                    })
+                    .await
+                    .map_err(IoError::ConnSend)?;
+                }
             }
         }
 
-        Ok(())
+        Ok(was_new)
     }
 
     /// Handle receiving a new chunk from a peer.
@@ -628,25 +633,28 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
         id: SedimentreeId,
         chunk: &Chunk,
         blob: Blob,
-    ) -> Result<(), IoError<F, S, C>> {
-        self.insert_chunk_locally(id, chunk.clone(), blob.clone()) // TODO lots of cloning
+    ) -> Result<bool, IoError<F, S, C>> {
+        let was_new = self
+            .insert_chunk_locally(id, chunk.clone(), blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
-        let locked = self.conn_manager.lock().await;
-        for conn in locked.connections.values() {
-            if conn.peer_id() != *from {
-                conn.send(Message::Chunk {
-                    id,
-                    chunk: chunk.clone(),
-                    blob: blob.clone(),
-                })
-                .await
-                .map_err(IoError::ConnSend)?;
+        if was_new {
+            let locked = self.conn_manager.lock().await;
+            for conn in locked.connections.values() {
+                if conn.peer_id() != *from {
+                    conn.send(Message::Chunk {
+                        id,
+                        chunk: chunk.clone(),
+                        blob: blob.clone(),
+                    })
+                    .await
+                    .map_err(IoError::ConnSend)?;
+                }
             }
         }
 
-        Ok(())
+        Ok(was_new)
     }
 
     /*********************
@@ -1096,20 +1104,20 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
         id: SedimentreeId,
         commit: LooseCommit,
         blob: Blob,
-    ) -> Result<(), S::Error> {
+    ) -> Result<bool, S::Error> {
         tracing::debug!("Inserting commit {:?} locally", commit.digest());
         {
             let mut sed = self.sedimentrees.lock().await;
             let tree = sed.entry(id).or_default();
             if !tree.add_commit(commit.clone()) {
-                return Ok(());
+                return Ok(false);
             }
         }
 
         self.storage.save_loose_commit(commit).await?;
         self.storage.save_blob(blob).await?;
 
-        Ok(())
+        Ok(true)
     }
 
     // NOTE no integrity checking, we assume that they made a good chunk at the right depth
@@ -1118,18 +1126,18 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
         id: SedimentreeId,
         chunk: Chunk,
         blob: Blob,
-    ) -> Result<(), S::Error> {
+    ) -> Result<bool, S::Error> {
         {
             let mut sed = self.sedimentrees.lock().await;
             let tree = sed.entry(id).or_default();
             if !tree.add_chunk(chunk.clone()) {
-                return Ok(());
+                return Ok(false);
             }
         }
 
         self.storage.save_chunk(chunk).await?;
         self.storage.save_blob(blob).await?;
-        Ok(())
+        Ok(true)
     }
 }
 

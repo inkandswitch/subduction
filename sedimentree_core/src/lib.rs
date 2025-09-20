@@ -276,16 +276,6 @@ impl Chunk {
         }
     }
 
-    /// Constructor for a [`Chunk`] from its raw components, including its digest.
-    #[must_use]
-    pub const fn from_raw(summary: ChunkSummary, checkpoints: Vec<Digest>, digest: Digest) -> Self {
-        Chunk {
-            summary,
-            checkpoints,
-            digest,
-        }
-    }
-
     /// Returns true if this chunk supports the given chunk summary.
     #[must_use]
     pub fn supports(&self, other: &ChunkSummary) -> bool {
@@ -412,12 +402,11 @@ impl ChunkSummary {
     /// The depth of this stratum, determined by the number of leading zeros.
     #[must_use]
     pub fn depth(&self) -> Depth {
-        // TODO at least in theory this should ALWAYS be the head, right? -BZ
         let start_level = trailing_zeros_in_base(self.start.as_bytes(), 10);
-        let smallest_level = self.ends.iter().fold(start_level, |acc, end| {
+        let lowest_level = self.ends.iter().fold(start_level, |acc, end| {
             std::cmp::min(acc, trailing_zeros_in_base(end.as_bytes(), 10))
         });
-        Depth(smallest_level)
+        Depth(lowest_level)
     }
 }
 

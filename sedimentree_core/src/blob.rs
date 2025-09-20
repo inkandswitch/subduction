@@ -104,12 +104,6 @@ impl Digest {
         Self(bytes)
     }
 
-    /// Wrap a raw 32-byte array as a digest.
-    #[must_use]
-    pub const fn from_raw_bytes(bytes: [u8; 32]) -> Self {
-        Digest(bytes)
-    }
-
     /// Get the raw bytes of the digest.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
