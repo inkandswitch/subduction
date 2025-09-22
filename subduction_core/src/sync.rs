@@ -259,8 +259,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
     pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
         let mut locked = self.conn_manager.lock().await;
-        locked.unstarted.remove(&conn_id);
-        if let Some(mut conn) = locked.connections.remove(&conn_id) {
+        locked.unstarted.remove(conn_id);
+        if let Some(mut conn) = locked.connections.remove(conn_id) {
             conn.disconnect().await.map(|()| true)
         } else {
             Ok(false)
@@ -845,7 +845,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         let mut peer_conns = Vec::new();
         {
             let locked = self.conn_manager.lock().await;
-            for (conn_id, conn) in locked.connections.iter() {
+            for (conn_id, conn) in &locked.connections {
                 if conn.peer_id() == *to_ask {
                     peer_conns.push((*conn_id, conn.clone()));
                 }
@@ -931,7 +931,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         let mut peers: HashMap<PeerId, Vec<(ConnectionId, C)>> = HashMap::new();
         {
             let locked = self.conn_manager.lock().await; // TODO held long, inefficient!
-            for (conn_id, conn) in locked.connections.iter() {
+            for (conn_id, conn) in &locked.connections {
                 peers
                     .entry(conn.peer_id())
                     .or_default()
