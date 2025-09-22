@@ -1,7 +1,7 @@
 use clap::Parser;
 use sedimentree_core::{storage::MemoryStorage, Sedimentree, SedimentreeId};
 use std::{collections::HashMap, time::Duration};
-use subduction_core::{connection::id::ConnectionId, peer::id::PeerId, Subduction};
+use subduction_core::{peer::id::PeerId, Subduction};
 use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
 use tungstenite::http::Uri;
 
@@ -26,14 +26,9 @@ async fn main() -> anyhow::Result<()> {
 
             let ws: TokioWebSocketServer = {
                 let addr = args.ws.parse()?;
-                TokioWebSocketServer::setup(
-                    addr,
-                    Duration::from_secs(5),
-                    PeerId::new([0; 32]),
-                    ConnectionId::generate(),
-                )
-                .await?
-                .start()
+                TokioWebSocketServer::setup(addr, Duration::from_secs(5), PeerId::new([0; 32]))
+                    .await?
+                    .start()
             };
 
             syncer.register(ws).await?;
@@ -50,7 +45,6 @@ async fn main() -> anyhow::Result<()> {
                 Uri::try_from(&args.ws)?,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
-                ConnectionId::generate(),
             )
             .await?
             .start();

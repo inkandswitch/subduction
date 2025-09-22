@@ -10,7 +10,7 @@ use sedimentree_core::{
     Blob, BlobMeta, Digest, LooseCommit, Sedimentree,
 };
 use subduction_core::{
-    connection::{id::ConnectionId, message::Message, Connection, Reconnect},
+    connection::{message::Message, Connection, Reconnect},
     peer::id::PeerId,
     Subduction,
 };
@@ -44,7 +44,6 @@ async fn rend_receive() -> TestResult {
                 bound,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
-                ConnectionId::generate(),
                 ws_stream,
             )
             .start();
@@ -58,14 +57,10 @@ async fn rend_receive() -> TestResult {
     });
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let mut client_ws = TokioWebSocketClient::new(
-        uri,
-        Duration::from_secs(5),
-        PeerId::new([1; 32]),
-        ConnectionId::generate(),
-    )
-    .await?
-    .start();
+    let mut client_ws =
+        TokioWebSocketClient::new(uri, Duration::from_secs(5), PeerId::new([1; 32]))
+            .await?
+            .start();
 
     let expected = Message::BlobsRequest(Vec::new());
     client_ws.send(expected).await?;
@@ -126,7 +121,6 @@ async fn batch_sync() -> TestResult {
                 bound,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
-                ConnectionId::generate(),
                 ws_stream,
             )
             .start();
@@ -156,10 +150,9 @@ async fn batch_sync() -> TestResult {
     ));
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let client_ws =
-        TokioWebSocketClient::new(uri, Duration::from_secs(5), PeerId::new([1; 32]), 0.into())
-            .await?
-            .start();
+    let client_ws = TokioWebSocketClient::new(uri, Duration::from_secs(5), PeerId::new([1; 32]))
+        .await?
+        .start();
 
     client.register(client_ws).await?;
     rx.await.unwrap();

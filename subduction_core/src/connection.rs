@@ -5,10 +5,7 @@ pub mod message;
 
 use std::time::Duration;
 
-use self::{
-    id::ConnectionId,
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-};
+use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use crate::peer::id::PeerId;
 use futures::Future;
 use sedimentree_core::future::FutureKind;
@@ -31,15 +28,9 @@ pub trait Connection<K: FutureKind>: Clone {
     /// A problem with a roundtrip call.
     type CallError: core::error::Error;
 
-    /// A unique identifier for this connection.
-    ///
-    /// This number should be a counter or random number.
-    /// We assume that the same ID is never reused for different connections.
-    /// For this reason, it is not recommended to use or derive from the peer ID on its own.
-    fn connection_id(&self) -> ConnectionId;
-
     /// The peer ID of the remote peer.
     fn peer_id(&self) -> PeerId;
+
     /// Disconnect from the peer gracefully.
     fn disconnect(&mut self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
 

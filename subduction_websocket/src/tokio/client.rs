@@ -11,7 +11,6 @@ use sedimentree_core::future::Sendable;
 use std::time::Duration;
 use subduction_core::{
     connection::{
-        id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection, Reconnect,
     },
@@ -39,13 +38,12 @@ impl TokioWebSocketClient {
         address: Uri,
         timeout: Duration,
         peer_id: PeerId,
-        conn_id: ConnectionId,
     ) -> Result<Unstarted<Self>, tungstenite::Error> {
         tracing::info!("Connecting to WebSocket server at {address}");
         let (ws_stream, _resp) = connect_async(address.clone()).await?;
         Ok(Unstarted(TokioWebSocketClient {
             address,
-            socket: WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id),
+            socket: WebSocket::<_>::new(ws_stream, timeout, peer_id),
         }))
     }
 
@@ -74,10 +72,6 @@ impl Connection<Sendable> for TokioWebSocketClient {
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn connection_id(&self) -> ConnectionId {
-        Connection::<Sendable>::connection_id(&self.socket)
-    }
 
     fn peer_id(&self) -> PeerId {
         Connection::<Sendable>::peer_id(&self.socket)
@@ -130,7 +124,6 @@ impl Reconnect<Sendable> for TokioWebSocketClient {
                 self.address.clone(),
                 self.socket.timeout,
                 self.socket.peer_id,
-                self.connection_id(),
             )
             .await?
             .start();
@@ -148,5 +141,11 @@ impl Reconnect<Sendable> for TokioWebSocketClient {
             }
         }
         .boxed()
+    }
+}
+
+impl PartialEq for TokioWebSocketClient {
+    fn eq(&self, other: &Self) -> bool {
+        self.address == other.address && self.socket.peer_id == other.socket.peer_id
     }
 }

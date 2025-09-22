@@ -14,7 +14,6 @@ use sedimentree_core::future::Sendable;
 use std::time::Duration;
 use subduction_core::{
     connection::{
-        id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection, Reconnect,
     },
@@ -40,10 +39,9 @@ impl TokioWebSocketServer {
         address: SocketAddr,
         timeout: Duration,
         peer_id: PeerId,
-        conn_id: ConnectionId,
         ws_stream: WebSocketStream<TokioAdapter<TcpStream>>,
     ) -> Unstarted<Self> {
-        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id, conn_id);
+        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id);
         tracing::info!("Accepting WebSocket connections at {address}");
         Unstarted(TokioWebSocketServer { address, socket })
     }
@@ -58,13 +56,12 @@ impl TokioWebSocketServer {
         address: SocketAddr,
         timeout: Duration,
         peer_id: PeerId,
-        conn_id: ConnectionId,
     ) -> Result<Unstarted<Self>, tungstenite::Error> {
         tracing::info!("Starting WebSocket server on {address}");
         let listener = TcpListener::bind(address).await?;
         let (tcp, _peer) = listener.accept().await?;
         let ws_stream = accept_async(tcp).await?;
-        Ok(Self::new(address, timeout, peer_id, conn_id, ws_stream))
+        Ok(Self::new(address, timeout, peer_id, ws_stream))
     }
 
     /// Start listening for incoming messages.
@@ -92,10 +89,6 @@ impl Connection<Sendable> for TokioWebSocketServer {
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn connection_id(&self) -> ConnectionId {
-        Connection::<Sendable>::connection_id(&self.socket)
-    }
 
     fn peer_id(&self) -> PeerId {
         Connection::<Sendable>::peer_id(&self.socket)
@@ -144,14 +137,10 @@ impl Reconnect<Sendable> for TokioWebSocketServer {
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ConnectError>> {
         async {
-            *self = TokioWebSocketServer::setup(
-                self.address,
-                self.socket.timeout,
-                self.socket.peer_id,
-                self.connection_id(),
-            )
-            .await?
-            .start();
+            *self =
+                TokioWebSocketServer::setup(self.address, self.socket.timeout, self.socket.peer_id)
+                    .await?
+                    .start();
 
             Ok(())
         }
@@ -166,5 +155,11 @@ impl Reconnect<Sendable> for TokioWebSocketServer {
             }
         }
         .boxed()
+    }
+}
+
+impl PartialEq for TokioWebSocketServer {
+    fn eq(&self, other: &Self) -> bool {
+        self.address == other.address && self.socket.peer_id == other.socket.peer_id
     }
 }

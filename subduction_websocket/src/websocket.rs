@@ -14,7 +14,6 @@ use sedimentree_core::future::{Local, Sendable};
 use std::{collections::HashMap, sync::Arc, time::Duration};
 use subduction_core::{
     connection::{
-        id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
     },
@@ -24,7 +23,6 @@ use subduction_core::{
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]
 pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin> {
-    pub(crate) conn_id: ConnectionId,
     pub(crate) peer_id: PeerId,
 
     pub(crate) req_id_counter: Arc<Mutex<u128>>,
@@ -41,12 +39,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin> {
 
 impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     /// Create a new WebSocket connection.
-    pub fn new(
-        ws: WebSocketStream<T>,
-        timeout: Duration,
-        peer_id: PeerId,
-        conn_id: ConnectionId,
-    ) -> Self {
+    pub fn new(ws: WebSocketStream<T>, timeout: Duration, peer_id: PeerId) -> Self {
         let (ws_writer, ws_reader) = ws.split();
         let pending = Arc::new(Mutex::new(HashMap::<
             RequestId,
@@ -56,7 +49,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
         let starting_counter = rand::random::<u128>();
 
         Self {
-            conn_id,
             peer_id,
 
             req_id_counter: Arc::new(Mutex::new(starting_counter)),
@@ -145,7 +137,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
 impl<T: AsyncRead + AsyncWrite + Unpin> Clone for WebSocket<T> {
     fn clone(&self) -> Self {
         Self {
-            conn_id: self.conn_id,
             peer_id: self.peer_id,
             req_id_counter: self.req_id_counter.clone(),
             timeout: self.timeout,
@@ -163,10 +154,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Connection<Local> for WebSocket<T> {
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn connection_id(&self) -> ConnectionId {
-        self.conn_id
-    }
 
     fn peer_id(&self) -> PeerId {
         self.peer_id
@@ -271,10 +258,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn connection_id(&self) -> ConnectionId {
-        self.conn_id
-    }
 
     fn peer_id(&self) -> PeerId {
         self.peer_id

@@ -27,14 +27,14 @@ use std::{
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
-pub struct Subduction<F: FutureKind, S: Storage<F>, C: Connection<F>> {
+pub struct Subduction<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> {
     sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
     conn_manager: Arc<Mutex<ConnectionManager<C>>>,
     storage: S,
     _phantom: std::marker::PhantomData<F>,
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S, C> {
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -66,22 +66,22 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
                     .clone();
 
                 tracing::info!("Spawning listener for connection {:?}", conn_id);
-                pump.push(self.fire_once(conn));
+                pump.push(self.fire_once(conn_id, conn));
             }
         }
 
-        while let Some((conn, res)) = pump.next().await {
+        while let Some((conn_id, conn, res)) = pump.next().await {
             let () = res?;
             let mut locked = self.conn_manager.lock().await;
-            if locked.connections.contains_key(&conn.connection_id()) {
+            if locked.connections.contains_key(&conn_id) {
                 // Re-enque if that connection is still active at the top-level
-                pump.push(self.fire_once(conn));
+                pump.push(self.fire_once(conn_id, conn));
             }
 
             let unstarted_ids = locked.unstarted.drain().collect::<Vec<_>>();
             for conn_id in unstarted_ids {
                 if let Some(unstarted) = locked.connections.get(&conn_id) {
-                    pump.push(self.fire_once(unstarted.clone()));
+                    pump.push(self.fire_once(conn_id, unstarted.clone()));
                 }
             }
         }
@@ -89,17 +89,25 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
         Ok(())
     }
 
-    async fn fire_once(&self, conn: C) -> (C, Result<(), ListenError<F, S, C>>) {
+    async fn fire_once(
+        &self,
+        conn_id: ConnectionId,
+        conn: C,
+    ) -> (ConnectionId, C, Result<(), ListenError<F, S, C>>) {
         let result = async {
             let msg = conn.recv().await.map_err(IoError::ConnRecv)?;
-            self.dispatch(&conn, msg).await
+            self.dispatch(conn_id, &conn, msg).await
         }
         .await;
-        (conn, result)
+        (conn_id, conn, result)
     }
 
-    async fn dispatch(&self, conn: &C, message: Message) -> Result<(), ListenError<F, S, C>> {
-        let idx = conn.connection_id();
+    async fn dispatch(
+        &self,
+        conn_id: ConnectionId,
+        conn: &C,
+        message: Message,
+    ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
 
         tracing::info!("Received message from peer {:?}: {:?}", from, message);
@@ -132,7 +140,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
                     .lock()
                     .await
                     .connections
-                    .contains_key(&idx)
+                    .contains_key(&conn_id)
                 {
                     match self.recv_blob_request(conn, &digests).await {
                         Ok(()) => {
@@ -151,7 +159,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
                         }
                     }
                 } else {
-                    tracing::warn!("No open connection for request ({:?})", idx);
+                    tracing::warn!("No open connection for request ({:?})", conn_id);
                 }
             }
             Message::BlobsResponse(blobs) => {
@@ -175,6 +183,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
         Self {
             sedimentrees: Arc::new(Mutex::new(sedimentrees)),
             conn_manager: Arc::new(Mutex::new(ConnectionManager {
+                next_id: ConnectionId::default(),
                 connections,
                 unstarted: HashSet::new(),
             })),
@@ -222,11 +231,11 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
     /// # Errors
     ///
     /// * Returns `IoError` if a storage or network error occurs.
-    pub async fn attach(&self, conn: C) -> Result<(), IoError<F, S, C>> {
+    pub async fn attach(&self, conn: C) -> Result<(bool, ConnectionId), IoError<F, S, C>> {
         let peer_id = conn.peer_id();
         tracing::info!("Attaching connection to peer {:?}", peer_id);
 
-        self.register(conn).await?;
+        let (fresh, conn_id) = self.register(conn).await?;
 
         for tree_id in self
             .sedimentrees
@@ -240,7 +249,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
                 .await?;
         }
 
-        Ok(())
+        Ok((fresh, conn_id))
     }
 
     /// Gracefully shut down a connection.
@@ -248,10 +257,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
     /// # Errors
     ///
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
-    pub async fn disconnect(&self, conn: &C) -> Result<bool, C::DisconnectionError> {
+    pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
         let mut locked = self.conn_manager.lock().await;
-        locked.unstarted.remove(&conn.connection_id());
-        if let Some(mut conn) = locked.connections.remove(&conn.connection_id()) {
+        locked.unstarted.remove(&conn_id);
+        if let Some(mut conn) = locked.connections.remove(&conn_id) {
             conn.disconnect().await.map(|()| true)
         } else {
             Ok(false)
@@ -309,29 +318,25 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
     /// # Errors
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
-    pub async fn register(&self, conn: C) -> Result<bool, ConnectionDisallowed> {
+    pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), ConnectionDisallowed> {
         self.allowed_to_connect(&conn.peer_id()).await?;
 
         let mut locked = self.conn_manager.lock().await;
-        let id = conn.connection_id();
-        #[allow(clippy::map_entry)]
-        if locked.connections.contains_key(&id) {
-            Ok(false)
+        if let Some((conn_id, _conn)) = locked.connections.iter().find(|(_, c)| **c == conn) {
+            Ok((false, *conn_id))
         } else {
-            locked.unstarted.insert(id);
-            locked.connections.insert(id, conn);
-            Ok(true)
+            let conn_id = locked.next_connection_id();
+            locked.unstarted.insert(conn_id);
+            locked.connections.insert(conn_id, conn);
+            Ok((true, conn_id))
         }
     }
 
     /// Low-level unregistration of a connection.
-    ///
-    /// This does not perform any disconnection.
-    pub async fn unregister(&mut self, conn: &C) -> bool {
+    pub async fn unregister(&mut self, conn_id: &ConnectionId) -> bool {
         let mut locked = self.conn_manager.lock().await;
-        let id = conn.connection_id();
-        locked.unstarted.remove(&id);
-        locked.connections.remove(&id).is_some()
+        locked.unstarted.remove(conn_id);
+        locked.connections.remove(conn_id).is_some()
     }
 
     /*********
@@ -840,21 +845,17 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
         let mut peer_conns = Vec::new();
         {
             let locked = self.conn_manager.lock().await;
-            for conn in locked.connections.values() {
+            for (conn_id, conn) in locked.connections.iter() {
                 if conn.peer_id() == *to_ask {
-                    peer_conns.push(conn.clone());
+                    peer_conns.push((*conn_id, conn.clone()));
                 }
             }
         }
 
         let mut conn_errs = Vec::new();
 
-        for conn in peer_conns {
-            tracing::info!(
-                "Using connection {:?} to peer {:?}",
-                conn.connection_id(),
-                to_ask
-            );
+        for (conn_id, conn) in peer_conns {
+            tracing::info!("Using connection {:?} to peer {:?}", conn_id, to_ask);
             let summary = self
                 .sedimentrees
                 .lock()
@@ -927,11 +928,14 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
         );
-        let mut peers: HashMap<PeerId, Vec<C>> = HashMap::new();
+        let mut peers: HashMap<PeerId, Vec<(ConnectionId, C)>> = HashMap::new();
         {
             let locked = self.conn_manager.lock().await; // TODO held long, inefficient!
-            for conn in locked.connections.values() {
-                peers.entry(conn.peer_id()).or_default().push(conn.clone());
+            for (conn_id, conn) in locked.connections.iter() {
+                peers
+                    .entry(conn.peer_id())
+                    .or_default()
+                    .push((*conn_id, conn.clone()));
             }
         }
 
@@ -948,10 +952,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
                 let mut had_success = false;
                 let mut conn_errs = Vec::new();
 
-                for conn in peer_conns {
+                for (conn_id, conn) in peer_conns {
                     tracing::debug!(
                         "Using connection {:?} to peer {:?}",
-                        conn.connection_id(),
+                        conn_id,
                         conn.peer_id()
                     );
                     let summary = self
@@ -1141,7 +1145,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> Subduction<F, S, C> {
     }
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F>> ConnectionPolicy for Subduction<F, S, C> {
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> ConnectionPolicy
+    for Subduction<F, S, C>
+{
     async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
         Ok(()) // TODO currently allows all
     }
@@ -1149,6 +1155,18 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F>> ConnectionPolicy for Subduc
 
 #[derive(Debug, Default)]
 struct ConnectionManager<C> {
+    next_id: ConnectionId,
     connections: HashMap<ConnectionId, C>,
     unstarted: HashSet<ConnectionId>,
+}
+
+impl<C> ConnectionManager<C> {
+    fn next_connection_id(&mut self) -> ConnectionId {
+        let mut id = self.next_id.into();
+        while self.connections.contains_key(&ConnectionId::new(id)) {
+            id = id.wrapping_add(1);
+        }
+        self.next_id = id.wrapping_add(1).into();
+        id.into()
+    }
 }
