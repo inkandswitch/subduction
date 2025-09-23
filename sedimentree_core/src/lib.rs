@@ -184,7 +184,7 @@ impl SedimentreeSummary {
 /// Depth 2 │               7 commits               │
 ///         └───────────────────────────────────────┘
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Depth(pub u32);
 
@@ -203,24 +203,6 @@ impl From<Digest> for Depth {
 impl std::fmt::Display for Depth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Depth({})", self.0)
-    }
-}
-
-impl PartialOrd for Depth {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-// Flip the ordering so that stratum with a larger number of leading zeros are
-// "lower". This is mainly so that the sedimentary rock metaphor holds
-impl Ord for Depth {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        match self.0.cmp(&other.0) {
-            std::cmp::Ordering::Greater => std::cmp::Ordering::Less,
-            std::cmp::Ordering::Less => std::cmp::Ordering::Greater,
-            std::cmp::Ordering::Equal => std::cmp::Ordering::Equal,
-        }
     }
 }
 
@@ -281,6 +263,10 @@ impl Chunk {
     pub fn supports(&self, other: &ChunkSummary) -> bool {
         if &self.summary == other {
             return true;
+        }
+
+        if self.depth() < other.depth() {
+            return false;
         }
 
         if self.summary.head == other.head
@@ -621,7 +607,7 @@ impl Sedimentree {
         // level, discard that stratum if it is supported by any of the stratum
         // above it.
         let mut chunks = self.chunks.iter().collect::<Vec<_>>();
-        chunks.sort_by(|a, b| a.depth().cmp(&b.depth()).reverse());
+        chunks.sort_by(|a, b| a.depth().cmp(&b.depth()));
 
         let mut minimized_chunks = Vec::<Chunk>::new();
 
@@ -708,7 +694,7 @@ impl Sedimentree {
                     checkpoints.push(commit_hash);
                 }
             }
-            if level <= crate::MAX_STRATA_DEPTH {
+            if level >= crate::MAX_STRATA_DEPTH {
                 if let Some((head, checkpoints)) = runs_by_level.remove(&level) {
                     if self.chunks.iter().any(|s| s.supports_block(commit_hash)) {
                         runs_by_level.insert(level, (commit_hash, Vec::new()));
@@ -854,87 +840,37 @@ mod tests {
         trailing_zeros: u32,
     ) -> Result<Digest, arbitrary::Error> {
         assert!(base > 1, "Base must be greater than 1");
-        assert!(base <= 10, "Base must be <= 10"); // we only emit decimal digits
+        assert!(base <= 10, "Base must be less than 10");
 
-        // How many base-`base` digits do we need to cover 256 bits?
-        // Use ceil to ensure we have enough room.
-        let mut num_digits = (256.0 / (base as f64).log2()).ceil() as usize;
+        let zero_str = "0".repeat(trailing_zeros as usize);
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let num_digits = (256.0 / f64::from(base).log2()).floor() as u64;
 
-        // We need at least k zeros + 1 guard digit.
-        let k = trailing_zeros as usize;
-        if num_digits <= k {
-            num_digits = k + 1;
+        let mut num_str = zero_str;
+        num_str.push('1');
+        #[allow(clippy::cast_possible_truncation)]
+        while num_str.len() < num_digits as usize {
+            if unstructured.is_empty() {
+                return Err(arbitrary::Error::NotEnoughData);
+            }
+            #[allow(clippy::range_minus_one)]
+            let digit = unstructured.int_in_range(0..=base - 1)?;
+            num_str.push_str(&digit.to_string());
         }
+        // reverse the string to get the correct representation
+        num_str = num_str.chars().rev().collect();
+        #[allow(clippy::unwrap_used)]
+        let num = num::BigInt::from_str_radix(&num_str, base).unwrap();
 
-        // Build MSB->LSB as a string of decimal digits (base <= 10).
-        let mut s = String::with_capacity(num_digits);
-
-        // 1) Random high digits (could include zeros, that’s fine).
-        let head_len = num_digits - (k + 1);
-        for _ in 0..head_len {
-            let d = unstructured.int_in_range(0..=base - 1)?;
-            s.push(char::from(b'0' + (d as u8)));
-        }
-
-        // 2) Guard digit just before the zeros: MUST be non-zero.
-        let guard = unstructured.int_in_range(1..=base - 1)?;
-        s.push(char::from(b'0' + (guard as u8)));
-
-        // 3) Exactly k zeros at the end.
-        for _ in 0..k {
-            s.push('0');
-        }
-
-        // Parse the base-`base` number.
-        let n = num::BigInt::from_str_radix(&s, base).expect("string is valid in given base");
-
-        // To 32 bytes big-endian, left-pad as needed.
-        let (_, mut bytes) = n.to_bytes_be();
+        let (_, mut bytes) = num.to_bytes_be();
         if bytes.len() < 32 {
-            let mut padded = vec![0u8; 32 - bytes.len()];
-            padded.extend_from_slice(&bytes);
-            bytes = padded;
-        } else if bytes.len() > 32 {
-            // If you *must* clamp to 256 bits, drop the top bytes.
-            // Alternatively, regenerate with smaller `num_digits`.
-            bytes = bytes[bytes.len() - 32..].to_vec();
+            let mut padded_bytes = vec![0; 32 - bytes.len()];
+            padded_bytes.extend(bytes);
+            bytes = padded_bytes;
         }
-
-        let arr: [u8; 32] = bytes.try_into().expect("32 bytes");
-        Ok(Digest::from(arr))
-
-        // assert!(base > 1, "Base must be greater than 1");
-        // assert!(base <= 10, "Base must be less than 10");
-
-        // let zero_str = "0".repeat(trailing_zeros as usize);
-        // #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        // let num_digits = (256.0 / f64::from(base).log2()).floor() as u64;
-
-        // let mut num_str = zero_str;
-        // num_str.push('1');
-        // #[allow(clippy::cast_possible_truncation)]
-        // while num_str.len() < num_digits as usize {
-        //     if unstructured.is_empty() {
-        //         return Err(arbitrary::Error::NotEnoughData);
-        //     }
-        //     #[allow(clippy::range_minus_one)]
-        //     let digit = unstructured.int_in_range(0..=base - 1)?;
-        //     num_str.push_str(&digit.to_string());
-        // }
-        // // reverse the string to get the correct representation
-        // num_str = num_str.chars().rev().collect();
-        // #[allow(clippy::unwrap_used)]
-        // let num = num::BigInt::from_str_radix(&num_str, base).unwrap();
-
-        // let (_, mut bytes) = num.to_bytes_be();
-        // if bytes.len() < 32 {
-        //     let mut padded_bytes = vec![0; 32 - bytes.len()];
-        //     padded_bytes.extend(bytes);
-        //     bytes = padded_bytes;
-        // }
-        // #[allow(clippy::unwrap_used)]
-        // let byte_arr: [u8; 32] = bytes.try_into().unwrap();
-        // Ok(Digest::from(byte_arr))
+        #[allow(clippy::unwrap_used)]
+        let byte_arr: [u8; 32] = bytes.try_into().unwrap();
+        Ok(Digest::from(byte_arr))
     }
 
     #[test]
@@ -943,71 +879,65 @@ mod tests {
 
         #[derive(Debug)]
         struct Scenario {
-            lower_level: Chunk,
-            higher_level: ChunkSummary,
+            deeper: Chunk,
+            shallower: ChunkSummary,
         }
         impl<'a> arbitrary::Arbitrary<'a> for Scenario {
             fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
                 #[allow(clippy::enum_variant_names)]
                 #[derive(arbitrary::Arbitrary)]
-                enum HigherDepthType {
+                enum ShallowerDepthType {
                     StartsAtStartBoundaryAtCheckpoint,
                     StartsAtCheckpointBoundaryAtCheckpoint,
                     StartsAtCheckpointBoundaryAtBoundary,
                 }
 
                 let start_hash = hash_with_trailing_zeros(u, 10, 10)?;
-                let lower_boundary_hash = hash_with_trailing_zeros(u, 10, 10)?;
+                let deeper_boundary_hash = hash_with_trailing_zeros(u, 10, 10)?;
 
-                let higher_start_hash: Digest;
-                let higher_boundary_hash: Digest;
+                let shallower_start_hash: Digest;
+                let shallower_boundary_hash: Digest;
                 let mut checkpoints = Vec::<Digest>::arbitrary(u)?;
-                let lower_level_type = HigherDepthType::arbitrary(u)?;
+                let lower_level_type = ShallowerDepthType::arbitrary(u)?;
                 match lower_level_type {
-                    HigherDepthType::StartsAtStartBoundaryAtCheckpoint => {
-                        higher_start_hash = start_hash;
-                        higher_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        checkpoints.push(higher_boundary_hash);
+                    ShallowerDepthType::StartsAtStartBoundaryAtCheckpoint => {
+                        shallower_start_hash = start_hash;
+                        shallower_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        checkpoints.push(shallower_boundary_hash);
                     }
-                    HigherDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
-                        higher_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        higher_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        checkpoints.push(higher_start_hash);
-                        checkpoints.push(higher_boundary_hash);
+                    ShallowerDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
+                        shallower_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        shallower_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        checkpoints.push(shallower_start_hash);
+                        checkpoints.push(shallower_boundary_hash);
                     }
-                    HigherDepthType::StartsAtCheckpointBoundaryAtBoundary => {
-                        higher_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        checkpoints.push(higher_start_hash);
-                        higher_boundary_hash = lower_boundary_hash;
+                    ShallowerDepthType::StartsAtCheckpointBoundaryAtBoundary => {
+                        shallower_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        checkpoints.push(shallower_start_hash);
+                        shallower_boundary_hash = deeper_boundary_hash;
                     }
                 }
 
-                let lower_level = Chunk::new(
+                let deeper = Chunk::new(
                     start_hash,
-                    nonempty![lower_boundary_hash],
+                    nonempty![deeper_boundary_hash],
                     checkpoints,
                     BlobMeta::arbitrary(u)?,
                 );
-                let higher_level = ChunkSummary::new(
-                    higher_start_hash,
-                    nonempty![higher_boundary_hash],
+                let shallower = ChunkSummary::new(
+                    shallower_start_hash,
+                    nonempty![shallower_boundary_hash],
                     BlobMeta::arbitrary(u)?,
                 );
 
-                Ok(Self {
-                    lower_level,
-                    higher_level,
-                })
+                Ok(Self { deeper, shallower })
             }
         }
-        bolero::check!().with_arbitrary::<Scenario>().for_each(
-            |Scenario {
-                 lower_level,
-                 higher_level,
-             }| {
-                assert!(lower_level.supports(higher_level));
-            },
-        );
+        bolero::check!()
+            .with_arbitrary::<Scenario>()
+            .for_each(|Scenario { deeper, shallower }| {
+                assert!(deeper.supports(shallower));
+            });
     }
 
     #[test]

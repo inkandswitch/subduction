@@ -175,7 +175,7 @@ impl CommitDag {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
             for hash in self.reverse_topo(tip) {
                 let level = super::Depth::from(hash);
-                if level <= crate::MAX_STRATA_DEPTH {
+                if level >= crate::MAX_STRATA_DEPTH {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -190,10 +190,10 @@ impl CommitDag {
                     block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if level > crate::MAX_STRATA_DEPTH {
+                    if level < crate::MAX_STRATA_DEPTH {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && level > crate::MAX_STRATA_DEPTH
+                } else if !commits_to_blocks.contains_key(&hash) && level < crate::MAX_STRATA_DEPTH
                 {
                     blockless_commits.insert(hash);
                 }
@@ -345,7 +345,6 @@ impl CommitDag {
                             .filter(|s| s.boundary().contains(&commit))
                             .collect::<Vec<_>>();
                         supporting_chunks.sort_by_key(|s| s.depth());
-                        supporting_chunks.reverse();
                         if let Some(chunk) = supporting_chunks.pop() {
                             for commit in chunk.checkpoints() {
                                 stack.push(*commit);

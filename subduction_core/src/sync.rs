@@ -678,9 +678,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         req_id: RequestId,
         conn: &C,
     ) -> Result<(), ListenError<F, S, C>> {
-        let mut missing_commits = Vec::new();
-        let mut missing_chunks = Vec::new();
-        let mut missing_blobs = Vec::new();
+        let mut their_missing_commits = Vec::new();
+        let mut their_missing_chunks = Vec::new();
+        let mut our_missing_blobs = Vec::new();
 
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
         {
@@ -693,7 +693,12 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 their_summary.chunk_summaries().len()
             );
 
-            let diff: RemoteDiff<'_> = sedimentree.diff_remote(&their_summary);
+            let local_sedimentree = sedimentree.clone();
+            let diff: RemoteDiff<'_> = local_sedimentree.diff_remote(&their_summary);
+
+            for commit in diff.remote_commits.into_iter() {
+                sedimentree.add_commit(commit.clone());
+            }
 
             for commit in diff.local_commits.into_iter() {
                 if let Some(blob) = self
@@ -702,14 +707,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                     .await
                     .map_err(IoError::Storage)?
                 {
-                    missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
+                    their_missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
                 } else {
-                    tracing::warn!(
-                        "Missing blob for commit {:?} at depth {:?}",
-                        commit.digest(),
-                        Depth::from(commit.digest())
-                    );
-                    missing_blobs.push(commit.blob().digest());
+                    tracing::warn!("Missing blob for commit {:?}", commit.digest(),);
+                    our_missing_blobs.push(commit.blob().digest());
                 }
             }
 
@@ -720,14 +721,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                     .await
                     .map_err(IoError::Storage)?
                 {
-                    missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
+                    their_missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
                 } else {
-                    tracing::warn!(
-                        "Missing blob for chunk {:?} at depth {:?}",
-                        chunk.digest(),
-                        chunk.summary().depth()
-                    );
-                    missing_blobs.push(chunk.summary().blob_meta().digest());
+                    tracing::warn!("Missing blob for chunk {:?} ", chunk.digest(),);
+                    our_missing_blobs.push(chunk.summary().blob_meta().digest());
                 }
             }
         }
@@ -735,16 +732,16 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         tracing::info!(
             "Sending batch sync response for sedimentree {:?} with {} missing commits and {} missing chunks",
             id,
-            missing_commits.len(),
-            missing_chunks.len()
+            their_missing_commits.len(),
+            their_missing_chunks.len()
         );
         conn.send(
             BatchSyncResponse {
                 id,
                 req_id,
                 diff: SyncDiff {
-                    missing_commits,
-                    missing_chunks,
+                    missing_commits: their_missing_commits,
+                    missing_chunks: their_missing_chunks,
                 },
             }
             .into(),
@@ -752,10 +749,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         .await
         .map_err(IoError::ConnSend)?;
 
-        if missing_blobs.is_empty() {
+        if our_missing_blobs.is_empty() {
             Ok(())
         } else {
-            Err(ListenError::MissingBlobs(missing_blobs))
+            Err(ListenError::MissingBlobs(our_missing_blobs))
         }
     }
 
