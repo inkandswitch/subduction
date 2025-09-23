@@ -28,7 +28,7 @@ subduction_core = { path = "../subduction_core", features = ["serde"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
-tracing-subscriber = { version = "0.3.2", features = ["env-filter"] }
+tracing-subscriber = { workspace = true }
 tungstenite = "0.27"
 url = "2.5"
 

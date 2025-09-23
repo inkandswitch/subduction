@@ -26,6 +26,7 @@ tracing = { workspace = true }
 [dev-dependencies]
 bolero = { workspace = true, features = ["arbitrary"] }
 rand = { workspace = true }
+tracing-subscriber = { workspace = true }
 
 [features]
 default = []

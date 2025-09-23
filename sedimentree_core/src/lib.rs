@@ -244,16 +244,16 @@ impl Chunk {
     /// Constructor for a [`Chunk`].
     #[must_use]
     pub fn new(
-        start: Digest,
-        ends: NonEmpty<Digest>,
+        head: Digest,
+        boundary: NonEmpty<Digest>,
         checkpoints: Vec<Digest>,
         blob_meta: BlobMeta,
     ) -> Self {
         let digest = {
             let mut hasher = blake3::Hasher::new();
-            hasher.update(start.as_bytes());
+            hasher.update(head.as_bytes());
 
-            for end in ends.iter() {
+            for end in boundary.iter() {
                 hasher.update(end.as_bytes());
             }
             hasher.update(blob_meta.digest().as_bytes());
@@ -267,8 +267,8 @@ impl Chunk {
 
         Self {
             summary: ChunkSummary {
-                start,
-                ends,
+                head,
+                boundary,
                 blob_meta,
             },
             checkpoints,
@@ -283,33 +283,32 @@ impl Chunk {
             return true;
         }
 
-        if self.depth() >= other.depth() {
-            return false;
-        }
-
-        if self.summary.start == other.start
+        if self.summary.head == other.head
             && self
                 .checkpoints
                 .iter()
                 .collect::<HashSet<_>>()
-                .is_superset(&other.ends.iter().collect::<HashSet<_>>())
+                .is_superset(&other.boundary.iter().collect::<HashSet<_>>())
         {
             return true;
         }
 
-        if self.checkpoints.contains(&other.start)
-            && other.ends.iter().all(|end| self.checkpoints.contains(end))
+        if self.checkpoints.contains(&other.head)
+            && other
+                .boundary
+                .iter()
+                .all(|end| self.checkpoints.contains(end))
         {
             return true;
         }
 
-        if self.checkpoints.contains(&other.start)
+        if self.checkpoints.contains(&other.head)
             && self
                 .summary
-                .ends
+                .boundary
                 .iter()
                 .collect::<HashSet<_>>()
-                .is_superset(&other.ends.iter().collect::<HashSet<_>>())
+                .is_superset(&other.boundary.iter().collect::<HashSet<_>>())
         {
             return true;
         }
@@ -320,7 +319,7 @@ impl Chunk {
     /// Returns true if this [`Chunk`] covers the given [`Digest`].
     #[must_use]
     pub fn supports_block(&self, chunk_end: Digest) -> bool {
-        self.checkpoints.contains(&chunk_end) || self.summary.ends.contains(&chunk_end)
+        self.checkpoints.contains(&chunk_end) || self.summary.boundary.contains(&chunk_end)
     }
 
     /// Convert to a [`ChunkSummary`].
@@ -337,14 +336,14 @@ impl Chunk {
 
     /// The head of the chunk.
     #[must_use]
-    pub const fn start(&self) -> Digest {
-        self.summary.start
+    pub const fn head(&self) -> Digest {
+        self.summary.head
     }
 
     /// The (possibly ragged) end(s) of the chunk.
     #[must_use]
-    pub const fn ends(&self) -> &NonEmpty<Digest> {
-        &self.summary.ends
+    pub const fn boundary(&self) -> &NonEmpty<Digest> {
+        &self.summary.boundary
     }
 
     /// The inner checkpoints of the chunk.
@@ -365,32 +364,32 @@ impl Chunk {
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ChunkSummary {
-    start: Digest,
-    ends: NonEmpty<Digest>,
+    head: Digest,
+    boundary: NonEmpty<Digest>,
     blob_meta: BlobMeta,
 }
 
 impl ChunkSummary {
     /// Constructor for a [`ChunkSummary`].
     #[must_use]
-    pub const fn new(start: Digest, ends: NonEmpty<Digest>, blob_meta: BlobMeta) -> Self {
+    pub const fn new(head: Digest, boundary: NonEmpty<Digest>, blob_meta: BlobMeta) -> Self {
         Self {
-            start,
-            ends,
+            head,
+            boundary,
             blob_meta,
         }
     }
 
     /// The head of the chunk.
     #[must_use]
-    pub const fn start(&self) -> Digest {
-        self.start
+    pub const fn head(&self) -> Digest {
+        self.head
     }
 
     /// The (possibly ragged) end(s) of the chunk.
     #[must_use]
-    pub const fn ends(&self) -> &NonEmpty<Digest> {
-        &self.ends
+    pub const fn boundary(&self) -> &NonEmpty<Digest> {
+        &self.boundary
     }
 
     /// Basic information about the payload blob.
@@ -402,7 +401,7 @@ impl ChunkSummary {
     /// The depth of this stratum, determined by the number of leading zeros.
     #[must_use]
     pub fn depth(&self) -> Depth {
-        let level = trailing_zeros_in_base(self.start.as_bytes(), 10);
+        let level = trailing_zeros_in_base(self.head.as_bytes(), 10);
         Depth(level)
     }
 }
@@ -506,8 +505,8 @@ impl Sedimentree {
         let mut hashes = minimal
             .chunks()
             .flat_map(|s| {
-                std::iter::once(s.start())
-                    .chain(s.ends().iter().copied())
+                std::iter::once(s.head())
+                    .chain(s.boundary().iter().copied())
                     .chain(s.checkpoints().iter().copied())
             })
             .chain(minimal.commits.iter().map(LooseCommit::digest))
@@ -568,7 +567,7 @@ impl Sedimentree {
         let mut local_chunks = Vec::new();
         for m in our_chunks_meta.difference(&their_chunks) {
             for s in &self.chunks {
-                if s.start() == m.start && *s.ends() == m.ends && s.depth() == m.depth() {
+                if s.head() == m.head && *s.boundary() == m.boundary && s.depth() == m.depth() {
                     local_chunks.push(s);
                     break;
                 }
@@ -678,10 +677,10 @@ impl Sedimentree {
             if !minimized
                 .chunks
                 .iter()
-                .any(|s| s.ends().contains(&chunk.start()))
-                && chunk.ends().iter().all(|end| !dag.contains_commit(end))
+                .any(|s| s.boundary().contains(&chunk.head()))
+                && chunk.boundary().iter().all(|end| !dag.contains_commit(end))
             {
-                heads.extend(chunk.ends());
+                heads.extend(chunk.boundary());
             }
         }
         heads.extend(dag.heads());
@@ -710,14 +709,14 @@ impl Sedimentree {
                 }
             }
             if level <= crate::MAX_STRATA_DEPTH {
-                if let Some((start, checkpoints)) = runs_by_level.remove(&level) {
+                if let Some((head, checkpoints)) = runs_by_level.remove(&level) {
                     if self.chunks.iter().any(|s| s.supports_block(commit_hash)) {
                         runs_by_level.insert(level, (commit_hash, Vec::new()));
                     } else {
                         all_bundles.push(ChunkSpec {
                             id,
-                            start,
-                            ends: nonempty![commit_hash], // FIXME could be more than one, right?
+                            head,
+                            boundary: nonempty![commit_hash], // FIXME could be more than one, right?
                             checkpoints: checkpoints.clone(),
                         });
                     }
@@ -743,9 +742,9 @@ impl Sedimentree {
 #[derive(Debug, Clone)]
 pub struct ChunkSpec {
     id: SedimentreeId,
-    start: Digest,
+    head: Digest,
     checkpoints: Vec<Digest>,
-    ends: NonEmpty<Digest>,
+    boundary: NonEmpty<Digest>,
 }
 
 impl ChunkSpec {
@@ -757,14 +756,14 @@ impl ChunkSpec {
 
     /// The head of the chunk.
     #[must_use]
-    pub const fn start(&self) -> Digest {
-        self.start
+    pub const fn head(&self) -> Digest {
+        self.head
     }
 
     /// The (possibly ragged) end(s) of the chunk.
     #[must_use]
-    pub const fn ends(&self) -> &NonEmpty<Digest> {
-        &self.ends
+    pub const fn boundary(&self) -> &NonEmpty<Digest> {
+        &self.boundary
     }
 
     /// The inner checkpopoints of the chunk.
@@ -855,41 +854,93 @@ mod tests {
         trailing_zeros: u32,
     ) -> Result<Digest, arbitrary::Error> {
         assert!(base > 1, "Base must be greater than 1");
-        assert!(base <= 10, "Base must be less than 10");
+        assert!(base <= 10, "Base must be <= 10"); // we only emit decimal digits
 
-        let zero_str = "0".repeat(trailing_zeros as usize);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let num_digits = (256.0 / f64::from(base).log2()).floor() as u64;
+        // How many base-`base` digits do we need to cover 256 bits?
+        // Use ceil to ensure we have enough room.
+        let mut num_digits = (256.0 / (base as f64).log2()).ceil() as usize;
 
-        let mut num_str = zero_str;
-        num_str.push('1');
-        #[allow(clippy::cast_possible_truncation)]
-        while num_str.len() < num_digits as usize {
-            if unstructured.is_empty() {
-                return Err(arbitrary::Error::NotEnoughData);
-            }
-            #[allow(clippy::range_minus_one)]
-            let digit = unstructured.int_in_range(0..=base - 1)?;
-            num_str.push_str(&digit.to_string());
+        // We need at least k zeros + 1 guard digit.
+        let k = trailing_zeros as usize;
+        if num_digits <= k {
+            num_digits = k + 1;
         }
-        // reverse the string to get the correct representation
-        num_str = num_str.chars().rev().collect();
-        #[allow(clippy::unwrap_used)]
-        let num = num::BigInt::from_str_radix(&num_str, base).unwrap();
 
-        let (_, mut bytes) = num.to_bytes_be();
+        // Build MSB->LSB as a string of decimal digits (base <= 10).
+        let mut s = String::with_capacity(num_digits);
+
+        // 1) Random high digits (could include zeros, that’s fine).
+        let head_len = num_digits - (k + 1);
+        for _ in 0..head_len {
+            let d = unstructured.int_in_range(0..=base - 1)?;
+            s.push(char::from(b'0' + (d as u8)));
+        }
+
+        // 2) Guard digit just before the zeros: MUST be non-zero.
+        let guard = unstructured.int_in_range(1..=base - 1)?;
+        s.push(char::from(b'0' + (guard as u8)));
+
+        // 3) Exactly k zeros at the end.
+        for _ in 0..k {
+            s.push('0');
+        }
+
+        // Parse the base-`base` number.
+        let n = num::BigInt::from_str_radix(&s, base).expect("string is valid in given base");
+
+        // To 32 bytes big-endian, left-pad as needed.
+        let (_, mut bytes) = n.to_bytes_be();
         if bytes.len() < 32 {
-            let mut padded_bytes = vec![0; 32 - bytes.len()];
-            padded_bytes.extend(bytes);
-            bytes = padded_bytes;
+            let mut padded = vec![0u8; 32 - bytes.len()];
+            padded.extend_from_slice(&bytes);
+            bytes = padded;
+        } else if bytes.len() > 32 {
+            // If you *must* clamp to 256 bits, drop the top bytes.
+            // Alternatively, regenerate with smaller `num_digits`.
+            bytes = bytes[bytes.len() - 32..].to_vec();
         }
-        #[allow(clippy::unwrap_used)]
-        let byte_arr: [u8; 32] = bytes.try_into().unwrap();
-        Ok(Digest::from(byte_arr))
+
+        let arr: [u8; 32] = bytes.try_into().expect("32 bytes");
+        Ok(Digest::from(arr))
+
+        // assert!(base > 1, "Base must be greater than 1");
+        // assert!(base <= 10, "Base must be less than 10");
+
+        // let zero_str = "0".repeat(trailing_zeros as usize);
+        // #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        // let num_digits = (256.0 / f64::from(base).log2()).floor() as u64;
+
+        // let mut num_str = zero_str;
+        // num_str.push('1');
+        // #[allow(clippy::cast_possible_truncation)]
+        // while num_str.len() < num_digits as usize {
+        //     if unstructured.is_empty() {
+        //         return Err(arbitrary::Error::NotEnoughData);
+        //     }
+        //     #[allow(clippy::range_minus_one)]
+        //     let digit = unstructured.int_in_range(0..=base - 1)?;
+        //     num_str.push_str(&digit.to_string());
+        // }
+        // // reverse the string to get the correct representation
+        // num_str = num_str.chars().rev().collect();
+        // #[allow(clippy::unwrap_used)]
+        // let num = num::BigInt::from_str_radix(&num_str, base).unwrap();
+
+        // let (_, mut bytes) = num.to_bytes_be();
+        // if bytes.len() < 32 {
+        //     let mut padded_bytes = vec![0; 32 - bytes.len()];
+        //     padded_bytes.extend(bytes);
+        //     bytes = padded_bytes;
+        // }
+        // #[allow(clippy::unwrap_used)]
+        // let byte_arr: [u8; 32] = bytes.try_into().unwrap();
+        // Ok(Digest::from(byte_arr))
     }
 
     #[test]
     fn chunk_supports_higher_levels() {
+        tracing_subscriber::fmt().with_env_filter("warn").init();
+
         #[derive(Debug)]
         struct Scenario {
             lower_level: Chunk,
@@ -900,46 +951,46 @@ mod tests {
                 #[allow(clippy::enum_variant_names)]
                 #[derive(arbitrary::Arbitrary)]
                 enum HigherDepthType {
-                    StartsAtStartEndsAtCheckpoint,
-                    StartsAtCheckpointEndsAtEnd,
-                    StartsAtCheckpointEndsAtCheckpoint,
+                    StartsAtStartBoundaryAtCheckpoint,
+                    StartsAtCheckpointBoundaryAtCheckpoint,
+                    StartsAtCheckpointBoundaryAtBoundary,
                 }
 
                 let start_hash = hash_with_trailing_zeros(u, 10, 10)?;
-                let lower_end_hash = hash_with_trailing_zeros(u, 10, 10)?;
+                let lower_boundary_hash = hash_with_trailing_zeros(u, 10, 10)?;
 
                 let higher_start_hash: Digest;
-                let higher_end_hash: Digest;
+                let higher_boundary_hash: Digest;
                 let mut checkpoints = Vec::<Digest>::arbitrary(u)?;
                 let lower_level_type = HigherDepthType::arbitrary(u)?;
                 match lower_level_type {
-                    HigherDepthType::StartsAtStartEndsAtCheckpoint => {
+                    HigherDepthType::StartsAtStartBoundaryAtCheckpoint => {
                         higher_start_hash = start_hash;
-                        higher_end_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        checkpoints.push(higher_end_hash);
+                        higher_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        checkpoints.push(higher_boundary_hash);
                     }
-                    HigherDepthType::StartsAtCheckpointEndsAtEnd => {
+                    HigherDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
+                        higher_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        higher_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        checkpoints.push(higher_start_hash);
+                        checkpoints.push(higher_boundary_hash);
+                    }
+                    HigherDepthType::StartsAtCheckpointBoundaryAtBoundary => {
                         higher_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
                         checkpoints.push(higher_start_hash);
-                        higher_end_hash = lower_end_hash;
-                    }
-                    HigherDepthType::StartsAtCheckpointEndsAtCheckpoint => {
-                        higher_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        higher_end_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        checkpoints.push(higher_start_hash);
-                        checkpoints.push(higher_end_hash);
+                        higher_boundary_hash = lower_boundary_hash;
                     }
                 }
 
                 let lower_level = Chunk::new(
                     start_hash,
-                    nonempty![lower_end_hash],
+                    nonempty![lower_boundary_hash],
                     checkpoints,
                     BlobMeta::arbitrary(u)?,
                 );
                 let higher_level = ChunkSummary::new(
                     higher_start_hash,
-                    nonempty![higher_end_hash],
+                    nonempty![higher_boundary_hash],
                     BlobMeta::arbitrary(u)?,
                 );
 

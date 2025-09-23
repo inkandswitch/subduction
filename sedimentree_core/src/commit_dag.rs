@@ -308,15 +308,15 @@ impl CommitDag {
         // First find the tips of the DAG, which is the heads of the commit DAG,
         // plus the end hashes of any chunks which are not contained in the
         // commit DAG
-        let mut ends = Vec::new();
+        let mut boundary = Vec::new();
         for chunk in chunks.clone() {
-            for end in chunk.ends() {
+            for end in chunk.boundary() {
                 if !self.contains_commit(end) {
-                    ends.push(*end);
+                    boundary.push(*end);
                 }
             }
         }
-        let mut heads = self.heads().chain(ends).collect::<Vec<_>>();
+        let mut heads = self.heads().chain(boundary).collect::<Vec<_>>();
         heads.sort();
 
         // Then for each tip, do a reverse depth first traversal. When we reach
@@ -342,7 +342,7 @@ impl CommitDag {
                     } else {
                         let mut supporting_chunks = chunks
                             .clone()
-                            .filter(|s| s.ends().contains(&commit))
+                            .filter(|s| s.boundary().contains(&commit))
                             .collect::<Vec<_>>();
                         supporting_chunks.sort_by_key(|s| s.depth());
                         supporting_chunks.reverse();
@@ -350,7 +350,7 @@ impl CommitDag {
                             for commit in chunk.checkpoints() {
                                 stack.push(*commit);
                             }
-                            stack.push(chunk.start());
+                            stack.push(chunk.head());
                         }
                     }
                     return Some(commit);

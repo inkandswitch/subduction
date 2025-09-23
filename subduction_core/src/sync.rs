@@ -15,8 +15,8 @@ use crate::{
 use error::{BlobRequestErr, IoError, ListenError};
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use sedimentree_core::{
-    future::FutureKind, storage::Storage, Blob, Chunk, Depth, Digest, LooseCommit, Sedimentree,
-    SedimentreeId, SedimentreeSummary,
+    future::FutureKind, storage::Storage, Blob, Chunk, Depth, Digest, LooseCommit, RemoteDiff,
+    Sedimentree, SedimentreeId, SedimentreeSummary,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -693,53 +693,42 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 their_summary.chunk_summaries().len()
             );
 
-            for commit in sedimentree.loose_commits() {
-                if !their_summary.loose_commits().contains(commit) {
-                    tracing::debug!(
-                        "Peer is missing commit {:?} at depth {:?}",
+            let diff: RemoteDiff<'_> = sedimentree.diff_remote(&their_summary);
+
+            for commit in diff.local_commits.into_iter() {
+                if let Some(blob) = self
+                    .storage
+                    .load_blob(commit.blob().digest())
+                    .await
+                    .map_err(IoError::Storage)?
+                {
+                    missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
+                } else {
+                    tracing::warn!(
+                        "Missing blob for commit {:?} at depth {:?}",
                         commit.digest(),
                         Depth::from(commit.digest())
                     );
-                    if let Some(blob) = self
-                        .storage
-                        .load_blob(commit.blob().digest())
-                        .await
-                        .map_err(IoError::Storage)?
-                    {
-                        missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
-                    } else {
-                        tracing::warn!(
-                            "Missing blob for commit {:?} at depth {:?}",
-                            commit.digest(),
-                            Depth::from(commit.digest())
-                        );
-                        missing_blobs.push(commit.blob().digest());
-                    }
+                    missing_blobs.push(commit.blob().digest());
                 }
             }
 
-            for chunk in sedimentree.chunks() {
-                if !their_summary.chunk_summaries().contains(chunk.summary()) {
-                    if let Some(blob) = self
-                        .storage
-                        .load_blob(chunk.summary().blob_meta().digest())
-                        .await
-                        .map_err(IoError::Storage)?
-                    {
-                        missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
-                    } else {
-                        tracing::warn!(
-                            "Missing blob for chunk {:?} at depth {:?}",
-                            chunk.digest(),
-                            chunk.summary().depth()
-                        );
-                        missing_blobs.push(chunk.summary().blob_meta().digest());
-                    }
+            for chunk in diff.local_chunks.into_iter() {
+                if let Some(blob) = self
+                    .storage
+                    .load_blob(chunk.summary().blob_meta().digest())
+                    .await
+                    .map_err(IoError::Storage)?
+                {
+                    missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
+                } else {
+                    tracing::warn!(
+                        "Missing blob for chunk {:?} at depth {:?}",
+                        chunk.digest(),
+                        chunk.summary().depth()
+                    );
+                    missing_blobs.push(chunk.summary().blob_meta().digest());
                 }
-            }
-
-            for commit in their_summary.loose_commits() {
-                sedimentree.add_commit(commit.clone());
             }
         }
 

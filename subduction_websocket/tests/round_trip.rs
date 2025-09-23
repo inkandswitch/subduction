@@ -174,6 +174,7 @@ async fn batch_sync() -> TestResult {
         .get_commits(sed_id)
         .await
         .expect("sedimentree exists");
+
     assert_eq!(server_updated.len(), 3);
     assert!(server_updated.contains(&commit1));
     assert!(server_updated.contains(&commit2));
@@ -183,6 +184,7 @@ async fn batch_sync() -> TestResult {
         .get_commits(client_sed_id)
         .await
         .expect("sedimentree exists");
+
     assert_eq!(client_updated.len(), 3);
     assert!(client_updated.contains(&commit1));
     assert!(client_updated.contains(&commit2));

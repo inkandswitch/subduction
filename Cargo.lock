@@ -1312,6 +1312,7 @@ dependencies = [
  "serde",
  "thiserror",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
