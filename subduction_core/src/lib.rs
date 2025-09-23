@@ -29,6 +29,6 @@
 pub mod connection;
 pub mod peer;
 pub mod storage;
-pub mod sync;
+pub mod subduction;
 
-pub use sync::Subduction;
+pub use subduction::Subduction;

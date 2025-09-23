@@ -109,6 +109,19 @@ impl Digest {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Create a digest from raw bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, error::InvalidDigest> {
+        if bytes.len() < 32 {
+            return Err(error::InvalidDigest::NotEnoughInput);
+        }
+        if bytes.len() > 32 {
+            return Err(error::InvalidDigest::InvalidLength);
+        }
+        let mut hash = [0; 32];
+        hash.copy_from_slice(&bytes[..32]);
+        Ok(Digest(hash))
+    }
 }
 
 impl From<[u8; 32]> for Digest {

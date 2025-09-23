@@ -278,7 +278,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     ///
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_from_peer(
-        &mut self,
+        &self,
         peer_id: &PeerId,
     ) -> Result<bool, C::DisconnectionError> {
         let mut touched = false;
@@ -333,7 +333,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     }
 
     /// Low-level unregistration of a connection.
-    pub async fn unregister(&mut self, conn_id: &ConnectionId) -> bool {
+    pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
         let mut locked = self.conn_manager.lock().await;
         locked.unstarted.remove(conn_id);
         locked.connections.remove(conn_id).is_some()
@@ -372,6 +372,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
     pub async fn get_local_blobs(&self, id: SedimentreeId) -> Result<Option<Vec<Blob>>, S::Error> {
+        // FIXME return NonEmprt
         if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
             tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
@@ -506,7 +507,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     ///
     /// * [`IoError`] if a storage or network error occurs.
     pub async fn add_commit(
-        &mut self,
+        &self,
         id: SedimentreeId,
         commit: &LooseCommit,
         blob: Blob,
