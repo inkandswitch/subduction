@@ -1,0 +1,42 @@
+[package]
+name = "subduction_websocket"
+version = "0.1.0"
+description = "WebSocket implementation for Subduction"
+
+categories = ["web-programming"]
+keywords = ["websocket", "sync", "subduction"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-tungstenite = { workspace = true }
+bincode = { version = "2.0", features = ["serde"] }
+futures = { workspace = true }
+futures-timer = { workspace = true }
+futures-util = { workspace = true }
+rand = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
+subduction_core = { path = "../subduction_core", features = ["serde"] }
+serde = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true, optional = true }
+tracing = { workspace = true }
+tungstenite = "0.27"
+
+[dev-dependencies]
+anyhow = "1.0"
+arbitrary = { workspace = true }
+testresult = { workspace = true }
+tokio-test = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[features]
+default = []
+tokio_client = ["tokio"]
+tokio_server = ["tokio"]
+tokio = ["dep:tokio", "async-tungstenite/tokio-native-tls"]

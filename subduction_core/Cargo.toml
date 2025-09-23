@@ -1,0 +1,25 @@
+[package]
+name = "subduction_core"
+version = "0.1.0"
+description = "Core implementation and traits for the Subduction protocol"
+
+categories = ["web-programming"]
+keywords = ["sync", "subduction"]
+readme = "./README.md"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+arbitrary = { workspace = true, optional = true, features = ["derive"] }
+futures = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core" }
+serde = { workspace = true, optional = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+arbitrary = ["dep:arbitrary"]
+serde = ["dep:serde"]

@@ -1,0 +1,27 @@
+name: Code Quality Checks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-lint-test-audit:
+
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Build
+      run: cargo build --verbose
+    - name: Build with Test Utils
+      run: cargo build --verbose --all-features
+    - name: Check
+      run: cargo check --verbose --all-features
+    - name: Clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
