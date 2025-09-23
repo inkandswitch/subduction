@@ -4,6 +4,7 @@ members = [
   "sedimentree_core",
   "subduction_cli",
   "subduction_core",
+  "subduction_wasm",
   "subduction_websocket"
 ]
 
