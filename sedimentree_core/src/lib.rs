@@ -607,7 +607,7 @@ impl Sedimentree {
         // level, discard that stratum if it is supported by any of the stratum
         // above it.
         let mut chunks = self.chunks.iter().collect::<Vec<_>>();
-        chunks.sort_by(|a, b| a.depth().cmp(&b.depth()));
+        chunks.sort_by_key(|a| a.depth());
 
         let mut minimized_chunks = Vec::<Chunk>::new();
 

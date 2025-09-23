@@ -694,13 +694,13 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
             );
 
             let local_sedimentree = sedimentree.clone();
-            let diff: RemoteDiff<'_> = local_sedimentree.diff_remote(&their_summary);
+            let diff: RemoteDiff<'_> = local_sedimentree.diff_remote(their_summary);
 
-            for commit in diff.remote_commits.into_iter() {
+            for commit in diff.remote_commits {
                 sedimentree.add_commit(commit.clone());
             }
 
-            for commit in diff.local_commits.into_iter() {
+            for commit in diff.local_commits {
                 if let Some(blob) = self
                     .storage
                     .load_blob(commit.blob().digest())
@@ -714,7 +714,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 }
             }
 
-            for chunk in diff.local_chunks.into_iter() {
+            for chunk in diff.local_chunks {
                 if let Some(blob) = self
                     .storage
                     .load_blob(chunk.summary().blob_meta().digest())
