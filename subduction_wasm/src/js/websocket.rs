@@ -4,7 +4,7 @@ use futures::{
     channel::{mpsc, oneshot},
     future::LocalBoxFuture,
     lock::Mutex,
-    FutureExt, SinkExt,
+    FutureExt, SinkExt, StreamExt,
 };
 use sedimentree_core::future::Local;
 use subduction_core::{
@@ -16,7 +16,11 @@ use subduction_core::{
 };
 use thiserror::Error;
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
-use web_sys::{js_sys, MessageEvent, WebSocket};
+use wasm_bindgen_futures::JsFuture;
+use web_sys::{
+    js_sys::{self, Promise},
+    MessageEvent, WebSocket,
+};
 
 use super::peer_id::JsPeerId;
 
@@ -24,6 +28,8 @@ use super::peer_id::JsPeerId;
 #[derive(Debug, Clone)]
 pub struct JsWebSocket {
     peer_id: PeerId,
+    timeout: Duration,
+
     request_id_counter: Arc<Mutex<u128>>,
     socket: web_sys::WebSocket,
 
@@ -35,7 +41,7 @@ pub struct JsWebSocket {
 impl JsWebSocket {
     /// Create a new [`JsWebSocket`] instance.
     #[wasm_bindgen(constructor)]
-    pub fn new(peer_id: JsPeerId, ws: &WebSocket) -> Self {
+    pub fn new(peer_id: JsPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
         let (inbound_writer, raw_inbound_reader) = mpsc::unbounded();
         let inbound_reader = Arc::new(Mutex::new(raw_inbound_reader));
 
@@ -111,6 +117,8 @@ impl JsWebSocket {
 
         Self {
             peer_id: peer_id.into(),
+            timeout: Duration::from_millis(timeout_milliseconds as u64),
+
             request_id_counter: Arc::new(Mutex::new(0)),
             socket,
 
@@ -168,7 +176,11 @@ impl Connection<Local> for JsWebSocket {
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            todo!("Implement sending logic using WebSocket");
+            tracing::debug!("Waiting for inbound message");
+            let mut chan = self.inbound_reader.lock().await;
+            let msg = chan.next().await.expect("FIXME"); //ok_or(RecvError::ReadFromClosed)?;
+            tracing::info!("Received inbound message id {:?}", msg.request_id());
+            Ok(msg)
         }
         .boxed_local()
     }
@@ -176,10 +188,47 @@ impl Connection<Local> for JsWebSocket {
     fn call(
         &self,
         req: BatchSyncRequest,
-        timeout: Option<Duration>,
+        override_timeout: Option<Duration>,
     ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        async {
-            todo!("Implement sending logic using WebSocket");
+        async move {
+            tracing::debug!("making call with request id {:?}", req.req_id);
+            let req_id = req.req_id;
+
+            // Pre-register channel
+            let (tx, rx) = oneshot::channel();
+            self.pending.lock().await.insert(req_id, tx);
+
+            let msg_bytes = bincode::serde::encode_to_vec(
+                Message::BatchSyncRequest(req),
+                bincode::config::standard(),
+            )
+            .expect("FIXME");
+
+            self.socket
+                .send_with_u8_array(msg_bytes.as_slice())
+                .expect("FIXME");
+
+            tracing::info!("sent request {:?}", req_id);
+
+            let req_timeout = override_timeout.unwrap_or(self.timeout);
+
+            // await response with timeout & cleanup
+            match timeout(req_timeout, rx).await {
+                Ok(Ok(resp)) => {
+                    tracing::info!("request {:?} completed", req_id);
+                    Ok(resp)
+                }
+                Ok(Err(e)) => {
+                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
+                    todo!()
+                    // FIXME Err(CallError::ChanCanceled(e))
+                }
+                Err(TimedOut) => {
+                    tracing::error!("request {:?} timed out", req_id);
+                    todo!()
+                    // FIXME Err(CallError::Timeout)
+                }
+            }
         }
         .boxed_local()
     }
@@ -188,3 +237,81 @@ impl Connection<Local> for JsWebSocket {
 #[derive(Debug, Error)]
 #[error("Not implemented")]
 pub struct Fixme;
+
+#[derive(Debug)]
+struct JsTimeout {
+    id: JsValue, // Numeric in browsers, special Timeout type in e.g. Deno.
+    // Keep the closure alive so the timer can call it
+    _closure: Option<Closure<dyn FnMut()>>,
+}
+
+impl JsTimeout {
+    /// Creates a Promise that resolves after `ms` and a handle you can cancel.
+    fn new(ms: i32) -> (JsFuture, Self) {
+        let mut out_id: JsValue = JsValue::UNDEFINED;
+        let mut out_closure: Option<Closure<dyn FnMut()>> = None;
+
+        let promise = Promise::new(&mut |resolve, _reject| {
+            // NOTE this `global` strategy looks ugly,
+            // BUT it abstracts over both `window` and `worker` contexts.
+            let global = js_sys::global();
+            let set_timeout = js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout"))
+                .expect("FIXME")
+                .dyn_into::<js_sys::Function>()
+                .expect("FIXME");
+
+            let callback = Closure::wrap(Box::new(move || {
+                resolve
+                    .call0(&JsValue::NULL)
+                    .expect("FIXME but also maybe okay to fail silently?");
+            }) as Box<dyn FnMut()>);
+
+            let id = set_timeout
+                .call2(
+                    &global,
+                    callback.as_ref().unchecked_ref(),
+                    &JsValue::from(ms),
+                )
+                .expect("setTimeout call ok");
+
+            out_id = id.into();
+            out_closure = Some(callback);
+        });
+
+        (
+            JsFuture::from(promise),
+            JsTimeout {
+                id: out_id,
+                _closure: out_closure,
+            },
+        )
+    }
+
+    /// Cancel the timer (prevents the callback from firing).
+    fn cancel(self) {
+        let global = js_sys::global();
+        if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
+            .and_then(|v| v.dyn_into::<js_sys::Function>().map_err(|e| e.into()))
+        {
+            clear_timeout.call1(&global, &self.id).expect("FIXME"); // MAYBE silently failing is ok?
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TimedOut;
+
+pub async fn timeout<F: Future<Output = T> + Unpin, T>(
+    dur: Duration,
+    fut: F,
+) -> Result<T, TimedOut> {
+    let ms = dur.as_millis().try_into().unwrap_or(i32::MAX);
+    let (sleep, handle) = JsTimeout::new(ms);
+    match futures_util::future::select(fut, sleep).await {
+        futures_util::future::Either::Left((val, _sleep_future)) => {
+            handle.cancel();
+            Ok(val)
+        }
+        futures_util::future::Either::Right((_done, _fut)) => Err(TimedOut),
+    }
+}
