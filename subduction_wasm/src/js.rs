@@ -1,6 +1,5 @@
 //! JS wrappers
 
-pub mod blob;
 pub mod chunk;
 pub mod chunk_requested;
 pub mod connection_id;

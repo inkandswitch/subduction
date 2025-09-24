@@ -1,11 +1,12 @@
 use std::{collections::HashMap, time::Duration};
 
-use sedimentree_core::{future::Local, storage::MemoryStorage};
+use sedimentree_core::{future::Local, storage::MemoryStorage, Blob};
 use subduction_core::{connection::Connection, Subduction};
 use wasm_bindgen::prelude::*;
+use web_sys::js_sys::Uint8Array;
 
 use super::{
-    blob::JsBlob, chunk::JsChunk, chunk_requested::JsChunkRequested, connection_id::JsConnectionId,
+    chunk::JsChunk, chunk_requested::JsChunkRequested, connection_id::JsConnectionId,
     digest::JsDigest, error::JsIoError, loose_commit::JsLooseCommit, peer_id::JsPeerId,
     sedimentree_id::JsSedimentreeId, websocket::JsWebSocket,
 };
@@ -69,15 +70,18 @@ impl JsSubduction {
     }
 
     #[wasm_bindgen(js_name = getLocalBlob)]
-    pub async fn get_local_blob(&self, digest: JsDigest) -> Result<Option<JsBlob>, String> {
+    pub async fn get_local_blob(&self, digest: JsDigest) -> Result<Option<Uint8Array>, String> {
         let maybe_blob = self.0.get_local_blob(digest.into()).await.expect("FIXME");
-        Ok(maybe_blob.map(JsBlob::from))
+        Ok(maybe_blob.map(|blob| Uint8Array::from(blob.as_slice())))
     }
 
     #[wasm_bindgen(js_name = getLocalBlobs)]
-    pub async fn get_local_blobs(&self, id: JsSedimentreeId) -> Result<Vec<JsBlob>, String> {
+    pub async fn get_local_blobs(&self, id: JsSedimentreeId) -> Result<Vec<Uint8Array>, String> {
         if let Some(blobs) = self.0.get_local_blobs(id.into()).await.expect("FIXME") {
-            Ok(blobs.into_iter().map(JsBlob::from).collect())
+            Ok(blobs
+                .into_iter()
+                .map(|blob| Uint8Array::from(blob.as_slice()))
+                .collect())
         } else {
             Ok(vec![])
         }
@@ -88,10 +92,15 @@ impl JsSubduction {
         &self,
         id: JsSedimentreeId,
         timeout_milliseconds: Option<u64>,
-    ) -> Result<Option<Vec<JsBlob>>, String> {
+    ) -> Result<Option<Vec<Uint8Array>>, String> {
         let timeout = timeout_milliseconds.map(|ms| Duration::from_millis(ms));
         if let Some(blobs) = self.0.fetch_blobs(id.into(), timeout).await.expect("FIXME") {
-            Ok(Some(blobs.into_iter().map(JsBlob::from).collect()))
+            Ok(Some(
+                blobs
+                    .into_iter()
+                    .map(|blob| Uint8Array::from(blob.as_slice()))
+                    .collect(),
+            ))
         } else {
             Ok(None)
         }
@@ -102,11 +111,15 @@ impl JsSubduction {
         &self,
         id: JsSedimentreeId,
         commit: &JsLooseCommit,
-        blob: &JsBlob,
+        blob: &Uint8Array,
     ) -> Result<Option<JsChunkRequested>, String> {
         let maybe_chunk_requested = self
             .0
-            .add_commit(id.into(), &commit.clone().into(), blob.clone().into())
+            .add_commit(
+                id.into(),
+                &commit.clone().into(),
+                Blob::from(blob.clone().to_vec()),
+            )
             .await
             .expect("FIXME");
 
@@ -118,10 +131,11 @@ impl JsSubduction {
         &self,
         id: JsSedimentreeId,
         chunk: &JsChunk,
-        blob: &JsBlob,
+        blob: &Uint8Array,
     ) -> Result<(), String> {
+        let blob: Blob = blob.clone().to_vec().into();
         self.0
-            .add_chunk(id.into(), &chunk.clone().into(), blob.clone().into())
+            .add_chunk(id.into(), &chunk.clone().into(), blob)
             .await
             .expect("FIXME");
         Ok(())

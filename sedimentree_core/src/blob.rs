@@ -43,6 +43,24 @@ impl Blob {
     }
 }
 
+impl From<Vec<u8>> for Blob {
+    fn from(contents: Vec<u8>) -> Self {
+        Blob::new(contents)
+    }
+}
+
+impl From<&[u8]> for Blob {
+    fn from(contents: &[u8]) -> Self {
+        Blob::new(contents.to_vec())
+    }
+}
+
+impl From<Blob> for Vec<u8> {
+    fn from(blob: Blob) -> Self {
+        blob.into_contents()
+    }
+}
+
 /// Metadata for the underlying payload data itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
