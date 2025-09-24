@@ -19,7 +19,7 @@ use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     js_sys::{self, Promise},
-    MessageEvent, WebSocket,
+    MessageEvent, Url, WebSocket,
 };
 
 use super::peer_id::JsPeerId;
@@ -27,6 +27,7 @@ use super::peer_id::JsPeerId;
 #[wasm_bindgen(js_name = JsWebSocket)]
 #[derive(Debug, Clone)]
 pub struct JsWebSocket {
+    address: Url,
     peer_id: PeerId,
     timeout: Duration,
 
@@ -41,7 +42,12 @@ pub struct JsWebSocket {
 impl JsWebSocket {
     /// Create a new [`JsWebSocket`] instance.
     #[wasm_bindgen(constructor)]
-    pub fn new(peer_id: JsPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
+    pub fn new(
+        address: &Url,
+        peer_id: JsPeerId,
+        ws: &WebSocket,
+        timeout_milliseconds: u32,
+    ) -> Self {
         let (inbound_writer, raw_inbound_reader) = mpsc::unbounded();
         let inbound_reader = Arc::new(Mutex::new(raw_inbound_reader));
 
@@ -58,7 +64,7 @@ impl JsWebSocket {
                     &bytes,
                     bincode::config::standard(),
                 ) {
-                    tracing::info!("WS message received with {} bytes length", bytes.len());
+                    tracing::info!("WS message received that's {} bytes long", bytes.len());
                     let inner_pending = closure_pending.clone();
                     let inner_inbound_writer = inbound_writer.clone();
 
@@ -116,6 +122,7 @@ impl JsWebSocket {
         onmessage.forget();
 
         Self {
+            address: address.clone(),
             peer_id: peer_id.into(),
             timeout: Duration::from_millis(timeout_milliseconds as u64),
 
@@ -125,6 +132,19 @@ impl JsWebSocket {
             pending,
             inbound_reader,
         }
+    }
+
+    pub fn connect(
+        address: Url,
+        peer_id: JsPeerId,
+        timeout_milliseconds: u32,
+    ) -> Result<Self, String> {
+        Ok(Self::new(
+            &address,
+            peer_id,
+            &WebSocket::new(&address.href()).expect("FIXME"),
+            timeout_milliseconds,
+        ))
     }
 }
 
@@ -301,10 +321,7 @@ impl JsTimeout {
 #[derive(Debug, Clone, Copy)]
 struct TimedOut;
 
-pub async fn timeout<F: Future<Output = T> + Unpin, T>(
-    dur: Duration,
-    fut: F,
-) -> Result<T, TimedOut> {
+async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Result<T, TimedOut> {
     let ms = dur.as_millis().try_into().unwrap_or(i32::MAX);
     let (sleep, handle) = JsTimeout::new(ms);
     match futures_util::future::select(fut, sleep).await {

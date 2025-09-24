@@ -27,7 +27,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = "0.2.103"
 wasm-bindgen-futures = "0.4.53"
-web-sys = { version = "0.3.80", features = ["BinaryType", "MessageEvent", "WebSocket"] }
+web-sys = { version = "0.3.80", features = ["BinaryType", "MessageEvent", "WebSocket", "Url"] }
 
 
 [features]
