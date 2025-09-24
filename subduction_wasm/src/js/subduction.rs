@@ -133,24 +133,94 @@ impl JsSubduction {
         self.0.request_blobs(digests).await
     }
 
-    // pub async fn request_peer_batch_sync(
-    //     &self,
-    //     to_ask: JsPeerId,
-    //     id: JsSedimentreeId,
-    //     timeout_milliseconds: Option<u64>,
-    // ) -> Result<
-    //     (
-    //         bool,
-    //         Vec<(JsWebSocket, <JsWebSocket as Connection<Local>>::CallError)>,
-    //     ),
-    //     JsIoError,
-    // > {
-    //     let timeout = timeout_milliseconds.map(Duration::from_millis);
-    //     self.0
-    //         .request_peer_batch_sync(&to_ask.into(), id.into(), timeout)
-    //         .await
-    //         .expect("FIXME")
-    // }
+    #[wasm_bindgen(js_name = requestPeerBatchSync)]
+    pub async fn request_peer_batch_sync(
+        &self,
+        to_ask: JsPeerId,
+        id: JsSedimentreeId,
+        timeout_milliseconds: Option<u64>,
+    ) -> Result<PeerBatchSyncResult, JsIoError> {
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let (success, conn_errors) = self
+            .0
+            .request_peer_batch_sync(&to_ask.into(), id.into(), timeout)
+            .await
+            .expect("FIXME");
+
+        Ok(PeerBatchSyncResult {
+            success,
+            conn_errors,
+        })
+    }
+
+    #[wasm_bindgen(js_name = requestAllBatchSync)]
+    pub async fn request_all_batch_sync(
+        &self,
+        id: JsSedimentreeId,
+        timeout_milliseconds: Option<u64>,
+    ) -> Result<PeerBatchSyncResult, JsIoError> {
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let peer_map = self
+            .0
+            .request_all_batch_sync(id.into(), timeout)
+            .await
+            .expect("FIXME");
+
+        todo!("Needs special type")
+    }
+
+    #[wasm_bindgen(js_name = requestAllBatchSyncAll)]
+    pub async fn request_all_batch_sync_all(
+        &self,
+        timeout_milliseconds: Option<u64>,
+    ) -> Result<bool, JsIoError> {
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        self.0
+            .request_all_batch_sync_all(timeout)
+            .await
+            .map_err(JsIoError::from)
+    }
+
+    #[wasm_bindgen(js_name = sedimentreeIds)]
+    pub async fn seidmentree_ids(&self) -> Vec<JsSedimentreeId> {
+        self.0
+            .sedimentree_ids()
+            .await
+            .into_iter()
+            .map(JsSedimentreeId::from)
+            .collect()
+    }
+
+    #[wasm_bindgen(js_name = getCommits)]
+    pub async fn get_commits(
+        &self,
+        id: JsSedimentreeId,
+    ) -> Result<Option<Vec<JsLooseCommit>>, String> {
+        if let Some(commits) = self.0.get_commits(id.into()).await {
+            Ok(Some(commits.into_iter().map(JsLooseCommit::from).collect()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[wasm_bindgen(js_name = getChunks)]
+    pub async fn get_chunks(&self, id: JsSedimentreeId) -> Result<Option<Vec<JsChunk>>, String> {
+        if let Some(chunks) = self.0.get_chunks(id.into()).await {
+            Ok(Some(chunks.into_iter().map(JsChunk::from).collect()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    #[wasm_bindgen(js_name = getPeerIds)]
+    pub async fn peer_ids(&self) -> Vec<JsPeerId> {
+        self.0
+            .peer_ids()
+            .await
+            .into_iter()
+            .map(JsPeerId::from)
+            .collect()
+    }
 }
 
 #[wasm_bindgen(js_name = Registered)]
@@ -171,4 +241,25 @@ impl Registered {
     pub fn conn_id(&self) -> JsConnectionId {
         self.conn_id
     }
+}
+
+#[wasm_bindgen(js_name = PeerBatchSyncResult)]
+#[derive(Debug)]
+pub struct PeerBatchSyncResult {
+    success: bool,
+    conn_errors: Vec<(JsWebSocket, <JsWebSocket as Connection<Local>>::CallError)>,
+}
+
+#[wasm_bindgen(js_class = PeerBatchSyncResult)]
+impl PeerBatchSyncResult {
+    #[wasm_bindgen(getter)]
+    pub fn success(&self) -> bool {
+        self.success
+    }
+
+    // FIXME
+    // #[wasm_bindgen(getter, js_name = connErrors)]
+    // pub fn conn_errors(&self) -> Vec<JsValue> {
+    //     self.conn_errors
+    // }
 }
