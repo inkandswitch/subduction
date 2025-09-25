@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
 use futures::{
     channel::{mpsc, oneshot},
@@ -10,7 +10,7 @@ use sedimentree_core::future::Local;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection,
+        Connection, Reconnect,
     },
     peer::id::PeerId,
 };
@@ -24,7 +24,7 @@ use web_sys::{
 
 use super::peer_id::JsPeerId;
 
-#[wasm_bindgen(js_name = JsWebSocket)]
+#[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
 pub struct JsWebSocket {
     address: Url,
@@ -38,7 +38,7 @@ pub struct JsWebSocket {
     inbound_reader: Arc<Mutex<mpsc::UnboundedReceiver<Message>>>,
 }
 
-#[wasm_bindgen(js_class = JsWebSocket)]
+#[wasm_bindgen(js_class = SubductionWebSocket)]
 impl JsWebSocket {
     /// Create a new [`JsWebSocket`] instance.
     #[wasm_bindgen(constructor)]
@@ -138,11 +138,11 @@ impl JsWebSocket {
         address: Url,
         peer_id: JsPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, WebsocketConnectionError> {
         Ok(Self::new(
             &address,
             peer_id,
-            &WebSocket::new(&address.href()).expect("FIXME"),
+            &WebSocket::new(&address.href()).map_err(WebsocketConnectionError)?,
             timeout_milliseconds,
         ))
     }
@@ -155,10 +155,10 @@ impl PartialEq for JsWebSocket {
 }
 
 impl Connection<Local> for JsWebSocket {
-    type DisconnectionError = Fixme;
-    type SendError = Fixme;
-    type RecvError = Fixme;
-    type CallError = Fixme;
+    type SendError = SendError;
+    type RecvError = ReadFromClosedChannel;
+    type CallError = CallError;
+    type DisconnectionError = Infallible;
 
     fn peer_id(&self) -> PeerId {
         self.peer_id
@@ -185,10 +185,12 @@ impl Connection<Local> for JsWebSocket {
     fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         async move {
             let msg_bytes = bincode::serde::encode_to_vec(&message, bincode::config::standard())
-                .expect("FIXME");
+                .map_err(SendError::Encoding)?;
+
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
-                .expect("FIXME");
+                .map_err(SendError::SocketSend)?;
+
             Ok(())
         }
         .boxed_local()
@@ -198,7 +200,7 @@ impl Connection<Local> for JsWebSocket {
         async {
             tracing::debug!("Waiting for inbound message");
             let mut chan = self.inbound_reader.lock().await;
-            let msg = chan.next().await.expect("FIXME"); //ok_or(RecvError::ReadFromClosed)?;
+            let msg = chan.next().await.ok_or(ReadFromClosedChannel)?;
             tracing::info!("Received inbound message id {:?}", msg.request_id());
             Ok(msg)
         }
@@ -222,11 +224,11 @@ impl Connection<Local> for JsWebSocket {
                 Message::BatchSyncRequest(req),
                 bincode::config::standard(),
             )
-            .expect("FIXME");
+            .map_err(CallError::Encoding)?;
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
-                .expect("FIXME");
+                .map_err(CallError::SocketSend)?;
 
             tracing::info!("sent request {:?}", req_id);
 
@@ -240,13 +242,11 @@ impl Connection<Local> for JsWebSocket {
                 }
                 Ok(Err(e)) => {
                     tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    todo!()
-                    // FIXME Err(CallError::ChanCanceled(e))
+                    Err(CallError::ChannelCancelled)
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {:?} timed out", req_id);
-                    todo!()
-                    // FIXME Err(CallError::Timeout)
+                    Err(CallError::TimedOut)
                 }
             }
         }
@@ -254,9 +254,32 @@ impl Connection<Local> for JsWebSocket {
     }
 }
 
-#[derive(Debug, Error)]
-#[error("Not implemented")]
-pub struct Fixme;
+impl Reconnect<Local> for JsWebSocket {
+    type ConnectError = WebsocketConnectionError;
+    type RunError = WebsocketConnectionError;
+
+    fn reconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::ConnectError>> {
+        async {
+            let address = self.address.clone();
+            let peer_id = self.peer_id;
+            let timeout = self.timeout.as_millis() as u32;
+
+            *self = JsWebSocket::connect(address, peer_id.into(), timeout)?;
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    /// Run the connection send/receive loop.
+    fn run(&mut self) -> LocalBoxFuture<'_, Result<(), Self::RunError>> {
+        async move {
+            loop {
+                self.reconnect().await?;
+            }
+        }
+        .boxed_local()
+    }
+}
 
 #[derive(Debug)]
 struct JsTimeout {
@@ -332,3 +355,37 @@ async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Res
         futures_util::future::Either::Right((_done, _fut)) => Err(TimedOut),
     }
 }
+
+#[derive(Debug, Error)]
+pub enum SendError {
+    #[error("Problem encoding message: {0}")]
+    Encoding(bincode::error::EncodeError),
+
+    #[error("WebSocket error while sending: {0:?}")]
+    SocketSend(JsValue),
+}
+
+#[wasm_bindgen]
+#[derive(Debug, Clone, Copy, Error)]
+#[error("Attempted to read from closed channel")]
+pub struct ReadFromClosedChannel;
+
+#[derive(Debug, Error)]
+pub enum CallError {
+    #[error("Problem encoding message: {0}")]
+    Encoding(bincode::error::EncodeError),
+
+    #[error("WebSocket error while sending: {0:?}")]
+    SocketSend(JsValue),
+
+    #[error("Channel cancelled")]
+    ChannelCancelled,
+
+    #[error("Timed out waiting for response")]
+    TimedOut,
+}
+
+#[wasm_bindgen]
+#[derive(Debug, Clone, Error)]
+#[error("WebSocket connection error: {0:?}")]
+pub struct WebsocketConnectionError(JsValue);
