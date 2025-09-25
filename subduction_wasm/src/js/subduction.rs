@@ -2,10 +2,10 @@
 
 use std::{collections::HashMap, time::Duration};
 
+use js_sys::Uint8Array;
 use sedimentree_core::{future::Local, storage::MemoryStorage, Blob};
 use subduction_core::{peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;
-use web_sys::js_sys::Uint8Array;
 
 use super::{
     chunk::{JsChunk, JsChunkRequested},

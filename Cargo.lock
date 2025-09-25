@@ -1494,6 +1494,7 @@ dependencies = [
  "futures-timer",
  "futures-util",
  "getrandom",
+ "js-sys",
  "rand",
  "sedimentree_core",
  "serde",

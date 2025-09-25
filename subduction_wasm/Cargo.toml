@@ -23,6 +23,7 @@ futures = { workspace = true }
 futures-timer = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { version = "0.3.3", features = ["wasm_js"] }
+js-sys = "0.3.81"
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
 subduction_core = { path = "../subduction_core", features = ["serde"] }
