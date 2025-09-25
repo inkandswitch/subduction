@@ -3,7 +3,7 @@
 use std::{collections::HashMap, time::Duration};
 
 use sedimentree_core::{future::Local, storage::MemoryStorage, Blob};
-use subduction_core::{connection::Connection, peer::id::PeerId, Subduction};
+use subduction_core::{peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;
 use web_sys::js_sys::Uint8Array;
 
@@ -11,11 +11,11 @@ use super::{
     chunk::{JsChunk, JsChunkRequested},
     connection_id::JsConnectionId,
     digest::JsDigest,
-    error::{JsConnectionDisallowed, JsIoError, JsListenError},
+    error::{JsCallError, JsConnectionDisallowed, JsIoError, JsListenError},
     loose_commit::JsLooseCommit,
     peer_id::JsPeerId,
     sedimentree_id::JsSedimentreeId,
-    websocket::{CallError, JsWebSocket},
+    websocket::JsWebSocket,
 };
 
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
@@ -193,7 +193,13 @@ impl JsSubduction {
 
         Ok(PeerBatchSyncResult {
             success,
-            conn_errors,
+            conn_errors: conn_errors
+                .into_iter()
+                .map(|(ws, err)| ConnErrPair {
+                    ws: ws.clone(),
+                    err: JsCallError::from(err),
+                })
+                .collect(),
         })
     }
 
@@ -209,9 +215,17 @@ impl JsSubduction {
         Ok(PeerResultMap(
             peer_map
                 .into_iter()
-                .map(|(peer_id, res)| {
-                    let js_res = todo!(); // res.map_err(|(ws, err)| (ws, err));
-                    (peer_id, js_res)
+                .map(|(peer_id, (success, conn_errs))| {
+                    (
+                        peer_id,
+                        (
+                            success,
+                            conn_errs
+                                .into_iter()
+                                .map(|(ws, err)| (ws.clone(), JsCallError::from(err)))
+                                .collect::<Vec<_>>(),
+                        ),
+                    )
                 })
                 .collect(),
         ))
@@ -304,7 +318,7 @@ impl Registered {
 #[derive(Debug)]
 pub struct PeerBatchSyncResult {
     success: bool,
-    conn_errors: Vec<(JsWebSocket, CallError)>,
+    conn_errors: Vec<ConnErrPair>,
 }
 
 #[wasm_bindgen(js_class = PeerBatchSyncResult)]
@@ -315,50 +329,56 @@ impl PeerBatchSyncResult {
         self.success
     }
 
+    /// List of connection errors that occurred during the batch sync.
     #[wasm_bindgen(getter, js_name = connErrors)]
-    pub fn conn_errors(&self) -> Vec<CallError> {
-        self.conn_errors
+    pub fn conn_errors(&self) -> Vec<ConnErrPair> {
+        self.conn_errors.clone()
     }
 }
 
+/// A pair of a WebSocket connection and an error that occurred during a call.
 #[wasm_bindgen(js_name = ConnErrorPair)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ConnErrPair {
     ws: JsWebSocket,
-    err: CallError,
+    err: JsCallError,
 }
 
 #[wasm_bindgen(js_class = ConnErrorPair)]
 impl ConnErrPair {
+    /// The WebSocket connection that encountered the error.
     #[wasm_bindgen(getter)]
     pub fn ws(&self) -> JsWebSocket {
         self.ws.clone()
     }
 
+    /// The error that occurred during the call.
     #[wasm_bindgen(getter)]
-    pub fn err(&self) -> CallError {
+    pub fn err(&self) -> JsCallError {
         self.err.clone()
     }
 }
 
+/// Map of peer IDs to their batch sync results.
 #[wasm_bindgen(js_name = PeerResultMap)]
 #[derive(Debug)]
-pub struct PeerResultMap(
-    HashMap<PeerId, Result<bool, (JsWebSocket, <JsWebSocket as Connection<Local>>::CallError)>>,
-);
+pub struct PeerResultMap(HashMap<PeerId, (bool, Vec<(JsWebSocket, JsCallError)>)>);
 
 #[wasm_bindgen(js_class = PeerResultMap)]
 impl PeerResultMap {
+    /// Get the result for a specific peer ID.
     pub fn get_result(&self, peer_id: JsPeerId) -> Option<PeerBatchSyncResult> {
-        self.0.get(&peer_id.into()).map(|res| match res {
-            Ok(success) => PeerBatchSyncResult {
+        self.0
+            .get(&peer_id.into())
+            .map(|(success, conn_errs)| PeerBatchSyncResult {
                 success: *success,
-                conn_errors: vec![],
-            },
-            Err((ws, err)) => PeerBatchSyncResult {
-                success: false,
-                conn_errors: todo!(),
-            },
-        })
+                conn_errors: conn_errs
+                    .iter()
+                    .map(|(ws, err)| ConnErrPair {
+                        ws: ws.clone(),
+                        err: err.clone(),
+                    })
+                    .collect(),
+            })
     }
 }
