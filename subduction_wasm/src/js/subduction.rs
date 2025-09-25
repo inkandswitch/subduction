@@ -1,14 +1,21 @@
+//! Subduction node.
+
 use std::{collections::HashMap, time::Duration};
 
 use sedimentree_core::{future::Local, storage::MemoryStorage, Blob};
-use subduction_core::{connection::Connection, Subduction};
+use subduction_core::{connection::Connection, peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;
 use web_sys::js_sys::Uint8Array;
 
 use super::{
-    chunk::JsChunk, chunk_requested::JsChunkRequested, connection_id::JsConnectionId,
-    digest::JsDigest, error::JsIoError, loose_commit::JsLooseCommit, peer_id::JsPeerId,
-    sedimentree_id::JsSedimentreeId, websocket::JsWebSocket,
+    chunk::{JsChunk, JsChunkRequested},
+    connection_id::JsConnectionId,
+    digest::JsDigest,
+    error::{JsConnectionDisallowed, JsIoError, JsListenError},
+    loose_commit::JsLooseCommit,
+    peer_id::JsPeerId,
+    sedimentree_id::JsSedimentreeId,
+    websocket::{CallError, JsWebSocket},
 };
 
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
@@ -18,6 +25,7 @@ pub struct JsSubduction(Subduction<Local, MemoryStorage, JsWebSocket>);
 
 #[wasm_bindgen(js_class = Subduction)]
 impl JsSubduction {
+    /// Create a new [`Subduction`] instance.
     #[wasm_bindgen(constructor)]
     pub fn new() -> Self {
         Self(Subduction::new(
@@ -27,13 +35,13 @@ impl JsSubduction {
         ))
     }
 
-    pub async fn run(&self) -> Result<(), JsValue> {
-        self.0
-            .run()
-            .await
-            .map_err(|e| JsValue::from_str(&e.to_string())) // FIXME
+    /// Run the Subduction instance.
+    pub async fn run(&self) -> Result<(), JsListenError> {
+        self.0.run().await?;
+        Ok(())
     }
 
+    /// Attach a connection.
     pub async fn attach(&self, conn: JsWebSocket) -> Result<Registered, JsIoError> {
         let (is_new, conn_id) = self.0.attach(conn).await.map_err(JsIoError::from)?;
         Ok(Registered {
@@ -42,42 +50,54 @@ impl JsSubduction {
         })
     }
 
-    pub async fn disconnect(&self, js_conn_id: JsConnectionId) -> Result<bool, String> {
-        let new_disconnect = self.0.disconnect(&js_conn_id.into()).await.expect("FIXME");
-        Ok(new_disconnect)
+    /// Disconnect a connection by its ID.
+    pub async fn disconnect(&self, js_conn_id: JsConnectionId) -> bool {
+        self.0
+            .disconnect(&js_conn_id.into())
+            .await
+            .expect("Infallable")
     }
 
+    /// Disconnect from a peer by its ID.
     #[wasm_bindgen(js_name = disconnectFromPeer)]
-    pub async fn disconnect_from_peer(&self, peer_id: JsPeerId) -> Result<bool, String> {
-        let new_disconnect = self
-            .0
+    pub async fn disconnect_from_peer(&self, peer_id: JsPeerId) -> bool {
+        self.0
             .disconnect_from_peer(&peer_id.into())
             .await
-            .expect("FIXME");
-        Ok(new_disconnect)
+            .expect("Infallable")
     }
 
-    pub async fn register(&self, conn: JsWebSocket) -> Result<Registered, String> {
-        let (is_new, conn_id) = self.0.register(conn).await.expect("FIXME");
+    /// Register a new connection.
+    pub async fn register(&self, conn: JsWebSocket) -> Result<Registered, JsConnectionDisallowed> {
+        let (is_new, conn_id) = self.0.register(conn).await?;
         Ok(Registered {
             is_new,
             conn_id: conn_id.into(),
         })
     }
 
+    /// Unregister a connection by its ID.
+    ///
+    /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
     pub async fn unregister(&self, conn_id: JsConnectionId) -> bool {
         self.0.unregister(&conn_id.into()).await
     }
 
+    /// Get a local blob by its digest.
     #[wasm_bindgen(js_name = getLocalBlob)]
-    pub async fn get_local_blob(&self, digest: JsDigest) -> Result<Option<Uint8Array>, String> {
-        let maybe_blob = self.0.get_local_blob(digest.into()).await.expect("FIXME");
-        Ok(maybe_blob.map(|blob| Uint8Array::from(blob.as_slice())))
+    pub async fn get_local_blob(&self, digest: JsDigest) -> Option<Uint8Array> {
+        let maybe_blob = self
+            .0
+            .get_local_blob(digest.into())
+            .await
+            .expect("Infallible");
+        maybe_blob.map(|blob| Uint8Array::from(blob.as_slice()))
     }
 
+    /// Get all local blobs for a given Sedimentree ID.
     #[wasm_bindgen(js_name = getLocalBlobs)]
     pub async fn get_local_blobs(&self, id: JsSedimentreeId) -> Result<Vec<Uint8Array>, String> {
-        if let Some(blobs) = self.0.get_local_blobs(id.into()).await.expect("FIXME") {
+        if let Some(blobs) = self.0.get_local_blobs(id.into()).await.expect("Infallible") {
             Ok(blobs
                 .into_iter()
                 .map(|blob| Uint8Array::from(blob.as_slice()))
@@ -87,14 +107,20 @@ impl JsSubduction {
         }
     }
 
+    /// Fetch blobs by their digests, with an optional timeout in milliseconds.
     #[wasm_bindgen(js_name = fetchBlobs)]
     pub async fn fetch_blobs(
         &self,
         id: JsSedimentreeId,
         timeout_milliseconds: Option<u64>,
-    ) -> Result<Option<Vec<Uint8Array>>, String> {
+    ) -> Result<Option<Vec<Uint8Array>>, JsIoError> {
         let timeout = timeout_milliseconds.map(|ms| Duration::from_millis(ms));
-        if let Some(blobs) = self.0.fetch_blobs(id.into(), timeout).await.expect("FIXME") {
+        if let Some(blobs) = self
+            .0
+            .fetch_blobs(id.into(), timeout)
+            .await
+            .map_err(JsIoError::from)?
+        {
             Ok(Some(
                 blobs
                     .into_iter()
@@ -106,13 +132,14 @@ impl JsSubduction {
         }
     }
 
+    /// Add a commit with its associated blob to the storage.
     #[wasm_bindgen(js_name = addCommit)]
     pub async fn add_commit(
         &self,
         id: JsSedimentreeId,
         commit: &JsLooseCommit,
         blob: &Uint8Array,
-    ) -> Result<Option<JsChunkRequested>, String> {
+    ) -> Result<Option<JsChunkRequested>, JsIoError> {
         let maybe_chunk_requested = self
             .0
             .add_commit(
@@ -121,32 +148,35 @@ impl JsSubduction {
                 Blob::from(blob.clone().to_vec()),
             )
             .await
-            .expect("FIXME");
+            .map_err(JsIoError::from)?;
 
         Ok(maybe_chunk_requested.map(JsChunkRequested::from))
     }
 
+    /// Add a chunk with its associated blob to the storage.
     #[wasm_bindgen(js_name = addChunk)]
     pub async fn add_chunk(
         &self,
         id: JsSedimentreeId,
         chunk: &JsChunk,
         blob: &Uint8Array,
-    ) -> Result<(), String> {
+    ) -> Result<(), JsIoError> {
         let blob: Blob = blob.clone().to_vec().into();
         self.0
             .add_chunk(id.into(), &chunk.clone().into(), blob)
             .await
-            .expect("FIXME");
+            .map_err(JsIoError::from)?;
         Ok(())
     }
 
+    /// Request blobs by their digests from connected peers.
     #[wasm_bindgen(js_name = requestBlobs)]
     pub async fn request_blobs(&self, digests: Vec<JsDigest>) {
         let digests: Vec<_> = digests.into_iter().map(Into::into).collect();
         self.0.request_blobs(digests).await
     }
 
+    /// Request batch sync for a given Sedimentree ID from a specific peer.
     #[wasm_bindgen(js_name = requestPeerBatchSync)]
     pub async fn request_peer_batch_sync(
         &self,
@@ -159,7 +189,7 @@ impl JsSubduction {
             .0
             .request_peer_batch_sync(&to_ask.into(), id.into(), timeout)
             .await
-            .expect("FIXME");
+            .map_err(JsIoError::from)?;
 
         Ok(PeerBatchSyncResult {
             success,
@@ -167,22 +197,27 @@ impl JsSubduction {
         })
     }
 
+    /// Request batch sync for a given Sedimentree ID from all connected peers.
     #[wasm_bindgen(js_name = requestAllBatchSync)]
     pub async fn request_all_batch_sync(
         &self,
         id: JsSedimentreeId,
         timeout_milliseconds: Option<u64>,
-    ) -> Result<PeerBatchSyncResult, JsIoError> {
+    ) -> Result<PeerResultMap, JsIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let peer_map = self
-            .0
-            .request_all_batch_sync(id.into(), timeout)
-            .await
-            .expect("FIXME");
-
-        todo!("Needs special type")
+        let peer_map = self.0.request_all_batch_sync(id.into(), timeout).await?;
+        Ok(PeerResultMap(
+            peer_map
+                .into_iter()
+                .map(|(peer_id, res)| {
+                    let js_res = todo!(); // res.map_err(|(ws, err)| (ws, err));
+                    (peer_id, js_res)
+                })
+                .collect(),
+        ))
     }
 
+    /// Request batch sync for all known Sedimentree IDs from all connected peers.
     #[wasm_bindgen(js_name = requestAllBatchSyncAll)]
     pub async fn request_all_batch_sync_all(
         &self,
@@ -195,6 +230,7 @@ impl JsSubduction {
             .map_err(JsIoError::from)
     }
 
+    /// Get all known Sedimentree IDs
     #[wasm_bindgen(js_name = sedimentreeIds)]
     pub async fn seidmentree_ids(&self) -> Vec<JsSedimentreeId> {
         self.0
@@ -205,6 +241,7 @@ impl JsSubduction {
             .collect()
     }
 
+    /// Get all commits for a given Sedimentree ID
     #[wasm_bindgen(js_name = getCommits)]
     pub async fn get_commits(
         &self,
@@ -217,6 +254,7 @@ impl JsSubduction {
         }
     }
 
+    /// Get all chunks for a given Sedimentree ID
     #[wasm_bindgen(js_name = getChunks)]
     pub async fn get_chunks(&self, id: JsSedimentreeId) -> Result<Option<Vec<JsChunk>>, String> {
         if let Some(chunks) = self.0.get_chunks(id.into()).await {
@@ -226,6 +264,7 @@ impl JsSubduction {
         }
     }
 
+    /// Get the peer IDs of all connected peers
     #[wasm_bindgen(js_name = getPeerIds)]
     pub async fn peer_ids(&self) -> Vec<JsPeerId> {
         self.0
@@ -237,6 +276,7 @@ impl JsSubduction {
     }
 }
 
+/// Result of registering a connection.
 #[wasm_bindgen(js_name = Registered)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Registered {
@@ -246,34 +286,79 @@ pub struct Registered {
 
 #[wasm_bindgen(js_class = Registered)]
 impl Registered {
+    /// Whether the connection was newly registered.
     #[wasm_bindgen(getter)]
     pub fn is_new(&self) -> bool {
         self.is_new
     }
 
+    /// The connection ID of the registered connection.
     #[wasm_bindgen(getter)]
     pub fn conn_id(&self) -> JsConnectionId {
         self.conn_id
     }
 }
 
+/// Result of a peer batch sync request.
 #[wasm_bindgen(js_name = PeerBatchSyncResult)]
 #[derive(Debug)]
 pub struct PeerBatchSyncResult {
     success: bool,
-    conn_errors: Vec<(JsWebSocket, <JsWebSocket as Connection<Local>>::CallError)>,
+    conn_errors: Vec<(JsWebSocket, CallError)>,
 }
 
 #[wasm_bindgen(js_class = PeerBatchSyncResult)]
 impl PeerBatchSyncResult {
+    /// Whether the batch sync was successful with at least one connection.
     #[wasm_bindgen(getter)]
     pub fn success(&self) -> bool {
         self.success
     }
 
-    // FIXME
-    // #[wasm_bindgen(getter, js_name = connErrors)]
-    // pub fn conn_errors(&self) -> Vec<JsValue> {
-    //     self.conn_errors
-    // }
+    #[wasm_bindgen(getter, js_name = connErrors)]
+    pub fn conn_errors(&self) -> Vec<CallError> {
+        self.conn_errors
+    }
+}
+
+#[wasm_bindgen(js_name = ConnErrorPair)]
+#[derive(Debug)]
+pub struct ConnErrPair {
+    ws: JsWebSocket,
+    err: CallError,
+}
+
+#[wasm_bindgen(js_class = ConnErrorPair)]
+impl ConnErrPair {
+    #[wasm_bindgen(getter)]
+    pub fn ws(&self) -> JsWebSocket {
+        self.ws.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn err(&self) -> CallError {
+        self.err.clone()
+    }
+}
+
+#[wasm_bindgen(js_name = PeerResultMap)]
+#[derive(Debug)]
+pub struct PeerResultMap(
+    HashMap<PeerId, Result<bool, (JsWebSocket, <JsWebSocket as Connection<Local>>::CallError)>>,
+);
+
+#[wasm_bindgen(js_class = PeerResultMap)]
+impl PeerResultMap {
+    pub fn get_result(&self, peer_id: JsPeerId) -> Option<PeerBatchSyncResult> {
+        self.0.get(&peer_id.into()).map(|res| match res {
+            Ok(success) => PeerBatchSyncResult {
+                success: *success,
+                conn_errors: vec![],
+            },
+            Err((ws, err)) => PeerBatchSyncResult {
+                success: false,
+                conn_errors: todo!(),
+            },
+        })
+    }
 }

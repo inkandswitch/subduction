@@ -1,6 +1,9 @@
+//! IDs for individual [`Sedimentree`]s.
+
 use sedimentree_core::SedimentreeId;
 use wasm_bindgen::prelude::*;
 
+/// A Wasm wrapper around the [`SedimentreeId`] type.
 #[wasm_bindgen(js_name = SedimentreeId)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JsSedimentreeId(SedimentreeId);

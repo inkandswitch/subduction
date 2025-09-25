@@ -1,3 +1,5 @@
+//! JS [`WebSocket`] connection implementation for Subduction.
+
 use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
 
 use futures::{
@@ -24,6 +26,7 @@ use web_sys::{
 
 use super::peer_id::JsPeerId;
 
+/// A WebSocket connection with internal wiring for [`Subduction`] message handling.
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
 pub struct JsWebSocket {
@@ -134,6 +137,7 @@ impl JsWebSocket {
         }
     }
 
+    /// Connect to a WebSocket server at the given address.
     pub fn connect(
         address: Url,
         peer_id: JsPeerId,
@@ -294,28 +298,47 @@ impl JsTimeout {
         let mut out_id: JsValue = JsValue::UNDEFINED;
         let mut out_closure: Option<Closure<dyn FnMut()>> = None;
 
-        let promise = Promise::new(&mut |resolve, _reject| {
+        let promise = Promise::new(&mut |resolve, reject| {
             // NOTE this `global` strategy looks ugly,
             // BUT it abstracts over both `window` and `worker` contexts.
             let global = js_sys::global();
-            let set_timeout = js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout"))
-                .expect("FIXME")
-                .dyn_into::<js_sys::Function>()
-                .expect("FIXME");
 
-            let callback = Closure::wrap(Box::new(move || {
-                resolve
-                    .call0(&JsValue::NULL)
-                    .expect("FIXME but also maybe okay to fail silently?");
+            let js_value = match js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout")) {
+                Ok(v) => v,
+                Err(e) => {
+                    drop(reject.call1(&JsValue::NULL, &e));
+                    return;
+                }
+            };
+
+            let set_timeout = match js_value.dyn_into::<js_sys::Function>() {
+                Ok(set_timeout) => set_timeout,
+                Err(e) => {
+                    drop(reject.call1(&JsValue::NULL, &e));
+                    return;
+                }
+            };
+
+            let callback_reject = reject.clone();
+            let callback = Closure::wrap(Box::new(move || match resolve.call0(&JsValue::NULL) {
+                Err(e) => {
+                    drop(callback_reject.call1(&JsValue::NULL, &e));
+                    return;
+                }
+                Ok(_val) => (),
             }) as Box<dyn FnMut()>);
 
-            let id = set_timeout
-                .call2(
-                    &global,
-                    callback.as_ref().unchecked_ref(),
-                    &JsValue::from(ms),
-                )
-                .expect("setTimeout call ok");
+            let id = match set_timeout.call2(
+                &global,
+                callback.as_ref().unchecked_ref(),
+                &JsValue::from(ms),
+            ) {
+                Ok(id) => id,
+                Err(e) => {
+                    drop(reject.call1(&JsValue::NULL, &e));
+                    return;
+                }
+            };
 
             out_id = id.into();
             out_closure = Some(callback);
@@ -336,7 +359,9 @@ impl JsTimeout {
         if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
             .and_then(|v| v.dyn_into::<js_sys::Function>().map_err(|e| e.into()))
         {
-            clear_timeout.call1(&global, &self.id).expect("FIXME"); // MAYBE silently failing is ok?
+            if let Err(e) = clear_timeout.call1(&global, &self.id) {
+                tracing::error!("Failed to clear timeout: {:?}", e);
+            }
         }
     }
 }
@@ -356,35 +381,45 @@ async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Res
     }
 }
 
+/// Problem while sending a message.
 #[derive(Debug, Error)]
 pub enum SendError {
+    /// Problem encoding message.
     #[error("Problem encoding message: {0}")]
     Encoding(bincode::error::EncodeError),
 
+    /// WebSocket error while sending.
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
 }
 
+/// Attempted to read from a closed channel.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Copy, Error)]
 #[error("Attempted to read from closed channel")]
 pub struct ReadFromClosedChannel;
 
+/// Problem while attempting to make a roundtrip call.
 #[derive(Debug, Error)]
 pub enum CallError {
+    /// Problem encoding message.
     #[error("Problem encoding message: {0}")]
     Encoding(bincode::error::EncodeError),
 
+    /// WebSocket error while sending.
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
 
+    /// Tried to read from a cancelled channel.
     #[error("Channel cancelled")]
     ChannelCancelled,
 
+    /// Timed out waiting for response.
     #[error("Timed out waiting for response")]
     TimedOut,
 }
 
+/// Problem while attempting to connect or reconnect the WebSocket.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Error)]
 #[error("WebSocket connection error: {0:?}")]

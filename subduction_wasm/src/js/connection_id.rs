@@ -1,6 +1,9 @@
+//! Type safe connection ID.
+
 use subduction_core::connection::id::ConnectionId;
 use wasm_bindgen::prelude::*;
 
+/// A Wasm wrapper around the Rust `ConnectionId` type.
 #[wasm_bindgen(js_name = ConnectionId)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct JsConnectionId(ConnectionId);
