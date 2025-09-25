@@ -13,12 +13,16 @@ license.workspace = true
 repository.workspace = true
 rust-version.workspace = true
 
+[lib]
+crate-type = ["cdylib", "rlib"]
+
 [dependencies]
 bincode = { version = "2.0", features = ["serde"] }
 console_error_panic_hook = { version = "0.1.7", optional = true }
 futures = { workspace = true }
 futures-timer = { workspace = true }
 futures-util = { workspace = true }
+getrandom = { version = "0.3.3", features = ["wasm_js"] }
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
 subduction_core = { path = "../subduction_core", features = ["serde"] }
