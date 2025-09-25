@@ -1,12 +1,13 @@
 {
   "name": "@automerge/subduction",
-  "version": "0.0.0-alpha.1",
+  "version": "0.0.0-alpha.0",
   "description": "",
+  "private": true,
   "main": "pkg/subduction_wasm.js",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
-    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release -- --features ingest_static",
-    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release -- --features ingest_static",
+    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
+    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
     "build-slim": "node build_slim.js"
   },
   "keywords": [],

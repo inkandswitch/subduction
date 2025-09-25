@@ -30,7 +30,6 @@ use super::peer_id::JsPeerId;
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
 pub struct JsWebSocket {
-    address: Url,
     peer_id: PeerId,
     timeout: Duration,
 
@@ -45,12 +44,7 @@ pub struct JsWebSocket {
 impl JsWebSocket {
     /// Create a new [`JsWebSocket`] instance.
     #[wasm_bindgen(constructor)]
-    pub fn new(
-        address: &Url,
-        peer_id: JsPeerId,
-        ws: &WebSocket,
-        timeout_milliseconds: u32,
-    ) -> Self {
+    pub fn new(peer_id: JsPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
         let (inbound_writer, raw_inbound_reader) = mpsc::unbounded();
         let inbound_reader = Arc::new(Mutex::new(raw_inbound_reader));
 
@@ -125,7 +119,6 @@ impl JsWebSocket {
         onmessage.forget();
 
         Self {
-            address: address.clone(),
             peer_id: peer_id.into(),
             timeout: Duration::from_millis(timeout_milliseconds as u64),
 
@@ -144,7 +137,6 @@ impl JsWebSocket {
         timeout_milliseconds: u32,
     ) -> Result<Self, WebsocketConnectionError> {
         Ok(Self::new(
-            &address,
             peer_id,
             &WebSocket::new(&address.href()).map_err(WebsocketConnectionError)?,
             timeout_milliseconds,
@@ -264,11 +256,15 @@ impl Reconnect<Local> for JsWebSocket {
 
     fn reconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::ConnectError>> {
         async {
-            let address = self.address.clone();
+            let address = self.socket.url();
             let peer_id = self.peer_id;
             let timeout = self.timeout.as_millis() as u32;
 
-            *self = JsWebSocket::connect(address, peer_id.into(), timeout)?;
+            *self = JsWebSocket::connect(
+                Url::new(&address).expect("existing URL should be valid URL"),
+                peer_id.into(),
+                timeout,
+            )?;
             Ok(())
         }
         .boxed_local()
