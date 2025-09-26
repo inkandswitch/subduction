@@ -67,6 +67,11 @@ impl SedimentreeId {
     pub const fn new(id: [u8; 32]) -> Self {
         Self(id)
     }
+
+    /// The bytes of this [`SedimentreeId`].
+    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
 }
 
 /// An error indicating that a [`SedimentreeId`] could not be parsed from a string.
