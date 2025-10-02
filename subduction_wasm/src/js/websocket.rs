@@ -38,6 +38,7 @@ pub struct JsWebSocket {
 
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
     inbound_reader: Arc<Mutex<mpsc::UnboundedReceiver<Message>>>,
+    // FIXME callbacks: Option<Arc<Mutex<js_sys::Function>>>,
 }
 
 #[wasm_bindgen(js_class = SubductionWebSocket)]

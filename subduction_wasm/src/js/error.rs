@@ -1,6 +1,6 @@
 //! Error types.
 
-use sedimentree_core::{future::Local, storage::MemoryStorage};
+use sedimentree_core::future::Local;
 use subduction_core::{
     connection::ConnectionDisallowed,
     subduction::error::{IoError, ListenError},
@@ -8,7 +8,11 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use super::websocket::{CallError, JsWebSocket};
+use super::{
+    connection_callback_reader::JsConnectionCallbackReader,
+    storage::JsStorage,
+    websocket::{CallError, JsWebSocket},
+};
 
 /// A Wasm wrapper around the [`IoError`] type.
 ///
@@ -17,7 +21,7 @@ use super::websocket::{CallError, JsWebSocket};
 #[wasm_bindgen(js_name = IoError)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsIoError(#[from] IoError<Local, MemoryStorage, JsWebSocket>);
+pub struct JsIoError(#[from] IoError<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>>);
 
 /// A Wasm wrapper around the [`ConnectionDisallowed`] type.
 #[wasm_bindgen(js_name = ConnectionDisallowed)]
@@ -29,7 +33,9 @@ pub struct JsConnectionDisallowed(#[from] ConnectionDisallowed);
 #[wasm_bindgen(js_name = ListenError)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsListenError(#[from] ListenError<Local, MemoryStorage, JsWebSocket>);
+pub struct JsListenError(
+    #[from] ListenError<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>>,
+);
 
 /// A Wasm wrapper around the [`CallError`] type.
 #[wasm_bindgen(js_name = CallError)]

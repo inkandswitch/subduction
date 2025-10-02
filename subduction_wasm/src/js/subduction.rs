@@ -1,49 +1,70 @@
 //! Subduction node.
 
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
+use futures::{lock::Mutex, FutureExt};
 use js_sys::Uint8Array;
-use sedimentree_core::{future::Local, storage::MemoryStorage, Blob};
+use sedimentree_core::{future::Local, Blob};
 use subduction_core::{peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;
 
-use super::{
+use crate::js::{
     chunk::{JsChunk, JsChunkRequested},
+    connection_callback_reader::JsConnectionCallbackReader,
     connection_id::JsConnectionId,
     digest::JsDigest,
     error::{JsCallError, JsConnectionDisallowed, JsIoError, JsListenError},
     loose_commit::JsLooseCommit,
     peer_id::JsPeerId,
     sedimentree_id::JsSedimentreeId,
+    storage::JsStorage,
     websocket::JsWebSocket,
 };
 
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
-#[derive(Debug, Clone)]
-pub struct JsSubduction(Subduction<Local, MemoryStorage, JsWebSocket>);
+#[derive(Debug)]
+pub struct JsSubduction {
+    core: Subduction<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>>,
+    commit_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
+    chunk_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
+    blob_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
+}
 
 #[wasm_bindgen(js_class = Subduction)]
 impl JsSubduction {
     /// Create a new [`Subduction`] instance.
     #[wasm_bindgen(constructor)]
-    pub fn new() -> Self {
-        Self(Subduction::new(
-            HashMap::new(),
-            MemoryStorage::default(), // FIXME use lcoalstorage or indexeddb
-            HashMap::new(),
-        ))
+    pub fn new(storage: JsStorage) -> Self {
+        Self {
+            core: Subduction::new(HashMap::new(), storage, HashMap::new()),
+            commit_callbacks: Arc::new(Mutex::new(Vec::new())),
+            chunk_callbacks: Arc::new(Mutex::new(Vec::new())),
+            blob_callbacks: Arc::new(Mutex::new(Vec::new())),
+        }
     }
 
     /// Run the Subduction instance.
     pub async fn run(&self) -> Result<(), JsListenError> {
-        self.0.run().await?;
+        self.core.run().await?;
         Ok(())
     }
 
     /// Attach a connection.
     pub async fn attach(&self, conn: JsWebSocket) -> Result<Registered, JsIoError> {
-        let (is_new, conn_id) = self.0.attach(conn).await.map_err(JsIoError::from)?;
+        let conn_with_callbacks = JsConnectionCallbackReader {
+            conn,
+            commit_callbacks: self.commit_callbacks.clone(),
+            chunk_callbacks: self.chunk_callbacks.clone(),
+            blob_callbacks: self.blob_callbacks.clone(),
+        };
+
+        let (is_new, conn_id) = self
+            .core
+            .attach(conn_with_callbacks)
+            .await
+            .map_err(JsIoError::from)?;
+
         Ok(Registered {
             is_new,
             conn_id: conn_id.into(),
@@ -52,7 +73,7 @@ impl JsSubduction {
 
     /// Disconnect a connection by its ID.
     pub async fn disconnect(&self, js_conn_id: JsConnectionId) -> bool {
-        self.0
+        self.core
             .disconnect(&js_conn_id.into())
             .await
             .expect("Infallable")
@@ -61,7 +82,7 @@ impl JsSubduction {
     /// Disconnect from a peer by its ID.
     #[wasm_bindgen(js_name = disconnectFromPeer)]
     pub async fn disconnect_from_peer(&self, peer_id: JsPeerId) -> bool {
-        self.0
+        self.core
             .disconnect_from_peer(&peer_id.into())
             .await
             .expect("Infallable")
@@ -69,7 +90,13 @@ impl JsSubduction {
 
     /// Register a new connection.
     pub async fn register(&self, conn: JsWebSocket) -> Result<Registered, JsConnectionDisallowed> {
-        let (is_new, conn_id) = self.0.register(conn).await?;
+        let conn_with_callbacks = JsConnectionCallbackReader {
+            conn,
+            commit_callbacks: self.commit_callbacks.clone(),
+            chunk_callbacks: self.chunk_callbacks.clone(),
+            blob_callbacks: self.blob_callbacks.clone(),
+        };
+        let (is_new, conn_id) = self.core.register(conn_with_callbacks).await?;
         Ok(Registered {
             is_new,
             conn_id: conn_id.into(),
@@ -80,14 +107,14 @@ impl JsSubduction {
     ///
     /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
     pub async fn unregister(&self, conn_id: JsConnectionId) -> bool {
-        self.0.unregister(&conn_id.into()).await
+        self.core.unregister(&conn_id.into()).await
     }
 
     /// Get a local blob by its digest.
     #[wasm_bindgen(js_name = getLocalBlob)]
     pub async fn get_local_blob(&self, digest: JsDigest) -> Option<Uint8Array> {
         let maybe_blob = self
-            .0
+            .core
             .get_local_blob(digest.into())
             .await
             .expect("Infallible");
@@ -97,7 +124,12 @@ impl JsSubduction {
     /// Get all local blobs for a given Sedimentree ID.
     #[wasm_bindgen(js_name = getLocalBlobs)]
     pub async fn get_local_blobs(&self, id: JsSedimentreeId) -> Result<Vec<Uint8Array>, String> {
-        if let Some(blobs) = self.0.get_local_blobs(id.into()).await.expect("Infallible") {
+        if let Some(blobs) = self
+            .core
+            .get_local_blobs(id.into())
+            .await
+            .expect("Infallible")
+        {
             Ok(blobs
                 .into_iter()
                 .map(|blob| Uint8Array::from(blob.as_slice()))
@@ -116,7 +148,7 @@ impl JsSubduction {
     ) -> Result<Option<Vec<Uint8Array>>, JsIoError> {
         let timeout = timeout_milliseconds.map(|ms| Duration::from_millis(ms));
         if let Some(blobs) = self
-            .0
+            .core
             .fetch_blobs(id.into(), timeout)
             .await
             .map_err(JsIoError::from)?
@@ -141,7 +173,7 @@ impl JsSubduction {
         blob: &Uint8Array,
     ) -> Result<Option<JsChunkRequested>, JsIoError> {
         let maybe_chunk_requested = self
-            .0
+            .core
             .add_commit(
                 id.into(),
                 &commit.clone().into(),
@@ -162,7 +194,7 @@ impl JsSubduction {
         blob: &Uint8Array,
     ) -> Result<(), JsIoError> {
         let blob: Blob = blob.clone().to_vec().into();
-        self.0
+        self.core
             .add_chunk(id.into(), &chunk.clone().into(), blob)
             .await
             .map_err(JsIoError::from)?;
@@ -173,7 +205,7 @@ impl JsSubduction {
     #[wasm_bindgen(js_name = requestBlobs)]
     pub async fn request_blobs(&self, digests: Vec<JsDigest>) {
         let digests: Vec<_> = digests.into_iter().map(Into::into).collect();
-        self.0.request_blobs(digests).await
+        self.core.request_blobs(digests).await
     }
 
     /// Request batch sync for a given Sedimentree ID from a specific peer.
@@ -186,7 +218,7 @@ impl JsSubduction {
     ) -> Result<PeerBatchSyncResult, JsIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let (success, conn_errors) = self
-            .0
+            .core
             .request_peer_batch_sync(&to_ask.into(), id.into(), timeout)
             .await
             .map_err(JsIoError::from)?;
@@ -196,7 +228,7 @@ impl JsSubduction {
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(ws, err)| ConnErrPair {
-                    ws: ws.clone(),
+                    ws: ws.conn.clone(),
                     err: JsCallError::from(err),
                 })
                 .collect(),
@@ -211,7 +243,7 @@ impl JsSubduction {
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerResultMap, JsIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let peer_map = self.0.request_all_batch_sync(id.into(), timeout).await?;
+        let peer_map = self.core.request_all_batch_sync(id.into(), timeout).await?;
         Ok(PeerResultMap(
             peer_map
                 .into_iter()
@@ -222,7 +254,7 @@ impl JsSubduction {
                             success,
                             conn_errs
                                 .into_iter()
-                                .map(|(ws, err)| (ws.clone(), JsCallError::from(err)))
+                                .map(|(ws, err)| (ws.conn.clone(), JsCallError::from(err)))
                                 .collect::<Vec<_>>(),
                         ),
                     )
@@ -238,7 +270,7 @@ impl JsSubduction {
         timeout_milliseconds: Option<u64>,
     ) -> Result<bool, JsIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        self.0
+        self.core
             .request_all_batch_sync_all(timeout)
             .await
             .map_err(JsIoError::from)
@@ -247,7 +279,7 @@ impl JsSubduction {
     /// Get all known Sedimentree IDs
     #[wasm_bindgen(js_name = sedimentreeIds)]
     pub async fn seidmentree_ids(&self) -> Vec<JsSedimentreeId> {
-        self.0
+        self.core
             .sedimentree_ids()
             .await
             .into_iter()
@@ -261,7 +293,7 @@ impl JsSubduction {
         &self,
         id: JsSedimentreeId,
     ) -> Result<Option<Vec<JsLooseCommit>>, String> {
-        if let Some(commits) = self.0.get_commits(id.into()).await {
+        if let Some(commits) = self.core.get_commits(id.into()).await {
             Ok(Some(commits.into_iter().map(JsLooseCommit::from).collect()))
         } else {
             Ok(None)
@@ -271,7 +303,7 @@ impl JsSubduction {
     /// Get all chunks for a given Sedimentree ID
     #[wasm_bindgen(js_name = getChunks)]
     pub async fn get_chunks(&self, id: JsSedimentreeId) -> Result<Option<Vec<JsChunk>>, String> {
-        if let Some(chunks) = self.0.get_chunks(id.into()).await {
+        if let Some(chunks) = self.core.get_chunks(id.into()).await {
             Ok(Some(chunks.into_iter().map(JsChunk::from).collect()))
         } else {
             Ok(None)
@@ -281,7 +313,7 @@ impl JsSubduction {
     /// Get the peer IDs of all connected peers
     #[wasm_bindgen(js_name = getPeerIds)]
     pub async fn peer_ids(&self) -> Vec<JsPeerId> {
-        self.0
+        self.core
             .peer_ids()
             .await
             .into_iter()

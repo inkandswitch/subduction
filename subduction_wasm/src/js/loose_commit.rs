@@ -75,3 +75,24 @@ impl From<JsBlobMeta> for BlobMeta {
         meta.0
     }
 }
+
+#[wasm_bindgen(inline_js = r#"
+export function tryIntoLooseCommitArray(xs) { return xs; }
+"#)]
+
+extern "C" {
+    #[wasm_bindgen(js_name = tryIntoLooseCommitArray, catch)]
+    pub fn try_into_js_loose_commit_array(v: &JsValue) -> Result<Vec<JsLooseCommit>, JsValue>;
+}
+
+pub(crate) struct JsLooseCommitsArray(pub(crate) Vec<JsLooseCommit>);
+
+impl TryFrom<&JsValue> for JsLooseCommitsArray {
+    type Error = JsValue;
+
+    fn try_from(js_value: &JsValue) -> Result<Self, Self::Error> {
+        Ok(JsLooseCommitsArray(try_into_js_loose_commit_array(
+            js_value,
+        )?))
+    }
+}

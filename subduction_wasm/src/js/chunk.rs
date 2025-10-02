@@ -37,3 +37,22 @@ impl From<JsChunkRequested> for ChunkRequested {
         req.0
     }
 }
+
+#[wasm_bindgen(inline_js = r#"
+export function tryIntoChunkArray(xs) { return xs; }
+"#)]
+
+extern "C" {
+    #[wasm_bindgen(js_name = tryIntoChunkArray, catch)]
+    pub fn try_into_js_chunk_array(v: &JsValue) -> Result<Vec<JsChunk>, JsValue>;
+}
+
+pub(crate) struct JsChunksArray(pub(crate) Vec<JsChunk>);
+
+impl TryFrom<&JsValue> for JsChunksArray {
+    type Error = JsValue;
+
+    fn try_from(js_value: &JsValue) -> Result<Self, Self::Error> {
+        Ok(JsChunksArray(try_into_js_chunk_array(js_value)?))
+    }
+}
