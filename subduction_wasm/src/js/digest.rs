@@ -36,12 +36,6 @@ impl From<JsDigest> for Digest {
     }
 }
 
-// FIXME
-// #[wasm_bindgen(typescript_custom_section)]
-// const _: &str = r#"
-// export class Digest {}
-// "#;
-
 #[wasm_bindgen(inline_js = r#"
 export function tryIntoDigest(v) { return v; }
 "#)]

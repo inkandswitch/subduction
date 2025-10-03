@@ -12,8 +12,6 @@ pub struct JsLooseCommit(LooseCommit);
 
 #[wasm_bindgen(js_class = LooseCommit)]
 impl JsLooseCommit {
-    // FIXME constrcutor
-
     /// Get the digest of the commit.
     #[wasm_bindgen(getter)]
     pub fn digest(&self) -> JsDigest {

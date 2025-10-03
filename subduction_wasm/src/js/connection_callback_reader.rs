@@ -13,6 +13,7 @@ use subduction_core::{
     },
     peer::id::PeerId,
 };
+use thiserror::Error;
 use wasm_bindgen::JsValue;
 
 use crate::js::{chunk::JsChunk, loose_commit::JsLooseCommit, sedimentree_id::JsSedimentreeId};
@@ -34,7 +35,7 @@ impl<T: PartialEq + Connection<Local>> PartialEq for JsConnectionCallbackReader<
 impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
-    type RecvError = T::RecvError;
+    type RecvError = RecvOrCallbackErr<T>;
     type CallError = T::CallError;
 
     fn peer_id(&self) -> PeerId {
@@ -51,48 +52,45 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            let msg = self.conn.recv().await?;
+            let msg = self.conn.recv().await.map_err(RecvOrCallbackErr::Recv)?;
 
             match &msg {
                 Message::LooseCommit { id, commit, blob } => {
                     let callbacks_lock = self.commit_callbacks.lock().await;
                     for callback in callbacks_lock.iter() {
-                        let _fixme = callback
+                        callback
                             .call3(
                                 &JsValue::NULL,
                                 &JsValue::from(JsSedimentreeId::from(id.clone())),
                                 &JsValue::from(JsLooseCommit::from(commit.clone())),
                                 &JsValue::from(Uint8Array::from(blob.as_slice())),
                             )
-                            .expect("FIXME");
+                            .map_err(RecvOrCallbackErr::CommitCallback)?;
                     }
-                    todo!()
                 }
                 Message::Chunk { id, chunk, blob } => {
                     let callbacks_lock = self.chunk_callbacks.lock().await;
                     for callback in callbacks_lock.iter() {
-                        let _fixme = callback
+                        callback
                             .call3(
                                 &JsValue::NULL,
                                 &JsValue::from(JsSedimentreeId::from(id.clone())),
                                 &JsValue::from(JsChunk::from(chunk.clone())),
                                 &JsValue::from(Uint8Array::from(blob.as_slice())),
                             )
-                            .expect("FIXME");
+                            .map_err(RecvOrCallbackErr::ChunkCallback)?;
                     }
-                    todo!()
                 }
                 Message::BlobsResponse(blobs) => {
                     for blob in blobs {
                         let lock = self.blob_callbacks.lock().await;
                         for callback in lock.iter() {
-                            let _fixme = callback
+                            callback
                                 .call1(
                                     &JsValue::NULL,
                                     &JsValue::from(Uint8Array::from(blob.as_slice())),
                                 )
-                                // FIXME add sedimentreeID?
-                                .expect("FIXME");
+                                .map_err(RecvOrCallbackErr::BlobCallback)?;
                         }
                     }
                 }
@@ -110,14 +108,14 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                     for (commit, blob) in missing_commits {
                         for callback in lock.iter() {
                             let this = JsValue::NULL;
-                            let _fixme = callback
+                            callback
                                 .call3(
                                     &this,
                                     &JsValue::from(JsSedimentreeId::from(id.clone())),
                                     &JsValue::from(JsLooseCommit::from(commit.clone())),
                                     &JsValue::from(blob.clone().into_contents()),
                                 )
-                                .expect("FIXME");
+                                .map_err(RecvOrCallbackErr::CommitCallback)?;
                         }
                     }
 
@@ -126,14 +124,14 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                     for (chunk, blob) in missing_chunks {
                         for callback in lock.iter() {
                             let this = JsValue::NULL;
-                            let _fixme = callback
+                            callback
                                 .call3(
                                     &this,
                                     &JsValue::from(JsSedimentreeId::from(id.clone())),
                                     &JsValue::from(JsChunk::from(chunk.clone())),
                                     &JsValue::from(blob.clone().into_contents()),
                                 )
-                                .expect("FIXME");
+                                .map_err(RecvOrCallbackErr::ChunkCallback)?;
                         }
                     }
                 }
@@ -155,5 +153,30 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
         timeout: Option<Duration>,
     ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         self.conn.call(req, timeout)
+    }
+}
+
+#[derive(Error)]
+pub(crate) enum RecvOrCallbackErr<T: Connection<Local>> {
+    /// An error occurred while sending a message.
+    #[error(transparent)]
+    Recv(T::RecvError),
+
+    /// An error occurred while invoking a blob callback.
+    #[error("Blob callback error: {0:?}")]
+    BlobCallback(JsValue),
+
+    /// An error occurred while invoking a commit callback.
+    #[error("Commit callback error: {0:?}")]
+    CommitCallback(JsValue),
+
+    /// An error occurred while invoking a chunk callback.
+    #[error("Chunk callback error: {0:?}")]
+    ChunkCallback(JsValue),
+}
+
+impl<T: Connection<Local>> std::fmt::Debug for RecvOrCallbackErr<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, f)
     }
 }

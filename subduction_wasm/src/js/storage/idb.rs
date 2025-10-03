@@ -4,6 +4,7 @@ use futures::channel::oneshot;
 use js_sys::Uint8Array;
 use sedimentree_core::Digest;
 use std::{cell::RefCell, rc::Rc};
+use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::{Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
@@ -39,7 +40,9 @@ impl IndexedDbStorage {
                 {
                     if let Ok(db_val) = req.result() {
                         if let Ok(db) = db_val.dyn_into::<IdbDatabase>() {
-                            let ensured = db.create_object_store(DB_NAME).expect("FIXME");
+                            let ensured = db.create_object_store(DB_NAME).map_err(|e| {
+                                tracing::error!("Failed to create object store: {:?}", e);
+                            });
                             drop(ensured);
                         }
                     }
@@ -145,3 +148,10 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, JsValue> {
     rx.await
         .map_err(|_| JsValue::from(js_sys::Error::new("Channel dropped")))?
 }
+
+/// Error indicating that a `JsValue` was expected to be a `Uint8Array` but was not.
+#[wasm_bindgen]
+#[derive(Debug, Clone, Error)]
+#[error("Expected a Uint8Array but got something else")]
+#[allow(missing_copy_implementations)]
+pub struct NotBytes;
