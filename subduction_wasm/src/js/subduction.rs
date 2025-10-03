@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use futures::{lock::Mutex, FutureExt};
+use futures::lock::Mutex;
 use js_sys::Uint8Array;
 use sedimentree_core::{future::Local, Blob};
 use subduction_core::{peer::id::PeerId, Subduction};
@@ -108,6 +108,48 @@ impl JsSubduction {
     /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
     pub async fn unregister(&self, conn_id: JsConnectionId) -> bool {
         self.core.unregister(&conn_id.into()).await
+    }
+
+    /// Add a callback for commit events.
+    #[wasm_bindgen(js_name = onCommit)]
+    pub async fn on_commit(&self, callback: js_sys::Function) {
+        let mut lock = self.commit_callbacks.lock().await;
+        lock.push(callback);
+    }
+
+    /// Remove a callback for commit events.
+    #[wasm_bindgen(js_name = offCommit)]
+    pub async fn off_commit(&self, callback: js_sys::Function) {
+        let mut lock = self.commit_callbacks.lock().await;
+        lock.retain(|cb| cb != &callback);
+    }
+
+    /// Add a callback for chunk events.
+    #[wasm_bindgen(js_name = onChunk)]
+    pub async fn on_chunk(&self, callback: js_sys::Function) {
+        let mut lock = self.chunk_callbacks.lock().await;
+        lock.push(callback);
+    }
+
+    /// Remove a callback for chunk events.
+    #[wasm_bindgen(js_name = offChunk)]
+    pub async fn off_chunk(&self, callback: js_sys::Function) {
+        let mut lock = self.chunk_callbacks.lock().await;
+        lock.retain(|cb| cb != &callback);
+    }
+
+    /// Add a callback for blob events.
+    #[wasm_bindgen(js_name = onBlob)]
+    pub async fn on_blob(&self, callback: js_sys::Function) {
+        let mut lock = self.chunk_callbacks.lock().await;
+        lock.push(callback);
+    }
+
+    /// Remove a callback for blob events.
+    #[wasm_bindgen(js_name = offBlob)]
+    pub async fn off_blob(&self, callback: js_sys::Function) {
+        let mut lock = self.chunk_callbacks.lock().await;
+        lock.retain(|cb| cb != &callback);
     }
 
     /// Get a local blob by its digest.
@@ -324,7 +366,8 @@ impl JsSubduction {
 
 /// Result of registering a connection.
 #[wasm_bindgen(js_name = Registered)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_copy_implementations)]
 pub struct Registered {
     is_new: bool,
     conn_id: JsConnectionId,
@@ -341,7 +384,7 @@ impl Registered {
     /// The connection ID of the registered connection.
     #[wasm_bindgen(getter)]
     pub fn conn_id(&self) -> JsConnectionId {
-        self.conn_id
+        self.conn_id.clone()
     }
 }
 

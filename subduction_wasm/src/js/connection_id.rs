@@ -5,7 +5,8 @@ use wasm_bindgen::prelude::*;
 
 /// A Wasm wrapper around the Rust `ConnectionId` type.
 #[wasm_bindgen(js_name = ConnectionId)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_copy_implementations)]
 pub struct JsConnectionId(ConnectionId);
 
 impl From<ConnectionId> for JsConnectionId {

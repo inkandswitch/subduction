@@ -5,7 +5,8 @@ use wasm_bindgen::prelude::*;
 
 /// A Wasm wrapper around the [`SedimentreeId`] type.
 #[wasm_bindgen(js_name = SedimentreeId)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_copy_implementations)]
 pub struct JsSedimentreeId(SedimentreeId);
 
 #[wasm_bindgen(js_class = SedimentreeId)]

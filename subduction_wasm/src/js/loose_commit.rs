@@ -47,7 +47,8 @@ impl From<JsLooseCommit> for LooseCommit {
 
 /// A Wasm wrapper around the [`BlobMeta`] type.
 #[wasm_bindgen(js_name = BlobMeta)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[allow(missing_copy_implementations)]
 pub struct JsBlobMeta(BlobMeta);
 
 #[wasm_bindgen(js_class = BlobMeta)]
@@ -81,6 +82,7 @@ export function tryIntoLooseCommitArray(xs) { return xs; }
 "#)]
 
 extern "C" {
+    /// Try to convert a `JsValue` into an array of `JsLooseCommit`.
     #[wasm_bindgen(js_name = tryIntoLooseCommitArray, catch)]
     pub fn try_into_js_loose_commit_array(v: &JsValue) -> Result<Vec<JsLooseCommit>, JsValue>;
 }

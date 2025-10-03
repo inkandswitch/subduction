@@ -34,11 +34,10 @@ pub struct JsWebSocket {
     timeout: Duration,
 
     request_id_counter: Arc<Mutex<u128>>,
-    socket: web_sys::WebSocket,
+    socket: WebSocket,
 
     pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
     inbound_reader: Arc<Mutex<mpsc::UnboundedReceiver<Message>>>,
-    // FIXME callbacks: Option<Arc<Mutex<js_sys::Function>>>,
 }
 
 #[wasm_bindgen(js_class = SubductionWebSocket)]
@@ -115,7 +114,6 @@ impl JsWebSocket {
         });
 
         let socket = ws.clone();
-        socket.set_binary_type(web_sys::BinaryType::Arraybuffer);
         socket.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         onmessage.forget();
 
@@ -391,7 +389,6 @@ pub enum SendError {
 }
 
 /// Attempted to read from a closed channel.
-#[wasm_bindgen]
 #[derive(Debug, Clone, Copy, Error)]
 #[error("Attempted to read from closed channel")]
 pub struct ReadFromClosedChannel;

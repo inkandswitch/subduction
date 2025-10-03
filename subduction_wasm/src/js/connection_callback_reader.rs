@@ -18,37 +18,11 @@ use wasm_bindgen::JsValue;
 use crate::js::{chunk::JsChunk, loose_commit::JsLooseCommit, sedimentree_id::JsSedimentreeId};
 
 #[derive(Debug, Clone)]
-pub struct JsConnectionCallbackReader<T: Connection<Local>> {
+pub(crate) struct JsConnectionCallbackReader<T: Connection<Local>> {
     pub(crate) conn: T,
     pub(crate) commit_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
     pub(crate) chunk_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
     pub(crate) blob_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
-}
-
-impl<T: Connection<Local>> JsConnectionCallbackReader<T> {
-    pub fn new(conn: T) -> Self {
-        Self {
-            conn,
-            commit_callbacks: Arc::new(Mutex::new(Vec::new())),
-            chunk_callbacks: Arc::new(Mutex::new(Vec::new())),
-            blob_callbacks: Arc::new(Mutex::new(Vec::new())),
-        }
-    }
-
-    pub async fn add_commit_callback(&self, callback: js_sys::Function) {
-        let mut lock = self.commit_callbacks.lock().await;
-        lock.push(callback);
-    }
-
-    pub async fn add_chunk_callback(&self, callback: js_sys::Function) {
-        let mut lock = self.chunk_callbacks.lock().await;
-        lock.push(callback);
-    }
-
-    pub async fn add_blob_callback(&self, callback: js_sys::Function) {
-        let mut lock = self.blob_callbacks.lock().await;
-        lock.push(callback);
-    }
 }
 
 impl<T: PartialEq + Connection<Local>> PartialEq for JsConnectionCallbackReader<T> {

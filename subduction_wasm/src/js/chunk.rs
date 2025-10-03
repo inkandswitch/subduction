@@ -23,7 +23,8 @@ impl From<JsChunk> for Chunk {
 
 /// A request for a specific chunk in the Sedimentree system.
 #[wasm_bindgen(js_name = ChunkRequested)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(missing_copy_implementations)]
 pub struct JsChunkRequested(ChunkRequested);
 
 impl From<ChunkRequested> for JsChunkRequested {
@@ -43,6 +44,7 @@ export function tryIntoChunkArray(xs) { return xs; }
 "#)]
 
 extern "C" {
+    /// Try to convert a `JsValue` into an array of `JsChunk`.
     #[wasm_bindgen(js_name = tryIntoChunkArray, catch)]
     pub fn try_into_js_chunk_array(v: &JsValue) -> Result<Vec<JsChunk>, JsValue>;
 }

@@ -3,11 +3,10 @@
 use sedimentree_core::Digest;
 use wasm_bindgen::prelude::*;
 
-// FIXME remove Copy from all bindgen classes that aren't scalar newtypes under the hood
-
 /// A wrapper around [`sedimentree_core::Digest`] for use in JavaScript via wasm-bindgen.
 #[wasm_bindgen(js_name = Digest)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_copy_implementations)]
 pub struct JsDigest(Digest);
 
 #[wasm_bindgen(js_class = Digest)]
@@ -48,6 +47,7 @@ export function tryIntoDigest(v) { return v; }
 "#)]
 
 extern "C" {
+    /// Try to convert a `JsValue` into a `JsDigest`.
     #[wasm_bindgen(js_name = tryIntoDigest, catch)]
     pub fn try_into_js_digest(v: &JsValue) -> Result<JsDigest, JsValue>;
 }

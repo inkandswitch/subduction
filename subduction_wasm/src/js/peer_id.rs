@@ -5,7 +5,8 @@ use wasm_bindgen::prelude::*;
 
 /// A JavaScript-compatible wrapper around the Rust `PeerId` type.
 #[wasm_bindgen(js_name = PeerId)]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_copy_implementations)]
 pub struct JsPeerId(PeerId);
 
 #[wasm_bindgen(js_class = PeerId)]

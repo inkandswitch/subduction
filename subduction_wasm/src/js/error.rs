@@ -25,8 +25,9 @@ pub struct JsIoError(#[from] IoError<Local, JsStorage, JsConnectionCallbackReade
 
 /// A Wasm wrapper around the [`ConnectionDisallowed`] type.
 #[wasm_bindgen(js_name = ConnectionDisallowed)]
-#[derive(Debug, Copy, Clone, Error)]
+#[derive(Debug, Clone, Error)]
 #[error(transparent)]
+#[allow(missing_copy_implementations)]
 pub struct JsConnectionDisallowed(#[from] ConnectionDisallowed);
 
 /// A Wasm wrapper around the [`ListenError`] type.

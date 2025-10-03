@@ -37,21 +37,17 @@ wasm-bindgen-futures = "0.4.53"
 version = "0.3.80"
 features = [
   "BinaryType",
-  "MessageEvent",
-  "WebSocket",
-  "Url",
-
-
-
-  # FIXME
-  "WorkerGlobalScope",
-  "ServiceWorkerGlobalScope",
-  # IndexedDB
-  "IdbFactory","IdbOpenDbRequest","IdbDatabase","IdbTransaction","IdbTransactionMode",
-  "IdbObjectStore","IdbRequest",
-  # Events
-  "Event",
   "DomException",
+  "IdbDatabase",
+  "IdbFactory",
+  "IdbObjectStore",
+  "IdbOpenDbRequest",
+  "IdbTransaction",
+  "IdbTransactionMode",
+  "MessageEvent",
+  "ServiceWorkerGlobalScope",
+  "Url",
+  "WebSocket",
   "Window"
 ]
 
