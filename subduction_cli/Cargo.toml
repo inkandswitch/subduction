@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "CLI tool for running Subduction with WebSockets"
 
 categories = ["command-line-utilities", "web-programming"]
-keywords = ["sedimentree-sync"]
+keywords = ["subduction"]
 readme = "./README.md"
 
 authors.workspace = true
