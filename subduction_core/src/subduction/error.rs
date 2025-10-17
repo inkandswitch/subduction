@@ -50,7 +50,7 @@ pub enum ListenError<F: FutureKind, S: Storage<F>, C: Connection<F>> {
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
 
-    /// Missing blobs associated with local chunks or commits.
-    #[error("Missing blobs associated to local chunks & commits: {0:?}")]
+    /// Missing blobs associated with local fragments or commits.
+    #[error("Missing blobs associated to local fragments & commits: {0:?}")]
     MissingBlobs(Vec<Digest>),
 }

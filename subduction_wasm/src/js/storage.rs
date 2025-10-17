@@ -4,13 +4,13 @@ pub mod idb;
 
 use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::{Promise, Uint8Array};
-use sedimentree_core::{future::Local, storage::Storage, Blob, Chunk, Digest, LooseCommit};
+use sedimentree_core::{future::Local, storage::Storage, Blob, Digest, Fragment, LooseCommit};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::js::{
-    chunk::{JsChunk, JsChunksArray},
     digest::JsDigest,
+    fragment::{JsFragment, JsFragmentsArray},
     loose_commit::{JsLooseCommit, JsLooseCommitsArray},
 };
 
@@ -18,11 +18,11 @@ use crate::js::{
 const TS: &str = r#"
 export interface Storage {
     saveJsLooseCommit(commit: LooseCommit): Promise<void>;
-    saveJsChunk(chunk: Chunk): Promise<void>;
+    saveJsFragment(fragment: Fragment): Promise<void>;
     saveBlob(data: Uint8Array): Promise<Digest>;
 
     loadJsLooseCommits(): Promise<LooseCommit[]>;
-    loadJsChunks(): Promise<Chunk[]>;
+    loadJsFragments(): Promise<Fragment[]>;
     loadBlob(digest: Digest): Promise<Uint8Array | null>;
 }
 "#;
@@ -48,13 +48,13 @@ extern "C" {
         loose_commit: JsLooseCommit,
     ) -> Result<Promise, JsValue>;
 
-    /// Save a chunk to storage.
-    #[wasm_bindgen(method, catch, js_name = saveJsChunk)]
-    fn js_save_chunk(this: &JsStorage, chunk: JsChunk) -> Result<Promise, JsValue>;
+    /// Save a fragment to storage.
+    #[wasm_bindgen(method, catch, js_name = saveJsFragment)]
+    fn js_save_fragment(this: &JsStorage, fragment: JsFragment) -> Result<Promise, JsValue>;
 
-    /// Load all chunks from storage.
-    #[wasm_bindgen(method, catch, js_name = loadJsChunks)]
-    fn js_load_chunks(this: &JsStorage) -> Result<Promise, JsValue>;
+    /// Load all fragments from storage.
+    #[wasm_bindgen(method, catch, js_name = loadJsFragments)]
+    fn js_load_fragments(this: &JsStorage) -> Result<Promise, JsValue>;
 
     /// Load a blob from storage.
     #[wasm_bindgen(method, catch, js_name = loadBlob)]
@@ -87,12 +87,12 @@ impl Storage<Local> for JsStorage {
         .boxed_local()
     }
 
-    fn save_chunk(&self, chunk: Chunk) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    fn save_fragment(&self, fragment: Fragment) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
-            let js_chunk: JsChunk = chunk.into();
+            let js_fragment: JsFragment = fragment.into();
             let promise = self
-                .js_save_chunk(js_chunk)
-                .map_err(JsStorageError::SaveChunkError)?;
+                .js_save_fragment(js_fragment)
+                .map_err(JsStorageError::SaveFragmentError)?;
             wasm_bindgen_futures::JsFuture::from(promise)
                 .await
                 .map_err(JsStorageError::ConvertFromJsPromiseError)?;
@@ -130,17 +130,17 @@ impl Storage<Local> for JsStorage {
         .boxed_local()
     }
 
-    fn load_chunks(&self) -> LocalBoxFuture<'_, Result<Vec<Chunk>, Self::Error>> {
+    fn load_fragments(&self) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
         async move {
             let promise = self
-                .js_load_chunks()
-                .map_err(JsStorageError::LoadChunksError)?;
+                .js_load_fragments()
+                .map_err(JsStorageError::LoadFragmentsError)?;
             let js_value = wasm_bindgen_futures::JsFuture::from(promise)
                 .await
                 .map_err(JsStorageError::ConvertFromJsPromiseError)?;
-            let js_chunks =
-                JsChunksArray::try_from(&js_value).map_err(JsStorageError::NotChunksArray)?;
-            Ok(js_chunks.0.into_iter().map(|jc| jc.into()).collect())
+            let js_fragments =
+                JsFragmentsArray::try_from(&js_value).map_err(JsStorageError::NotFragmentsArray)?;
+            Ok(js_fragments.0.into_iter().map(|jc| jc.into()).collect())
         }
         .boxed_local()
     }
@@ -185,9 +185,9 @@ pub enum JsStorageError {
     #[error("JavaScript save loose commits error: {0:?}")]
     SaveLooseCommitError(JsValue),
 
-    /// An error occurred while saving a chunk.
-    #[error("JavaScript save chunks error: {0:?}")]
-    SaveChunkError(JsValue),
+    /// An error occurred while saving a fragment.
+    #[error("JavaScript save fragments error: {0:?}")]
+    SaveFragmentError(JsValue),
 
     /// An error occurred while loading a blob.
     #[error("JavaScript load blob error: {0:?}")]
@@ -197,9 +197,9 @@ pub enum JsStorageError {
     #[error("JavaScript load loose commits error: {0:?}")]
     LoadLooseCommitsError(JsValue),
 
-    /// An error occurred while loading chunks.
-    #[error("JavaScript load chunks error: {0:?}")]
-    LoadChunksError(JsValue),
+    /// An error occurred while loading fragments.
+    #[error("JavaScript load fragments error: {0:?}")]
+    LoadFragmentsError(JsValue),
 
     /// An error occurred while converting a `Promise` result to a Rust future.
     #[error("Promise conversion error: {0:?}")]
@@ -213,9 +213,9 @@ pub enum JsStorageError {
     #[error("Value was not an array of LooseCommits: {0:?}")]
     NotLooseCommitArray(JsValue),
 
-    /// The `JsValue` could not be converted into an array of `JsChunk`.
-    #[error("Value was not an array of Chunks: {0:?}")]
-    NotChunksArray(JsValue),
+    /// The `JsValue` could not be converted into an array of `JsFragment`.
+    #[error("Value was not an array of Fragments: {0:?}")]
+    NotFragmentsArray(JsValue),
 
     /// The `JsValue` could not be converted into a `JsDigest`.
     #[error("Value was not a Digest: {0:?}")]

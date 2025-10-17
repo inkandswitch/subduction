@@ -16,13 +16,15 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
-use crate::js::{chunk::JsChunk, loose_commit::JsLooseCommit, sedimentree_id::JsSedimentreeId};
+use crate::js::{
+    fragment::JsFragment, loose_commit::JsLooseCommit, sedimentree_id::JsSedimentreeId,
+};
 
 #[derive(Debug, Clone)]
 pub(crate) struct JsConnectionCallbackReader<T: Connection<Local>> {
     pub(crate) conn: T,
     pub(crate) commit_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
-    pub(crate) chunk_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
+    pub(crate) fragment_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
     pub(crate) blob_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
 }
 
@@ -68,17 +70,17 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                             .map_err(RecvOrCallbackErr::CommitCallback)?;
                     }
                 }
-                Message::Chunk { id, chunk, blob } => {
-                    let callbacks_lock = self.chunk_callbacks.lock().await;
+                Message::Fragment { id, fragment, blob } => {
+                    let callbacks_lock = self.fragment_callbacks.lock().await;
                     for callback in callbacks_lock.iter() {
                         callback
                             .call3(
                                 &JsValue::NULL,
                                 &JsValue::from(JsSedimentreeId::from(id.clone())),
-                                &JsValue::from(JsChunk::from(chunk.clone())),
+                                &JsValue::from(JsFragment::from(fragment.clone())),
                                 &JsValue::from(Uint8Array::from(blob.as_slice())),
                             )
-                            .map_err(RecvOrCallbackErr::ChunkCallback)?;
+                            .map_err(RecvOrCallbackErr::FragmentCallback)?;
                     }
                 }
                 Message::BlobsResponse(blobs) => {
@@ -99,7 +101,7 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                     diff:
                         SyncDiff {
                             missing_commits,
-                            missing_chunks,
+                            missing_fragments,
                         },
                     ..
                 }) => {
@@ -119,19 +121,19 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                         }
                     }
 
-                    let lock = self.chunk_callbacks.lock().await;
+                    let lock = self.fragment_callbacks.lock().await;
 
-                    for (chunk, blob) in missing_chunks {
+                    for (fragment, blob) in missing_fragments {
                         for callback in lock.iter() {
                             let this = JsValue::NULL;
                             callback
                                 .call3(
                                     &this,
                                     &JsValue::from(JsSedimentreeId::from(id.clone())),
-                                    &JsValue::from(JsChunk::from(chunk.clone())),
+                                    &JsValue::from(JsFragment::from(fragment.clone())),
                                     &JsValue::from(blob.clone().into_contents()),
                                 )
-                                .map_err(RecvOrCallbackErr::ChunkCallback)?;
+                                .map_err(RecvOrCallbackErr::FragmentCallback)?;
                         }
                     }
                 }
@@ -170,9 +172,9 @@ pub(crate) enum RecvOrCallbackErr<T: Connection<Local>> {
     #[error("Commit callback error: {0:?}")]
     CommitCallback(JsValue),
 
-    /// An error occurred while invoking a chunk callback.
-    #[error("Chunk callback error: {0:?}")]
-    ChunkCallback(JsValue),
+    /// An error occurred while invoking a fragment callback.
+    #[error("Fragment callback error: {0:?}")]
+    FragmentCallback(JsValue),
 }
 
 impl<T: Connection<Local>> std::fmt::Debug for RecvOrCallbackErr<T> {

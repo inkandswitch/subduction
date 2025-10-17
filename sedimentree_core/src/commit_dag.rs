@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet};
 
 use crate::{Digest, LooseCommit};
 
-use super::Chunk;
+use super::Fragment;
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
 // `nodes` and `edges` vectors instead of pointers in order to please the borrow checker.
@@ -111,7 +111,7 @@ impl CommitDag {
         }
     }
 
-    pub(crate) fn simplify(&self, chunks: &[Chunk]) -> Self {
+    pub(crate) fn simplify(&self, fragments: &[Fragment]) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -219,7 +219,7 @@ impl CommitDag {
             .filter_map(|(commit, blocks)| {
                 if blocks
                     .iter()
-                    .all(|&b| chunks.iter().any(|s| s.supports_block(b)))
+                    .all(|&b| fragments.iter().any(|s| s.supports_block(b)))
                 {
                     None
                 } else {
@@ -301,16 +301,16 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    pub(crate) fn canonical_sequence<'a, I: Iterator<Item = &'a Chunk> + Clone + 'a>(
+    pub(crate) fn canonical_sequence<'a, I: Iterator<Item = &'a Fragment> + Clone + 'a>(
         &'a self,
-        chunks: I,
+        fragments: I,
     ) -> impl Iterator<Item = Digest> + 'a {
         // First find the tips of the DAG, which is the heads of the commit DAG,
-        // plus the end hashes of any chunks which are not contained in the
+        // plus the end hashes of any fragments which are not contained in the
         // commit DAG
         let mut boundary = Vec::new();
-        for chunk in chunks.clone() {
-            for end in chunk.boundary() {
+        for fragment in fragments.clone() {
+            for end in fragment.boundary() {
                 if !self.contains_commit(end) {
                     boundary.push(*end);
                 }
@@ -325,7 +325,7 @@ impl CommitDag {
         heads.into_iter().flat_map(move |head| {
             let mut stack = vec![head];
             let mut visited = HashSet::new();
-            let chunks = chunks.clone();
+            let fragments = fragments.clone();
             std::iter::from_fn(move || {
                 while let Some(commit) = stack.pop() {
                     if visited.contains(&commit) {
@@ -340,16 +340,16 @@ impl CommitDag {
                         parents.sort();
                         stack.extend(parents);
                     } else {
-                        let mut supporting_chunks = chunks
+                        let mut supporting_fragments = fragments
                             .clone()
                             .filter(|s| s.boundary().contains(&commit))
                             .collect::<Vec<_>>();
-                        supporting_chunks.sort_by_key(|s| s.depth());
-                        if let Some(chunk) = supporting_chunks.pop() {
-                            for commit in chunk.checkpoints() {
+                        supporting_fragments.sort_by_key(|s| s.depth());
+                        if let Some(fragment) = supporting_fragments.pop() {
+                            for commit in fragment.checkpoints() {
                                 stack.push(*commit);
                             }
-                            stack.push(chunk.head());
+                            stack.push(fragment.head());
                         }
                     }
                     return Some(commit);
@@ -434,7 +434,7 @@ mod tests {
     use num::Num;
 
     use super::{
-        super::{Chunk, LooseCommit},
+        super::{Fragment, LooseCommit},
         CommitDag,
     };
     use std::collections::{HashMap, HashSet};
@@ -592,14 +592,14 @@ mod tests {
             rng => $rng: expr,
             nodes => |node|level| $(|$node:ident | $level:literal| )*,
             graph => {$($from:ident  --> $to:ident)*},
-            chunks => [$({start: $chunk_start: ident, end: $chunk_end: ident, checkpoints: [$($checkpoint: ident),*]})*],
+            fragments => [$({start: $fragment_start: ident, end: $fragment_end: ident, checkpoints: [$($checkpoint: ident),*]})*],
             simplified => [$($remaining: ident),*]
         ) => {
             let node_info = vec![$((stringify!($node), $level)),*];
             let graph = TestGraph::new($rng, node_info, vec![$((stringify!($from), stringify!($to)),)*]);
-            let chunks = vec![$(Chunk::new(
-                graph.node_hash(stringify!($chunk_start)),
-                nonempty![graph.node_hash(stringify!($chunk_end))],
+            let fragments = vec![$(Fragment::new(
+                graph.node_hash(stringify!($fragment_start)),
+                nonempty![graph.node_hash(stringify!($fragment_end))],
                 vec![$(graph.node_hash(stringify!($checkpoint)),)*],
                 random_blob($rng),
             ),)*];
@@ -609,7 +609,7 @@ mod tests {
                 commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
             )*
             let expected_commits = HashSet::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
-            let actual_commits = dag.simplify(&chunks).commit_hashes().collect::<HashSet<_>>();
+            let actual_commits = dag.simplify(&fragments).commit_hashes().collect::<HashSet<_>>();
             let expected_message = pretty_hashes(&commit_name_map, &expected_commits);
             let actual_message = pretty_hashes(&commit_name_map, &actual_commits);
             assert_eq!(expected_commits, actual_commits, "\nexpected: {:?}, \nactual: {:?}", expected_message, actual_message);
@@ -646,7 +646,7 @@ mod tests {
                 b --> d
                 d --> e
             },
-            chunks => [
+            fragments => [
                 {start: a, end: d, checkpoints: []}
             ],
             simplified => [a, c, e]
@@ -667,7 +667,7 @@ mod tests {
                 c --> b
                 b --> d
             },
-            chunks => [
+            fragments => [
                 {start: c, end: d, checkpoints: []}
             ],
             simplified => [a, c]
@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[test]
-    fn simplify_block_boundaries_without_chunks() {
+    fn simplify_block_boundaries_without_fragments() {
         simplify_test!(
             rng => &mut rand::rng(),
             nodes => | node | level |
@@ -684,13 +684,13 @@ mod tests {
             graph => {
                 a --> b
             },
-            chunks => [],
+            fragments => [],
             simplified => [a, b]
         );
     }
 
     #[test]
-    fn simplify_consecutive_block_boundary_commits_without_chunks() {
+    fn simplify_consecutive_block_boundary_commits_without_fragments() {
         simplify_test!(
             rng => &mut rand::rng(),
             nodes => | node | level |
@@ -699,7 +699,7 @@ mod tests {
             graph => {
                 a --> b
             },
-            chunks => [],
+            fragments => [],
             simplified => [a, b]
         );
     }

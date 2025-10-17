@@ -9,11 +9,11 @@ use subduction_core::{peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;
 
 use crate::js::{
-    chunk::{JsChunk, JsChunkRequested},
     connection_callback_reader::JsConnectionCallbackReader,
     connection_id::JsConnectionId,
     digest::JsDigest,
     error::{JsCallError, JsConnectionDisallowed, JsIoError, JsListenError},
+    fragment::{JsFragment, JsFragmentRequested},
     loose_commit::JsLooseCommit,
     peer_id::JsPeerId,
     sedimentree_id::JsSedimentreeId,
@@ -27,7 +27,7 @@ use crate::js::{
 pub struct JsSubduction {
     core: Subduction<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>>,
     commit_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
-    chunk_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
+    fragment_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
     blob_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
 }
 
@@ -39,7 +39,7 @@ impl JsSubduction {
         Self {
             core: Subduction::new(HashMap::new(), storage, HashMap::new()),
             commit_callbacks: Arc::new(Mutex::new(Vec::new())),
-            chunk_callbacks: Arc::new(Mutex::new(Vec::new())),
+            fragment_callbacks: Arc::new(Mutex::new(Vec::new())),
             blob_callbacks: Arc::new(Mutex::new(Vec::new())),
         }
     }
@@ -55,7 +55,7 @@ impl JsSubduction {
         let conn_with_callbacks = JsConnectionCallbackReader {
             conn,
             commit_callbacks: self.commit_callbacks.clone(),
-            chunk_callbacks: self.chunk_callbacks.clone(),
+            fragment_callbacks: self.fragment_callbacks.clone(),
             blob_callbacks: self.blob_callbacks.clone(),
         };
 
@@ -93,7 +93,7 @@ impl JsSubduction {
         let conn_with_callbacks = JsConnectionCallbackReader {
             conn,
             commit_callbacks: self.commit_callbacks.clone(),
-            chunk_callbacks: self.chunk_callbacks.clone(),
+            fragment_callbacks: self.fragment_callbacks.clone(),
             blob_callbacks: self.blob_callbacks.clone(),
         };
         let (is_new, conn_id) = self.core.register(conn_with_callbacks).await?;
@@ -124,31 +124,31 @@ impl JsSubduction {
         lock.retain(|cb| cb != &callback);
     }
 
-    /// Add a callback for chunk events.
-    #[wasm_bindgen(js_name = onChunk)]
-    pub async fn on_chunk(&self, callback: js_sys::Function) {
-        let mut lock = self.chunk_callbacks.lock().await;
+    /// Add a callback for fragment events.
+    #[wasm_bindgen(js_name = onFragment)]
+    pub async fn on_fragment(&self, callback: js_sys::Function) {
+        let mut lock = self.fragment_callbacks.lock().await;
         lock.push(callback);
     }
 
-    /// Remove a callback for chunk events.
-    #[wasm_bindgen(js_name = offChunk)]
-    pub async fn off_chunk(&self, callback: js_sys::Function) {
-        let mut lock = self.chunk_callbacks.lock().await;
+    /// Remove a callback for fragment events.
+    #[wasm_bindgen(js_name = offFragment)]
+    pub async fn off_fragment(&self, callback: js_sys::Function) {
+        let mut lock = self.fragment_callbacks.lock().await;
         lock.retain(|cb| cb != &callback);
     }
 
     /// Add a callback for blob events.
     #[wasm_bindgen(js_name = onBlob)]
     pub async fn on_blob(&self, callback: js_sys::Function) {
-        let mut lock = self.chunk_callbacks.lock().await;
+        let mut lock = self.fragment_callbacks.lock().await;
         lock.push(callback);
     }
 
     /// Remove a callback for blob events.
     #[wasm_bindgen(js_name = offBlob)]
     pub async fn off_blob(&self, callback: js_sys::Function) {
-        let mut lock = self.chunk_callbacks.lock().await;
+        let mut lock = self.fragment_callbacks.lock().await;
         lock.retain(|cb| cb != &callback);
     }
 
@@ -213,8 +213,8 @@ impl JsSubduction {
         id: JsSedimentreeId,
         commit: &JsLooseCommit,
         blob: &Uint8Array,
-    ) -> Result<Option<JsChunkRequested>, JsIoError> {
-        let maybe_chunk_requested = self
+    ) -> Result<Option<JsFragmentRequested>, JsIoError> {
+        let maybe_fragment_requested = self
             .core
             .add_commit(
                 id.into(),
@@ -224,20 +224,20 @@ impl JsSubduction {
             .await
             .map_err(JsIoError::from)?;
 
-        Ok(maybe_chunk_requested.map(JsChunkRequested::from))
+        Ok(maybe_fragment_requested.map(JsFragmentRequested::from))
     }
 
-    /// Add a chunk with its associated blob to the storage.
-    #[wasm_bindgen(js_name = addChunk)]
-    pub async fn add_chunk(
+    /// Add a fragment with its associated blob to the storage.
+    #[wasm_bindgen(js_name = addFragment)]
+    pub async fn add_fragment(
         &self,
         id: JsSedimentreeId,
-        chunk: &JsChunk,
+        fragment: &JsFragment,
         blob: &Uint8Array,
     ) -> Result<(), JsIoError> {
         let blob: Blob = blob.clone().to_vec().into();
         self.core
-            .add_chunk(id.into(), &chunk.clone().into(), blob)
+            .add_fragment(id.into(), &fragment.clone().into(), blob)
             .await
             .map_err(JsIoError::from)?;
         Ok(())
@@ -342,11 +342,14 @@ impl JsSubduction {
         }
     }
 
-    /// Get all chunks for a given Sedimentree ID
-    #[wasm_bindgen(js_name = getChunks)]
-    pub async fn get_chunks(&self, id: JsSedimentreeId) -> Result<Option<Vec<JsChunk>>, String> {
-        if let Some(chunks) = self.core.get_chunks(id.into()).await {
-            Ok(Some(chunks.into_iter().map(JsChunk::from).collect()))
+    /// Get all fragments for a given Sedimentree ID
+    #[wasm_bindgen(js_name = getFragments)]
+    pub async fn get_fragments(
+        &self,
+        id: JsSedimentreeId,
+    ) -> Result<Option<Vec<JsFragment>>, String> {
+        if let Some(fragments) = self.core.get_fragments(id.into()).await {
+            Ok(Some(fragments.into_iter().map(JsFragment::from).collect()))
         } else {
             Ok(None)
         }
