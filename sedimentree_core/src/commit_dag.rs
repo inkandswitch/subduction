@@ -430,7 +430,6 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
-    use nonempty::nonempty;
     use num::Num;
 
     use super::{
@@ -599,7 +598,7 @@ mod tests {
             let graph = TestGraph::new($rng, node_info, vec![$((stringify!($from), stringify!($to)),)*]);
             let fragments = vec![$(Fragment::new(
                 graph.node_hash(stringify!($fragment_start)),
-                nonempty![graph.node_hash(stringify!($fragment_end))],
+                vec![graph.node_hash(stringify!($fragment_end))],
                 vec![$(graph.node_hash(stringify!($checkpoint)),)*],
                 random_blob($rng),
             ),)*];

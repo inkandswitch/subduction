@@ -38,7 +38,6 @@
 )]
 #![forbid(unsafe_code)]
 
-use nonempty::{nonempty, NonEmpty};
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
     fmt::Formatter,
@@ -46,6 +45,7 @@ use std::{
 };
 
 mod blob;
+pub mod commit;
 mod commit_dag;
 pub mod future;
 pub mod storage;
@@ -193,18 +193,6 @@ impl SedimentreeSummary {
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Depth(pub u32);
 
-impl<'a> From<&'a Digest> for Depth {
-    fn from(hash: &'a Digest) -> Self {
-        Depth(trailing_zeros_in_base(hash.as_bytes(), 10))
-    }
-}
-
-impl From<Digest> for Depth {
-    fn from(hash: Digest) -> Self {
-        Self::from(&hash)
-    }
-}
-
 impl std::fmt::Display for Depth {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Depth({})", self.0)
@@ -232,7 +220,7 @@ impl Fragment {
     #[must_use]
     pub fn new(
         head: Digest,
-        boundary: NonEmpty<Digest>,
+        boundary: Vec<Digest>,
         checkpoints: Vec<Digest>,
         blob_meta: BlobMeta,
     ) -> Self {
@@ -333,8 +321,8 @@ impl Fragment {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &NonEmpty<Digest> {
-        &self.summary.boundary
+    pub fn boundary(&self) -> &[Digest] {
+        self.summary.boundary.as_slice()
     }
 
     /// The inner checkpoints of the fragment.
@@ -356,14 +344,14 @@ impl Fragment {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FragmentSummary {
     head: Digest,
-    boundary: NonEmpty<Digest>,
+    boundary: Vec<Digest>,
     blob_meta: BlobMeta,
 }
 
 impl FragmentSummary {
     /// Constructor for a [`FragmentSummary`].
     #[must_use]
-    pub const fn new(head: Digest, boundary: NonEmpty<Digest>, blob_meta: BlobMeta) -> Self {
+    pub const fn new(head: Digest, boundary: Vec<Digest>, blob_meta: BlobMeta) -> Self {
         Self {
             head,
             boundary,
@@ -379,8 +367,8 @@ impl FragmentSummary {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &NonEmpty<Digest> {
-        &self.boundary
+    pub fn boundary(&self) -> &[Digest] {
+        self.boundary.as_slice()
     }
 
     /// Basic information about the payload blob.
@@ -710,7 +698,7 @@ impl Sedimentree {
                         all_bundles.push(FragmentSpec {
                             id,
                             head,
-                            boundary: nonempty![commit_hash], // FIXME could be more than one, right?
+                            boundary: vec![commit_hash], // FIXME?
                             checkpoints: checkpoints.clone(),
                         });
                     }
@@ -738,7 +726,7 @@ pub struct FragmentSpec {
     id: SedimentreeId,
     head: Digest,
     checkpoints: Vec<Digest>,
-    boundary: NonEmpty<Digest>,
+    boundary: Vec<Digest>,
 }
 
 impl FragmentSpec {
@@ -756,8 +744,8 @@ impl FragmentSpec {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &NonEmpty<Digest> {
-        &self.boundary
+    pub fn boundary(&self) -> &[Digest] {
+        self.boundary.as_slice()
     }
 
     /// The inner checkpopoints of the fragment.
@@ -837,7 +825,6 @@ pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>>(commits: 
 
 #[cfg(test)]
 mod tests {
-    use nonempty::nonempty;
     use num::Num;
 
     use super::*;
@@ -926,13 +913,13 @@ mod tests {
 
                 let deeper = Fragment::new(
                     start_hash,
-                    nonempty![deeper_boundary_hash],
+                    vec![deeper_boundary_hash], // FIXME?
                     checkpoints,
                     BlobMeta::arbitrary(u)?,
                 );
                 let shallower = FragmentSummary::new(
                     shallower_start_hash,
-                    nonempty![shallower_boundary_hash],
+                    vec![shallower_boundary_hash], // FIXME?
                     BlobMeta::arbitrary(u)?,
                 );
 

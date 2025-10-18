@@ -17,7 +17,6 @@ arbitrary = { workspace = true, optional = true, features = ["derive"] }
 blake3 = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
-nonempty = { workspace = true, features = ["arbitrary", "serialize"] }
 num = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
 thiserror = { workspace = true }
