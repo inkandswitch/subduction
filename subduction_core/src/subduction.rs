@@ -15,8 +15,11 @@ use crate::{
 use error::{BlobRequestErr, IoError, ListenError};
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use sedimentree_core::{
-    future::FutureKind, storage::Storage, Blob, Depth, Digest, Fragment, LooseCommit, RemoteDiff,
-    Sedimentree, SedimentreeId, SedimentreeSummary,
+    commit::{CountLeadingZeroBytes, DepthStrategy},
+    future::FutureKind,
+    storage::Storage,
+    Blob, Depth, Digest, Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId,
+    SedimentreeSummary,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -27,14 +30,22 @@ use std::{
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
-pub struct Subduction<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> {
+pub struct Subduction<
+    F: FutureKind,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq,
+    M: DepthStrategy = CountLeadingZeroBytes,
+> {
+    depth_metric: M,
     sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
     conn_manager: Arc<Mutex<ConnectionManager<C>>>,
     storage: S,
     _phantom: std::marker::PhantomData<F>,
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S, C> {
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrategy>
+    Subduction<F, S, C, M>
+{
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -179,8 +190,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         sedimentrees: HashMap<SedimentreeId, Sedimentree>,
         storage: S,
         connections: HashMap<ConnectionId, C>,
+        depth_metric: M,
     ) -> Self {
         Self {
+            depth_metric,
             sedimentrees: Arc::new(Mutex::new(sedimentrees)),
             conn_manager: Arc::new(Mutex::new(ConnectionManager {
                 next_id: ConnectionId::default(),
@@ -532,7 +545,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
 
         let mut maybe_requested_fragment = None;
 
-        let depth = Depth::from(commit.digest());
+        let depth = self.depth_metric.to_depth(commit.digest());
         if depth != Depth(0) {
             maybe_requested_fragment = Some(FragmentRequested {
                 head: commit.digest(),
@@ -1132,8 +1145,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     }
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> ConnectionPolicy
-    for Subduction<F, S, C>
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrategy> ConnectionPolicy
+    for Subduction<F, S, C, M>
 {
     async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
         Ok(()) // TODO currently allows all

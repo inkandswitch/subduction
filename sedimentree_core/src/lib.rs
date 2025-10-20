@@ -51,6 +51,7 @@ pub mod future;
 pub mod storage;
 
 pub use blob::*;
+use commit::DepthStrategy;
 
 /// The maximum depth of strata that a [`Sedimentree`] can go to.
 pub const MAX_STRATA_DEPTH: Depth = Depth(2);
@@ -479,8 +480,8 @@ impl Sedimentree {
 
     /// The minimal ordered hash of this [`Sedimentree`].
     #[must_use]
-    pub fn minimal_hash(&self) -> MinimalTreeHash {
-        let minimal = self.minimize();
+    pub fn minimal_hash<M: DepthStrategy>(&self, depth_metric: &M) -> MinimalTreeHash {
+        let minimal = self.minimize(depth_metric);
         let mut hashes = minimal
             .fragments()
             .flat_map(|s| {
@@ -585,8 +586,12 @@ impl Sedimentree {
 
     /// Returns true if this [`Sedimentree`] has a fragment starting with the given digest.
     #[must_use]
-    pub fn has_fragment_starting_with(&self, digest: Digest) -> bool {
-        self.heads().contains(&digest)
+    pub fn has_fragment_starting_with<M: DepthStrategy>(
+        &self,
+        digest: Digest,
+        depth_metric: &M,
+    ) -> bool {
+        self.heads(depth_metric).contains(&digest)
     }
 
     /// Prune a [`Sedimentree`].
@@ -595,7 +600,7 @@ impl Sedimentree {
     /// fully supported by other fragments, and removing any loose commits
     /// that are not needed to support the remaining fragments.
     #[must_use]
-    pub fn minimize(&self) -> Sedimentree {
+    pub fn minimize<M: DepthStrategy>(&self, depth_metric: &M) -> Sedimentree {
         // First sort fragments by depth, then for each stratum below the lowest
         // level, discard that stratum if it is supported by any of the stratum
         // above it.
@@ -615,7 +620,7 @@ impl Sedimentree {
 
         // Now, form a commit graph from the loose commits and simplify it relative to the minimized fragments
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
-        let simplified_dag = dag.simplify(&minimized_fragments);
+        let simplified_dag = dag.simplify(&minimized_fragments, depth_metric);
 
         let commits = self
             .commits
@@ -648,8 +653,8 @@ impl Sedimentree {
     /// and which do not appear in the [`LooseCommit`] graph, plus the heads of
     /// the loose commit graph.
     #[must_use]
-    pub fn heads(&self) -> Vec<Digest> {
-        let minimized = self.minimize();
+    pub fn heads<M: DepthStrategy>(&self, depth_metric: &M) -> Vec<Digest> {
+        let minimized = self.minimize(depth_metric);
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.iter());
         let mut heads = Vec::<Digest>::new();
         for fragment in &minimized.fragments {
@@ -679,12 +684,16 @@ impl Sedimentree {
 
     /// Given a [`SedimentreeId`], return the [`Fragment`]s that are missing to fill in the gaps.
     #[must_use]
-    pub fn missing_fragments(&self, id: SedimentreeId) -> Vec<FragmentSpec> {
+    pub fn missing_fragments<M: DepthStrategy>(
+        &self,
+        id: SedimentreeId,
+        depth_metric: &M,
+    ) -> Vec<FragmentSpec> {
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level = BTreeMap::<Depth, (Digest, Vec<Digest>)>::new();
         let mut all_bundles = Vec::new();
         for commit_hash in dag.canonical_sequence(self.fragments.iter()) {
-            let level = Depth::from(commit_hash);
+            let level = depth_metric.to_depth(commit_hash);
             for (run_level, (_start, checkpoints)) in &mut runs_by_level {
                 if run_level < &level {
                     checkpoints.push(commit_hash);
@@ -817,10 +826,13 @@ impl From<[u8; 32]> for MinimalTreeHash {
 }
 
 /// Checks if any of the given commits has a commit boundary.
-pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>>(commits: I) -> bool {
+pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthStrategy>(
+    commits: I,
+    depth_metric: &M,
+) -> bool {
     commits
         .into_iter()
-        .any(|digest| Depth::from(digest.into()) <= MAX_STRATA_DEPTH)
+        .any(|digest| depth_metric.to_depth(digest.into()) <= MAX_STRATA_DEPTH)
 }
 
 #[cfg(test)]

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{Digest, LooseCommit};
+use crate::{commit::DepthStrategy, Digest, LooseCommit};
 
 use super::Fragment;
 
@@ -111,7 +111,7 @@ impl CommitDag {
         }
     }
 
-    pub(crate) fn simplify(&self, fragments: &[Fragment]) -> Self {
+    pub(crate) fn simplify<S: DepthStrategy>(&self, fragments: &[Fragment], strategy: &S) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -174,8 +174,8 @@ impl CommitDag {
         for tip in tips {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
             for hash in self.reverse_topo(tip) {
-                let level = super::Depth::from(hash);
-                if level >= crate::MAX_STRATA_DEPTH {
+                let depth = strategy.to_depth(hash);
+                if depth >= crate::MAX_STRATA_DEPTH {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -190,10 +190,10 @@ impl CommitDag {
                     block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if level < crate::MAX_STRATA_DEPTH {
+                    if depth < crate::MAX_STRATA_DEPTH {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && level < crate::MAX_STRATA_DEPTH
+                } else if !commits_to_blocks.contains_key(&hash) && depth < crate::MAX_STRATA_DEPTH
                 {
                     blockless_commits.insert(hash);
                 }

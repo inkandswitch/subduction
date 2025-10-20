@@ -20,23 +20,35 @@ pub trait DepthStrategy {
     fn to_depth(&self, digest: Digest) -> Depth;
 }
 
-pub trait CommitStore {
-    type Commit: Parents;
+impl<Digestish: From<Digest>, Depthish: Into<Depth>> DepthStrategy for fn(Digestish) -> Depthish {
+    fn to_depth(&self, digest: Digest) -> Depth {
+        self(Digestish::from(digest)).into()
+    }
+}
+
+impl<T: DepthStrategy> DepthStrategy for Box<T> {
+    fn to_depth(&self, digest: Digest) -> Depth {
+        T::to_depth(self, digest)
+    }
+}
+
+pub trait CommitStore<'a> {
+    type Node: Parents;
     type LookupError: Error;
 
-    fn lookup(&self, digest: Digest) -> Result<Option<Self::Commit>, Self::LookupError>;
+    fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError>;
 
     fn fragment<D: DepthStrategy>(
         &self,
         head_digest: Digest,
         strategy: &D,
-    ) -> Result<State<Self::Commit>, Self::LookupError> {
+    ) -> Result<FragmentState<Self::Node>, Self::LookupError> {
         let min_depth = strategy.to_depth(head_digest);
 
         let mut visited: HashSet<Digest> = HashSet::from([head_digest]);
         let mut members: HashSet<Digest> = HashSet::from([head_digest]);
 
-        let mut boundary: HashMap<Digest, Self::Commit> = HashMap::new();
+        let mut boundary: HashMap<Digest, Self::Node> = HashMap::new();
         let mut checkpoints: HashSet<Digest> = HashSet::new();
 
         let head_change = self.lookup(head_digest)?.expect("FIXME");
@@ -90,7 +102,12 @@ pub trait CommitStore {
             }
         }
 
-        Ok(State::new(head_digest, members, checkpoints, boundary))
+        Ok(FragmentState::new(
+            head_digest,
+            members,
+            checkpoints,
+            boundary,
+        ))
     }
 }
 
@@ -121,14 +138,14 @@ impl DepthStrategy for CountLeadingZeroBytes {
 /// This is an experimental API, the fragmet API is subject to change
 /// and so should not be used in production just yet.
 #[derive(Debug, Clone)]
-pub struct State<T> {
+pub struct FragmentState<T> {
     head_digest: Digest,
     members: HashSet<Digest>,
     checkpoints: HashSet<Digest>,
     boundary: HashMap<Digest, T>,
 }
 
-impl<T> State<T> {
+impl<T> FragmentState<T> {
     pub fn new(
         head_digest: Digest,
         members: HashSet<Digest>,

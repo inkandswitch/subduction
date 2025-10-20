@@ -4,7 +4,11 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures::lock::Mutex;
 use js_sys::Uint8Array;
-use sedimentree_core::{future::Local, Blob};
+use sedimentree_core::{
+    commit::{CountLeadingZeroBytes, DepthStrategy},
+    future::Local,
+    Blob, Depth, Digest,
+};
 use subduction_core::{peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;
 
@@ -25,7 +29,7 @@ use crate::js::{
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
 pub struct JsSubduction {
-    core: Subduction<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>>,
+    core: Subduction<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>, JsHashMetric>,
     commit_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
     fragment_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
     blob_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
@@ -35,9 +39,14 @@ pub struct JsSubduction {
 impl JsSubduction {
     /// Create a new [`Subduction`] instance.
     #[wasm_bindgen(constructor)]
-    pub fn new(storage: JsStorage) -> Self {
+    pub fn new(storage: JsStorage, hash_metric_override: Option<js_sys::Function>) -> Self {
         Self {
-            core: Subduction::new(HashMap::new(), storage, HashMap::new()),
+            core: Subduction::new(
+                HashMap::new(),
+                storage,
+                HashMap::new(),
+                JsHashMetric(hash_metric_override),
+            ),
             commit_callbacks: Arc::new(Mutex::new(Vec::new())),
             fragment_callbacks: Arc::new(Mutex::new(Vec::new())),
             blob_callbacks: Arc::new(Mutex::new(Vec::new())),
@@ -458,5 +467,35 @@ impl PeerResultMap {
                     })
                     .collect(),
             })
+    }
+}
+
+#[derive(Debug, Clone)]
+struct JsHashMetric(Option<js_sys::Function>);
+
+impl DepthStrategy for JsHashMetric {
+    fn to_depth(&self, digest: Digest) -> Depth {
+        if let Some(func) = &self.0 {
+            let js_digest = JsDigest::from(digest);
+            let f64_depth = func
+                .call1(&JsValue::NULL, &JsValue::from(js_digest))
+                .expect("Callback failed") // FIXME?
+                .as_f64()
+                .expect("FIXME");
+
+            let depth = if f64_depth.is_finite()
+                && f64_depth.fract() == 0.0
+                && 0.0 <= f64_depth
+                && f64_depth <= (u32::MAX as f64)
+            {
+                f64_depth as u32
+            } else {
+                panic!("Invalid depth value returned from callback");
+            };
+
+            Depth(depth)
+        } else {
+            CountLeadingZeroBytes.to_depth(digest)
+        }
     }
 }
