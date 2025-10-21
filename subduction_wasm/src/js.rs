@@ -1,6 +1,7 @@
 //! JS wrappers
 
 pub mod connection_id;
+pub mod depth;
 pub mod digest;
 pub mod error;
 pub mod fragment;

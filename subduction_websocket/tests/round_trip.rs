@@ -5,6 +5,7 @@ use testresult::TestResult;
 use arbitrary::{Arbitrary, Unstructured};
 use rand::Rng;
 use sedimentree_core::{
+    commit::CountLeadingZeroBytes,
     future::Sendable,
     storage::{MemoryStorage, Storage},
     Blob, BlobMeta, Digest, LooseCommit, Sedimentree,
@@ -104,6 +105,7 @@ async fn batch_sync() -> TestResult {
             HashMap::from_iter([(sed_id, server_tree)]),
             server_storage,
             HashMap::new(),
+            CountLeadingZeroBytes,
         ),
     );
 
@@ -144,6 +146,7 @@ async fn batch_sync() -> TestResult {
         HashMap::from_iter([(client_sed_id, client_tree)]),
         client_storage,
         HashMap::new(),
+        CountLeadingZeroBytes,
     ));
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;

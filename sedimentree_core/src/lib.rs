@@ -839,6 +839,8 @@ pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthS
 mod tests {
     use num::Num;
 
+    use crate::commit::CountLeadingZeroBytes;
+
     use super::*;
 
     fn hash_with_trailing_zeros(
@@ -986,7 +988,7 @@ mod tests {
             .with_arbitrary::<Scenario>()
             .for_each(|Scenario { commits }| {
                 let tree = super::Sedimentree::new(vec![], commits.clone());
-                let minimized = tree.minimize();
+                let minimized = tree.minimize(&CountLeadingZeroBytes);
                 assert_eq!(tree, minimized);
             });
     }

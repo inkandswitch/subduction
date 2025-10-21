@@ -438,7 +438,7 @@ mod tests {
     };
     use std::collections::{HashMap, HashSet};
 
-    use crate::{blob::BlobMeta, Digest};
+    use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes, Digest};
 
     fn hash_with_trailing_zeros<R: rand::Rng>(
         rng: &mut R,
@@ -608,7 +608,7 @@ mod tests {
                 commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
             )*
             let expected_commits = HashSet::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
-            let actual_commits = dag.simplify(&fragments).commit_hashes().collect::<HashSet<_>>();
+            let actual_commits = dag.simplify(&fragments, &CountLeadingZeroBytes).commit_hashes().collect::<HashSet<_>>();
             let expected_message = pretty_hashes(&commit_name_map, &expected_commits);
             let actual_message = pretty_hashes(&commit_name_map, &actual_commits);
             assert_eq!(expected_commits, actual_commits, "\nexpected: {:?}, \nactual: {:?}", expected_message, actual_message);

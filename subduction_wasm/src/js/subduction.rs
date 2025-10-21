@@ -1,6 +1,6 @@
 //! Subduction node.
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
 
 use futures::lock::Mutex;
 use js_sys::Uint8Array;
@@ -25,6 +25,8 @@ use crate::js::{
     websocket::JsWebSocket,
 };
 
+use super::depth::{JsDepthRef, JsToDepth};
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
@@ -39,13 +41,15 @@ pub struct JsSubduction {
 impl JsSubduction {
     /// Create a new [`Subduction`] instance.
     #[wasm_bindgen(constructor)]
-    pub fn new(storage: JsStorage, hash_metric_override: Option<js_sys::Function>) -> Self {
+    pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
+        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(|f| f.unchecked_into());
+
         Self {
             core: Subduction::new(
                 HashMap::new(),
                 storage,
                 HashMap::new(),
-                JsHashMetric(hash_metric_override),
+                JsHashMetric(raw_fn),
             ),
             commit_callbacks: Arc::new(Mutex::new(Vec::new())),
             fragment_callbacks: Arc::new(Mutex::new(Vec::new())),
@@ -470,30 +474,19 @@ impl PeerResultMap {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 struct JsHashMetric(Option<js_sys::Function>);
 
 impl DepthStrategy for JsHashMetric {
     fn to_depth(&self, digest: Digest) -> Depth {
         if let Some(func) = &self.0 {
             let js_digest = JsDigest::from(digest);
-            let f64_depth = func
+            let js_value = func
                 .call1(&JsValue::NULL, &JsValue::from(js_digest))
-                .expect("Callback failed") // FIXME?
-                .as_f64()
-                .expect("FIXME");
+                .expect("callback failed");
 
-            let depth = if f64_depth.is_finite()
-                && f64_depth.fract() == 0.0
-                && 0.0 <= f64_depth
-                && f64_depth <= (u32::MAX as f64)
-            {
-                f64_depth as u32
-            } else {
-                panic!("Invalid depth value returned from callback");
-            };
-
-            Depth(depth)
+            let js_depth_ref: &JsDepthRef = js_value.unchecked_ref();
+            js_depth_ref.cast_to_js_depth().into()
         } else {
             CountLeadingZeroBytes.to_depth(digest)
         }
