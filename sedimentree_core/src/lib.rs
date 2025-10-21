@@ -254,12 +254,12 @@ impl Fragment {
 
     /// Returns true if this fragment supports the given fragment summary.
     #[must_use]
-    pub fn supports(&self, other: &FragmentSummary) -> bool {
+    pub fn supports<M: DepthStrategy>(&self, other: &FragmentSummary, hash_metric: &M) -> bool {
         if &self.summary == other {
             return true;
         }
 
-        if self.depth() < other.depth() {
+        if self.depth(hash_metric) < other.depth(hash_metric) {
             return false;
         }
 
@@ -310,8 +310,8 @@ impl Fragment {
 
     /// The depth of this stratum, determined by the number of leading zeros.
     #[must_use]
-    pub fn depth(&self) -> Depth {
-        self.summary.depth()
+    pub fn depth<M: DepthStrategy>(&self, hash_metric: &M) -> Depth {
+        self.summary.depth(hash_metric)
     }
 
     /// The head of the fragment.
@@ -380,9 +380,8 @@ impl FragmentSummary {
 
     /// The depth of this stratum, determined by the number of leading zeros.
     #[must_use]
-    pub fn depth(&self) -> Depth {
-        let level = trailing_zeros_in_base(self.head.as_bytes(), 10);
-        Depth(level)
+    pub fn depth<M: DepthStrategy>(&self, hash_metric: &M) -> Depth {
+        hash_metric.to_depth(self.head)
     }
 }
 
@@ -537,7 +536,11 @@ impl Sedimentree {
 
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
-    pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
+    pub fn diff_remote<'a, M: DepthStrategy>(
+        &'a self,
+        remote: &'a SedimentreeSummary,
+        hash_metric: &M,
+    ) -> RemoteDiff<'a> {
         let our_fragments_meta = self
             .fragments
             .iter()
@@ -547,7 +550,10 @@ impl Sedimentree {
         let mut local_fragments = Vec::new();
         for m in our_fragments_meta.difference(&their_fragments) {
             for s in &self.fragments {
-                if s.head() == m.head && *s.boundary() == m.boundary && s.depth() == m.depth() {
+                if s.head() == m.head
+                    && *s.boundary() == m.boundary
+                    && s.depth(hash_metric) == m.depth(hash_metric)
+                {
                     local_fragments.push(s);
                     break;
                 }
@@ -605,14 +611,14 @@ impl Sedimentree {
         // level, discard that stratum if it is supported by any of the stratum
         // above it.
         let mut fragments = self.fragments.iter().collect::<Vec<_>>();
-        fragments.sort_by_key(|a| a.depth());
+        fragments.sort_by_key(|a| a.depth(depth_metric));
 
         let mut minimized_fragments = Vec::<Fragment>::new();
 
         for fragment in fragments {
             if !minimized_fragments
                 .iter()
-                .any(|existing| existing.supports(&fragment.summary))
+                .any(|existing| existing.supports(&fragment.summary, depth_metric))
             {
                 minimized_fragments.push(fragment.clone());
             }
@@ -692,7 +698,7 @@ impl Sedimentree {
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level = BTreeMap::<Depth, (Digest, Vec<Digest>)>::new();
         let mut all_bundles = Vec::new();
-        for commit_hash in dag.canonical_sequence(self.fragments.iter()) {
+        for commit_hash in dag.canonical_sequence(self.fragments.iter(), depth_metric) {
             let level = depth_metric.to_depth(commit_hash);
             for (run_level, (_start, checkpoints)) in &mut runs_by_level {
                 if run_level < &level {
@@ -786,21 +792,7 @@ fn trailing_zeros_in_base(arr: &[u8; 32], base: u8) -> u32 {
 
 impl std::fmt::Debug for Sedimentree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let fragment_summaries = self
-            .fragments
-            .iter()
-            .map(|s| {
-                format!(
-                    "{{depth: {}, size_bytes: {}}}",
-                    s.depth(),
-                    s.summary().blob_meta().size_bytes()
-                )
-            })
-            .collect::<Vec<_>>()
-            .join(", ");
-
         f.debug_struct("Sedimentree")
-            .field("fragments", &fragment_summaries)
             .field("commits", &self.commits.len())
             .finish()
     }
@@ -838,47 +830,17 @@ pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthS
 #[cfg(test)]
 mod tests {
     use num::Num;
+    use rand::Rng;
 
     use crate::commit::CountLeadingZeroBytes;
 
     use super::*;
 
-    fn hash_with_trailing_zeros(
-        unstructured: &mut arbitrary::Unstructured<'_>,
-        base: u32,
-        trailing_zeros: u32,
-    ) -> Result<Digest, arbitrary::Error> {
-        assert!(base > 1, "Base must be greater than 1");
-        assert!(base <= 10, "Base must be less than 10");
-
-        let zero_str = "0".repeat(trailing_zeros as usize);
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let num_digits = (256.0 / f64::from(base).log2()).floor() as u64;
-
-        let mut num_str = zero_str;
-        num_str.push('1');
-        #[allow(clippy::cast_possible_truncation)]
-        while num_str.len() < num_digits as usize {
-            if unstructured.is_empty() {
-                return Err(arbitrary::Error::NotEnoughData);
-            }
-            #[allow(clippy::range_minus_one)]
-            let digit = unstructured.int_in_range(0..=base - 1)?;
-            num_str.push_str(&digit.to_string());
+    fn hash_with_leading_zeros(zero_count: u32) -> Result<Digest, arbitrary::Error> {
+        let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
+        for i in 0..zero_count as usize {
+            byte_arr[i] = 0;
         }
-        // reverse the string to get the correct representation
-        num_str = num_str.chars().rev().collect();
-        #[allow(clippy::unwrap_used)]
-        let num = num::BigInt::from_str_radix(&num_str, base).unwrap();
-
-        let (_, mut bytes) = num.to_bytes_be();
-        if bytes.len() < 32 {
-            let mut padded_bytes = vec![0; 32 - bytes.len()];
-            padded_bytes.extend(bytes);
-            bytes = padded_bytes;
-        }
-        #[allow(clippy::unwrap_used)]
-        let byte_arr: [u8; 32] = bytes.try_into().unwrap();
         Ok(Digest::from(byte_arr))
     }
 
@@ -899,8 +861,8 @@ mod tests {
                     StartsAtCheckpointBoundaryAtBoundary,
                 }
 
-                let start_hash = hash_with_trailing_zeros(u, 10, 10)?;
-                let deeper_boundary_hash = hash_with_trailing_zeros(u, 10, 10)?;
+                let start_hash = hash_with_leading_zeros(10)?;
+                let deeper_boundary_hash = hash_with_leading_zeros(10)?;
 
                 let shallower_start_hash: Digest;
                 let shallower_boundary_hash: Digest;
@@ -909,17 +871,17 @@ mod tests {
                 match lower_level_type {
                     ShallowerDepthType::StartsAtStartBoundaryAtCheckpoint => {
                         shallower_start_hash = start_hash;
-                        shallower_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        shallower_boundary_hash = hash_with_leading_zeros(9)?;
                         checkpoints.push(shallower_boundary_hash);
                     }
                     ShallowerDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
-                        shallower_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
-                        shallower_boundary_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        shallower_start_hash = hash_with_leading_zeros(9)?;
+                        shallower_boundary_hash = hash_with_leading_zeros(9)?;
                         checkpoints.push(shallower_start_hash);
                         checkpoints.push(shallower_boundary_hash);
                     }
                     ShallowerDepthType::StartsAtCheckpointBoundaryAtBoundary => {
-                        shallower_start_hash = hash_with_trailing_zeros(u, 10, 9)?;
+                        shallower_start_hash = hash_with_leading_zeros(9)?;
                         checkpoints.push(shallower_start_hash);
                         shallower_boundary_hash = deeper_boundary_hash;
                     }
@@ -943,7 +905,7 @@ mod tests {
         bolero::check!()
             .with_arbitrary::<Scenario>()
             .for_each(|Scenario { deeper, shallower }| {
-                assert!(deeper.supports(shallower));
+                assert!(deeper.supports(shallower, &CountLeadingZeroBytes));
             });
     }
 

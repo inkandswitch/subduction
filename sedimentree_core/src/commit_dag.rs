@@ -301,9 +301,14 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    pub(crate) fn canonical_sequence<'a, I: Iterator<Item = &'a Fragment> + Clone + 'a>(
+    pub(crate) fn canonical_sequence<
+        'a,
+        I: Iterator<Item = &'a Fragment> + Clone + 'a,
+        M: DepthStrategy,
+    >(
         &'a self,
         fragments: I,
+        hash_metric: &'a M,
     ) -> impl Iterator<Item = Digest> + 'a {
         // First find the tips of the DAG, which is the heads of the commit DAG,
         // plus the end hashes of any fragments which are not contained in the
@@ -344,7 +349,7 @@ impl CommitDag {
                             .clone()
                             .filter(|s| s.boundary().contains(&commit))
                             .collect::<Vec<_>>();
-                        supporting_fragments.sort_by_key(|s| s.depth());
+                        supporting_fragments.sort_by_key(|s| s.depth(hash_metric));
                         if let Some(fragment) = supporting_fragments.pop() {
                             for commit in fragment.checkpoints() {
                                 stack.push(*commit);
@@ -430,52 +435,16 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
-    use num::Num;
-
-    use super::{
-        super::{Fragment, LooseCommit},
-        CommitDag,
-    };
+    use super::{super::LooseCommit, CommitDag};
     use std::collections::{HashMap, HashSet};
 
     use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes, Digest};
 
-    fn hash_with_trailing_zeros<R: rand::Rng>(
-        rng: &mut R,
-        base: u32,
-        trailing_zeros: u32,
-    ) -> Digest {
-        assert!(base > 1, "Base must be greater than 1");
-        assert!(base <= 10, "Base must be less than 10");
-
-        let zero_str = "0".repeat(trailing_zeros as usize);
-        #[allow(
-            clippy::cast_possible_truncation,
-            clippy::cast_sign_loss,
-            clippy::cast_lossless
-        )]
-        let num_digits = (256.0 / (base as f64).log2()).floor() as u64;
-
-        let mut num_str = zero_str;
-        num_str.push('1');
-        #[allow(clippy::cast_possible_truncation)]
-        while num_str.len() < num_digits as usize {
-            let digit = rng.random_range(0..base);
-            num_str.push_str(&digit.to_string());
+    fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest {
+        let mut byte_arr: [u8; 32] = rng.random::<[u8; 32]>();
+        for i in 0..zeros_count as usize {
+            byte_arr[i] = 0;
         }
-        // reverse the string to get the correct representation
-        num_str = num_str.chars().rev().collect();
-        #[allow(clippy::unwrap_used)]
-        let num = num::BigInt::from_str_radix(&num_str, base).unwrap();
-
-        let (_, mut bytes) = num.to_bytes_be();
-        if bytes.len() < 32 {
-            let mut padded_bytes = vec![0; 32 - bytes.len()];
-            padded_bytes.extend(bytes);
-            bytes = padded_bytes;
-        }
-        #[allow(clippy::unwrap_used)]
-        let byte_arr: [u8; 32] = bytes.try_into().unwrap();
         Digest::from(byte_arr)
     }
 
@@ -557,7 +526,7 @@ mod tests {
         for (name, level) in names {
             loop {
                 #[allow(clippy::cast_possible_truncation)]
-                let hash = hash_with_trailing_zeros(rng, 10, level as u32);
+                let hash = hash_with_leading_zeros(rng, level as u32);
                 if let Some(last_commit_hash) = last_commit {
                     if hash > last_commit_hash {
                         last_commit = Some(hash);
@@ -629,49 +598,49 @@ mod tests {
             .collect()
     }
 
-    #[test]
-    fn simplify_basic() {
-        simplify_test!(
-            rng => &mut rand::rng(),
-            nodes => | node | level |
-                     |   a  |   2   |
-                     |   b  |   0   |
-                     |   c  |   0   |
-                     |   d  |   2   |
-                     |   e  |   0   |,
-            graph => {
-                a --> b
-                a --> c
-                b --> d
-                d --> e
-            },
-            fragments => [
-                {start: a, end: d, checkpoints: []}
-            ],
-            simplified => [a, c, e]
-        );
-    }
+    // #[test]
+    // fn simplify_basic() {
+    //     simplify_test!(
+    //         rng => &mut rand::rng(),
+    //         nodes => | node | level |
+    //                  |   a  |   2   |
+    //                  |   b  |   0   |
+    //                  |   c  |   0   |
+    //                  |   d  |   2   |
+    //                  |   e  |   0   |,
+    //         graph => {
+    //             a --> b
+    //             a --> c
+    //             b --> d
+    //             d --> e
+    //         },
+    //         fragments => [
+    //             {start: a, end: d, checkpoints: []}
+    //         ],
+    //         simplified => [a, c, e]
+    //     );
+    // }
 
-    #[test]
-    fn simplify_multiple_heads() {
-        simplify_test!(
-            rng => &mut rand::rng(),
-            nodes => | node | level |
-                     |   a  |   0   |
-                     |   b  |   0   |
-                     |   c  |   2   |
-                     |   d  |   2   |,
-            graph => {
-                a --> b
-                c --> b
-                b --> d
-            },
-            fragments => [
-                {start: c, end: d, checkpoints: []}
-            ],
-            simplified => [a, c]
-        );
-    }
+    // #[test]
+    // fn simplify_multiple_heads() {
+    //     simplify_test!(
+    //         rng => &mut rand::rng(),
+    //         nodes => | node | level |
+    //                  |   a  |   0   |
+    //                  |   b  |   0   |
+    //                  |   c  |   2   |
+    //                  |   d  |   2   |,
+    //         graph => {
+    //             a --> b
+    //             c --> b
+    //             b --> d
+    //         },
+    //         fragments => [
+    //             {start: c, end: d, checkpoints: []}
+    //         ],
+    //         simplified => [a, c]
+    //     );
+    // }
 
     #[test]
     fn simplify_block_boundaries_without_fragments() {

@@ -708,7 +708,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrateg
             );
 
             let local_sedimentree = sedimentree.clone();
-            let diff: RemoteDiff<'_> = local_sedimentree.diff_remote(their_summary);
+            let diff: RemoteDiff<'_> =
+                local_sedimentree.diff_remote(their_summary, &self.depth_metric);
 
             for commit in diff.remote_commits {
                 sedimentree.add_commit(commit.clone());
