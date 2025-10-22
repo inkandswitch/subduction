@@ -129,6 +129,10 @@ impl Digest {
     }
 
     /// Create a digest from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidDigest`] if the input is not exactly 32 bytes.
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, error::InvalidDigest> {
         if bytes.len() < 32 {
             return Err(error::InvalidDigest::NotEnoughInput);
@@ -168,7 +172,8 @@ impl FromStr for Digest {
     }
 }
 
-mod error {
+/// Errors related to digest parsing.
+pub mod error {
     use thiserror::Error;
 
     /// An error parsing a digest.

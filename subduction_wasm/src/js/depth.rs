@@ -1,9 +1,13 @@
+//! Wasm wrapper for `Depth`.
+
 use sedimentree_core::Depth;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
+/// A JavaScript wrapper around `Depth`.
 #[wasm_bindgen(js_name = Depth)]
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[allow(missing_copy_implementations)]
 pub struct JsDepth(Depth);
 
 impl From<Depth> for JsDepth {
@@ -21,12 +25,17 @@ impl From<JsDepth> for Depth {
 #[wasm_bindgen(js_class = Depth)]
 impl JsDepth {
     /// Creates a new `JsDepth` from a JavaScript value.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `NotU32Error` if the JS value is not safely coercible to `u32`.
     #[wasm_bindgen(constructor)]
-    pub fn new(js_value: JsValue) -> Result<Self, NotU32Error> {
+    pub fn new(js_value: &JsValue) -> Result<Self, NotU32Error> {
         let value = js_value
             .as_f64()
             .and_then(|f| {
-                if f.is_finite() && f.fract() == 0.0 && 0.0 <= f && f <= (u32::MAX as f64) {
+                if f.is_finite() && f.fract() == 0.0 && 0.0 <= f && f <= (f64::from(u32::MAX)) {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     Some(f as u32)
                 } else {
                     None
@@ -38,13 +47,17 @@ impl JsDepth {
     }
 
     /// The depth value as an integer.
+    #[must_use]
     #[wasm_bindgen(getter)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn value(&self) -> u32 {
         self.0 .0
     }
 
     /// Intrenal method for a hack crossing the JS bounary.
+    #[must_use]
     #[wasm_bindgen(js_name = __subduction_castToDepth)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn cast_to_depth(&self) -> JsDepth {
         self.clone()
     }

@@ -442,8 +442,8 @@ mod tests {
 
     fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest {
         let mut byte_arr: [u8; 32] = rng.random::<[u8; 32]>();
-        for i in 0..zeros_count as usize {
-            byte_arr[i] = 0;
+        for i in 0..zeros_count {
+            byte_arr[i as usize] = 0;
         }
         Digest::from(byte_arr)
     }

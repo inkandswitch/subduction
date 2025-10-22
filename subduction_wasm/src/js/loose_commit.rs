@@ -13,6 +13,7 @@ pub struct JsLooseCommit(LooseCommit);
 #[wasm_bindgen(js_class = LooseCommit)]
 impl JsLooseCommit {
     /// Get the digest of the commit.
+    #[must_use]
     #[wasm_bindgen(getter)]
     pub fn digest(&self) -> JsDigest {
         self.0.digest().into()
@@ -25,9 +26,10 @@ impl JsLooseCommit {
     }
 
     /// Get the blob metadata of the commit.
+    #[must_use]
     #[wasm_bindgen(getter, js_name = blobMeta)]
     pub fn blob_meta(&self) -> JsBlobMeta {
-        self.0.blob().clone().into()
+        self.0.blob().to_owned().into()
     }
 }
 
@@ -52,12 +54,15 @@ pub struct JsBlobMeta(BlobMeta);
 #[wasm_bindgen(js_class = BlobMeta)]
 impl JsBlobMeta {
     /// Get the digest of the blob.
+    #[must_use]
     pub fn digest(&self) -> JsDigest {
         self.0.digest().into()
     }
 
     /// Get the size of the blob in bytes.
+    #[must_use]
     #[wasm_bindgen(getter, js_name = sizeBytes)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn size_bytes(&self) -> u64 {
         self.0.size_bytes()
     }

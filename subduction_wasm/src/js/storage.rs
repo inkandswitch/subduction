@@ -125,7 +125,7 @@ impl Storage<Local> for JsStorage {
                 .map_err(JsStorageError::ConvertFromJsPromiseError)?;
             let js_loose_commits = JsLooseCommitsArray::try_from(&js_value)
                 .map_err(JsStorageError::NotLooseCommitArray)?;
-            Ok(js_loose_commits.0.into_iter().map(|jc| jc.into()).collect())
+            Ok(js_loose_commits.0.into_iter().map(Into::into).collect())
         }
         .boxed_local()
     }
@@ -140,7 +140,7 @@ impl Storage<Local> for JsStorage {
                 .map_err(JsStorageError::ConvertFromJsPromiseError)?;
             let js_fragments =
                 JsFragmentsArray::try_from(&js_value).map_err(JsStorageError::NotFragmentsArray)?;
-            Ok(js_fragments.0.into_iter().map(|jc| jc.into()).collect())
+            Ok(js_fragments.0.into_iter().map(Into::into).collect())
         }
         .boxed_local()
     }
@@ -160,12 +160,10 @@ impl Storage<Local> for JsStorage {
 
             let maybe_blob = if js_value.is_null() || js_value.is_undefined() {
                 None
+            } else if js_value.is_instance_of::<Uint8Array>() {
+                Some(Blob::from(Uint8Array::new(&js_value).to_vec()))
             } else {
-                if js_value.is_instance_of::<Uint8Array>() {
-                    Some(Blob::from(Uint8Array::new(&js_value).to_vec()))
-                } else {
-                    return Err(JsStorageError::NotBytes);
-                }
+                return Err(JsStorageError::NotBytes);
             };
 
             Ok(maybe_blob)

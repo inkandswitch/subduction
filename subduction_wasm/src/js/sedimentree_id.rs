@@ -13,6 +13,10 @@ pub struct JsSedimentreeId(SedimentreeId);
 #[wasm_bindgen(js_class = SedimentreeId)]
 impl JsSedimentreeId {
     /// Create an ID from a byte array.
+    ///
+    /// # Errors
+    ///
+    /// Returns `Not32Bytes` if the provided byte array is not exactly 32 bytes long.
     #[wasm_bindgen(js_name = fromBytes)]
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, Not32Bytes> {
         let raw: [u8; 32] = bytes.try_into().map_err(|_| Not32Bytes)?;
@@ -20,9 +24,16 @@ impl JsSedimentreeId {
     }
 
     /// Returns the string representation of the ID.
+    #[must_use]
     #[wasm_bindgen(js_name = toString)]
-    pub fn to_string(&self) -> String {
+    pub fn js_to_string(&self) -> String {
         self.0.to_string()
+    }
+}
+
+impl std::fmt::Display for JsSedimentreeId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
     }
 }
 

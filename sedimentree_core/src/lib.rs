@@ -44,7 +44,7 @@ use std::{
     str::FromStr,
 };
 
-mod blob;
+pub mod blob;
 pub mod commit;
 mod commit_dag;
 pub mod future;
@@ -70,7 +70,8 @@ impl SedimentreeId {
     }
 
     /// The bytes of this [`SedimentreeId`].
-    pub fn from_bytes(bytes: [u8; 32]) -> Self {
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
 }
@@ -229,7 +230,7 @@ impl Fragment {
             let mut hasher = blake3::Hasher::new();
             hasher.update(head.as_bytes());
 
-            for end in boundary.iter() {
+            for end in &boundary {
                 hasher.update(end.as_bytes());
             }
             hasher.update(blob_meta.digest().as_bytes());
@@ -780,19 +781,10 @@ pub enum CommitOrFragment {
     Fragment(Fragment),
 }
 
-fn trailing_zeros_in_base(arr: &[u8; 32], base: u8) -> u32 {
-    assert!(base > 1, "Base must be greater than 1");
-    let (_, bytes) =
-        num::BigInt::from_bytes_be(num::bigint::Sign::Plus, arr).to_radix_be(base.into());
-
-    #[allow(clippy::expect_used)]
-    u32::try_from(bytes.into_iter().rev().take_while(|&i| i == 0).count())
-        .expect("u32 is big enough")
-}
-
 impl std::fmt::Debug for Sedimentree {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Sedimentree")
+            .field("fragments", &self.fragments.len())
             .field("commits", &self.commits.len())
             .finish()
     }
@@ -829,19 +821,18 @@ pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthS
 
 #[cfg(test)]
 mod tests {
-    use num::Num;
     use rand::Rng;
 
     use crate::commit::CountLeadingZeroBytes;
 
     use super::*;
 
-    fn hash_with_leading_zeros(zero_count: u32) -> Result<Digest, arbitrary::Error> {
+    fn hash_with_leading_zeros(zero_count: u32) -> Digest {
         let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
-        for i in 0..zero_count as usize {
-            byte_arr[i] = 0;
+        for i in 0..zero_count {
+            byte_arr[i as usize] = 0;
         }
-        Ok(Digest::from(byte_arr))
+        Digest::from(byte_arr)
     }
 
     #[test]
@@ -861,8 +852,8 @@ mod tests {
                     StartsAtCheckpointBoundaryAtBoundary,
                 }
 
-                let start_hash = hash_with_leading_zeros(10)?;
-                let deeper_boundary_hash = hash_with_leading_zeros(10)?;
+                let start_hash = hash_with_leading_zeros(10);
+                let deeper_boundary_hash = hash_with_leading_zeros(10);
 
                 let shallower_start_hash: Digest;
                 let shallower_boundary_hash: Digest;
@@ -871,17 +862,17 @@ mod tests {
                 match lower_level_type {
                     ShallowerDepthType::StartsAtStartBoundaryAtCheckpoint => {
                         shallower_start_hash = start_hash;
-                        shallower_boundary_hash = hash_with_leading_zeros(9)?;
+                        shallower_boundary_hash = hash_with_leading_zeros(9);
                         checkpoints.push(shallower_boundary_hash);
                     }
                     ShallowerDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
-                        shallower_start_hash = hash_with_leading_zeros(9)?;
-                        shallower_boundary_hash = hash_with_leading_zeros(9)?;
+                        shallower_start_hash = hash_with_leading_zeros(9);
+                        shallower_boundary_hash = hash_with_leading_zeros(9);
                         checkpoints.push(shallower_start_hash);
                         checkpoints.push(shallower_boundary_hash);
                     }
                     ShallowerDepthType::StartsAtCheckpointBoundaryAtBoundary => {
-                        shallower_start_hash = hash_with_leading_zeros(9)?;
+                        shallower_start_hash = hash_with_leading_zeros(9);
                         checkpoints.push(shallower_start_hash);
                         shallower_boundary_hash = deeper_boundary_hash;
                     }
@@ -889,13 +880,13 @@ mod tests {
 
                 let deeper = Fragment::new(
                     start_hash,
-                    vec![deeper_boundary_hash], // FIXME?
+                    vec![deeper_boundary_hash],
                     checkpoints,
                     BlobMeta::arbitrary(u)?,
                 );
                 let shallower = FragmentSummary::new(
                     shallower_start_hash,
-                    vec![shallower_boundary_hash], // FIXME?
+                    vec![shallower_boundary_hash],
                     BlobMeta::arbitrary(u)?,
                 );
 

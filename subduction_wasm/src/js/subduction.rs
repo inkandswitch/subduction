@@ -9,7 +9,8 @@ use sedimentree_core::{
     future::Local,
     Blob, Depth, Digest,
 };
-use subduction_core::{peer::id::PeerId, Subduction};
+use subduction_core::{connection::Connection, peer::id::PeerId, Subduction};
+use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::js::{
@@ -40,9 +41,10 @@ pub struct JsSubduction {
 #[wasm_bindgen(js_class = Subduction)]
 impl JsSubduction {
     /// Create a new [`Subduction`] instance.
+    #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
-        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(|f| f.unchecked_into());
+        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
 
         Self {
             core: Subduction::new(
@@ -94,11 +96,11 @@ impl JsSubduction {
 
     /// Disconnect from a peer by its ID.
     #[wasm_bindgen(js_name = disconnectFromPeer)]
-    pub async fn disconnect_from_peer(&self, peer_id: JsPeerId) -> bool {
-        self.core
-            .disconnect_from_peer(&peer_id.into())
-            .await
-            .expect("Infallable")
+    pub async fn disconnect_from_peer(
+        &self,
+        peer_id: JsPeerId,
+    ) -> Result<bool, JsDisconnectionError> {
+        Ok(self.core.disconnect_from_peer(&peer_id.into()).await?)
     }
 
     /// Register a new connection.
@@ -344,14 +346,11 @@ impl JsSubduction {
 
     /// Get all commits for a given Sedimentree ID
     #[wasm_bindgen(js_name = getCommits)]
-    pub async fn get_commits(
-        &self,
-        id: JsSedimentreeId,
-    ) -> Result<Option<Vec<JsLooseCommit>>, String> {
+    pub async fn get_commits(&self, id: JsSedimentreeId) -> Option<Vec<JsLooseCommit>> {
         if let Some(commits) = self.core.get_commits(id.into()).await {
-            Ok(Some(commits.into_iter().map(JsLooseCommit::from).collect()))
+            Some(commits.into_iter().map(JsLooseCommit::from).collect())
         } else {
-            Ok(None)
+            None
         }
     }
 
@@ -393,6 +392,7 @@ pub struct Registered {
 impl Registered {
     /// Whether the connection was newly registered.
     #[wasm_bindgen(getter)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn is_new(&self) -> bool {
         self.is_new
     }
@@ -438,15 +438,33 @@ pub struct ConnErrPair {
 #[wasm_bindgen(js_class = ConnErrorPair)]
 impl ConnErrPair {
     /// The WebSocket connection that encountered the error.
+    #[must_use]
     #[wasm_bindgen(getter)]
     pub fn ws(&self) -> JsWebSocket {
         self.ws.clone()
     }
 
     /// The error that occurred during the call.
+    #[must_use]
     #[wasm_bindgen(getter)]
     pub fn err(&self) -> JsCallError {
         self.err.clone()
+    }
+}
+
+/// An error that occurred during disconnection.
+#[allow(missing_copy_implementations)]
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct JsDisconnectionError(
+    #[from] <JsConnectionCallbackReader<JsWebSocket> as Connection<Local>>::DisconnectionError,
+);
+
+impl From<JsDisconnectionError> for JsValue {
+    fn from(err: JsDisconnectionError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("DisconnectionError");
+        err.into()
     }
 }
 

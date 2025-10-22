@@ -14,6 +14,5 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-automerge = "0.7.0" # { path = "../../automerge/rust/automerge" }
+automerge = "0.7.0"
 sedimentree_core = { path = "../sedimentree_core" }
-thiserror = { workspace = true }

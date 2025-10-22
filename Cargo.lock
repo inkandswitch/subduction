@@ -1461,7 +1461,6 @@ version = "0.1.0"
 dependencies = [
  "automerge",
  "sedimentree_core",
- "thiserror",
 ]
 
 [[package]]

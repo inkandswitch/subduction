@@ -1,22 +1,30 @@
+//! Abstractions for working with commits.
+
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
     mem::take,
+    num::NonZero,
 };
 
 use thiserror::Error;
 
 use crate::{Depth, Digest};
 
-#[derive(Debug, Clone, Error)]
+/// An error indicating that a commit is missing from the store.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[error("missing commit: {0}")]
 pub struct MissingCommitError(Digest);
 
+/// A trait for types that have parent hashes.
 pub trait Parents {
+    /// The parent digests of this node.
     fn parents(&self) -> HashSet<Digest>;
 }
 
+/// A strategy for determining the depth of a commit based on its digest.
 pub trait DepthStrategy {
+    /// Calculates the depth of a digest using this strategy.
     fn to_depth(&self, digest: Digest) -> Depth;
 }
 
@@ -32,17 +40,43 @@ impl<T: DepthStrategy> DepthStrategy for Box<T> {
     }
 }
 
+#[derive(Debug, Error)]
+/// An error for the [`fragment`] function.
+pub enum FragmentError<'a, S: CommitStore<'a> + ?Sized> {
+    /// An error occurred during lookup.
+    #[error(transparent)]
+    LookupError(S::LookupError),
+
+    /// A commit was missing from the store.
+    #[error(transparent)]
+    MissingCommit(#[from] MissingCommitError),
+}
+
+/// An abstraction over stores of commits that can be looked up by their digest.
 pub trait CommitStore<'a> {
+    /// The type of node stored in the commit store.
     type Node: Parents;
+
+    /// The error type returned when a lookup fails.
     type LookupError: Error;
 
+    /// Looks up a commit by its digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`Self::LookupError`] if the lookup fails.
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError>;
 
+    /// Constructs a fragment of the commit history starting from the given head digest,
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`Self::LookupError`] if any lookup fails.
     fn fragment<D: DepthStrategy>(
         &self,
         head_digest: Digest,
         strategy: &D,
-    ) -> Result<FragmentState<Self::Node>, Self::LookupError> {
+    ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
         let min_depth = strategy.to_depth(head_digest);
 
         let mut visited: HashSet<Digest> = HashSet::from([head_digest]);
@@ -51,13 +85,20 @@ pub trait CommitStore<'a> {
         let mut boundary: HashMap<Digest, Self::Node> = HashMap::new();
         let mut checkpoints: HashSet<Digest> = HashSet::new();
 
-        let head_change = self.lookup(head_digest)?.expect("FIXME");
+        let head_change = self
+            .lookup(head_digest)
+            .map_err(|e| FragmentError::LookupError(e))?
+            .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
         let mut horizon: HashSet<Digest> = head_change.parents();
 
         while !horizon.is_empty() {
             let local_horizon = take(&mut horizon);
             for &digest in &local_horizon {
-                let commit = self.lookup(digest)?.expect("FIXME");
+                let commit = self
+                    .lookup(digest)
+                    .map_err(|e| FragmentError::LookupError(e))?
+                    .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
+
                 let is_newly_visited = visited.insert(digest);
                 if !is_newly_visited {
                     continue;
@@ -72,15 +113,15 @@ pub trait CommitStore<'a> {
                     if depth > Depth(0) {
                         checkpoints.insert(digest);
                     }
-                    horizon.extend(commit.parents().iter().filter(|&d| !visited.contains(d)))
+                    horizon.extend(commit.parents().iter().filter(|&d| !visited.contains(d)));
                 }
             }
         }
 
         // Cleanup
 
-        let mut cleanup_horizon: Vec<Digest> = Vec::new(); // boundary.keys().copied().collect::<Vec<_>>();
-        for (boundary_hash, boundary_change) in boundary.iter() {
+        let mut cleanup_horizon: Vec<Digest> = Vec::new();
+        for (boundary_hash, boundary_change) in &boundary {
             members.remove(boundary_hash);
             let deps = boundary_change.parents();
             cleanup_horizon.extend(deps);
@@ -97,8 +138,12 @@ pub trait CommitStore<'a> {
                     continue;
                 }
 
-                let commit = self.lookup(digest)?.expect("FIXME");
-                cleanup_horizon.extend(commit.parents().iter().filter(|&d| !visited.contains(d)))
+                let commit = self
+                    .lookup(digest)
+                    .map_err(|e| FragmentError::LookupError(e))?
+                    .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
+
+                cleanup_horizon.extend(commit.parents().iter().filter(|&d| !visited.contains(d)));
             }
         }
 
@@ -111,13 +156,18 @@ pub trait CommitStore<'a> {
     }
 }
 
+/// A depth strategy that counts leading zero bytes in the digest.
+///
+/// For example, the digest `0x00012345...` has a depth of 3,
+/// the digest `0x00abcdef...` has a depth of 2,
+/// and the digest `0x12345678...` has a depth of 0.
 #[derive(Debug, Clone, Copy)]
 pub struct CountLeadingZeroBytes;
 
 impl DepthStrategy for CountLeadingZeroBytes {
     fn to_depth(&self, digest: Digest) -> Depth {
         let mut acc = 0;
-        for &byte in digest.as_bytes().iter() {
+        for &byte in digest.as_bytes() {
             if byte == 0 {
                 acc += 1;
             } else {
@@ -125,6 +175,57 @@ impl DepthStrategy for CountLeadingZeroBytes {
             }
         }
         Depth(acc)
+    }
+}
+
+/// A depth strategy that counts trailing zeros in the digest in a given base.
+#[derive(Debug, Clone, Copy)]
+pub struct CountTrailingZerosInBase(NonZero<u8>);
+
+impl CountTrailingZerosInBase {
+    /// Creates a new `CountTrailingZerosInBase` strategy for the given base.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `base` is less than 2.
+    #[must_use]
+    pub const fn new(base: NonZero<u8>) -> Self {
+        Self(base)
+    }
+}
+
+impl From<NonZero<u8>> for CountTrailingZerosInBase {
+    fn from(base: NonZero<u8>) -> Self {
+        Self::new(base)
+    }
+}
+
+impl From<CountTrailingZerosInBase> for NonZero<u8> {
+    fn from(strategy: CountTrailingZerosInBase) -> Self {
+        strategy.0
+    }
+}
+
+impl From<CountTrailingZerosInBase> for u8 {
+    fn from(strategy: CountTrailingZerosInBase) -> Self {
+        strategy.0.into()
+    }
+}
+
+// FIXME Depth<T>
+
+impl DepthStrategy for CountTrailingZerosInBase {
+    fn to_depth(&self, digest: Digest) -> Depth {
+        let arr = digest.as_bytes();
+        let inner_depth: u8 = self.0.into();
+        let (_, bytes) = num::BigInt::from_bytes_be(num::bigint::Sign::Plus, arr)
+            .to_radix_be(inner_depth.into());
+
+        #[allow(clippy::expect_used)]
+        let int = u32::try_from(bytes.into_iter().rev().take_while(|&i| i == 0).count())
+            .expect("u32 is big enough");
+
+        Depth(int)
     }
 }
 
@@ -146,7 +247,9 @@ pub struct FragmentState<T> {
 }
 
 impl<T> FragmentState<T> {
-    pub fn new(
+    /// Create a new `FragmentState`.
+    #[must_use]
+    pub const fn new(
         head_digest: Digest,
         members: HashSet<Digest>,
         checkpoints: HashSet<Digest>,
@@ -164,7 +267,8 @@ impl<T> FragmentState<T> {
     ///
     /// This digest provides a stable point from which
     /// the restof the fragment is built.
-    pub fn head_digest(&self) -> Digest {
+    #[must_use]
+    pub const fn head_digest(&self) -> Digest {
         self.head_digest
     }
 
@@ -172,7 +276,8 @@ impl<T> FragmentState<T> {
     ///
     /// This includes all history between the `head_digest`
     /// and the `boundary` (not including the boundary elements).
-    pub fn members(&self) -> &HashSet<Digest> {
+    #[must_use]
+    pub const fn members(&self) -> &HashSet<Digest> {
         &self.members
     }
 
@@ -181,12 +286,14 @@ impl<T> FragmentState<T> {
     /// These are all of the [`Digest`]s that match a valid level
     /// below the target, so that it is possible to know which other fragments
     /// this one covers.
-    pub fn checkpoints(&self) -> &HashSet<Digest> {
+    #[must_use]
+    pub const fn checkpoints(&self) -> &HashSet<Digest> {
         &self.checkpoints
     }
 
     /// The boundary from which the next set of fragments would be built.
-    pub fn boundary(&self) -> &HashMap<Digest, T> {
+    #[must_use]
+    pub const fn boundary(&self) -> &HashMap<Digest, T> {
         &self.boundary
     }
 }

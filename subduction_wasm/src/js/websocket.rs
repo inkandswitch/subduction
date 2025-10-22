@@ -131,12 +131,12 @@ impl JsWebSocket {
 
     /// Connect to a WebSocket server at the given address.
     pub fn connect(
-        address: Url,
-        peer_id: JsPeerId,
+        address: &Url,
+        peer_id: &JsPeerId,
         timeout_milliseconds: u32,
     ) -> Result<Self, WebsocketConnectionError> {
         Ok(Self::new(
-            peer_id,
+            peer_id.clone(),
             &WebSocket::new(&address.href()).map_err(WebsocketConnectionError)?,
             timeout_milliseconds,
         ))
@@ -260,8 +260,8 @@ impl Reconnect<Local> for JsWebSocket {
             let timeout = self.timeout.as_millis() as u32;
 
             *self = JsWebSocket::connect(
-                Url::new(&address).expect("existing URL should be valid URL"),
-                peer_id.into(),
+                &Url::new(&address).expect("existing URL should be valid URL"),
+                &peer_id.into(),
                 timeout,
             )?;
             Ok(())
@@ -318,12 +318,11 @@ impl JsTimeout {
             let callback = Closure::wrap(Box::new(move || match resolve.call0(&JsValue::NULL) {
                 Err(e) => {
                     drop(callback_reject.call1(&JsValue::NULL, &e));
-                    return;
                 }
                 Ok(_val) => (),
             }) as Box<dyn FnMut()>);
 
-            let id = match set_timeout.call2(
+            out_id = match set_timeout.call2(
                 &global,
                 callback.as_ref().unchecked_ref(),
                 &JsValue::from(ms),
@@ -335,7 +334,6 @@ impl JsTimeout {
                 }
             };
 
-            out_id = id.into();
             out_closure = Some(callback);
         });
 
@@ -352,7 +350,7 @@ impl JsTimeout {
     fn cancel(self) {
         let global = js_sys::global();
         if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
-            .and_then(|v| v.dyn_into::<js_sys::Function>().map_err(|e| e.into()))
+            .and_then(JsCast::dyn_into::<js_sys::Function>)
         {
             if let Err(e) = clear_timeout.call1(&global, &self.id) {
                 tracing::error!("Failed to clear timeout: {:?}", e);

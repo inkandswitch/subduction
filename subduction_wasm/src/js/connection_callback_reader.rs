@@ -63,7 +63,7 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                         callback
                             .call3(
                                 &JsValue::NULL,
-                                &JsValue::from(JsSedimentreeId::from(id.clone())),
+                                &JsValue::from(JsSedimentreeId::from(*id)),
                                 &JsValue::from(JsLooseCommit::from(commit.clone())),
                                 &JsValue::from(Uint8Array::from(blob.as_slice())),
                             )
@@ -76,7 +76,7 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                         callback
                             .call3(
                                 &JsValue::NULL,
-                                &JsValue::from(JsSedimentreeId::from(id.clone())),
+                                &JsValue::from(JsSedimentreeId::from(*id)),
                                 &JsValue::from(JsFragment::from(fragment.clone())),
                                 &JsValue::from(Uint8Array::from(blob.as_slice())),
                             )
@@ -113,7 +113,7 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                             callback
                                 .call3(
                                     &this,
-                                    &JsValue::from(JsSedimentreeId::from(id.clone())),
+                                    &JsValue::from(JsSedimentreeId::from(*id)),
                                     &JsValue::from(JsLooseCommit::from(commit.clone())),
                                     &JsValue::from(blob.clone().into_contents()),
                                 )
@@ -129,7 +129,7 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                             callback
                                 .call3(
                                     &this,
-                                    &JsValue::from(JsSedimentreeId::from(id.clone())),
+                                    &JsValue::from(JsSedimentreeId::from(*id)),
                                     &JsValue::from(JsFragment::from(fragment.clone())),
                                     &JsValue::from(blob.clone().into_contents()),
                                 )

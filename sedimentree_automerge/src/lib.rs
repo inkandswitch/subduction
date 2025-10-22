@@ -26,15 +26,15 @@
 )]
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
+use std::{collections::HashSet, convert::Infallible};
 
 use automerge::{Automerge, ChangeMetadata};
 use sedimentree_core::{
     commit::{CommitStore, Parents},
     Digest,
 };
-use thiserror::Error;
 
+/// A newtype wrapper around Automerge's [`ChangeMetadata`].
 #[derive(Debug, Clone)]
 pub struct SedimentreeChangeMetadata<'a>(ChangeMetadata<'a>);
 
@@ -60,6 +60,7 @@ impl Parents for SedimentreeChangeMetadata<'_> {
     }
 }
 
+/// A newtype wrapper around [`Automerge`] for use as a Sedimentree commit store.
 #[derive(Debug, Clone)]
 pub struct SedimentreeAutomerge<'a>(&'a Automerge);
 
@@ -77,7 +78,7 @@ impl<'a> From<SedimentreeAutomerge<'a>> for &'a Automerge {
 
 impl<'a> CommitStore<'a> for SedimentreeAutomerge<'a> {
     type Node = SedimentreeChangeMetadata<'a>;
-    type LookupError = Fixme;
+    type LookupError = Infallible;
 
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {
         let change_hash = automerge::ChangeHash(*digest.as_bytes());
@@ -85,7 +86,3 @@ impl<'a> CommitStore<'a> for SedimentreeAutomerge<'a> {
         Ok(change_meta.map(SedimentreeChangeMetadata::from))
     }
 }
-
-#[derive(Debug, Clone, Error)]
-#[error("FIXME")]
-pub struct Fixme;

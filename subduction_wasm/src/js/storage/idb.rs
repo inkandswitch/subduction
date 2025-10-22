@@ -1,4 +1,4 @@
-//! IndexedDB storage backend for Sedimentree.
+//! [`IndexedDB`] storage backend for Sedimentree.
 
 use futures::channel::oneshot;
 use js_sys::Uint8Array;
@@ -10,10 +10,10 @@ use web_sys::{Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbT
 
 use crate::js::digest::JsDigest;
 
-/// The version number of the IndexedDB database schema.
+/// The version number of the [`IndexedDB`] database schema.
 pub const DB_VERSION: u32 = 0;
 
-/// The name of the IndexedDB database.
+/// The name of the [`IndexedDB`] database.
 pub const DB_NAME: &str = "@automerge/subduction/db";
 
 /// The name of the object store for blobs.
@@ -27,6 +27,10 @@ pub struct IndexedDbStorage(IdbDatabase);
 #[wasm_bindgen(js_class = "IndexedDbStorage")]
 impl IndexedDbStorage {
     /// Create a new `IndexedDbStorage` instance, opening (or creating) the database.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsValue` if the database could not be opened.
     #[wasm_bindgen]
     pub async fn setup(factory: &IdbFactory) -> Result<Self, JsValue> {
         let open_req: IdbOpenDbRequest = factory.open_with_u32(DB_NAME, DB_VERSION)?;
@@ -63,6 +67,10 @@ impl IndexedDbStorage {
     }
 
     /// Load a blob from the database by its digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsValue` if the blob could not be loaded.
     #[wasm_bindgen(js_name = loadBlob)]
     pub async fn load_blob(&self, digest: JsDigest) -> Result<Option<Vec<u8>>, JsValue> {
         let req = self
@@ -77,13 +85,16 @@ impl IndexedDbStorage {
         } else if js_value.is_instance_of::<Uint8Array>() {
             Ok(Some(Uint8Array::new(&js_value).to_vec()))
         } else {
-            Err(JsValue::from_str(
-                "Expected Uint8Array or null/undefined from IndexedDB", // FIXME better error
-            ))
+            Err(JsValue::from(InvalidIndexedDbValue))
         }
     }
 
     /// Save a blob to the database, returning its digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsValue` if the JS transaction could not be opened,
+    /// or if the blob could not be saved.
     #[wasm_bindgen(js_name = saveBlob)]
     pub async fn save_blob(&self, bytes: &[u8]) -> Result<JsDigest, JsValue> {
         let digest = Digest::hash(bytes);
@@ -111,9 +122,9 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, JsValue> {
     let success = {
         let req = req.clone();
         Closure::once(Box::new(move |_e: Event| {
-            let res = req.result().map_err(|e| e.into());
+            let js_res = req.result();
             let _ = tx_ok.borrow_mut().take().map(|tx| {
-                tx.send(res).expect("FIXME");
+                tx.send(js_res).expect("FIXME");
             });
 
             // Unregister handlers
@@ -130,8 +141,7 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, JsValue> {
         Closure::once(Box::new(move |_e: Event| {
             let err = req
                 .error()
-                .map(|dom_exc| dom_exc.into())
-                .unwrap_or_else(|_| js_sys::Error::new("IDB error").into());
+                .map_or_else(Into::into, |_| js_sys::Error::new("IDB error").into());
 
             let _ = tx_err.borrow_mut().take().map(|tx| {
                 tx.send(Err(err)).expect("FIXME");
@@ -152,6 +162,21 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, JsValue> {
 /// Error indicating that a `JsValue` was expected to be a `Uint8Array` but was not.
 #[wasm_bindgen]
 #[derive(Debug, Clone, Error)]
-#[error("Expected a Uint8Array but got something else")]
+#[error("expected a Uint8Array but got something else")]
 #[allow(missing_copy_implementations)]
 pub struct NotBytes;
+
+/// Error indicating that a value from [`IndexedDB`] was expected to be a
+/// `Uint8Array` or `null`/`undefined` but was not.
+#[allow(missing_copy_implementations)]
+#[derive(Debug, Clone, Error)]
+#[error("expected Uint8Array or null/undefined from IndexedDB")]
+pub struct InvalidIndexedDbValue;
+
+impl From<InvalidIndexedDbValue> for JsValue {
+    fn from(err: InvalidIndexedDbValue) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("InvalidIndexedDbValue");
+        err.into()
+    }
+}
