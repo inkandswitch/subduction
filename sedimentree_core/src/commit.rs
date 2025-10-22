@@ -9,7 +9,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{Depth, Digest};
+use crate::{depth::DepthMetric, Depth, Digest};
 
 /// An error indicating that a commit is missing from the store.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -20,24 +20,6 @@ pub struct MissingCommitError(Digest);
 pub trait Parents {
     /// The parent digests of this node.
     fn parents(&self) -> HashSet<Digest>;
-}
-
-/// A strategy for determining the depth of a commit based on its digest.
-pub trait DepthStrategy {
-    /// Calculates the depth of a digest using this strategy.
-    fn to_depth(&self, digest: Digest) -> Depth;
-}
-
-impl<Digestish: From<Digest>, Depthish: Into<Depth>> DepthStrategy for fn(Digestish) -> Depthish {
-    fn to_depth(&self, digest: Digest) -> Depth {
-        self(Digestish::from(digest)).into()
-    }
-}
-
-impl<T: DepthStrategy> DepthStrategy for Box<T> {
-    fn to_depth(&self, digest: Digest) -> Depth {
-        T::to_depth(self, digest)
-    }
 }
 
 #[derive(Debug, Error)]
@@ -72,7 +54,7 @@ pub trait CommitStore<'a> {
     /// # Errors
     ///
     /// Returns a [`Self::LookupError`] if any lookup fails.
-    fn fragment<D: DepthStrategy>(
+    fn fragment<D: DepthMetric>(
         &self,
         head_digest: Digest,
         strategy: &D,
@@ -164,7 +146,7 @@ pub trait CommitStore<'a> {
 #[derive(Debug, Clone, Copy)]
 pub struct CountLeadingZeroBytes;
 
-impl DepthStrategy for CountLeadingZeroBytes {
+impl DepthMetric for CountLeadingZeroBytes {
     fn to_depth(&self, digest: Digest) -> Depth {
         let mut acc = 0;
         for &byte in digest.as_bytes() {
@@ -212,9 +194,7 @@ impl From<CountTrailingZerosInBase> for u8 {
     }
 }
 
-// FIXME Depth<T>
-
-impl DepthStrategy for CountTrailingZerosInBase {
+impl DepthMetric for CountTrailingZerosInBase {
     fn to_depth(&self, digest: Digest) -> Depth {
         let arr = digest.as_bytes();
         let inner_depth: u8 = self.0.into();

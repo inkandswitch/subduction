@@ -1,6 +1,6 @@
 //! Messages handed back to the caller.
 
-use sedimentree_core::{Depth, Digest};
+use sedimentree_core::{blob::Digest, depth::Depth};
 
 /// A request for a fragment at a certain depth, starting from a given head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

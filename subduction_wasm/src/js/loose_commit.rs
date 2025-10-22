@@ -1,6 +1,6 @@
 //! Individual/"loose" commits.
 
-use sedimentree_core::{BlobMeta, LooseCommit};
+use sedimentree_core::{blob::BlobMeta, LooseCommit};
 use wasm_bindgen::prelude::*;
 
 use super::digest::JsDigest;

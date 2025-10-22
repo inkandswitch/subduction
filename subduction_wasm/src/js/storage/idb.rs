@@ -2,7 +2,7 @@
 
 use futures::channel::oneshot;
 use js_sys::Uint8Array;
-use sedimentree_core::Digest;
+use sedimentree_core::blob::Digest;
 use std::{cell::RefCell, rc::Rc};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;

@@ -9,8 +9,9 @@ use futures::{
 };
 
 use crate::{
+    blob::Blob,
     future::{FutureKind, Local, Sendable},
-    Blob, Digest,
+    Digest,
 };
 
 use super::{Fragment, LooseCommit};

@@ -5,10 +5,11 @@ use testresult::TestResult;
 use arbitrary::{Arbitrary, Unstructured};
 use rand::Rng;
 use sedimentree_core::{
+    blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
     future::Sendable,
     storage::{MemoryStorage, Storage},
-    Blob, BlobMeta, Digest, LooseCommit, Sedimentree,
+    LooseCommit, Sedimentree,
 };
 use subduction_core::{
     connection::{message::Message, Connection},

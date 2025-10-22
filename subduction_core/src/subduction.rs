@@ -16,11 +16,12 @@ use error::{BlobRequestErr, IoError, ListenError};
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use nonempty::NonEmpty;
 use sedimentree_core::{
-    commit::{CountLeadingZeroBytes, DepthStrategy},
+    blob::{Blob, Digest},
+    commit::CountLeadingZeroBytes,
+    depth::{Depth, DepthMetric},
     future::FutureKind,
     storage::Storage,
-    Blob, Depth, Digest, Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId,
-    SedimentreeSummary,
+    Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -35,7 +36,7 @@ pub struct Subduction<
     F: FutureKind,
     S: Storage<F>,
     C: Connection<F> + PartialEq,
-    M: DepthStrategy = CountLeadingZeroBytes,
+    M: DepthMetric = CountLeadingZeroBytes,
 > {
     depth_metric: M,
     sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
@@ -44,7 +45,7 @@ pub struct Subduction<
     _phantom: std::marker::PhantomData<F>,
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrategy>
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     Subduction<F, S, C, M>
 {
     /// Listen for incoming messages from all connections and handle them appropriately.
@@ -1147,7 +1148,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrateg
     }
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrategy> ConnectionPolicy
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric> ConnectionPolicy
     for Subduction<F, S, C, M>
 {
     async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {

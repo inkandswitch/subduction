@@ -1,6 +1,9 @@
 //! The API contact messages to be sent over a [`Connection`].
 
-use sedimentree_core::{Blob, Digest, Fragment, LooseCommit, SedimentreeId, SedimentreeSummary};
+use sedimentree_core::{
+    blob::{Blob, Digest},
+    Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
+};
 
 use crate::peer::id::PeerId;
 

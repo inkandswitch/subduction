@@ -1,6 +1,6 @@
 //! Wasm wrapper for `Depth`.
 
-use sedimentree_core::Depth;
+use sedimentree_core::depth::Depth;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 

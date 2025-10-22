@@ -5,9 +5,10 @@ use std::{collections::HashMap, convert::Infallible, fmt::Debug, rc::Rc, time::D
 use futures::lock::Mutex;
 use js_sys::Uint8Array;
 use sedimentree_core::{
-    commit::{CountLeadingZeroBytes, DepthStrategy},
+    blob::{Blob, Digest},
+    commit::CountLeadingZeroBytes,
+    depth::{Depth, DepthMetric},
     future::Local,
-    Blob, Depth, Digest,
 };
 use subduction_core::{connection::Connection, peer::id::PeerId, Subduction};
 use thiserror::Error;
@@ -548,7 +549,7 @@ impl PeerResultMap {
 #[derive(Debug)]
 struct JsHashMetric(Option<js_sys::Function>);
 
-impl DepthStrategy for JsHashMetric {
+impl DepthMetric for JsHashMetric {
     fn to_depth(&self, digest: Digest) -> Depth {
         if let Some(func) = &self.0 {
             let js_digest = JsDigest::from(digest);

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::{commit::DepthStrategy, Digest, LooseCommit};
+use crate::{depth::DepthMetric, Digest, LooseCommit};
 
 use super::Fragment;
 
@@ -111,7 +111,7 @@ impl CommitDag {
         }
     }
 
-    pub(crate) fn simplify<S: DepthStrategy>(&self, fragments: &[Fragment], strategy: &S) -> Self {
+    pub(crate) fn simplify<S: DepthMetric>(&self, fragments: &[Fragment], strategy: &S) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -304,7 +304,7 @@ impl CommitDag {
     pub(crate) fn canonical_sequence<
         'a,
         I: Iterator<Item = &'a Fragment> + Clone + 'a,
-        M: DepthStrategy,
+        M: DepthMetric,
     >(
         &'a self,
         fragments: I,

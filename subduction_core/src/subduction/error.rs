@@ -1,6 +1,6 @@
 //! Error types for the top-level `Subduction`.
 
-use sedimentree_core::{future::FutureKind, storage::Storage, Digest};
+use sedimentree_core::{blob::Digest, future::FutureKind, storage::Storage};
 use thiserror::Error;
 
 use crate::connection::{Connection, ConnectionDisallowed};

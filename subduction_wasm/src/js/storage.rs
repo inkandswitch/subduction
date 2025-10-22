@@ -4,7 +4,12 @@ pub mod idb;
 
 use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::{Promise, Uint8Array};
-use sedimentree_core::{future::Local, storage::Storage, Blob, Digest, Fragment, LooseCommit};
+use sedimentree_core::{
+    blob::{Blob, Digest},
+    future::Local,
+    storage::Storage,
+    Fragment, LooseCommit,
+};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 

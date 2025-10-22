@@ -1,6 +1,6 @@
 //! Hash digests.
 
-use sedimentree_core::{blob::error::InvalidDigest, Digest};
+use sedimentree_core::blob::{error::InvalidDigest, Digest};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 

@@ -30,8 +30,8 @@ use std::{collections::HashSet, convert::Infallible};
 
 use automerge::{Automerge, ChangeMetadata};
 use sedimentree_core::{
+    blob::Digest,
     commit::{CommitStore, Parents},
-    Digest,
 };
 
 /// A newtype wrapper around Automerge's [`ChangeMetadata`].

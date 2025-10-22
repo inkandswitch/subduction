@@ -44,17 +44,15 @@ use std::{
     str::FromStr,
 };
 
+use blob::{BlobMeta, Digest};
+use depth::{Depth, DepthMetric, MAX_STRATA_DEPTH};
+
 pub mod blob;
 pub mod commit;
 mod commit_dag;
+pub mod depth;
 pub mod future;
 pub mod storage;
-
-pub use blob::*;
-use commit::DepthStrategy;
-
-/// The maximum depth of strata that a [`Sedimentree`] can go to.
-pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 
 /// A unique identifier for some data managed by Sedimentree.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -167,40 +165,6 @@ impl SedimentreeSummary {
     }
 }
 
-/// How deep in the Sedimentree a stratum is.
-///
-/// The greater the depth, the more leading zeros, the (probabilistically) larger,
-/// and thus "lower" the stratum. They become larger due to the fragmenting strategy.
-/// This means that the same data can appear in multiple strata, but may be fragmented
-/// into smaller or larger sections based on a hash hardness metric.
-///
-/// The depth is determined by the number of leading zeros in each hash in base 10.
-/// If there's zero-or-more leading zeros, it may only live in the topmost (0th) layer.
-/// If there is one leading zero (or more), it can only live in the 0th or 1st layer.
-/// If there are two leading zeros (or more), it can only live in the 0th, 1st, or 2nd layer
-/// (and so on).
-///
-/// ```diagram
-///         ┌───┐ ┌───┐ ┌───┐ ┌─────────┐ ┌───┐ ┌───┐
-/// Depth 0 │ 1 │ │ 1 │ │ 1 │ │    2    │ │ 1 │ │ 1 │
-///         └───┘ └───┘ └───┘ └─────────┘ └───┘ └───┘
-///         ┌───────────────┐ ┌─────────────────────┐
-/// Depth 1 │   3 commits   │ │      4 commits      │
-///         └───────────────┘ └─────────────────────┘
-///         ┌───────────────────────────────────────┐
-/// Depth 2 │               7 commits               │
-///         └───────────────────────────────────────┘
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Depth(pub u32);
-
-impl std::fmt::Display for Depth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Depth({})", self.0)
-    }
-}
-
 /// A portion of a Sedimentree that includes a set of checkpoints.
 ///
 /// This is created by breaking up (fragmenting) a larger document or log
@@ -255,7 +219,7 @@ impl Fragment {
 
     /// Returns true if this fragment supports the given fragment summary.
     #[must_use]
-    pub fn supports<M: DepthStrategy>(&self, other: &FragmentSummary, hash_metric: &M) -> bool {
+    pub fn supports<M: DepthMetric>(&self, other: &FragmentSummary, hash_metric: &M) -> bool {
         if &self.summary == other {
             return true;
         }
@@ -311,7 +275,7 @@ impl Fragment {
 
     /// The depth of this stratum, determined by the number of leading zeros.
     #[must_use]
-    pub fn depth<M: DepthStrategy>(&self, hash_metric: &M) -> Depth {
+    pub fn depth<M: DepthMetric>(&self, hash_metric: &M) -> Depth {
         self.summary.depth(hash_metric)
     }
 
@@ -381,7 +345,7 @@ impl FragmentSummary {
 
     /// The depth of this stratum, determined by the number of leading zeros.
     #[must_use]
-    pub fn depth<M: DepthStrategy>(&self, hash_metric: &M) -> Depth {
+    pub fn depth<M: DepthMetric>(&self, hash_metric: &M) -> Depth {
         hash_metric.to_depth(self.head)
     }
 }
@@ -480,7 +444,7 @@ impl Sedimentree {
 
     /// The minimal ordered hash of this [`Sedimentree`].
     #[must_use]
-    pub fn minimal_hash<M: DepthStrategy>(&self, depth_metric: &M) -> MinimalTreeHash {
+    pub fn minimal_hash<M: DepthMetric>(&self, depth_metric: &M) -> MinimalTreeHash {
         let minimal = self.minimize(depth_metric);
         let mut hashes = minimal
             .fragments()
@@ -537,7 +501,7 @@ impl Sedimentree {
 
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
-    pub fn diff_remote<'a, M: DepthStrategy>(
+    pub fn diff_remote<'a, M: DepthMetric>(
         &'a self,
         remote: &'a SedimentreeSummary,
         hash_metric: &M,
@@ -593,7 +557,7 @@ impl Sedimentree {
 
     /// Returns true if this [`Sedimentree`] has a fragment starting with the given digest.
     #[must_use]
-    pub fn has_fragment_starting_with<M: DepthStrategy>(
+    pub fn has_fragment_starting_with<M: DepthMetric>(
         &self,
         digest: Digest,
         depth_metric: &M,
@@ -607,7 +571,7 @@ impl Sedimentree {
     /// fully supported by other fragments, and removing any loose commits
     /// that are not needed to support the remaining fragments.
     #[must_use]
-    pub fn minimize<M: DepthStrategy>(&self, depth_metric: &M) -> Sedimentree {
+    pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
         // First sort fragments by depth, then for each stratum below the lowest
         // level, discard that stratum if it is supported by any of the stratum
         // above it.
@@ -660,7 +624,7 @@ impl Sedimentree {
     /// and which do not appear in the [`LooseCommit`] graph, plus the heads of
     /// the loose commit graph.
     #[must_use]
-    pub fn heads<M: DepthStrategy>(&self, depth_metric: &M) -> Vec<Digest> {
+    pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<Digest> {
         let minimized = self.minimize(depth_metric);
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.iter());
         let mut heads = Vec::<Digest>::new();
@@ -691,7 +655,7 @@ impl Sedimentree {
 
     /// Given a [`SedimentreeId`], return the [`Fragment`]s that are missing to fill in the gaps.
     #[must_use]
-    pub fn missing_fragments<M: DepthStrategy>(
+    pub fn missing_fragments<M: DepthMetric>(
         &self,
         id: SedimentreeId,
         depth_metric: &M,
@@ -810,7 +774,7 @@ impl From<[u8; 32]> for MinimalTreeHash {
 }
 
 /// Checks if any of the given commits has a commit boundary.
-pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthStrategy>(
+pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthMetric>(
     commits: I,
     depth_metric: &M,
 ) -> bool {
@@ -823,7 +787,7 @@ pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthS
 mod tests {
     use rand::Rng;
 
-    use crate::commit::CountLeadingZeroBytes;
+    use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes};
 
     use super::*;
 
