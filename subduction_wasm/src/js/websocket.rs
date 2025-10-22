@@ -31,7 +31,7 @@ use super::peer_id::JsPeerId;
 #[derive(Debug, Clone)]
 pub struct JsWebSocket {
     peer_id: PeerId,
-    timeout: Duration,
+    timeout_ms: u32,
 
     request_id_counter: Arc<Mutex<u128>>,
     socket: WebSocket,
@@ -43,6 +43,7 @@ pub struct JsWebSocket {
 #[wasm_bindgen(js_class = SubductionWebSocket)]
 impl JsWebSocket {
     /// Create a new [`JsWebSocket`] instance.
+    #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(peer_id: JsPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
         let (inbound_writer, raw_inbound_reader) = mpsc::unbounded();
@@ -119,7 +120,7 @@ impl JsWebSocket {
 
         Self {
             peer_id: peer_id.into(),
-            timeout: Duration::from_millis(timeout_milliseconds as u64),
+            timeout_ms: timeout_milliseconds,
 
             request_id_counter: Arc::new(Mutex::new(0)),
             socket,
@@ -130,6 +131,10 @@ impl JsWebSocket {
     }
 
     /// Connect to a WebSocket server at the given address.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WebsocketConnectionError`] if establishing the connection fails.
     pub fn connect(
         address: &Url,
         peer_id: &JsPeerId,
@@ -137,7 +142,8 @@ impl JsWebSocket {
     ) -> Result<Self, WebsocketConnectionError> {
         Ok(Self::new(
             peer_id.clone(),
-            &WebSocket::new(&address.href()).map_err(WebsocketConnectionError)?,
+            &WebSocket::new(&address.href())
+                .map_err(WebsocketConnectionError::SocketCreationFailed)?,
             timeout_milliseconds,
         ))
     }
@@ -227,7 +233,8 @@ impl Connection<Local> for JsWebSocket {
 
             tracing::info!("sent request {:?}", req_id);
 
-            let req_timeout = override_timeout.unwrap_or(self.timeout);
+            let req_timeout =
+                override_timeout.unwrap_or(Duration::from_millis(self.timeout_ms.into()));
 
             // await response with timeout & cleanup
             match timeout(req_timeout, rx).await {
@@ -257,12 +264,11 @@ impl Reconnect<Local> for JsWebSocket {
         async {
             let address = self.socket.url();
             let peer_id = self.peer_id;
-            let timeout = self.timeout.as_millis() as u32;
 
             *self = JsWebSocket::connect(
-                &Url::new(&address).expect("existing URL should be valid URL"),
+                &Url::new(&address).map_err(WebsocketConnectionError::InvalidUrl)?,
                 &peer_id.into(),
-                timeout,
+                self.timeout_ms,
             )?;
             Ok(())
         }
@@ -412,7 +418,21 @@ pub enum CallError {
 }
 
 /// Problem while attempting to connect or reconnect the WebSocket.
-#[wasm_bindgen]
 #[derive(Debug, Clone, Error)]
-#[error("WebSocket connection error: {0:?}")]
-pub struct WebsocketConnectionError(JsValue);
+pub enum WebsocketConnectionError {
+    /// Problem creating the WebSocket.
+    #[error("WebSocket creation failed: {0:?}")]
+    SocketCreationFailed(JsValue),
+
+    /// Problem creating the URL.
+    #[error("invalid URL: {0:?}")]
+    InvalidUrl(JsValue),
+}
+
+impl From<WebsocketConnectionError> for JsValue {
+    fn from(err: WebsocketConnectionError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WebsocketConnectionError");
+        err.into()
+    }
+}

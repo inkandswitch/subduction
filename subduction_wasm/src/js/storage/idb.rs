@@ -124,7 +124,9 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, JsValue> {
         Closure::once(Box::new(move |_e: Event| {
             let js_res = req.result();
             let _ = tx_ok.borrow_mut().take().map(|tx| {
-                tx.send(js_res).expect("FIXME");
+                if let Err(e) = tx.send(js_res) {
+                    tracing::error!("failed to send IDB success result: {:?}", e);
+                }
             });
 
             // Unregister handlers
@@ -144,7 +146,9 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, JsValue> {
                 .map_or_else(Into::into, |_| js_sys::Error::new("IDB error").into());
 
             let _ = tx_err.borrow_mut().take().map(|tx| {
-                tx.send(Err(err)).expect("FIXME");
+                if let Err(e) = tx.send(Err(err)) {
+                    tracing::error!("failed to send IDB error result: {:?}", e);
+                }
             });
 
             // Unregister handlers

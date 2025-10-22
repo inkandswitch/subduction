@@ -714,7 +714,7 @@ impl Sedimentree {
                         all_bundles.push(FragmentSpec {
                             id,
                             head,
-                            boundary: vec![commit_hash], // FIXME?
+                            boundary: vec![commit_hash],
                             checkpoints: checkpoints.clone(),
                         });
                     }

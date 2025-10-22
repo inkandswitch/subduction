@@ -14,6 +14,7 @@ use crate::{
 };
 use error::{BlobRequestErr, IoError, ListenError};
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
+use nonempty::NonEmpty;
 use sedimentree_core::{
     commit::{CountLeadingZeroBytes, DepthStrategy},
     future::FutureKind,
@@ -73,7 +74,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrateg
                 let conn = locked
                     .connections
                     .get(&conn_id)
-                    .expect("connections with IDs should be present")
+                    .expect("all unstarted IDs should be present by definition")
                     .clone();
 
                 tracing::info!("Spawning listener for connection {:?}", conn_id);
@@ -384,8 +385,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrateg
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_local_blobs(&self, id: SedimentreeId) -> Result<Option<Vec<Blob>>, S::Error> {
-        // FIXME return NonEmprt
+    pub async fn get_local_blobs(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
         if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
             tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
@@ -399,8 +402,6 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrateg
                         .map(|fragment| fragment.summary().blob_meta().digest()),
                 )
             {
-                // TODO include impl for range queries
-
                 if let Some(blob) = self.storage.load_blob(digest).await? {
                     results.push(blob);
                 } else {
@@ -408,7 +409,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrateg
                 }
             }
 
-            Ok(Some(results))
+            Ok(NonEmpty::from_vec(results))
         } else {
             Ok(None)
         }
@@ -430,9 +431,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthStrateg
         &self,
         id: SedimentreeId,
         timeout: Option<Duration>,
-    ) -> Result<Option<Vec<Blob>>, IoError<F, S, C>> {
-        if let Some(blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
-            Ok(Some(blobs))
+    ) -> Result<Option<NonEmpty<Blob>>, IoError<F, S, C>> {
+        if let Some(maybe_blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
+            Ok(Some(maybe_blobs))
         } else {
             if let Some(tree) = self.sedimentrees.lock().await.get(&id) {
                 let summary = tree.summarize();

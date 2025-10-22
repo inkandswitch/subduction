@@ -1,4 +1,4 @@
-use std::{sync::Arc, time::Duration};
+use std::{rc::Rc, time::Duration};
 
 use futures::{
     future::{FutureExt, LocalBoxFuture},
@@ -23,9 +23,9 @@ use crate::js::{
 #[derive(Debug, Clone)]
 pub(crate) struct JsConnectionCallbackReader<T: Connection<Local>> {
     pub(crate) conn: T,
-    pub(crate) commit_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
-    pub(crate) fragment_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
-    pub(crate) blob_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
+    pub(crate) commit_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
+    pub(crate) fragment_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
+    pub(crate) blob_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
 }
 
 impl<T: PartialEq + Connection<Local>> PartialEq for JsConnectionCallbackReader<T> {

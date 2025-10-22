@@ -1,6 +1,6 @@
 //! Subduction node.
 
-use std::{collections::HashMap, fmt::Debug, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Infallible, fmt::Debug, rc::Rc, time::Duration};
 
 use futures::lock::Mutex;
 use js_sys::Uint8Array;
@@ -26,16 +26,19 @@ use crate::js::{
     websocket::JsWebSocket,
 };
 
-use super::depth::{JsDepthRef, JsToDepth};
+use super::{
+    depth::{JsDepthRef, JsToDepth},
+    storage::JsStorageError,
+};
 
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
 pub struct JsSubduction {
     core: Subduction<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>, JsHashMetric>,
-    commit_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
-    fragment_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
-    blob_callbacks: Arc<Mutex<Vec<js_sys::Function>>>,
+    commit_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
+    fragment_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
+    blob_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
 }
 
 #[wasm_bindgen(js_class = Subduction)]
@@ -53,19 +56,27 @@ impl JsSubduction {
                 HashMap::new(),
                 JsHashMetric(raw_fn),
             ),
-            commit_callbacks: Arc::new(Mutex::new(Vec::new())),
-            fragment_callbacks: Arc::new(Mutex::new(Vec::new())),
-            blob_callbacks: Arc::new(Mutex::new(Vec::new())),
+            commit_callbacks: Rc::new(Mutex::new(Vec::new())),
+            fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
+            blob_callbacks: Rc::new(Mutex::new(Vec::new())),
         }
     }
 
     /// Run the Subduction instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsListenError` if the instance fails to run.
     pub async fn run(&self) -> Result<(), JsListenError> {
         self.core.run().await?;
         Ok(())
     }
 
     /// Attach a connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsIoError` if attaching the connection fails.
     pub async fn attach(&self, conn: JsWebSocket) -> Result<Registered, JsIoError> {
         let conn_with_callbacks = JsConnectionCallbackReader {
             conn,
@@ -91,10 +102,14 @@ impl JsSubduction {
         self.core
             .disconnect(&js_conn_id.into())
             .await
-            .expect("Infallable")
+            .unwrap_or_else(|e: Infallible| match e {})
     }
 
     /// Disconnect from a peer by its ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsDisconnectionError` if disconnection fails.
     #[wasm_bindgen(js_name = disconnectFromPeer)]
     pub async fn disconnect_from_peer(
         &self,
@@ -104,6 +119,10 @@ impl JsSubduction {
     }
 
     /// Register a new connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`JsConnectionDisallowed`] if the connection is not allowed.
     pub async fn register(&self, conn: JsWebSocket) -> Result<Registered, JsConnectionDisallowed> {
         let conn_with_callbacks = JsConnectionCallbackReader {
             conn,
@@ -168,25 +187,34 @@ impl JsSubduction {
     }
 
     /// Get a local blob by its digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsStorageError`] if JS storage fails.
     #[wasm_bindgen(js_name = getLocalBlob)]
-    pub async fn get_local_blob(&self, digest: JsDigest) -> Option<Uint8Array> {
-        let maybe_blob = self
+    pub async fn get_local_blob(
+        &self,
+        digest: JsDigest,
+    ) -> Result<Option<Uint8Array>, JsStorageError> {
+        Ok(self
             .core
             .get_local_blob(digest.into())
-            .await
-            .expect("Infallible");
-        maybe_blob.map(|blob| Uint8Array::from(blob.as_slice()))
+            .await?
+            .map(|blob| Uint8Array::from(blob.as_slice())))
     }
 
     /// Get all local blobs for a given Sedimentree ID.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsStorageError`] if JS storage fails.
     #[wasm_bindgen(js_name = getLocalBlobs)]
-    pub async fn get_local_blobs(&self, id: JsSedimentreeId) -> Result<Vec<Uint8Array>, String> {
-        if let Some(blobs) = self
-            .core
-            .get_local_blobs(id.into())
-            .await
-            .expect("Infallible")
-        {
+    pub async fn get_local_blobs(
+        &self,
+        id: JsSedimentreeId,
+    ) -> Result<Vec<Uint8Array>, JsStorageError> {
+        #[allow(clippy::expect_used)]
+        if let Some(blobs) = self.core.get_local_blobs(id.into()).await? {
             Ok(blobs
                 .into_iter()
                 .map(|blob| Uint8Array::from(blob.as_slice()))
@@ -197,13 +225,17 @@ impl JsSubduction {
     }
 
     /// Fetch blobs by their digests, with an optional timeout in milliseconds.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = fetchBlobs)]
     pub async fn fetch_blobs(
         &self,
         id: JsSedimentreeId,
         timeout_milliseconds: Option<u64>,
     ) -> Result<Option<Vec<Uint8Array>>, JsIoError> {
-        let timeout = timeout_milliseconds.map(|ms| Duration::from_millis(ms));
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
         if let Some(blobs) = self
             .core
             .fetch_blobs(id.into(), timeout)
@@ -222,6 +254,10 @@ impl JsSubduction {
     }
 
     /// Add a commit with its associated blob to the storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = addCommit)]
     pub async fn add_commit(
         &self,
@@ -243,6 +279,10 @@ impl JsSubduction {
     }
 
     /// Add a fragment with its associated blob to the storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = addFragment)]
     pub async fn add_fragment(
         &self,
@@ -262,10 +302,14 @@ impl JsSubduction {
     #[wasm_bindgen(js_name = requestBlobs)]
     pub async fn request_blobs(&self, digests: Vec<JsDigest>) {
         let digests: Vec<_> = digests.into_iter().map(Into::into).collect();
-        self.core.request_blobs(digests).await
+        self.core.request_blobs(digests).await;
     }
 
     /// Request batch sync for a given Sedimentree ID from a specific peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = requestPeerBatchSync)]
     pub async fn request_peer_batch_sync(
         &self,
@@ -293,6 +337,10 @@ impl JsSubduction {
     }
 
     /// Request batch sync for a given Sedimentree ID from all connected peers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = requestAllBatchSync)]
     pub async fn request_all_batch_sync(
         &self,
@@ -321,6 +369,10 @@ impl JsSubduction {
     }
 
     /// Request batch sync for all known Sedimentree IDs from all connected peers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = requestAllBatchSyncAll)]
     pub async fn request_all_batch_sync_all(
         &self,
@@ -347,24 +399,19 @@ impl JsSubduction {
     /// Get all commits for a given Sedimentree ID
     #[wasm_bindgen(js_name = getCommits)]
     pub async fn get_commits(&self, id: JsSedimentreeId) -> Option<Vec<JsLooseCommit>> {
-        if let Some(commits) = self.core.get_commits(id.into()).await {
-            Some(commits.into_iter().map(JsLooseCommit::from).collect())
-        } else {
-            None
-        }
+        self.core
+            .get_commits(id.into())
+            .await
+            .map(|commits| commits.into_iter().map(JsLooseCommit::from).collect())
     }
 
     /// Get all fragments for a given Sedimentree ID
     #[wasm_bindgen(js_name = getFragments)]
-    pub async fn get_fragments(
-        &self,
-        id: JsSedimentreeId,
-    ) -> Result<Option<Vec<JsFragment>>, String> {
-        if let Some(fragments) = self.core.get_fragments(id.into()).await {
-            Ok(Some(fragments.into_iter().map(JsFragment::from).collect()))
-        } else {
-            Ok(None)
-        }
+    pub async fn get_fragments(&self, id: JsSedimentreeId) -> Option<Vec<JsFragment>> {
+        self.core
+            .get_fragments(id.into())
+            .await
+            .map(|fragments| fragments.into_iter().map(JsFragment::from).collect())
     }
 
     /// Get the peer IDs of all connected peers
@@ -391,6 +438,7 @@ pub struct Registered {
 #[wasm_bindgen(js_class = Registered)]
 impl Registered {
     /// Whether the connection was newly registered.
+    #[must_use]
     #[wasm_bindgen(getter)]
     #[allow(clippy::missing_const_for_fn)]
     pub fn is_new(&self) -> bool {
@@ -398,6 +446,7 @@ impl Registered {
     }
 
     /// The connection ID of the registered connection.
+    #[must_use]
     #[wasm_bindgen(getter)]
     pub fn conn_id(&self) -> JsConnectionId {
         self.conn_id.clone()
@@ -415,12 +464,15 @@ pub struct PeerBatchSyncResult {
 #[wasm_bindgen(js_class = PeerBatchSyncResult)]
 impl PeerBatchSyncResult {
     /// Whether the batch sync was successful with at least one connection.
+    #[must_use]
     #[wasm_bindgen(getter)]
+    #[allow(clippy::missing_const_for_fn)]
     pub fn success(&self) -> bool {
         self.success
     }
 
     /// List of connection errors that occurred during the batch sync.
+    #[must_use]
     #[wasm_bindgen(getter, js_name = connErrors)]
     pub fn conn_errors(&self) -> Vec<ConnErrPair> {
         self.conn_errors.clone()
@@ -476,6 +528,7 @@ pub struct PeerResultMap(HashMap<PeerId, (bool, Vec<(JsWebSocket, JsCallError)>)
 #[wasm_bindgen(js_class = PeerResultMap)]
 impl PeerResultMap {
     /// Get the result for a specific peer ID.
+    #[must_use]
     pub fn get_result(&self, peer_id: JsPeerId) -> Option<PeerBatchSyncResult> {
         self.0
             .get(&peer_id.into())
@@ -499,6 +552,8 @@ impl DepthStrategy for JsHashMetric {
     fn to_depth(&self, digest: Digest) -> Depth {
         if let Some(func) = &self.0 {
             let js_digest = JsDigest::from(digest);
+
+            #[allow(clippy::expect_used)]
             let js_value = func
                 .call1(&JsValue::NULL, &JsValue::from(js_digest))
                 .expect("callback failed");

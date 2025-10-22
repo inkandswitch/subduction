@@ -219,3 +219,11 @@ pub enum JsStorageError {
     #[error("Value was not a Digest: {0:?}")]
     NotDigest(JsValue),
 }
+
+impl From<JsStorageError> for JsValue {
+    fn from(err: JsStorageError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("StorageError");
+        js_err.into()
+    }
+}
