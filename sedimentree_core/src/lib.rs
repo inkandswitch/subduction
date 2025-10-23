@@ -82,7 +82,7 @@ impl FromStr for SedimentreeId {
     type Err = BadSedimentreeId;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len().is_multiple_of(2) {
+        if !s.len().is_multiple_of(2) {
             return Err(BadSedimentreeId);
         }
 
