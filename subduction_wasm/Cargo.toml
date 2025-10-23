@@ -36,16 +36,18 @@ wasm-bindgen-futures = "0.4.53"
 wasm_refgen = "0.1.2"
 
 [dependencies.web-sys]
-version = "0.3.80"
+version = "0.3.81"
 features = [
   "BinaryType",
   "DomException",
+  "DomStringList",
   "IdbDatabase",
   "IdbFactory",
   "IdbObjectStore",
   "IdbOpenDbRequest",
   "IdbTransaction",
   "IdbTransactionMode",
+  "IdbVersionChangeEvent",
   "MessageEvent",
   "ServiceWorkerGlobalScope",
   "Url",

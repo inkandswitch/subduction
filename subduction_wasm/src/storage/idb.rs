@@ -6,12 +6,15 @@ use sedimentree_core::blob::Digest;
 use std::{cell::RefCell, rc::Rc};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
-use web_sys::{Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
+use web_sys::{
+    Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
+    IdbVersionChangeEvent,
+};
 
 use crate::digest::WasmDigest;
 
 /// The version number of the [`IndexedDB`] database schema.
-pub const DB_VERSION: u32 = 0;
+pub const DB_VERSION: u32 = 1;
 
 /// The name of the [`IndexedDB`] database.
 pub const DB_NAME: &str = "@automerge/subduction/db";
@@ -21,7 +24,7 @@ pub const BLOB_STORE_NAME: &str = "blobs";
 
 /// `IndexedDB` storage backend.
 #[wasm_bindgen(js_name = IndexedDbStorage)]
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct IndexedDbStorage(IdbDatabase);
 
 #[wasm_bindgen(js_class = "IndexedDbStorage")]
@@ -37,21 +40,21 @@ impl IndexedDbStorage {
 
         // Create object stores on first open
         {
-            let onupgradeneeded = Closure::once(Box::new(move |e: Event| {
+            let onupgradeneeded = Closure::wrap(Box::new(move |e: IdbVersionChangeEvent| {
                 if let Some(req) = e
                     .target()
                     .and_then(|t| t.dyn_into::<IdbOpenDbRequest>().ok())
                 {
                     if let Ok(db_val) = req.result() {
                         if let Ok(db) = db_val.dyn_into::<IdbDatabase>() {
-                            let ensured = db.create_object_store(DB_NAME).map_err(|e| {
-                                tracing::error!("Failed to create object store: {:?}", e);
-                            });
-                            drop(ensured);
+                            let names = db.object_store_names();
+                            if !names.contains(BLOB_STORE_NAME) {
+                                db.create_object_store(BLOB_STORE_NAME).unwrap();
+                            }
                         }
                     }
                 }
-            }) as Box<dyn FnOnce(_)>);
+            }) as Box<dyn FnMut(_)>);
             open_req.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
             onupgradeneeded.forget();
         }
