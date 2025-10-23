@@ -8,7 +8,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::{Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode};
 
-use crate::js::digest::JsDigest;
+use crate::digest::WasmDigest;
 
 /// The version number of the [`IndexedDB`] database schema.
 pub const DB_VERSION: u32 = 0;
@@ -19,7 +19,7 @@ pub const DB_NAME: &str = "@automerge/subduction/db";
 /// The name of the object store for blobs.
 pub const BLOB_STORE_NAME: &str = "blobs";
 
-/// IndexedDB storage backend.
+/// `IndexedDB` storage backend.
 #[wasm_bindgen(js_name = IndexedDbStorage)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct IndexedDbStorage(IdbDatabase);
@@ -72,7 +72,7 @@ impl IndexedDbStorage {
     ///
     /// Returns a `JsValue` if the blob could not be loaded.
     #[wasm_bindgen(js_name = loadBlob)]
-    pub async fn load_blob(&self, digest: JsDigest) -> Result<Option<Vec<u8>>, JsValue> {
+    pub async fn load_blob(&self, digest: WasmDigest) -> Result<Option<Vec<u8>>, JsValue> {
         let req = self
             .0
             .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readonly)?
@@ -96,7 +96,7 @@ impl IndexedDbStorage {
     /// Returns a `JsValue` if the JS transaction could not be opened,
     /// or if the blob could not be saved.
     #[wasm_bindgen(js_name = saveBlob)]
-    pub async fn save_blob(&self, bytes: &[u8]) -> Result<JsDigest, JsValue> {
+    pub async fn save_blob(&self, bytes: &[u8]) -> Result<WasmDigest, JsValue> {
         let digest = Digest::hash(bytes);
         let req = self
             .0

@@ -24,12 +24,12 @@ use web_sys::{
     MessageEvent, Url, WebSocket,
 };
 
-use super::peer_id::JsPeerId;
+use super::peer_id::WasmPeerId;
 
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
-pub struct JsWebSocket {
+pub struct WasmWebSocket {
     peer_id: PeerId,
     timeout_ms: u32,
 
@@ -41,11 +41,11 @@ pub struct JsWebSocket {
 }
 
 #[wasm_bindgen(js_class = SubductionWebSocket)]
-impl JsWebSocket {
-    /// Create a new [`JsWebSocket`] instance.
+impl WasmWebSocket {
+    /// Create a new [`WasmWebSocket`] instance.
     #[must_use]
     #[wasm_bindgen(constructor)]
-    pub fn new(peer_id: JsPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
+    pub fn new(peer_id: WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
         let (inbound_writer, raw_inbound_reader) = mpsc::unbounded();
         let inbound_reader = Arc::new(Mutex::new(raw_inbound_reader));
 
@@ -137,7 +137,7 @@ impl JsWebSocket {
     /// Returns [`WebsocketConnectionError`] if establishing the connection fails.
     pub fn connect(
         address: &Url,
-        peer_id: &JsPeerId,
+        peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
     ) -> Result<Self, WebsocketConnectionError> {
         Ok(Self::new(
@@ -149,13 +149,13 @@ impl JsWebSocket {
     }
 }
 
-impl PartialEq for JsWebSocket {
+impl PartialEq for WasmWebSocket {
     fn eq(&self, other: &Self) -> bool {
         self.peer_id == other.peer_id && self.socket == other.socket
     }
 }
 
-impl Connection<Local> for JsWebSocket {
+impl Connection<Local> for WasmWebSocket {
     type SendError = SendError;
     type RecvError = ReadFromClosedChannel;
     type CallError = CallError;
@@ -256,7 +256,7 @@ impl Connection<Local> for JsWebSocket {
     }
 }
 
-impl Reconnect<Local> for JsWebSocket {
+impl Reconnect<Local> for WasmWebSocket {
     type ConnectError = WebsocketConnectionError;
     type RunError = WebsocketConnectionError;
 
@@ -265,7 +265,7 @@ impl Reconnect<Local> for JsWebSocket {
             let address = self.socket.url();
             let peer_id = self.peer_id;
 
-            *self = JsWebSocket::connect(
+            *self = WasmWebSocket::connect(
                 &Url::new(&address).map_err(WebsocketConnectionError::InvalidUrl)?,
                 &peer_id.into(),
                 self.timeout_ms,
@@ -287,13 +287,13 @@ impl Reconnect<Local> for JsWebSocket {
 }
 
 #[derive(Debug)]
-struct JsTimeout {
+struct WasmTimeout {
     id: JsValue, // Numeric in browsers, special Timeout type in e.g. Deno.
     // Keep the closure alive so the timer can call it
     _closure: Option<Closure<dyn FnMut()>>,
 }
 
-impl JsTimeout {
+impl WasmTimeout {
     /// Creates a Promise that resolves after `ms` and a handle you can cancel.
     fn new(ms: i32) -> (JsFuture, Self) {
         let mut out_id: JsValue = JsValue::UNDEFINED;
@@ -345,7 +345,7 @@ impl JsTimeout {
 
         (
             JsFuture::from(promise),
-            JsTimeout {
+            WasmTimeout {
                 id: out_id,
                 _closure: out_closure,
             },
@@ -370,7 +370,7 @@ struct TimedOut;
 
 async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Result<T, TimedOut> {
     let ms = dur.as_millis().try_into().unwrap_or(i32::MAX);
-    let (sleep, handle) = JsTimeout::new(ms);
+    let (sleep, handle) = WasmTimeout::new(ms);
     match futures_util::future::select(fut, sleep).await {
         futures_util::future::Either::Left((val, _sleep_future)) => {
             handle.cancel();

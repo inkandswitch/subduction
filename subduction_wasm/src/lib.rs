@@ -26,9 +26,21 @@
 )]
 #![forbid(unsafe_code)]
 
-pub mod js;
+pub mod connection_id;
+pub mod depth;
+pub mod digest;
+pub mod error;
+pub mod fragment;
+pub mod loose_commit;
+pub mod peer_id;
+pub mod sedimentree_id;
+pub mod storage;
+pub mod subduction;
+pub mod websocket;
 
-pub use js::subduction::JsSubduction;
+pub(crate) mod connection_callback_reader;
+
+pub use subduction::WasmSubduction;
 
 /// Set a panic hook to get better error messages if the code panics.
 #[allow(dead_code)]

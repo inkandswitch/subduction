@@ -8,10 +8,10 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = SedimentreeId)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(missing_copy_implementations)]
-pub struct JsSedimentreeId(SedimentreeId);
+pub struct WasmSedimentreeId(SedimentreeId);
 
 #[wasm_bindgen(js_class = SedimentreeId)]
-impl JsSedimentreeId {
+impl WasmSedimentreeId {
     /// Create an ID from a byte array.
     ///
     /// # Errors
@@ -31,20 +31,20 @@ impl JsSedimentreeId {
     }
 }
 
-impl std::fmt::Display for JsSedimentreeId {
+impl std::fmt::Display for WasmSedimentreeId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
 }
 
-impl From<SedimentreeId> for JsSedimentreeId {
+impl From<SedimentreeId> for WasmSedimentreeId {
     fn from(id: SedimentreeId) -> Self {
         Self(id)
     }
 }
 
-impl From<JsSedimentreeId> for SedimentreeId {
-    fn from(id: JsSedimentreeId) -> Self {
+impl From<WasmSedimentreeId> for SedimentreeId {
+    fn from(id: WasmSedimentreeId) -> Self {
         id.0
     }
 }

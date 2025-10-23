@@ -3,44 +3,44 @@
 use sedimentree_core::{blob::BlobMeta, LooseCommit};
 use wasm_bindgen::prelude::*;
 
-use super::digest::JsDigest;
+use super::digest::WasmDigest;
 
 /// A Wasm wrapper around the [`LooseCommit`] type.
 #[wasm_bindgen(js_name = LooseCommit)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct JsLooseCommit(LooseCommit);
+pub struct WasmLooseCommit(LooseCommit);
 
 #[wasm_bindgen(js_class = LooseCommit)]
-impl JsLooseCommit {
+impl WasmLooseCommit {
     /// Get the digest of the commit.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn digest(&self) -> JsDigest {
+    pub fn digest(&self) -> WasmDigest {
         self.0.digest().into()
     }
 
     /// Get the parent digests of the commit.
     #[wasm_bindgen(getter)]
-    pub fn parents(&self) -> Vec<JsDigest> {
+    pub fn parents(&self) -> Vec<WasmDigest> {
         self.0.parents().iter().copied().map(Into::into).collect()
     }
 
     /// Get the blob metadata of the commit.
     #[must_use]
     #[wasm_bindgen(getter, js_name = blobMeta)]
-    pub fn blob_meta(&self) -> JsBlobMeta {
+    pub fn blob_meta(&self) -> WasmBlobMeta {
         self.0.blob().to_owned().into()
     }
 }
 
-impl From<LooseCommit> for JsLooseCommit {
+impl From<LooseCommit> for WasmLooseCommit {
     fn from(commit: LooseCommit) -> Self {
         Self(commit)
     }
 }
 
-impl From<JsLooseCommit> for LooseCommit {
-    fn from(commit: JsLooseCommit) -> Self {
+impl From<WasmLooseCommit> for LooseCommit {
+    fn from(commit: WasmLooseCommit) -> Self {
         commit.0
     }
 }
@@ -49,13 +49,13 @@ impl From<JsLooseCommit> for LooseCommit {
 #[wasm_bindgen(js_name = BlobMeta)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[allow(missing_copy_implementations)]
-pub struct JsBlobMeta(BlobMeta);
+pub struct WasmBlobMeta(BlobMeta);
 
 #[wasm_bindgen(js_class = BlobMeta)]
-impl JsBlobMeta {
+impl WasmBlobMeta {
     /// Get the digest of the blob.
     #[must_use]
-    pub fn digest(&self) -> JsDigest {
+    pub fn digest(&self) -> WasmDigest {
         self.0.digest().into()
     }
 
@@ -68,14 +68,14 @@ impl JsBlobMeta {
     }
 }
 
-impl From<BlobMeta> for JsBlobMeta {
+impl From<BlobMeta> for WasmBlobMeta {
     fn from(meta: BlobMeta) -> Self {
         Self(meta)
     }
 }
 
-impl From<JsBlobMeta> for BlobMeta {
-    fn from(meta: JsBlobMeta) -> Self {
+impl From<WasmBlobMeta> for BlobMeta {
+    fn from(meta: WasmBlobMeta) -> Self {
         meta.0
     }
 }
@@ -85,18 +85,18 @@ export function tryIntoLooseCommitArray(xs) { return xs; }
 "#)]
 
 extern "C" {
-    /// Try to convert a `JsValue` into an array of `JsLooseCommit`.
+    /// Try to convert a `JsValue` into an array of `WasmLooseCommit`.
     #[wasm_bindgen(js_name = tryIntoLooseCommitArray, catch)]
-    pub fn try_into_js_loose_commit_array(v: &JsValue) -> Result<Vec<JsLooseCommit>, JsValue>;
+    pub fn try_into_js_loose_commit_array(v: &JsValue) -> Result<Vec<WasmLooseCommit>, JsValue>;
 }
 
-pub(crate) struct JsLooseCommitsArray(pub(crate) Vec<JsLooseCommit>);
+pub(crate) struct WasmLooseCommitsArray(pub(crate) Vec<WasmLooseCommit>);
 
-impl TryFrom<&JsValue> for JsLooseCommitsArray {
+impl TryFrom<&JsValue> for WasmLooseCommitsArray {
     type Error = JsValue;
 
     fn try_from(js_value: &JsValue) -> Result<Self, Self::Error> {
-        Ok(JsLooseCommitsArray(try_into_js_loose_commit_array(
+        Ok(WasmLooseCommitsArray(try_into_js_loose_commit_array(
             js_value,
         )?))
     }

@@ -7,16 +7,16 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = ConnectionId)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(missing_copy_implementations)]
-pub struct JsConnectionId(ConnectionId);
+pub struct WasmConnectionId(ConnectionId);
 
-impl From<ConnectionId> for JsConnectionId {
+impl From<ConnectionId> for WasmConnectionId {
     fn from(id: ConnectionId) -> Self {
         Self(id)
     }
 }
 
-impl From<JsConnectionId> for ConnectionId {
-    fn from(id: JsConnectionId) -> Self {
+impl From<WasmConnectionId> for ConnectionId {
+    fn from(id: WasmConnectionId) -> Self {
         id.0
     }
 }

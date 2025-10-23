@@ -16,25 +16,25 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::JsValue;
 
-use crate::js::{
-    fragment::JsFragment, loose_commit::JsLooseCommit, sedimentree_id::JsSedimentreeId,
+use crate::{
+    fragment::WasmFragment, loose_commit::WasmLooseCommit, sedimentree_id::WasmSedimentreeId,
 };
 
 #[derive(Debug, Clone)]
-pub(crate) struct JsConnectionCallbackReader<T: Connection<Local>> {
+pub(crate) struct WasmConnectionCallbackReader<T: Connection<Local>> {
     pub(crate) conn: T,
     pub(crate) commit_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
     pub(crate) fragment_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
     pub(crate) blob_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
 }
 
-impl<T: PartialEq + Connection<Local>> PartialEq for JsConnectionCallbackReader<T> {
+impl<T: PartialEq + Connection<Local>> PartialEq for WasmConnectionCallbackReader<T> {
     fn eq(&self, other: &Self) -> bool {
         self.conn == other.conn
     }
 }
 
-impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
+impl<T: Connection<Local>> Connection<Local> for WasmConnectionCallbackReader<T> {
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = RecvOrCallbackErr<T>;
@@ -63,8 +63,8 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                         callback
                             .call3(
                                 &JsValue::NULL,
-                                &JsValue::from(JsSedimentreeId::from(*id)),
-                                &JsValue::from(JsLooseCommit::from(commit.clone())),
+                                &JsValue::from(WasmSedimentreeId::from(*id)),
+                                &JsValue::from(WasmLooseCommit::from(commit.clone())),
                                 &JsValue::from(Uint8Array::from(blob.as_slice())),
                             )
                             .map_err(RecvOrCallbackErr::CommitCallback)?;
@@ -76,8 +76,8 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                         callback
                             .call3(
                                 &JsValue::NULL,
-                                &JsValue::from(JsSedimentreeId::from(*id)),
-                                &JsValue::from(JsFragment::from(fragment.clone())),
+                                &JsValue::from(WasmSedimentreeId::from(*id)),
+                                &JsValue::from(WasmFragment::from(fragment.clone())),
                                 &JsValue::from(Uint8Array::from(blob.as_slice())),
                             )
                             .map_err(RecvOrCallbackErr::FragmentCallback)?;
@@ -113,8 +113,8 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                             callback
                                 .call3(
                                     &this,
-                                    &JsValue::from(JsSedimentreeId::from(*id)),
-                                    &JsValue::from(JsLooseCommit::from(commit.clone())),
+                                    &JsValue::from(WasmSedimentreeId::from(*id)),
+                                    &JsValue::from(WasmLooseCommit::from(commit.clone())),
                                     &JsValue::from(blob.clone().into_contents()),
                                 )
                                 .map_err(RecvOrCallbackErr::CommitCallback)?;
@@ -129,8 +129,8 @@ impl<T: Connection<Local>> Connection<Local> for JsConnectionCallbackReader<T> {
                             callback
                                 .call3(
                                     &this,
-                                    &JsValue::from(JsSedimentreeId::from(*id)),
-                                    &JsValue::from(JsFragment::from(fragment.clone())),
+                                    &JsValue::from(WasmSedimentreeId::from(*id)),
+                                    &JsValue::from(WasmFragment::from(fragment.clone())),
                                     &JsValue::from(blob.clone().into_contents()),
                                 )
                                 .map_err(RecvOrCallbackErr::FragmentCallback)?;

@@ -3,28 +3,30 @@
 use sedimentree_core::depth::Depth;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 /// A JavaScript wrapper around `Depth`.
 #[wasm_bindgen(js_name = Depth)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[allow(missing_copy_implementations)]
-pub struct JsDepth(Depth);
+pub struct WasmDepth(Depth);
 
-impl From<Depth> for JsDepth {
+impl From<Depth> for WasmDepth {
     fn from(depth: Depth) -> Self {
-        JsDepth(depth)
+        WasmDepth(depth)
     }
 }
 
-impl From<JsDepth> for Depth {
-    fn from(js_depth: JsDepth) -> Self {
+impl From<WasmDepth> for Depth {
+    fn from(js_depth: WasmDepth) -> Self {
         js_depth.0
     }
 }
 
+#[wasm_refgen(js_ref = JsDepth)]
 #[wasm_bindgen(js_class = Depth)]
-impl JsDepth {
-    /// Creates a new `JsDepth` from a JavaScript value.
+impl WasmDepth {
+    /// Creates a new `WasmDepth` from a JavaScript value.
     ///
     /// # Errors
     ///
@@ -43,7 +45,7 @@ impl JsDepth {
             })
             .ok_or(NotU32Error)?;
 
-        Ok(JsDepth(Depth(value)))
+        Ok(WasmDepth(Depth(value)))
     }
 
     /// The depth value as an integer.
@@ -58,33 +60,9 @@ impl JsDepth {
     #[must_use]
     #[wasm_bindgen(js_name = __subduction_castToDepth)]
     #[allow(clippy::missing_const_for_fn)]
-    pub fn cast_to_depth(&self) -> JsDepth {
+    pub fn cast_to_depth(&self) -> WasmDepth {
         self.clone()
     }
-}
-
-#[wasm_bindgen]
-extern "C" {
-    /// An interface for functions from `JsDigest` to `JsDepth` on the JS side of the boundary.
-    #[wasm_bindgen(typescript_type = "(digest: Digest) => Depth")]
-    pub type JsToDepth;
-}
-
-impl std::fmt::Debug for JsToDepth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("JsToDepth").finish()
-    }
-}
-
-#[wasm_bindgen]
-extern "C" {
-    /// Internal type for a hack crossing the JS boundary.
-    #[wasm_bindgen(js_name = DepthRef)]
-    pub type JsDepthRef;
-
-    /// Internal method for a hack crossing the JS boundary.
-    #[wasm_bindgen(method, js_name = __subduction_castToDepth)]
-    pub fn cast_to_js_depth(this: &JsDepthRef) -> JsDepth;
 }
 
 /// Error indicating that a value is not a valid u32.
@@ -98,5 +76,18 @@ impl From<NotU32Error> for JsValue {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("NotU32Error");
         err.into()
+    }
+}
+
+#[wasm_bindgen]
+extern "C" {
+    /// An interface for functions from `JsDigest` to `WasmDepth` on the JS side of the boundary.
+    #[wasm_bindgen(typescript_type = "(digest: Digest) => Depth")]
+    pub type JsToDepth;
+}
+
+impl std::fmt::Debug for JsToDepth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("JsToDepth").finish()
     }
 }

@@ -9,9 +9,9 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use super::{
-    connection_callback_reader::JsConnectionCallbackReader,
+    connection_callback_reader::WasmConnectionCallbackReader,
     storage::JsStorage,
-    websocket::{CallError, JsWebSocket},
+    websocket::{CallError, WasmWebSocket},
 };
 
 /// A Wasm wrapper around the [`IoError`] type.
@@ -21,44 +21,46 @@ use super::{
 #[wasm_bindgen(js_name = IoError)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsIoError(#[from] IoError<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>>);
+pub struct WasmIoError(
+    #[from] IoError<Local, JsStorage, WasmConnectionCallbackReader<WasmWebSocket>>,
+);
 
 /// A Wasm wrapper around the [`ConnectionDisallowed`] type.
 #[wasm_bindgen(js_name = ConnectionDisallowed)]
 #[derive(Debug, Clone, Error)]
 #[error(transparent)]
 #[allow(missing_copy_implementations)]
-pub struct JsConnectionDisallowed(#[from] ConnectionDisallowed);
+pub struct WasmConnectionDisallowed(#[from] ConnectionDisallowed);
 
 /// A Wasm wrapper around the [`ListenError`] type.
 #[wasm_bindgen(js_name = ListenError)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct JsListenError(
-    #[from] ListenError<Local, JsStorage, JsConnectionCallbackReader<JsWebSocket>>,
+pub struct WasmListenError(
+    #[from] ListenError<Local, JsStorage, WasmConnectionCallbackReader<WasmWebSocket>>,
 );
 
 /// A Wasm wrapper around the [`CallError`] type.
 #[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone, Error)]
 #[error(transparent)]
-pub struct JsCallError(#[from] JsCallErrorInner);
+pub struct WasmCallError(#[from] WasmCallErrorInner);
 
-impl From<CallError> for JsCallError {
+impl From<CallError> for WasmCallError {
     fn from(err: CallError) -> Self {
-        JsCallError(err.into())
+        WasmCallError(err.into())
     }
 }
 
-impl From<&CallError> for JsCallError {
+impl From<&CallError> for WasmCallError {
     fn from(err: &CallError) -> Self {
-        JsCallError((err).into())
+        WasmCallError((err).into())
     }
 }
 
 /// Problem while attempting to make a roundtrip call.
 #[derive(Debug, Clone, Error)]
-pub enum JsCallErrorInner {
+pub enum WasmCallErrorInner {
     /// Problem encoding message.
     #[error("Problem encoding message: {0}")]
     Encoding(String),
@@ -76,7 +78,7 @@ pub enum JsCallErrorInner {
     TimedOut,
 }
 
-impl From<CallError> for JsCallErrorInner {
+impl From<CallError> for WasmCallErrorInner {
     fn from(err: CallError) -> Self {
         match err {
             CallError::Encoding(e) => Self::Encoding(e.to_string()),
@@ -87,7 +89,7 @@ impl From<CallError> for JsCallErrorInner {
     }
 }
 
-impl From<&CallError> for JsCallErrorInner {
+impl From<&CallError> for WasmCallErrorInner {
     fn from(err: &CallError) -> Self {
         match err {
             CallError::Encoding(e) => Self::Encoding(e.to_string()),
