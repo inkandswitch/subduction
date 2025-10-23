@@ -32,7 +32,7 @@ npx playwright show-report
 
 ## Naming Conventions
 
-`wasm-bindgen`-generated types ownership rules can be confusing and cumbersome, with different behaviour depending on which side of the Wasm boundary your type was created from. To help keep this straight, we adopt the naming convention:
+`wasm-bindgen`-generated types ownership rules can be confusing and cumbersome, with different behavior depending on which side of the Wasm boundary your type was created from. To help keep this straight, we adopt the naming convention:
 
 > [!NOTE]
 > Types exported from Rust are prefixed with `Wasm`.

@@ -8,6 +8,7 @@ BeeKEM
 Beelay
 BigCo
 CGKA
+CLI
 CRDT
 CRDTs
 ChaCha
@@ -58,6 +59,7 @@ TreeKEM
 TypeScript
 Wasm
 WebCrypto
+WebSocket
 XChaCha
 al
 assignees
