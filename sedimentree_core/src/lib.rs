@@ -82,7 +82,7 @@ impl FromStr for SedimentreeId {
     type Err = BadSedimentreeId;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s.len() % 2 != 0 {
+        if s.len().is_multiple_of(2) {
             return Err(BadSedimentreeId);
         }
 
@@ -287,7 +287,7 @@ impl Fragment {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub fn boundary(&self) -> &[Digest] {
+    pub const fn boundary(&self) -> &[Digest] {
         self.summary.boundary.as_slice()
     }
 
@@ -333,7 +333,7 @@ impl FragmentSummary {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub fn boundary(&self) -> &[Digest] {
+    pub const fn boundary(&self) -> &[Digest] {
         self.boundary.as_slice()
     }
 
@@ -670,18 +670,16 @@ impl Sedimentree {
                     checkpoints.push(commit_hash);
                 }
             }
-            if level >= crate::MAX_STRATA_DEPTH {
-                if let Some((head, checkpoints)) = runs_by_level.remove(&level) {
-                    if self.fragments.iter().any(|s| s.supports_block(commit_hash)) {
-                        runs_by_level.insert(level, (commit_hash, Vec::new()));
-                    } else {
-                        all_bundles.push(FragmentSpec {
-                            id,
-                            head,
-                            boundary: vec![commit_hash],
-                            checkpoints: checkpoints.clone(),
-                        });
-                    }
+            if level >= crate::MAX_STRATA_DEPTH && let Some((head, checkpoints)) = runs_by_level.remove(&level) {
+                if self.fragments.iter().any(|s| s.supports_block(commit_hash)) {
+                    runs_by_level.insert(level, (commit_hash, Vec::new()));
+                } else {
+                    all_bundles.push(FragmentSpec {
+                        id,
+                        head,
+                        boundary: vec![commit_hash],
+                        checkpoints: checkpoints.clone(),
+                    });
                 }
             }
         }
@@ -724,7 +722,7 @@ impl FragmentSpec {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub fn boundary(&self) -> &[Digest] {
+    pub const fn boundary(&self) -> &[Digest] {
         self.boundary.as_slice()
     }
 

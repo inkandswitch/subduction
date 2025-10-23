@@ -44,16 +44,18 @@ impl IndexedDbStorage {
                 if let Some(req) = e
                     .target()
                     .and_then(|t| t.dyn_into::<IdbOpenDbRequest>().ok())
-                {
-                    if let Ok(db_val) = req.result() {
-                        if let Ok(db) = db_val.dyn_into::<IdbDatabase>() {
-                            let names = db.object_store_names();
-                            if !names.contains(BLOB_STORE_NAME) {
-                                db.create_object_store(BLOB_STORE_NAME).unwrap();
+                    && let Ok(db_val) = req.result()
+                    && let Ok(db) = db_val.dyn_into::<IdbDatabase>() {
+                        let names = db.object_store_names();
+                        if !names.contains(BLOB_STORE_NAME)
+                            && let Err(e) = db.create_object_store(BLOB_STORE_NAME) {
+                                tracing::error!(
+                                    "failed to create object store '{}': {:?}",
+                                    BLOB_STORE_NAME,
+                                    e
+                                );
                             }
-                        }
                     }
-                }
             }) as Box<dyn FnMut(_)>);
             open_req.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
             onupgradeneeded.forget();

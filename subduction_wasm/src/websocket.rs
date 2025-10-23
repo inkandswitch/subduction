@@ -357,11 +357,9 @@ impl WasmTimeout {
         let global = js_sys::global();
         if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
             .and_then(JsCast::dyn_into::<js_sys::Function>)
-        {
-            if let Err(e) = clear_timeout.call1(&global, &self.id) {
+            && let Err(e) = clear_timeout.call1(&global, &self.id) {
                 tracing::error!("Failed to clear timeout: {:?}", e);
             }
-        }
     }
 }
 
