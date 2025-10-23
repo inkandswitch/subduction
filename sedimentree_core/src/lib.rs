@@ -789,10 +789,10 @@ mod tests {
 
     use super::*;
 
-    fn hash_with_leading_zeros(zero_count: u32) -> Digest {
+    fn hash_with_leading_zeros(zeros_count: u32) -> Digest {
         let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
-        for i in 0..zero_count {
-            byte_arr[i as usize] = 0;
+        for slot in byte_arr.iter_mut().take(zeros_count as usize) {
+            *slot = 0;
         }
         Digest::from(byte_arr)
     }
