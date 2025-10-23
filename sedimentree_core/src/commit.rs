@@ -246,7 +246,7 @@ impl<T> FragmentState<T> {
     /// The "newest" element of the fragment.
     ///
     /// This digest provides a stable point from which
-    /// the restof the fragment is built.
+    /// the rest of the fragment is built.
     #[must_use]
     pub const fn head_digest(&self) -> Digest {
         self.head_digest
