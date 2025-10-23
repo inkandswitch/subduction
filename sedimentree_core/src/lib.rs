@@ -728,7 +728,7 @@ impl FragmentSpec {
         self.boundary.as_slice()
     }
 
-    /// The inner checkpopoints of the fragment.
+    /// The inner checkpoints of the fragment.
     #[must_use]
     pub const fn checkpoints(&self) -> &Vec<Digest> {
         &self.checkpoints
