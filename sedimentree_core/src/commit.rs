@@ -216,7 +216,7 @@ impl DepthMetric for CountTrailingZerosInBase {
 /// In this way, a document can be broken up into a series
 /// of `Fragment`s that are consistent across replicas.
 ///
-/// This is an experimental API, the fragmet API is subject to change
+/// This is an experimental API, the fragment API is subject to change
 /// and so should not be used in production just yet.
 #[derive(Debug, Clone)]
 pub struct FragmentState<T> {
