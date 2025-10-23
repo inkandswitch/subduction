@@ -1,5 +1,7 @@
 # Subduction Wasm bindings
 
+🚧 This is an early release preview. It has a very unstable API. No guarantees are given. DO NOT use for production use cases at this time. USE AT YOUR OWN RISK. 🚧
+
 ## Build package
 
 ```
@@ -27,3 +29,11 @@ View Playwright report:
 ```
 npx playwright show-report
 ```
+
+## Naming Conventions
+
+`wasm-bindgen`-generated types ownership rules can be confusing and cumbersome, with different behaviour depending on which side of the Wasm boundary your type was created from. To help keep this straight, we adopt the naming convention:
+
+> [!NOTE]
+> Types exported from Rust are prefixed with `Wasm`.
+> Types imported from JS are prefixed with `Js`.
