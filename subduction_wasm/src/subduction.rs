@@ -178,14 +178,14 @@ impl WasmSubduction {
     /// Add a callback for blob events.
     #[wasm_bindgen(js_name = onBlob)]
     pub async fn on_blob(&self, callback: js_sys::Function) {
-        let mut lock = self.fragment_callbacks.lock().await;
+        let mut lock = self.blob_callbacks.lock().await;
         lock.push(callback);
     }
 
     /// Remove a callback for blob events.
     #[wasm_bindgen(js_name = offBlob)]
     pub async fn off_blob(&self, callback: js_sys::Function) {
-        let mut lock = self.fragment_callbacks.lock().await;
+        let mut lock = self.blob_callbacks.lock().await;
         lock.retain(|cb| cb != &callback);
     }
 
