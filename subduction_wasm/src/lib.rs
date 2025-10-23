@@ -1,4 +1,4 @@
-//! # Wasm Bindings for the Subducton sync protocol.
+//! # Wasm Bindings for the Subduction sync protocol.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![warn(
