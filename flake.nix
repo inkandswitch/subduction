@@ -38,7 +38,7 @@
           config.allowUnfree = true;
         };
 
-        rustVersion = "1.86.0";
+        rustVersion = "1.90.0";
 
         rust-toolchain = pkgs.rust-bin.stable.${rustVersion}.default.override {
           extensions = [
@@ -182,8 +182,23 @@
           "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
             "${wasm-pack} test --node subduction_wasm";
 
-          "test:ts:web" = cmd "Run subduction_wasm Typescript tests in Playwright"
-            "build:wasm:web && ${playwright} test";
+          "test:ts:web" = cmd "Run subduction_wasm Typescript tests in Playwright" ''
+            cd ./subduction_wasm
+            ${pnpm} exec playwright install --with-deps
+            cd ..
+
+            ${pkgs.http-server}/bin/http-server --silent &
+            bg_pid=$!
+
+            build:wasm:web
+            ${playwright} test ./subduction_wasm
+
+            cleanup() {
+              echo "Killing background process $bg_pid"
+              kill "$bg_pid" 2>/dev/null || true
+            }
+            trap cleanup EXIT
+          '';
 
           "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
             "${playwright} show-report";
@@ -232,7 +247,9 @@
               pkgs.chromedriver
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
-              pkgs.nodejs_20
+              pkgs.nodejs_22
+              pkgs.playwright-driver
+              pkgs.playwright-driver.browsers
               pkgs.rust-analyzer
               pkgs.wasm-pack
               pkgs.websocat

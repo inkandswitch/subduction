@@ -43,6 +43,24 @@ impl Blob {
     }
 }
 
+impl From<Vec<u8>> for Blob {
+    fn from(contents: Vec<u8>) -> Self {
+        Blob::new(contents)
+    }
+}
+
+impl From<&[u8]> for Blob {
+    fn from(contents: &[u8]) -> Self {
+        Blob::new(contents.to_vec())
+    }
+}
+
+impl From<Blob> for Vec<u8> {
+    fn from(blob: Blob) -> Self {
+        blob.into_contents()
+    }
+}
+
 /// Metadata for the underlying payload data itself.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -109,6 +127,23 @@ impl Digest {
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.0
     }
+
+    /// Create a digest from raw bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InvalidDigest`] if the input is not exactly 32 bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, error::InvalidDigest> {
+        if bytes.len() < 32 {
+            return Err(error::InvalidDigest::NotEnoughInput);
+        }
+        if bytes.len() > 32 {
+            return Err(error::InvalidDigest::InvalidLength);
+        }
+        let mut hash = [0; 32];
+        hash.copy_from_slice(&bytes[..32]);
+        Ok(Digest(hash))
+    }
 }
 
 impl From<[u8; 32]> for Digest {
@@ -137,7 +172,8 @@ impl FromStr for Digest {
     }
 }
 
-mod error {
+/// Errors related to digest parsing.
+pub mod error {
     use thiserror::Error;
 
     /// An error parsing a digest.

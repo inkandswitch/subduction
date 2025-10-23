@@ -1,6 +1,9 @@
 //! The API contact messages to be sent over a [`Connection`].
 
-use sedimentree_core::{Blob, Chunk, Digest, LooseCommit, SedimentreeId, SedimentreeSummary};
+use sedimentree_core::{
+    blob::{Blob, Digest},
+    Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
+};
 
 use crate::peer::id::PeerId;
 
@@ -21,15 +24,15 @@ pub enum Message {
         blob: Blob,
     },
 
-    /// A single chunk being sent for a particular [`Sedimentree`].
-    Chunk {
-        /// The ID of the [`Sedimentree`] that this chunk belongs to.
+    /// A single fragment being sent for a particular [`Sedimentree`].
+    Fragment {
+        /// The ID of the [`Sedimentree`] that this fragment belongs to.
         id: SedimentreeId,
 
-        /// The [`Chunk`] being sent.
-        chunk: Chunk,
+        /// The [`Fragment`] being sent.
+        fragment: Fragment,
 
-        /// The [`Blob`] containing the chunk data.
+        /// The [`Blob`] containing the fragment data.
         blob: Blob,
     },
 
@@ -121,6 +124,6 @@ pub struct SyncDiff {
     /// Commits that we are missing and need to request from the peer.
     pub missing_commits: Vec<(LooseCommit, Blob)>,
 
-    /// Chunks that we are missing and need to request from the peer.
-    pub missing_chunks: Vec<(Chunk, Blob)>,
+    /// Fragments that we are missing and need to request from the peer.
+    pub missing_fragments: Vec<(Fragment, Blob)>,
 }

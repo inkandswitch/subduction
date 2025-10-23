@@ -1,5 +1,7 @@
 use clap::Parser;
-use sedimentree_core::{storage::MemoryStorage, Sedimentree, SedimentreeId};
+use sedimentree_core::{
+    commit::CountLeadingZeroBytes, storage::MemoryStorage, Sedimentree, SedimentreeId,
+};
 use std::{collections::HashMap, time::Duration};
 use subduction_core::{peer::id::PeerId, Subduction};
 use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
@@ -22,6 +24,7 @@ async fn main() -> anyhow::Result<()> {
                 HashMap::from_iter([(sed_id, sed)]),
                 MemoryStorage::default(),
                 HashMap::new(),
+                CountLeadingZeroBytes,
             );
 
             let ws: TokioWebSocketServer = {
@@ -39,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
                 HashMap::from_iter([(sed_id, sed)]),
                 MemoryStorage::default(),
                 HashMap::new(),
+                CountLeadingZeroBytes,
             );
 
             let ws = TokioWebSocketClient::new(

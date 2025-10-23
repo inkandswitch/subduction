@@ -3,7 +3,7 @@
 pub mod error;
 pub mod request;
 
-use self::request::ChunkRequested;
+use self::request::FragmentRequested;
 use crate::{
     connection::{
         id::ConnectionId,
@@ -14,9 +14,14 @@ use crate::{
 };
 use error::{BlobRequestErr, IoError, ListenError};
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
+use nonempty::NonEmpty;
 use sedimentree_core::{
-    future::FutureKind, storage::Storage, Blob, Chunk, Depth, Digest, LooseCommit, RemoteDiff,
-    Sedimentree, SedimentreeId, SedimentreeSummary,
+    blob::{Blob, Digest},
+    commit::CountLeadingZeroBytes,
+    depth::{Depth, DepthMetric},
+    future::FutureKind,
+    storage::Storage,
+    Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -27,14 +32,22 @@ use std::{
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
-pub struct Subduction<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> {
+pub struct Subduction<
+    F: FutureKind,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq,
+    M: DepthMetric = CountLeadingZeroBytes,
+> {
+    depth_metric: M,
     sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
     conn_manager: Arc<Mutex<ConnectionManager<C>>>,
     storage: S,
     _phantom: std::marker::PhantomData<F>,
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S, C> {
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
+    Subduction<F, S, C, M>
+{
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -62,7 +75,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 let conn = locked
                     .connections
                     .get(&conn_id)
-                    .expect("connections with IDs should be present")
+                    .expect("all unstarted IDs should be present by definition")
                     .clone();
 
                 tracing::info!("Spawning listener for connection {:?}", conn_id);
@@ -116,8 +129,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
             Message::LooseCommit { id, commit, blob } => {
                 self.recv_commit(&from, id, &commit, blob).await?;
             }
-            Message::Chunk { id, chunk, blob } => {
-                self.recv_chunk(&from, id, &chunk, blob).await?;
+            Message::Fragment { id, fragment, blob } => {
+                self.recv_fragment(&from, id, &fragment, blob).await?;
             }
             Message::BatchSyncRequest(BatchSyncRequest {
                 id,
@@ -179,8 +192,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         sedimentrees: HashMap<SedimentreeId, Sedimentree>,
         storage: S,
         connections: HashMap<ConnectionId, C>,
+        depth_metric: M,
     ) -> Self {
         Self {
+            depth_metric,
             sedimentrees: Arc::new(Mutex::new(sedimentrees)),
             conn_manager: Arc::new(Mutex::new(ConnectionManager {
                 next_id: ConnectionId::default(),
@@ -212,9 +227,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                     sedimentree.add_commit(commit);
                 }
 
-                for chunk in self.storage.load_chunks().await? {
-                    tracing::trace!("Loaded chunk {:?}", chunk.digest());
-                    sedimentree.add_chunk(chunk);
+                for fragment in self.storage.load_fragments().await? {
+                    tracing::trace!("Loaded fragment {:?}", fragment.digest());
+                    sedimentree.add_fragment(fragment);
                 }
             }
         }
@@ -278,7 +293,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     ///
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_from_peer(
-        &mut self,
+        &self,
         peer_id: &PeerId,
     ) -> Result<bool, C::DisconnectionError> {
         let mut touched = false;
@@ -333,7 +348,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     }
 
     /// Low-level unregistration of a connection.
-    pub async fn unregister(&mut self, conn_id: &ConnectionId) -> bool {
+    pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
         let mut locked = self.conn_manager.lock().await;
         locked.unstarted.remove(conn_id);
         locked.connections.remove(conn_id).is_some()
@@ -371,7 +386,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_local_blobs(&self, id: SedimentreeId) -> Result<Option<Vec<Blob>>, S::Error> {
+    pub async fn get_local_blobs(
+        &self,
+        id: SedimentreeId,
+    ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
         if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
             tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
@@ -381,12 +399,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 .map(|loose| loose.blob().digest())
                 .chain(
                     sedimentree
-                        .chunks()
-                        .map(|chunk| chunk.summary().blob_meta().digest()),
+                        .fragments()
+                        .map(|fragment| fragment.summary().blob_meta().digest()),
                 )
             {
-                // TODO include impl for range queries
-
                 if let Some(blob) = self.storage.load_blob(digest).await? {
                     results.push(blob);
                 } else {
@@ -394,7 +410,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 }
             }
 
-            Ok(Some(results))
+            Ok(NonEmpty::from_vec(results))
         } else {
             Ok(None)
         }
@@ -416,9 +432,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         &self,
         id: SedimentreeId,
         timeout: Option<Duration>,
-    ) -> Result<Option<Vec<Blob>>, IoError<F, S, C>> {
-        if let Some(blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
-            Ok(Some(blobs))
+    ) -> Result<Option<NonEmpty<Blob>>, IoError<F, S, C>> {
+        if let Some(maybe_blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
+            Ok(Some(maybe_blobs))
         } else {
             if let Some(tree) = self.sedimentrees.lock().await.get(&id) {
                 let summary = tree.summarize();
@@ -498,19 +514,19 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     ///
     /// # Returns
     ///
-    /// * `Ok(None)` if the commit is not on a chunk boundary.
-    /// * `Ok(Some(ChunkRequested))` if the commit is on a [`Chunk`] boundary.
-    ///   In this case, please call `add_chunk` after creating the requested chunk.
+    /// * `Ok(None)` if the commit is not on a fragment boundary.
+    /// * `Ok(Some(FragmentRequested))` if the commit is on a [`Fragment`] boundary.
+    ///   In this case, please call `add_fragment` after creating the requested fragment.
     ///
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs.
     pub async fn add_commit(
-        &mut self,
+        &self,
         id: SedimentreeId,
         commit: &LooseCommit,
         blob: Blob,
-    ) -> Result<Option<ChunkRequested>, IoError<F, S, C>> {
+    ) -> Result<Option<FragmentRequested>, IoError<F, S, C>> {
         self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
@@ -529,37 +545,37 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
             }
         }
 
-        let mut maybe_requested_chunk = None;
+        let mut maybe_requested_fragment = None;
 
-        let depth = Depth::from(commit.digest());
+        let depth = self.depth_metric.to_depth(commit.digest());
         if depth != Depth(0) {
-            maybe_requested_chunk = Some(ChunkRequested {
+            maybe_requested_fragment = Some(FragmentRequested {
                 head: commit.digest(),
                 depth,
             });
         }
 
-        Ok(maybe_requested_chunk)
+        Ok(maybe_requested_fragment)
     }
 
-    /// Add a new (incremental) chunk locally and propagate it to all connected peers.
+    /// Add a new (incremental) fragment locally and propagate it to all connected peers.
     ///
     /// NOTE this performs no integrity checks;
-    /// we assume this is a good chunk at the right depth
+    /// we assume this is a good fragment at the right depth
     ///
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs.
-    pub async fn add_chunk(
+    pub async fn add_fragment(
         &self,
         id: SedimentreeId,
-        chunk: &Chunk,
+        fragment: &Fragment,
         blob: Blob,
     ) -> Result<(), IoError<F, S, C>> {
         {
             let mut sed = self.sedimentrees.lock().await;
             let tree = sed.entry(id).or_default();
-            tree.add_chunk(chunk.clone());
+            tree.add_fragment(fragment.clone());
         }
 
         self.storage
@@ -571,9 +587,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
             let locked = self.conn_manager.lock().await;
             let conns = locked.connections.values().collect::<Vec<_>>();
             for conn in conns {
-                conn.send(Message::Chunk {
+                conn.send(Message::Fragment {
                     id,
-                    chunk: chunk.clone(),
+                    fragment: fragment.clone(),
                     blob: blob.clone(),
                 })
                 .await
@@ -625,22 +641,22 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         Ok(was_new)
     }
 
-    /// Handle receiving a new chunk from a peer.
+    /// Handle receiving a new fragment from a peer.
     ///
     /// Also propagates it to all other connected peers.
     ///
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs.
-    pub async fn recv_chunk(
+    pub async fn recv_fragment(
         &self,
         from: &PeerId,
         id: SedimentreeId,
-        chunk: &Chunk,
+        fragment: &Fragment,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
         let was_new = self
-            .insert_chunk_locally(id, chunk.clone(), blob.clone()) // TODO lots of cloning
+            .insert_fragment_locally(id, fragment.clone(), blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
@@ -648,9 +664,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
             let locked = self.conn_manager.lock().await;
             for conn in locked.connections.values() {
                 if conn.peer_id() != *from {
-                    conn.send(Message::Chunk {
+                    conn.send(Message::Fragment {
                         id,
-                        chunk: chunk.clone(),
+                        fragment: fragment.clone(),
                         blob: blob.clone(),
                     })
                     .await
@@ -679,7 +695,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         conn: &C,
     ) -> Result<(), ListenError<F, S, C>> {
         let mut their_missing_commits = Vec::new();
-        let mut their_missing_chunks = Vec::new();
+        let mut their_missing_fragments = Vec::new();
         let mut our_missing_blobs = Vec::new();
 
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
@@ -687,14 +703,15 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
             let mut guard = self.sedimentrees.lock().await;
             let sedimentree = guard.entry(id).or_default();
             tracing::info!(
-                "Received batch sync request for sedimentree {:?} with {} commits and {} chunks",
+                "Received batch sync request for sedimentree {:?} with {} commits and {} fragments",
                 id,
                 their_summary.loose_commits().len(),
-                their_summary.chunk_summaries().len()
+                their_summary.fragment_summaries().len()
             );
 
             let local_sedimentree = sedimentree.clone();
-            let diff: RemoteDiff<'_> = local_sedimentree.diff_remote(their_summary);
+            let diff: RemoteDiff<'_> =
+                local_sedimentree.diff_remote(their_summary, &self.depth_metric);
 
             for commit in diff.remote_commits {
                 sedimentree.add_commit(commit.clone());
@@ -714,26 +731,26 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 }
             }
 
-            for chunk in diff.local_chunks {
+            for fragment in diff.local_fragments {
                 if let Some(blob) = self
                     .storage
-                    .load_blob(chunk.summary().blob_meta().digest())
+                    .load_blob(fragment.summary().blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?
                 {
-                    their_missing_chunks.push((chunk.clone(), blob)); // TODO lots of cloning
+                    their_missing_fragments.push((fragment.clone(), blob)); // TODO lots of cloning
                 } else {
-                    tracing::warn!("Missing blob for chunk {:?} ", chunk.digest(),);
-                    our_missing_blobs.push(chunk.summary().blob_meta().digest());
+                    tracing::warn!("Missing blob for fragment {:?} ", fragment.digest(),);
+                    our_missing_blobs.push(fragment.summary().blob_meta().digest());
                 }
             }
         }
 
         tracing::info!(
-            "Sending batch sync response for sedimentree {:?} with {} missing commits and {} missing chunks",
+            "Sending batch sync response for sedimentree {:?} with {} missing commits and {} missing fragments",
             id,
             their_missing_commits.len(),
-            their_missing_chunks.len()
+            their_missing_fragments.len()
         );
         conn.send(
             BatchSyncResponse {
@@ -741,7 +758,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 req_id,
                 diff: SyncDiff {
                     missing_commits: their_missing_commits,
-                    missing_chunks: their_missing_chunks,
+                    missing_fragments: their_missing_fragments,
                 },
             }
             .into(),
@@ -760,7 +777,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
     ///
     /// # Errors
     ///
-    /// * [`IoError`] if a storage or network error occurs while inserting commits or chunks.
+    /// * [`IoError`] if a storage or network error occurs while inserting commits or fragments.
     pub async fn recv_batch_sync_response(
         &self,
         from: &PeerId,
@@ -768,11 +785,11 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         diff: &SyncDiff,
     ) -> Result<(), IoError<F, S, C>> {
         tracing::info!(
-            "Received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing chunks",
+            "Received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
             id,
             from,
             diff.missing_commits.len(),
-            diff.missing_chunks.len()
+            diff.missing_fragments.len()
         );
 
         for (commit, blob) in &diff.missing_commits {
@@ -781,8 +798,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                 .map_err(IoError::Storage)?;
         }
 
-        for (chunk, blob) in &diff.missing_chunks {
-            self.insert_chunk_locally(id, chunk.clone(), blob.clone())
+        for (fragment, blob) in &diff.missing_fragments {
+            self.insert_fragment_locally(id, fragment.clone(), blob.clone())
                 .await
                 .map_err(IoError::Storage)?;
         }
@@ -869,7 +886,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                     diff:
                         SyncDiff {
                             missing_commits,
-                            missing_chunks,
+                            missing_fragments,
                         },
                     ..
                 }) => {
@@ -879,8 +896,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                             .map_err(IoError::Storage)?;
                     }
 
-                    for (chunk, blob) in missing_chunks {
-                        self.insert_chunk_locally(id, chunk.clone(), blob.clone())
+                    for (fragment, blob) in missing_fragments {
+                        self.insert_fragment_locally(id, fragment.clone(), blob.clone())
                             .await
                             .map_err(IoError::Storage)?;
                     }
@@ -971,7 +988,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                             diff:
                                 SyncDiff {
                                     missing_commits,
-                                    missing_chunks,
+                                    missing_fragments,
                                 },
                             ..
                         }) => {
@@ -981,8 +998,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
                                     .map_err(IoError::<F, S, C>::Storage)?;
                             }
 
-                            for (chunk, blob) in missing_chunks {
-                                self.insert_chunk_locally(id, chunk.clone(), blob.clone())
+                            for (fragment, blob) in missing_fragments {
+                                self.insert_fragment_locally(id, fragment.clone(), blob.clone())
                                     .await
                                     .map_err(IoError::<F, S, C>::Storage)?;
                             }
@@ -1065,13 +1082,13 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
             .map(|tree| tree.loose_commits().cloned().collect())
     }
 
-    /// Get all chunks for a given sedimentree ID.
-    pub async fn get_chunks(&self, id: SedimentreeId) -> Option<Vec<Chunk>> {
+    /// Get all fragments for a given sedimentree ID.
+    pub async fn get_fragments(&self, id: SedimentreeId) -> Option<Vec<Fragment>> {
         self.sedimentrees
             .lock()
             .await
             .get(&id)
-            .map(|tree| tree.chunks().cloned().collect())
+            .map(|tree| tree.fragments().cloned().collect())
     }
 
     /// Get the set of all connected peer IDs.
@@ -1110,29 +1127,29 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> Subduction<F, S
         Ok(true)
     }
 
-    // NOTE no integrity checking, we assume that they made a good chunk at the right depth
-    async fn insert_chunk_locally(
+    // NOTE no integrity checking, we assume that they made a good fragment at the right depth
+    async fn insert_fragment_locally(
         &self,
         id: SedimentreeId,
-        chunk: Chunk,
+        fragment: Fragment,
         blob: Blob,
     ) -> Result<bool, S::Error> {
         {
             let mut sed = self.sedimentrees.lock().await;
             let tree = sed.entry(id).or_default();
-            if !tree.add_chunk(chunk.clone()) {
+            if !tree.add_fragment(fragment.clone()) {
                 return Ok(false);
             }
         }
 
-        self.storage.save_chunk(chunk).await?;
+        self.storage.save_fragment(fragment).await?;
         self.storage.save_blob(blob).await?;
         Ok(true)
     }
 }
 
-impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq> ConnectionPolicy
-    for Subduction<F, S, C>
+impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric> ConnectionPolicy
+    for Subduction<F, S, C, M>
 {
     async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
         Ok(()) // TODO currently allows all

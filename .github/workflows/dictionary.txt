@@ -8,6 +8,7 @@ BeeKEM
 Beelay
 BigCo
 CGKA
+CLI
 CRDT
 CRDTs
 ChaCha
@@ -17,8 +18,8 @@ Crypto
 Cryptree
 DCGKA
 DCGKA's
-Dev
 DNS
+Dev
 ECDH
 EE
 EdDSA
@@ -26,6 +27,7 @@ FIXME
 GroupId
 HChaCha
 Invariants
+JS
 Keyhive
 Keyoxide
 MLS
@@ -35,19 +37,19 @@ Nonces
 OCAP's
 OCap
 OpenPGP
-PeerId
 PKI
 PN
 PQC
+PeerId
 PoLA
 README
 RLE
 RPC
 SChaCha
-Sedimentree
-Sedimentrees
 SDK
 SPKI
+Sedimentree
+Sedimentrees
 ShareSecretKeys
 Stateful
 Subduction
@@ -58,6 +60,7 @@ TreeKEM
 TypeScript
 Wasm
 WebCrypto
+WebSocket
 XChaCha
 al
 assignees

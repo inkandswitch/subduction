@@ -1,15 +1,17 @@
 [workspace]
 resolver = "3"
 members = [
+  "sedimentree_automerge",
   "sedimentree_core",
   "subduction_cli",
   "subduction_core",
+  "subduction_wasm",
   "subduction_websocket"
 ]
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.86"
+rust-version = "1.90"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/inkandswitch/subduction"
 authors = [

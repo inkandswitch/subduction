@@ -1,0 +1,18 @@
+[package]
+name = "sedimentree_automerge"
+version = "0.1.0"
+description = "Automerge integration for Sedimentree"
+
+categories = ["web-programming"]
+keywords = ["sedimentree"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+automerge = "0.7.0"
+sedimentree_core = { path = "../sedimentree_core" }
