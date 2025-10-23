@@ -390,7 +390,7 @@ impl WasmSubduction {
 
     /// Get all known Sedimentree IDs
     #[wasm_bindgen(js_name = sedimentreeIds)]
-    pub async fn seidmentree_ids(&self) -> Vec<WasmSedimentreeId> {
+    pub async fn sedimentree_ids(&self) -> Vec<WasmSedimentreeId> {
         self.core
             .sedimentree_ids()
             .await
