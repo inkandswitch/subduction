@@ -56,7 +56,7 @@ impl WasmDepth {
         self.0 .0
     }
 
-    /// Intrenal method for a hack crossing the JS bounary.
+    /// Internal method for a hack crossing the JS boundary.
     #[must_use]
     #[wasm_bindgen(js_name = __subduction_castToDepth)]
     #[allow(clippy::missing_const_for_fn)]
