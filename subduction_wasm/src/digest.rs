@@ -19,6 +19,17 @@ impl WasmDigest {
     /// # Errors
     ///
     /// Returns a `WasmValue` error if the byte slice is not a valid digest.
+    #[wasm_bindgen(constructor)]
+    pub fn new(bytes: &[u8]) -> Result<WasmDigest, JsValue> {
+        let digest = Digest::from_bytes(bytes).map_err(WasmInvalidDigest::from)?;
+        Ok(WasmDigest(digest))
+    }
+
+    /// Creates a new digest from its byte representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `WasmValue` error if the byte slice is not a valid digest.
     pub fn from_bytes(bytes: &[u8]) -> Result<WasmDigest, JsValue> {
         let digest = Digest::from_bytes(bytes).map_err(WasmInvalidDigest::from)?;
         Ok(WasmDigest(digest))
