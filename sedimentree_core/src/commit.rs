@@ -22,6 +22,12 @@ pub trait Parents {
     fn parents(&self) -> HashSet<Digest>;
 }
 
+impl Parents for HashSet<Digest> {
+    fn parents(&self) -> HashSet<Digest> {
+        self.clone()
+    }
+}
+
 #[derive(Debug, Error)]
 /// An error for the [`fragment`] function.
 pub enum FragmentError<'a, S: CommitStore<'a> + ?Sized> {

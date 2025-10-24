@@ -548,8 +548,21 @@ impl PeerResultMap {
     }
 }
 
+/// An overridable hash metric.
 #[derive(Debug)]
-struct WasmHashMetric(Option<js_sys::Function>);
+#[wasm_bindgen(js_name = HashMetric)]
+pub struct WasmHashMetric(Option<js_sys::Function>);
+
+#[wasm_bindgen(js_class = HashMetric)]
+impl WasmHashMetric {
+    /// Create a new `WasmHashMetric` with an optional JavaScript function.
+    ///
+    /// Defaults to counting leading zero bytes if no function is provided.
+    #[wasm_bindgen(constructor)]
+    pub fn new(func: Option<js_sys::Function>) -> Self {
+        Self(func)
+    }
+}
 
 impl DepthMetric for WasmHashMetric {
     fn to_depth(&self, digest: Digest) -> Depth {

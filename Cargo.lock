@@ -1422,6 +1422,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedimentree_automerge_wasm"
+version = "0.1.0"
+dependencies = [
+ "automerge",
+ "getrandom",
+ "js-sys",
+ "sedimentree_core",
+ "subduction_wasm",
+ "thiserror",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "sedimentree_core"
 version = "0.1.0"
 dependencies = [

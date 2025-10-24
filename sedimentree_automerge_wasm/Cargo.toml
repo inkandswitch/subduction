@@ -1,0 +1,26 @@
+[package]
+name = "sedimentree_automerge_wasm"
+version = "0.1.0"
+description = "Wasm bindings for sedimentree_automerge"
+
+categories = ["web-programming"]
+keywords = ["sedimentree", "automerge", "wasm"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+automerge = { workspace = true }
+getrandom = { version = "0.3.3", features = ["wasm_js"] }
+js-sys = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core" }
+subduction_wasm = { path = "../subduction_wasm" } # FIXME extract out useful types?
+thiserror = { workspace = true }
+wasm-bindgen = { workspace = true }

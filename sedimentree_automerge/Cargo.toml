@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Automerge integration for Sedimentree"
 
 categories = ["web-programming"]
-keywords = ["sedimentree"]
+keywords = ["sedimentree", "automerge"]
 readme = "./README.md"
 
 authors.workspace = true
@@ -14,5 +14,8 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
-automerge = "0.7.0"
+automerge = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core" }
+
+[features]
+default = []
