@@ -6,7 +6,7 @@ use crate::{
     websocket::WebSocket,
 };
 use async_tungstenite::{
-    tokio::{accept_async, TokioAdapter},
+    tokio::{accept_hdr_async, TokioAdapter},
     WebSocketStream,
 };
 use dashmap::DashMap;
@@ -35,6 +35,7 @@ use tokio::{
     task::{JoinError, JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
+use tungstenite::handshake::client::{Request, Response};
 
 #[derive(Debug, Clone)]
 pub struct SubductionActor {
@@ -107,6 +108,7 @@ where
                         match res {
                             Ok((tcp, addr)) => {
                                 tracing::info!("New TCP connection from {addr}");
+
                                 // HACK FIXME include client ID in welcome message instead of this hack?
                                 let client_digest = {
                                     let mut hasher = blake3::Hasher::new();
@@ -121,20 +123,39 @@ where
                                 set.spawn({
                                     let sd = subd_actor.clone();
                                     async move {
-                                        match accept_async(tcp).await {
-                                            Ok(ws_stream) => {
-                                                tracing::info!("WebSocket handshake complete with {addr}");
-                                                let ws_conn = WebSocket::<TokioAdapter<TcpStream>>::new(
-                                                    ws_stream,
-                                                    inner_timeout,
-                                                    client_id,
-                                                );
+                                        // let hs = accept_hdr_async(tcp, |req, resp| {
+                                        //     // resp.headers_mut().append("x-server", "subduction".parse().unwrap());
+                                        //     Ok(resp)
+                                        // }).await.expect("FIXME");
 
-                                                let cmd = Cmd::Register { ws: ws_conn };
-                                                sd.tx.send(cmd).await.expect("FIXME");
-                                            }
-                                            Err(e) => tracing::warn!("WS handshake failed from {addr}: {e}"),
-                                        }
+                                        let hs = accept_hdr_async(tcp, tungstenite::handshake::server::NoCallback)
+                                            .await
+                                            .expect("FIXME");
+
+                                        let ws_conn = WebSocket::<TokioAdapter<TcpStream>>::new(
+                                            hs,
+                                            inner_timeout,
+                                            client_id,
+                                        );
+                                        tracing::info!("WebSocket handshake UPGRADED with {addr}");
+
+                                        let cmd = Cmd::Register { ws: ws_conn };
+                                        sd.tx.send(cmd).await.expect("FIXME");
+
+                                        // match accept_async(tcp).await {
+                                        //     Ok(ws_stream) => {
+                                        //         tracing::info!("WebSocket handshake complete with {addr}");
+                                        //         let ws_conn = WebSocket::<TokioAdapter<TcpStream>>::new(
+                                        //             ws_stream,
+                                        //             inner_timeout,
+                                        //             client_id,
+                                        //         );
+
+                                        //         let cmd = Cmd::Register { ws: ws_conn };
+                                        //         sd.tx.send(cmd).await.expect("FIXME");
+                                        //     }
+                                        //     Err(e) => tracing::warn!("WS handshake failed from {addr}: {e}"),
+                                        // }
                                     }
                                 });
                             }
@@ -325,6 +346,7 @@ where
         ));
 
         while let Some(cmd) = rx.recv().await {
+            tracing::warn!("Subduction actor received command: {:?}", cmd); // FIXME
             match cmd {
                 Cmd::Start => {
                     tokio::spawn({

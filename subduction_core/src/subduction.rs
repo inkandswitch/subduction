@@ -64,7 +64,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     }
 
     async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
-        tracing::debug!("Listening for messages from connections");
+        tracing::trace!("Listening for messages from connections");
 
         let mut pump = FuturesUnordered::new();
         {
@@ -107,6 +107,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         conn_id: ConnectionId,
         conn: C,
     ) -> (ConnectionId, C, Result<(), ListenError<F, S, C>>) {
+        tracing::info!("fire once");
         let result = async {
             let msg = conn.recv().await.map_err(IoError::ConnRecv)?;
             self.dispatch(conn_id, &conn, msg).await
@@ -705,11 +706,12 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         req_id: RequestId,
         conn: &C,
     ) -> Result<(), ListenError<F, S, C>> {
+        tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
+
         let mut their_missing_commits = Vec::new();
         let mut their_missing_fragments = Vec::new();
         let mut our_missing_blobs = Vec::new();
 
-        tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
         {
             let mut guard = self.sedimentrees.lock().await;
             let sedimentree = guard.entry(id).or_default();

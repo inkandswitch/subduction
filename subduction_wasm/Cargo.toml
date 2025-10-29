@@ -34,6 +34,7 @@ tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm-bindgen-futures = { workspace = true }
 wasm_refgen = { workspace = true }
+wasm-tracing = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3.81"

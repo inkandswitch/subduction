@@ -43,6 +43,8 @@ pub(crate) mod connection_callback_reader;
 
 pub use subduction::WasmSubduction;
 
+use wasm_tracing::WasmLayerConfig;
+
 /// Set a panic hook to get better error messages if the code panics.
 #[allow(dead_code)]
 pub fn set_panic_hook() {
@@ -50,4 +52,10 @@ pub fn set_panic_hook() {
     // `set_panic_hook` function to get better error messages if the code panics.
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
+
+    let mut config = WasmLayerConfig::new();
+    config.set_max_level(tracing::Level::TRACE);
+    wasm_tracing::set_as_global_default_with_config(config).expect("FIXME");
+    tracing::info!("We've just set panic hook");
+    tracing::debug!("We've just set panic hook panic hook");
 }
