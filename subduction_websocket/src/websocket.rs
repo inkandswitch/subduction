@@ -2,6 +2,7 @@
 
 use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
+use futures::stream::FusedStream;
 use futures::{
     channel::{mpsc, oneshot},
     future::{self, BoxFuture, LocalBoxFuture},
@@ -40,6 +41,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin> {
 impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     /// Create a new WebSocket connection.
     pub fn new(ws: WebSocketStream<T>, timeout: Duration, peer_id: PeerId) -> Self {
+        tracing::info!("Creating new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
         let pending = Arc::new(Mutex::new(HashMap::<
             RequestId,
@@ -68,12 +70,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     ///
     /// If there is an error reading from the WebSocket or processing messages.
     pub async fn listen(&self) -> Result<(), RunError> {
-        while let Some(msg) = self.ws_reader.lock().await.next().await {
+        tracing::info!("Starting WebSocket listener for peer {:?}", self.peer_id);
+        while let Some(ws_msg) = self.ws_reader.lock().await.next().await {
             tracing::debug!("received ws message");
-            match msg {
+            match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
                     let (msg, _size): (Message, usize) =
                         bincode::serde::decode_from_slice(&bytes, bincode::config::standard())?;
+
+                    tracing::debug!(
+                        "decoded inbound message id {:?} from peer {:?}, message: {:?}",
+                        msg.request_id(),
+                        self.peer_id,
+                        &msg
+                    );
 
                     match msg {
                         Message::BatchSyncResponse(resp) => {
@@ -97,7 +107,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                             }
                         }
                         other => {
-                            self.inbound_writer.clone().send(other).await?;
+                            tracing::info!(
+                                "dispatching to inbound channel {:?}",
+                                other.request_id()
+                            );
+                            self.inbound_writer
+                                .clone()
+                                .unbounded_send(other)
+                                .expect("FIXME"); // .await?;
                         }
                     }
                 }
@@ -202,8 +219,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Connection<Local> for WebSocket<T> {
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            tracing::debug!("Waiting for inbound message");
+            tracing::debug!("Waiting for inbound message for peer {:?}", self.peer_id);
             let mut chan = self.inbound_reader.lock().await;
+            tracing::debug!("Locked inbound reader for peer {:?}", self.peer_id);
             let msg = chan.next().await.ok_or(RecvError::ReadFromClosed)?;
             tracing::info!("Received inbound message id {:?}", msg.request_id());
             Ok(msg)
@@ -306,8 +324,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
 
     fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            tracing::debug!("Waiting for inbound message");
+            tracing::debug!("Waiting for inbound message for peer {:?}", self.peer_id);
+
+            tracing::debug!(
+                ">>>> is receiver locked? {}",
+                self.inbound_reader.try_lock().is_none()
+            );
+
             let mut chan = self.inbound_reader.lock().await;
+            tracing::debug!("Locked inbound reader for peer {:?}", self.peer_id);
+            tracing::debug!("**************** is_terminated = {}", chan.is_terminated());
             let msg = chan.next().await.ok_or(RecvError::ReadFromClosed)?;
             tracing::info!("Received inbound message id {:?}", msg.request_id());
             Ok(msg)

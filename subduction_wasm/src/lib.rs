@@ -46,7 +46,8 @@ pub use subduction::WasmSubduction;
 use wasm_tracing::WasmLayerConfig;
 
 /// Set a panic hook to get better error messages if the code panics.
-#[allow(dead_code)]
+// #[allow(dead_code)]
+#[wasm_bindgen::prelude::wasm_bindgen]
 pub fn set_panic_hook() {
     // When the `console_error_panic_hook` feature is enabled, we can call the
     // `set_panic_hook` function to get better error messages if the code panics.

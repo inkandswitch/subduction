@@ -80,14 +80,9 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
 
-            server.ignore().start().await?; // FIXME use unstarted run
-            tokio::select! {
-                _ = token.cancelled() => {
-                    eprintln!("Shutting down syncer (server) …");
-                    // If the WS/server exposes a shutdown/close, call it here.
-                    // Otherwise, dropping the syncer/WS after this block will close sockets.
-                }
-            }
+            let inner = server.ignore();
+            inner.start().await?; // FIXME use unstarted run
+            futures::future::pending::<()>().await;
         }
         Some("connect") => {
             let syncer = Subduction::new(

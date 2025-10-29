@@ -110,6 +110,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         tracing::info!("fire once");
         let result = async {
             let msg = conn.recv().await.map_err(IoError::ConnRecv)?;
+            tracing::debug!("Received message {:?} on connection {:?}", msg, conn_id);
             self.dispatch(conn_id, &conn, msg).await
         }
         .await;
