@@ -16,6 +16,8 @@ rust-version.workspace = true
 [dependencies]
 async-tungstenite = { workspace = true }
 bincode = { version = "2.0", features = ["serde"] }
+blake3 = { workspace = true }
+dashmap = { workspace = true }
 futures = { workspace = true }
 futures-timer = { workspace = true }
 futures-util = { workspace = true }
@@ -25,6 +27,7 @@ subduction_core = { path = "../subduction_core", features = ["serde"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
+tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
 tungstenite = "0.27"
 
@@ -39,4 +42,4 @@ tracing-subscriber = { workspace = true }
 default = []
 tokio_client = ["tokio"]
 tokio_server = ["tokio"]
-tokio = ["dep:tokio", "async-tungstenite/tokio-native-tls"]
+tokio = ["dep:tokio", "dep:tokio-util", "async-tungstenite/tokio-native-tls"]

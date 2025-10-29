@@ -26,6 +26,7 @@ sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
 subduction_core = { path = "../subduction_core", features = ["serde"] }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-util = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tungstenite = "0.27"

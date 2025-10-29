@@ -57,14 +57,14 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     ///
     /// * Returns `ListenError` if a storage or network error occurs.
     pub async fn run(&self) -> Result<(), ListenError<F, S, C>> {
-        tracing::debug!("Starting Subduction run loop");
+        tracing::info!("Starting Subduction run loop");
         loop {
             self.listen().await?;
         }
     }
 
     async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
-        tracing::info!("Listening for messages from connections");
+        tracing::debug!("Listening for messages from connections");
 
         let mut pump = FuturesUnordered::new();
         {
@@ -205,6 +205,17 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             storage,
             _phantom: std::marker::PhantomData,
         }
+    }
+
+    pub async fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) {
+        let mut sedimentrees = self.sedimentrees.lock().await;
+        let existing: &mut Sedimentree = sedimentrees.entry(id).or_default();
+        existing.merge(sedimentree)
+    }
+
+    pub async fn remove_sedimentree(&self, id: SedimentreeId) -> bool {
+        let mut sedimentrees = self.sedimentrees.lock().await;
+        sedimentrees.remove(&id).is_some()
     }
 
     /// The storage backend used for persisting sedimentree data.
@@ -933,12 +944,16 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         );
         let mut peers: HashMap<PeerId, Vec<(ConnectionId, C)>> = HashMap::new();
         {
-            let locked = self.conn_manager.lock().await; // TODO held long, inefficient!
-            for (conn_id, conn) in &locked.connections {
+            let conns = {
+                let locked = self.conn_manager.lock().await;
+                locked.connections.clone()
+            };
+
+            for (conn_id, conn) in conns {
                 peers
                     .entry(conn.peer_id())
                     .or_default()
-                    .push((*conn_id, conn.clone()));
+                    .push((conn_id, conn));
             }
         }
 

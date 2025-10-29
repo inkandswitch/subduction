@@ -25,7 +25,7 @@ pub const BLOB_STORE_NAME: &str = "blobs";
 /// `IndexedDB` storage backend.
 #[wasm_bindgen(js_name = IndexedDbStorage)]
 #[derive(Debug, Clone)]
-pub struct IndexedDbStorage(IdbDatabase);
+pub struct IndexedDbStorage(IdbDatabase); // FIXME rename WasmIndexedDbStorage
 
 #[wasm_bindgen(js_class = "IndexedDbStorage")]
 impl IndexedDbStorage {

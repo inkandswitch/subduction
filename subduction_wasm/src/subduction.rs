@@ -24,6 +24,7 @@ use crate::{
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
+    sedimentree::WasmSedimentree,
     sedimentree_id::WasmSedimentreeId,
     storage::{JsStorage, JsStorageError},
     websocket::WasmWebSocket,
@@ -70,6 +71,18 @@ impl WasmSubduction {
     pub async fn run(&self) -> Result<(), WasmListenError> {
         self.core.run().await?;
         Ok(())
+    }
+
+    #[wasm_bindgen(js_name = addSedimentree)]
+    pub async fn add_sedimentree(&self, id: WasmSedimentreeId, sedimentree: WasmSedimentree) {
+        self.core
+            .add_sedimentree(id.into(), sedimentree.into())
+            .await;
+    }
+
+    #[wasm_bindgen(js_name = removeSedimentree)]
+    pub async fn remove_sedimentree(&self, id: WasmSedimentreeId) -> bool {
+        self.core.remove_sedimentree(id.into()).await
     }
 
     /// Attach a connection.

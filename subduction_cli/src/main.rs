@@ -2,9 +2,20 @@ use clap::Parser;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, storage::MemoryStorage, Sedimentree, SedimentreeId,
 };
-use std::{collections::HashMap, time::Duration};
+use std::{
+    collections::HashMap,
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    time::Duration,
+};
 use subduction_core::{peer::id::PeerId, Subduction};
-use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
+use subduction_websocket::tokio::{
+    client::TokioWebSocketClient, server::TokioWebSocketServer, start::Unstarted,
+};
+use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
 
 #[tokio::main]
@@ -13,6 +24,44 @@ async fn main() -> anyhow::Result<()> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
+    let token = CancellationToken::new();
+    let hits = Arc::new(AtomicUsize::new(0));
+    {
+        let token = token.clone();
+        let hits = hits.clone();
+        tokio::spawn(async move {
+            loop {
+                if tokio::signal::ctrl_c().await.is_ok() {
+                    match hits.fetch_add(1, Ordering::SeqCst) {
+                        0 => {
+                            eprintln!(
+                                "Ctrl+C — attempting graceful shutdown… (press again to force)"
+                            );
+                            token.cancel(); // tell tasks to wind down
+                        }
+                        _ => {
+                            eprintln!("Force exiting.");
+                            std::process::exit(130);
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let t = token.clone();
+        tokio::spawn(async move {
+            if let Ok(mut term) = signal(SignalKind::terminate()) {
+                term.recv().await;
+                eprintln!("SIGTERM — graceful shutdown…");
+                t.cancel();
+            }
+        });
+    }
+
     let args = Arguments::parse();
 
     let sed = Sedimentree::new(vec![], vec![]);
@@ -20,22 +69,25 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command.as_deref() {
         Some("start") => {
-            let syncer = Subduction::new(
-                HashMap::from_iter([(sed_id, sed)]),
-                MemoryStorage::default(),
-                HashMap::new(),
-                CountLeadingZeroBytes,
-            );
+            let addr: SocketAddr = args.ws.parse()?;
+            let server: Unstarted<TokioWebSocketServer<MemoryStorage>> =
+                TokioWebSocketServer::setup(
+                    addr,
+                    Duration::from_secs(5),
+                    PeerId::new([0; 32]),
+                    MemoryStorage::default(),
+                    CountLeadingZeroBytes,
+                )
+                .await?;
 
-            let ws: TokioWebSocketServer = {
-                let addr = args.ws.parse()?;
-                TokioWebSocketServer::setup(addr, Duration::from_secs(5), PeerId::new([0; 32]))
-                    .await?
-                    .start()
-            };
-
-            syncer.register(ws).await?;
-            syncer.run().await?;
+            server.ignore().start().await?; // FIXME use unstarted run
+            tokio::select! {
+                _ = token.cancelled() => {
+                    eprintln!("Shutting down syncer (server) …");
+                    // If the WS/server exposes a shutdown/close, call it here.
+                    // Otherwise, dropping the syncer/WS after this block will close sockets.
+                }
+            }
         }
         Some("connect") => {
             let syncer = Subduction::new(
@@ -72,6 +124,6 @@ async fn main() -> anyhow::Result<()> {
 struct Arguments {
     command: Option<String>,
 
-    #[arg(short, long, default_value = "localhost:8080")]
+    #[arg(short, long, default_value = "0.0.0.0:8080")]
     ws: String,
 }

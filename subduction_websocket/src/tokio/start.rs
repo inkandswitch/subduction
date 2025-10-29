@@ -23,7 +23,9 @@ impl<T: Start> Unstarted<T> {
         self.0.start();
         self.0
     }
+}
 
+impl<T> Unstarted<T> {
     /// Consume the `Unstarted`, returning the inner type *without* starting it.
     pub fn ignore(self) -> T {
         self.0

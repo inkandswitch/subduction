@@ -24,8 +24,10 @@ authors = [
 automerge = "0.7.0"
 arbitrary = "1.4"
 async-tungstenite = "0.31.0"
+base58 = "0.2.0"
 blake3 = "1.8"
 bolero = "0.13.4"
+dashmap = "6.1"
 futures = "0.3.31"
 futures-timer = "3.0"
 futures-util = "0.3.31"
@@ -39,6 +41,7 @@ testresult = "0.4.1"
 thiserror = "2.0"
 tokio = { version = "1.46", features = ["full"] }
 tokio-test = "0.4.4"
+tokio-util = "0.7.16"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.2", features = ["env-filter"] }
 wasm-bindgen-futures = "0.4.53"

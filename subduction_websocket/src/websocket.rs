@@ -149,6 +149,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> Clone for WebSocket<T> {
     }
 }
 
+impl<T: AsyncRead + AsyncWrite + Unpin> PartialEq for WebSocket<T> {
+    fn eq(&self, other: &Self) -> bool {
+        self.peer_id == other.peer_id
+            && Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
+            && Arc::ptr_eq(&self.outbound, &other.outbound)
+    }
+}
+
 impl<T: AsyncRead + AsyncWrite + Unpin> Connection<Local> for WebSocket<T> {
     type SendError = SendError;
     type RecvError = RecvError;

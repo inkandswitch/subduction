@@ -442,6 +442,11 @@ impl Sedimentree {
         }
     }
 
+    pub fn merge(&mut self, other: Sedimentree) {
+        self.fragments.extend(other.fragments);
+        self.commits.extend(other.commits);
+    }
+
     /// The minimal ordered hash of this [`Sedimentree`].
     #[must_use]
     pub fn minimal_hash<M: DepthMetric>(&self, depth_metric: &M) -> MinimalTreeHash {
