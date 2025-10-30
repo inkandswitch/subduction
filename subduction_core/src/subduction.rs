@@ -12,6 +12,7 @@ use crate::{
     },
     peer::id::PeerId,
 };
+use async_channel::{RecvError, TrySendError};
 use error::{BlobRequestErr, IoError, ListenError};
 use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
 use nonempty::NonEmpty;
@@ -40,8 +41,10 @@ pub struct Subduction<
 > {
     depth_metric: M,
     sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
-    conn_manager: Arc<Mutex<ConnectionManager<C>>>,
+    pub conn_manager: Arc<Mutex<ConnectionManager<C>>>, // FIXME temp pub for debgging
     storage: S,
+    ready_waiter: async_channel::Receiver<()>,
+    ready_setter: async_channel::Sender<()>,
     _phantom: std::marker::PhantomData<F>,
 }
 
@@ -59,61 +62,105 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     pub async fn run(&self) -> Result<(), ListenError<F, S, C>> {
         tracing::info!("Starting Subduction run loop");
         loop {
+            if let Err(RecvError) = self.ready_waiter.clone().recv().await {
+                tracing::warn!("FIXME channel closed");
+            }
             self.listen().await?;
         }
     }
 
     async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
-        tracing::trace!("Listening for messages from connections");
+        tracing::info!("Listening for messages from connections");
 
         let mut pump = FuturesUnordered::new();
         {
-            let mut locked = self.conn_manager.lock().await;
-            let mut unstarted = locked.unstarted.drain().collect::<Vec<_>>();
+            let mut locked_mgr = self.conn_manager.lock().await;
+            let mut unstarted = locked_mgr.unstarted.drain().collect::<Vec<_>>();
             for conn_id in unstarted.drain(..) {
                 #[allow(clippy::expect_used)]
-                let conn = locked
-                    .connections
-                    .get(&conn_id)
-                    .expect("all unstarted IDs should be present by definition")
-                    .clone();
-
-                tracing::info!("Spawning listener for connection {:?}", conn_id);
-                pump.push(self.fire_once(conn_id, conn));
-            }
-        }
-
-        while let Some((conn_id, conn, res)) = pump.next().await {
-            let () = res?;
-            let mut locked = self.conn_manager.lock().await;
-            if locked.connections.contains_key(&conn_id) {
-                // Re-enque if that connection is still active at the top-level
-                pump.push(self.fire_once(conn_id, conn));
-            }
-
-            let unstarted_ids = locked.unstarted.drain().collect::<Vec<_>>();
-            for conn_id in unstarted_ids {
-                if let Some(unstarted) = locked.connections.get(&conn_id) {
-                    pump.push(self.fire_once(conn_id, unstarted.clone()));
+                if let Some(conn) = locked_mgr.connections.get(&conn_id) {
+                    tracing::info!("######### Spawning listener for connection {:?}", conn_id);
+                    pump.push(self.fire_once(conn_id, conn.clone()));
+                    if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
+                        panic!("FIXME Ready channel closed unexpectedly");
+                    }
+                } else {
+                    // Maybe they disconnected between loops
+                    tracing::warn!("Connection {:?} not found in connection manager", conn_id);
                 }
             }
         }
 
+        if !pump.is_empty() {
+            tracing::error!("Futures pump has elements: {}", pump.len());
+        }
+        while let Some((conn_id, conn, res)) = pump.next().await {
+            tracing::error!(
+                "######################### Pump rotated on connection {:?}",
+                conn_id
+            );
+            tracing::error!("PUMP SIZE: {}", pump.len());
+            tracing::error!(
+                "CONN SIZE: {}",
+                self.conn_manager.lock().await.connections.len()
+            );
+            let () = res?;
+            // let mut locked = self.conn_manager.lock().await;
+            let (conns, mut unstarted) = {
+                let locked = self.conn_manager.lock().await;
+                (locked.connections.clone(), locked.unstarted.clone())
+            };
+            // if locked.connections.contains_key(&conn_id) {
+            if conns.contains_key(&conn_id) {
+                // Re-enque if that connection is still active at the top-level
+                pump.push(self.fire_once(conn_id, conn));
+                if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
+                    panic!("FIXME Ready channel closed unexpectedly");
+                }
+            }
+
+            // let unstarted_ids = locked.unstarted.drain().collect::<Vec<_>>();
+            let unstarted_ids = unstarted.drain().collect::<Vec<_>>();
+            for conn_id in unstarted_ids {
+                if let Some(unstarted) = conns.get(&conn_id) {
+                    // if let Some(unstarted) = locked.connections.get(&conn_id) {
+                    pump.push(self.fire_once(conn_id, unstarted.clone()));
+                }
+                if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
+                    panic!("FIXME Ready channel closed unexpectedly");
+                }
+            }
+        }
+
+        tracing::debug!("^^^^^^^^^^^^^^^^^ No active connections to listen to");
+
         Ok(())
     }
 
+    // FIXME rename recv_once or somehtig
     async fn fire_once(
         &self,
         conn_id: ConnectionId,
         conn: C,
     ) -> (ConnectionId, C, Result<(), ListenError<F, S, C>>) {
-        tracing::info!("fire once");
-        let result = async {
-            let msg = conn.recv().await.map_err(IoError::ConnRecv)?;
-            tracing::debug!("Received message {:?} on connection {:?}", msg, conn_id);
-            self.dispatch(conn_id, &conn, msg).await
-        }
-        .await;
+        tracing::info!("@@@@@@@@@@ fire once");
+        tracing::error!("HIGHEST RECV {:?}", conn.peer_id());
+        let result =
+            // tracing::info!("@@@@@@@@@@ INSIDE fire once");
+        match conn.recv().await {
+            Err(e) => {
+                tracing::error!("Error receiving message on connection {:?}: {}", conn_id, e);
+                return (conn_id, conn, Err(IoError::ConnRecv(e).into()));
+            }
+            Ok(msg) => {
+                tracing::debug!("Received message {:?} on connection {:?}", msg, conn_id);
+                self.dispatch(conn_id, &conn, msg).await
+            }
+        };
+        // let msg = conn.recv().await.map_err(IoError::ConnRecv)?;
+        // tracing::debug!("Received message {:?} on connection {:?}", msg, conn_id);
+        // self.dispatch(conn_id, &conn, msg).await
+        tracing::info!("@@@@@@@@@@ COMPLETE fire once");
         (conn_id, conn, result)
     }
 
@@ -196,6 +243,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         connections: HashMap<ConnectionId, C>,
         depth_metric: M,
     ) -> Self {
+        let (ready_setter, ready_waiter) = async_channel::bounded::<()>(1);
+
         Self {
             depth_metric,
             sedimentrees: Arc::new(Mutex::new(sedimentrees)),
@@ -205,6 +254,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
                 unstarted: HashSet::new(),
             })),
             storage,
+            ready_waiter: ready_waiter,
+            ready_setter: ready_setter,
             _phantom: std::marker::PhantomData,
         }
     }
@@ -288,7 +339,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
         let mut locked = self.conn_manager.lock().await;
         locked.unstarted.remove(conn_id);
-        if let Some(mut conn) = locked.connections.remove(conn_id) {
+        if let Some(conn) = locked.connections.remove(conn_id) {
             conn.disconnect().await.map(|()| true)
         } else {
             Ok(false)
@@ -321,7 +372,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             if *conn_peer_id == *peer_id {
                 touched = true;
                 locked.unstarted.remove(id);
-                if let Some(mut conn) = locked.connections.remove(id) {
+                if let Some(conn) = locked.connections.remove(id) {
                     conn.disconnect().await?;
                 }
             }
@@ -347,6 +398,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
     pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), ConnectionDisallowed> {
+        tracing::info!("#### Registering connection from peer {:?}", conn.peer_id());
         self.allowed_to_connect(&conn.peer_id()).await?;
 
         let mut locked = self.conn_manager.lock().await;
@@ -354,8 +406,12 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             Ok((false, *conn_id))
         } else {
             let conn_id = locked.next_connection_id();
+            // let _ = conn.recv().await.ok();
             locked.unstarted.insert(conn_id);
             locked.connections.insert(conn_id, conn);
+            if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
+                panic!("FIXME Ready channel closed unexpectedly");
+            }
             Ok((true, conn_id))
         }
     }
@@ -1174,10 +1230,11 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     }
 }
 
+// FIXME temp pub for debugging
 #[derive(Debug, Default)]
-struct ConnectionManager<C> {
+pub struct ConnectionManager<C> {
     next_id: ConnectionId,
-    connections: HashMap<ConnectionId, C>,
+    pub connections: HashMap<ConnectionId, C>, // FIXME temp pub for debguging
     unstarted: HashSet<ConnectionId>,
 }
 

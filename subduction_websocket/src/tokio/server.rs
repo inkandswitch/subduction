@@ -85,7 +85,7 @@ where
         depth_metric: M,
     ) -> Result<Unstarted<Self>, tungstenite::Error> {
         tracing::info!("Starting WebSocket server on {}", address);
-        let listener = TcpListener::bind(address).await.expect("FIXME");
+        let tcp_listener = TcpListener::bind(address).await.expect("FIXME");
         // .map_err(|e| WsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
 
         let (subduction_actor, _sd_task) = start_subduction_actor::<S, M>(storage, depth_metric);
@@ -104,10 +104,10 @@ where
                             tracing::info!("accept loop canceled");
                             break;
                         }
-                    res = listener.accept() => {
+                    res = tcp_listener.accept() => {
                         match res {
                             Ok((tcp, addr)) => {
-                                tracing::info!("New TCP connection from {addr}");
+                                tracing::error!("New TCP connection from {addr}");
 
                                 // HACK FIXME include client ID in welcome message instead of this hack?
                                 let client_digest = {
@@ -123,11 +123,6 @@ where
                                 set.spawn({
                                     let sd = subd_actor.clone();
                                     async move {
-                                        // let hs = accept_hdr_async(tcp, |req, resp| {
-                                        //     // resp.headers_mut().append("x-server", "subduction".parse().unwrap());
-                                        //     Ok(resp)
-                                        // }).await.expect("FIXME");
-
                                         let hs = accept_hdr_async(tcp, tungstenite::handshake::server::NoCallback)
                                             .await
                                             .expect("FIXME");
@@ -172,12 +167,12 @@ where
         self.subduction_actor.tx.send(Cmd::Start).await
     }
 
-    pub async fn register(
-        &self,
-        ws: WebSocket<TokioAdapter<TcpStream>>,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd>> {
-        self.subduction_actor.tx.send(Cmd::Register { ws }).await
-    }
+    // pub async fn register(
+    //     &self,
+    //     ws: WebSocket<TokioAdapter<TcpStream>>,
+    // ) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd>> {
+    //     self.subduction_actor.tx.send(Cmd::Register { ws }).await
+    // }
 
     /// Graceful shutdown: cancel and await tasks.
     pub fn stop(&mut self) {
@@ -237,6 +232,8 @@ where
                     tracing::info!("Registering new WebSocket connection");
                     // FIXME here for debuggng
                     let foo = ws.clone();
+                    let bar = ws.clone();
+                    let baz = ws.clone();
                     tokio::spawn(async move {
                         if let Err(e) = foo.listen().await {
                             tracing::error!("WebSocket listen error: {}", e);
@@ -244,9 +241,54 @@ where
                     });
                     // FIXME
                     // let _ = ws.listen().await;
+                    // let x = ws.inbound_reader.recv().await;
+                    // tokio::spawn(async move {
+                    //     tracing::error!(">>>>>>>>>>>>>>>> Inbound reader recv");
+                    //     bar.recv().await.map_err(|e| {
+                    //         tracing::error!("Error receiving from connection: {}", e);
+                    //     });
+                    tracing::error!("<<<<<<<<<<<<<<<");
+                    // });
+                    // tokio::spawn(async move {
+                    //     //     let mut counter = 0;
+                    //     //     loop {
+                    //     //         if counter % 100_000_000 == 0 {
+                    //     //             // tracing::info!("%%%%%%%%%%%: {}", baz.chan_id);
+                    //     for i in 1..=3 {
+                    //         tracing::error!(".............. {}", i);
+                    //         tracing::error!(
+                    //             "sending to\nchan_id: {}\npeer_id: {}",
+                    //             baz.chan_id,
+                    //             baz.peer_id()
+                    //         );
+                    //         let r = baz
+                    //             .inbound_writer
+                    //             // .send(Message::BlobsRequest(vec![]))
+                    //             // .await
+                    //             .try_send(Message::BlobsRequest(vec![]))
+                    //             .inspect_err(|e| {
+                    //                 tracing::error!("Error sending to connection: {}", e);
+                    //             });
+                    //     }
+                    //     //             // tracing::info!("&&&&&&&&&: {} {:?}", baz.chan_id, r);
+                    //     //         }
+                    //     //         counter += 1;
+                    //     //     }
+                    // });
+                    tracing::error!("..............");
                     if let Err(e) = arc_subduction.register(ws).await {
                         tracing::error!("Failed to register connection: {}", e);
                     }
+
+                    // {
+                    //     let m = arc_subduction.conn_manager.lock().await;
+                    //     // for (pid, conn) in m.connections.iter() {
+                    //     //     tracing::info!("Currently registered connection: {:?}", pid);
+                    //     //     conn.recv().await.map_err(|e| {
+                    //     //         tracing::error!("Error receiving from connection {:?}: {}", pid, e);
+                    //     //     });
+                    //     // }
+                    // }
                 }
             }
         }

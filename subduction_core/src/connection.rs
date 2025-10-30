@@ -3,7 +3,7 @@
 pub mod id;
 pub mod message;
 
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use crate::peer::id::PeerId;
@@ -32,7 +32,7 @@ pub trait Connection<K: FutureKind>: Clone {
     fn peer_id(&self) -> PeerId;
 
     /// Disconnect from the peer gracefully.
-    fn disconnect(&mut self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
+    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
 
     /// Send a message.
     fn send(&self, message: Message) -> K::Future<'_, Result<(), Self::SendError>>;
@@ -49,6 +49,41 @@ pub trait Connection<K: FutureKind>: Clone {
         req: BatchSyncRequest,
         timeout: Option<Duration>,
     ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>>;
+}
+
+impl<T: Connection<K> + ?Sized, K: FutureKind> Connection<K> for Arc<T> {
+    type DisconnectionError = T::DisconnectionError;
+    type SendError = T::SendError;
+    type RecvError = T::RecvError;
+    type CallError = T::CallError;
+
+    fn peer_id(&self) -> PeerId {
+        T::peer_id(self)
+    }
+
+    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+        T::disconnect(self)
+    }
+
+    fn send(&self, message: Message) -> K::Future<'_, Result<(), Self::SendError>> {
+        T::send(self, message)
+    }
+
+    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
+        T::recv(self)
+    }
+
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
+        T::next_request_id(self)
+    }
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+        T::call(self, req, timeout)
+    }
 }
 
 /// A trait for connections that can be re-established if they drop.

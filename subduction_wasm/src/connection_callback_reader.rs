@@ -44,7 +44,7 @@ impl<T: Connection<Local>> Connection<Local> for WasmConnectionCallbackReader<T>
         self.conn.peer_id()
     }
 
-    fn disconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         self.conn.disconnect()
     }
 

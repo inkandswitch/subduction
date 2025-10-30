@@ -179,7 +179,7 @@ impl Connection<Local> for WasmWebSocket {
         .boxed_local()
     }
 
-    fn disconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed_local()
     }
 

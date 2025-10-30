@@ -13,12 +13,14 @@ use std::{
 };
 use subduction_core::{peer::id::PeerId, Subduction};
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, start::Unstarted,
+    // client::TokioWebSocketClient,
+    server::TokioWebSocketServer,
+    start::Unstarted,
 };
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
 
-#[tokio::main]
+#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
@@ -82,33 +84,34 @@ async fn main() -> anyhow::Result<()> {
 
             let inner = server.ignore();
             inner.start().await?; // FIXME use unstarted run
-            futures::future::pending::<()>().await;
+            futures::future::pending::<()>().await; // Keep alive
         }
-        Some("connect") => {
-            let syncer = Subduction::new(
-                HashMap::from_iter([(sed_id, sed)]),
-                MemoryStorage::default(),
-                HashMap::new(),
-                CountLeadingZeroBytes,
-            );
+        _ => panic!("Please specify 'start' command"),
+        // Some("connect") => {
+        //     let syncer = Subduction::new(
+        //         HashMap::from_iter([(sed_id, sed)]),
+        //         MemoryStorage::default(),
+        //         HashMap::new(),
+        //         CountLeadingZeroBytes,
+        //     );
 
-            let ws = TokioWebSocketClient::new(
-                Uri::try_from(&args.ws)?,
-                Duration::from_secs(5),
-                PeerId::new([0; 32]),
-            )
-            .await?
-            .start();
+        //     let ws = TokioWebSocketClient::new(
+        //         Uri::try_from(&args.ws)?,
+        //         Duration::from_secs(5),
+        //         PeerId::new([0; 32]),
+        //     )
+        //     .await?
+        //     .start();
 
-            syncer.register(ws).await?;
-            let listen = syncer.run();
-            syncer.request_all_batch_sync_all(None).await?;
-            listen.await?;
-        }
-        _ => {
-            eprintln!("Please specify either 'start' or 'connect' command");
-            std::process::exit(1);
-        }
+        //     syncer.register(ws).await?;
+        //     let listen = syncer.run();
+        //     syncer.request_all_batch_sync_all(None).await?;
+        //     listen.await?;
+        // }
+        // _ => {
+        //     eprintln!("Please specify either 'start' or 'connect' command");
+        //     std::process::exit(1);
+        // }
     }
 
     Ok(())

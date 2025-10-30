@@ -81,7 +81,7 @@ impl Connection<Sendable> for TokioWebSocketClient {
         async { Connection::<Sendable>::next_request_id(&self.socket).await }.boxed()
     }
 
-    fn disconnect(&mut self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed()
     }
 
