@@ -23,7 +23,10 @@ use crate::{
     connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::WasmDigest,
-    error::{WasmCallError, WasmConnectionDisallowed, WasmIoError, WasmListenError},
+    error::{
+        WasmCallError, WasmConnectionDisallowed, WasmDisconnectionError, WasmIoError,
+        WasmListenError, WasmRegistrationError,
+    },
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
@@ -59,14 +62,14 @@ impl WasmSubduction {
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
 
-        let (core, mut actor) = Subduction::new(
+        let (core, actor) = Subduction::new(
             Arc::new(DashMap::new()),
             storage,
             Arc::new(DashMap::new()),
             WasmHashMetric(raw_fn),
         );
 
-        wasm_bindgen_futures::spawn_local(async move { actor.listen().await });
+        //  wasm_bindgen_futures::spawn_local(async move { actor.listen().await });
 
         Self {
             core,
@@ -147,10 +150,7 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns [`WasmConnectionDisallowed`] if the connection is not allowed.
-    pub async fn register(
-        &self,
-        conn: WasmWebSocket,
-    ) -> Result<Registered, WasmConnectionDisallowed> {
+    pub async fn register(&self, conn: WasmWebSocket) -> Result<Registered, WasmRegistrationError> {
         let conn_with_callbacks = WasmConnectionCallbackReader {
             conn,
             commit_callbacks: self.commit_callbacks.clone(),
@@ -524,22 +524,6 @@ impl ConnErrPair {
     #[wasm_bindgen(getter)]
     pub fn err(&self) -> WasmCallError {
         self.err.clone()
-    }
-}
-
-/// An error that occurred during disconnection.
-#[allow(missing_copy_implementations)]
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct WasmDisconnectionError(
-    #[from] <WasmConnectionCallbackReader<WasmWebSocket> as Connection<Local>>::DisconnectionError,
-);
-
-impl From<WasmDisconnectionError> for JsValue {
-    fn from(err: WasmDisconnectionError) -> Self {
-        let err = js_sys::Error::new(&err.to_string());
-        err.set_name("DisconnectionError");
-        err.into()
     }
 }
 

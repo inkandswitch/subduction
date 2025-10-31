@@ -29,6 +29,9 @@ pub enum IoError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// The connection was disallowed by the [`ConnectionPolicy`] policy.
     #[error(transparent)]
     ConnPolicy(#[from] ConnectionDisallowed),
+
+    #[error(transparent)]
+    RegistrationError(#[from] RegistrationError),
 }
 
 /// An error that can occur while handling a blob request.
@@ -53,4 +56,13 @@ pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// Missing blobs associated with local fragments or commits.
     #[error("Missing blobs associated to local fragments & commits: {0:?}")]
     MissingBlobs(Vec<Digest>),
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
+pub enum RegistrationError {
+    #[error(transparent)]
+    ConnectionDisallowed(#[from] ConnectionDisallowed),
+
+    #[error("tried to send to closed channel")]
+    SendToClosedChannel,
 }

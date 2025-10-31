@@ -200,11 +200,9 @@ pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, JsValue> {
         js_err.set_name("Base58DecodeError");
         JsValue::from(js_err)
     })?;
-    let raw: [u8; 32] = decoded.as_slice().try_into().map_err(|_| {
-        let js_err = js_sys::Error::new("decoded base58 string is not 32 bytes long");
-        js_err.set_name("InvalidLengthError");
-        JsValue::from(js_err)
-    })?;
+
+    let raw: [u8; 32] = blake3::hash(&decoded).into();
+
     Ok(Digest::from(raw).into())
 }
 

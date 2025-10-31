@@ -2,8 +2,8 @@
 
 use sedimentree_core::future::Local;
 use subduction_core::{
-    connection::ConnectionDisallowed,
-    subduction::error::{IoError, ListenError},
+    connection::{Connection, ConnectionDisallowed},
+    subduction::error::{IoError, ListenError, RegistrationError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -97,5 +97,39 @@ impl From<&CallError> for WasmCallErrorInner {
             CallError::ChannelCancelled => Self::ChannelCancelled,
             CallError::TimedOut => Self::TimedOut,
         }
+    }
+}
+
+#[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
+#[error(transparent)]
+pub struct WasmRegistrationError(RegistrationError);
+
+impl From<RegistrationError> for WasmRegistrationError {
+    fn from(err: RegistrationError) -> Self {
+        WasmRegistrationError(err)
+    }
+}
+
+impl From<WasmRegistrationError> for JsValue {
+    fn from(err: WasmRegistrationError) -> Self {
+        let js_err = js_sys::Error::new(&err.0.to_string());
+        js_err.set_name("RegistrationError");
+        js_err.into()
+    }
+}
+
+/// An error that occurred during disconnection.
+#[allow(missing_copy_implementations)]
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmDisconnectionError(
+    #[from] <WasmConnectionCallbackReader<WasmWebSocket> as Connection<Local>>::DisconnectionError,
+);
+
+impl From<WasmDisconnectionError> for JsValue {
+    fn from(err: WasmDisconnectionError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("DisconnectionError");
+        err.into()
     }
 }

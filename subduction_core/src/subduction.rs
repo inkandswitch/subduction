@@ -14,9 +14,9 @@ use crate::{
     peer::id::PeerId,
 };
 use dashmap::DashMap;
-use error::{BlobRequestErr, IoError, ListenError};
+use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    channel::mpsc::{unbounded, UnboundedSender},
+    channel::mpsc::{unbounded, TrySendError, UnboundedSender},
     stream::FuturesUnordered,
     StreamExt,
 };
@@ -37,6 +37,7 @@ use std::{
     },
     time::Duration,
 };
+use thiserror::Error;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -301,7 +302,7 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
     /// # Errors
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
-    pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), ConnectionDisallowed> {
+    pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), RegistrationError> {
         tracing::info!("registering connection from peer {:?}", conn.peer_id());
         self.allowed_to_connect(&conn.peer_id()).await?;
 
@@ -314,7 +315,7 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
             self.conns.insert(conn_id, conn.clone());
             self.actor_channel
                 .unbounded_send((conn_id, conn))
-                .expect("FIXME");
+                .map_err(|_| RegistrationError::SendToClosedChannel)?;
 
             Ok((true, conn_id))
         }
