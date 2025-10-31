@@ -14,6 +14,7 @@ repository.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = "2.5.0" # FIXME lift to top level
+dashmap = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core" }

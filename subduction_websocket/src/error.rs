@@ -1,6 +1,7 @@
 //! Error types.
 
 use futures::channel::oneshot;
+use subduction_core::connection::message::Message;
 use thiserror::Error;
 
 /// Problem while attempting to send a message.
@@ -57,7 +58,7 @@ pub struct DisconnectionError;
 pub enum RunError {
     /// Internal MPSC channel error.
     #[error("Channel send error: {0}")]
-    ChanSend(#[from] futures::channel::mpsc::SendError),
+    ChanSend(#[from] async_channel::SendError<Message>),
 
     /// WebSocket error.
     #[error("WebSocket error: {0}")]

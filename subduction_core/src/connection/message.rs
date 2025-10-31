@@ -112,7 +112,7 @@ pub struct RequestId {
     pub requestor: PeerId,
 
     /// A nonce unique to this user and connection.
-    pub nonce: u128,
+    pub nonce: u64,
 }
 
 // TODO also make a version for the sender that is borrowed instead of owned.

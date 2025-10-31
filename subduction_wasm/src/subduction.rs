@@ -50,13 +50,14 @@ impl WasmSubduction {
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
 
+        let (core, actor) = Subduction::new(
+            HashMap::new(),
+            storage,
+            HashMap::new(),
+            WasmHashMetric(raw_fn),
+        );
         Self {
-            core: Subduction::new(
-                HashMap::new(),
-                storage,
-                HashMap::new(),
-                WasmHashMetric(raw_fn),
-            ),
+            core: _,
             commit_callbacks: Rc::new(Mutex::new(Vec::new())),
             fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
             blob_callbacks: Rc::new(Mutex::new(Vec::new())),
@@ -68,8 +69,8 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a `WasmListenError` if the instance fails to run.
-    pub async fn run(&self) -> Result<(), WasmListenError> {
-        self.core.run().await?;
+    pub async fn listen(&mut self) -> Result<(), WasmListenError> {
+        self.core.listen().await?;
         Ok(())
     }
 

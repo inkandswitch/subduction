@@ -15,7 +15,7 @@ use thiserror::Error;
 ///
 /// It is assumed that a [`Connection`] is authenticated to a particular peer.
 /// Encrypting this channel is also strongly recommended.
-pub trait Connection<K: FutureKind>: Clone {
+pub trait Connection<K: FutureKind + ?Sized>: Clone {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 

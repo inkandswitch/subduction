@@ -1,9 +1,9 @@
 use clap::Parser;
+use dashmap::DashMap;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, storage::MemoryStorage, Sedimentree, SedimentreeId,
 };
 use std::{
-    collections::HashMap,
     net::SocketAddr,
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -13,9 +13,7 @@ use std::{
 };
 use subduction_core::{peer::id::PeerId, Subduction};
 use subduction_websocket::tokio::{
-    // client::TokioWebSocketClient,
-    server::TokioWebSocketServer,
-    start::Unstarted,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, start::Unstarted,
 };
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
@@ -34,12 +32,12 @@ async fn main() -> anyhow::Result<()> {
         tokio::spawn(async move {
             loop {
                 if tokio::signal::ctrl_c().await.is_ok() {
-                    match hits.fetch_add(1, Ordering::SeqCst) {
+                    match hits.fetch_add(1, Ordering::Relaxed) {
                         0 => {
                             eprintln!(
                                 "Ctrl+C — attempting graceful shutdown… (press again to force)"
                             );
-                            token.cancel(); // tell tasks to wind down
+                            token.cancel();
                         }
                         _ => {
                             eprintln!("Force exiting.");
@@ -86,32 +84,33 @@ async fn main() -> anyhow::Result<()> {
             inner.start().await?; // FIXME use unstarted run
             futures::future::pending::<()>().await; // Keep alive
         }
-        _ => panic!("Please specify 'start' command"),
-        // Some("connect") => {
-        //     let syncer = Subduction::new(
-        //         HashMap::from_iter([(sed_id, sed)]),
-        //         MemoryStorage::default(),
-        //         HashMap::new(),
-        //         CountLeadingZeroBytes,
-        //     );
+        Some("connect") => {
+            let (syncer, mut actor) = Subduction::new(
+                DashMap::from_iter([(sed_id, sed)]),
+                MemoryStorage::default(),
+                DashMap::new(),
+                CountLeadingZeroBytes,
+            );
 
-        //     let ws = TokioWebSocketClient::new(
-        //         Uri::try_from(&args.ws)?,
-        //         Duration::from_secs(5),
-        //         PeerId::new([0; 32]),
-        //     )
-        //     .await?
-        //     .start();
+            tokio::spawn(async move { actor.listen().await });
 
-        //     syncer.register(ws).await?;
-        //     let listen = syncer.run();
-        //     syncer.request_all_batch_sync_all(None).await?;
-        //     listen.await?;
-        // }
-        // _ => {
-        //     eprintln!("Please specify either 'start' or 'connect' command");
-        //     std::process::exit(1);
-        // }
+            let ws = TokioWebSocketClient::new(
+                Uri::try_from(&args.ws)?,
+                Duration::from_secs(5),
+                PeerId::new([0; 32]),
+            )
+            .await?
+            .start();
+
+            syncer.register(ws).await?;
+            let listen = syncer.listen();
+            syncer.request_all_batch_sync_all(None).await?;
+            listen.await?;
+        }
+        _ => {
+            eprintln!("Please specify either 'start' or 'connect' command");
+            std::process::exit(1);
+        }
     }
 
     Ok(())

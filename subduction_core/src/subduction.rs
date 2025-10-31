@@ -12,27 +12,33 @@ use crate::{
     },
     peer::id::PeerId,
 };
-use async_channel::{RecvError, TrySendError};
+use dashmap::DashMap;
 use error::{BlobRequestErr, IoError, ListenError};
-use futures::{lock::Mutex, stream::FuturesUnordered, StreamExt};
+use futures::{
+    channel::mpsc::{unbounded, UnboundedReceiver, UnboundedSender},
+    stream::{FusedStream, FuturesUnordered},
+    FutureExt, StreamExt,
+};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    future::FutureKind,
+    future::{FutureKind, Local, Sendable},
     storage::Storage,
     Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
 use std::{
     collections::{HashMap, HashSet},
-    fmt::Debug,
-    sync::Arc,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
     time::Duration,
 };
 
 /// The main synchronization manager for sedimentrees.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Subduction<
     F: FutureKind,
     S: Storage<F>,
@@ -40,17 +46,39 @@ pub struct Subduction<
     M: DepthMetric = CountLeadingZeroBytes,
 > {
     depth_metric: M,
-    sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
-    pub conn_manager: Arc<Mutex<ConnectionManager<C>>>, // FIXME temp pub for debgging
+    sedimentrees: DashMap<SedimentreeId, Sedimentree>,
+    next_connection_id: Arc<AtomicUsize>,
+    conns: DashMap<ConnectionId, C>,
     storage: S,
-    ready_waiter: async_channel::Receiver<()>,
-    ready_setter: async_channel::Sender<()>,
+
+    actor_channel: UnboundedSender<(ConnectionId, C)>,
+    msg_queue: async_channel::Receiver<(ConnectionId, C, Message)>,
+
     _phantom: std::marker::PhantomData<F>,
 }
 
 impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     Subduction<F, S, C, M>
 {
+    // /// Listen for incoming messages from all connections and handle them appropriately.
+    // ///
+    // /// This method runs indefinitely, processing messages as they arrive.
+    // /// If no peers are connected, it will wait until a peer connects.
+    // ///
+    // /// # Errors
+    // ///
+    // /// * Returns `ListenError` if a storage or network error occurs.
+    // // FIXME remove run now that we're using a queue in listen
+    // pub async fn run(&mut self) -> Result<(), ListenError<F, S, C>> {
+    //     tracing::info!("Starting Subduction run loop");
+    //     loop {
+    //         if let Err(RecvError) = self.ready_waiter.clone().recv().await {
+    //             tracing::warn!("FIXME channel closed");
+    //         }
+    //         self.listen().await?;
+    //     }
+    // }
+
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -59,109 +87,15 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     /// # Errors
     ///
     /// * Returns `ListenError` if a storage or network error occurs.
-    pub async fn run(&self) -> Result<(), ListenError<F, S, C>> {
-        tracing::info!("Starting Subduction run loop");
-        loop {
-            if let Err(RecvError) = self.ready_waiter.clone().recv().await {
-                tracing::warn!("FIXME channel closed");
-            }
-            self.listen().await?;
+    // FIXME wrap the msg queue or use an mpmc (probably the later)
+    pub async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
+        while let Ok((conn_id, conn, msg)) = self.msg_queue.recv().await {
+            self.dispatch(conn_id, &conn, msg).await?; // FIXME maybe just log if it breaks
+            self.actor_channel
+                .unbounded_send((conn_id, conn))
+                .expect("FIXME")
         }
-    }
-
-    async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
-        tracing::info!("Listening for messages from connections");
-
-        let mut pump = FuturesUnordered::new();
-        {
-            let mut locked_mgr = self.conn_manager.lock().await;
-            let mut unstarted = locked_mgr.unstarted.drain().collect::<Vec<_>>();
-            for conn_id in unstarted.drain(..) {
-                #[allow(clippy::expect_used)]
-                if let Some(conn) = locked_mgr.connections.get(&conn_id) {
-                    tracing::info!("######### Spawning listener for connection {:?}", conn_id);
-                    pump.push(self.fire_once(conn_id, conn.clone()));
-                    if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
-                        panic!("FIXME Ready channel closed unexpectedly");
-                    }
-                } else {
-                    // Maybe they disconnected between loops
-                    tracing::warn!("Connection {:?} not found in connection manager", conn_id);
-                }
-            }
-        }
-
-        if !pump.is_empty() {
-            tracing::error!("Futures pump has elements: {}", pump.len());
-        }
-        while let Some((conn_id, conn, res)) = pump.next().await {
-            tracing::error!(
-                "######################### Pump rotated on connection {:?}",
-                conn_id
-            );
-            tracing::error!("PUMP SIZE: {}", pump.len());
-            tracing::error!(
-                "CONN SIZE: {}",
-                self.conn_manager.lock().await.connections.len()
-            );
-            let () = res?;
-            // let mut locked = self.conn_manager.lock().await;
-            let (conns, mut unstarted) = {
-                let locked = self.conn_manager.lock().await;
-                (locked.connections.clone(), locked.unstarted.clone())
-            };
-            // if locked.connections.contains_key(&conn_id) {
-            if conns.contains_key(&conn_id) {
-                // Re-enque if that connection is still active at the top-level
-                pump.push(self.fire_once(conn_id, conn));
-                if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
-                    panic!("FIXME Ready channel closed unexpectedly");
-                }
-            }
-
-            // let unstarted_ids = locked.unstarted.drain().collect::<Vec<_>>();
-            let unstarted_ids = unstarted.drain().collect::<Vec<_>>();
-            for conn_id in unstarted_ids {
-                if let Some(unstarted) = conns.get(&conn_id) {
-                    // if let Some(unstarted) = locked.connections.get(&conn_id) {
-                    pump.push(self.fire_once(conn_id, unstarted.clone()));
-                }
-                if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
-                    panic!("FIXME Ready channel closed unexpectedly");
-                }
-            }
-        }
-
-        tracing::debug!("^^^^^^^^^^^^^^^^^ No active connections to listen to");
-
         Ok(())
-    }
-
-    // FIXME rename recv_once or somehtig
-    async fn fire_once(
-        &self,
-        conn_id: ConnectionId,
-        conn: C,
-    ) -> (ConnectionId, C, Result<(), ListenError<F, S, C>>) {
-        tracing::info!("@@@@@@@@@@ fire once");
-        tracing::error!("HIGHEST RECV {:?}", conn.peer_id());
-        let result =
-            // tracing::info!("@@@@@@@@@@ INSIDE fire once");
-        match conn.recv().await {
-            Err(e) => {
-                tracing::error!("Error receiving message on connection {:?}: {}", conn_id, e);
-                return (conn_id, conn, Err(IoError::ConnRecv(e).into()));
-            }
-            Ok(msg) => {
-                tracing::debug!("Received message {:?} on connection {:?}", msg, conn_id);
-                self.dispatch(conn_id, &conn, msg).await
-            }
-        };
-        // let msg = conn.recv().await.map_err(IoError::ConnRecv)?;
-        // tracing::debug!("Received message {:?} on connection {:?}", msg, conn_id);
-        // self.dispatch(conn_id, &conn, msg).await
-        tracing::info!("@@@@@@@@@@ COMPLETE fire once");
-        (conn_id, conn, result)
     }
 
     async fn dispatch(
@@ -171,7 +105,6 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         message: Message,
     ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
-
         tracing::info!("Received message from peer {:?}: {:?}", from, message);
 
         match message {
@@ -197,13 +130,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
                 self.recv_batch_sync_response(&from, id, &diff).await?;
             }
             Message::BlobsRequest(digests) => {
-                if self
-                    .conn_manager
-                    .lock()
-                    .await
-                    .connections
-                    .contains_key(&conn_id)
-                {
+                if self.conns.contains_key(&conn_id) {
                     match self.recv_blob_request(conn, &digests).await {
                         Ok(()) => {
                             tracing::info!(
@@ -237,38 +164,45 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     }
 
     /// Initialize a new `Subduction` with the given storage backend and network adapters.
-    pub fn new(
-        sedimentrees: HashMap<SedimentreeId, Sedimentree>,
+    pub fn new<'a>(
+        sedimentrees: DashMap<SedimentreeId, Sedimentree>,
         storage: S,
-        connections: HashMap<ConnectionId, C>,
+        conns: DashMap<ConnectionId, C>,
         depth_metric: M,
-    ) -> Self {
-        let (ready_setter, ready_waiter) = async_channel::bounded::<()>(1);
+    ) -> (Self, Actor<'a, F, C>) {
+        // FIXME NOTE: UNSTARTED ACTOR
+        let (actor_sender, actor_receiver) = unbounded();
+        let (queue_sender, queue_receiver) = async_channel::unbounded();
 
-        Self {
+        let actor = Actor {
+            inbox: actor_receiver,
+            outbox: queue_sender,
+            queue: FuturesUnordered::new(),
+        };
+
+        let sd = Self {
             depth_metric,
-            sedimentrees: Arc::new(Mutex::new(sedimentrees)),
-            conn_manager: Arc::new(Mutex::new(ConnectionManager {
-                next_id: ConnectionId::default(),
-                connections,
-                unstarted: HashSet::new(),
-            })),
+            sedimentrees,
+            next_connection_id: Arc::new(AtomicUsize::new(0)),
+            conns,
             storage,
-            ready_waiter: ready_waiter,
-            ready_setter: ready_setter,
+            actor_channel: actor_sender,
+            msg_queue: queue_receiver,
             _phantom: std::marker::PhantomData,
-        }
+        };
+
+        (sd, actor)
     }
 
-    pub async fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) {
-        let mut sedimentrees = self.sedimentrees.lock().await;
-        let existing: &mut Sedimentree = sedimentrees.entry(id).or_default();
+    /// Add a [`Sedimentree`] to sync.
+    pub fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) {
+        let existing = &mut self.sedimentrees.entry(id).or_default();
         existing.merge(sedimentree)
     }
 
-    pub async fn remove_sedimentree(&self, id: SedimentreeId) -> bool {
-        let mut sedimentrees = self.sedimentrees.lock().await;
-        sedimentrees.remove(&id).is_some()
+    /// Remove a [`Sedimentree`].
+    pub fn remove_sedimentree(&self, id: SedimentreeId) -> bool {
+        self.sedimentrees.remove(&id).is_some()
     }
 
     /// The storage backend used for persisting sedimentree data.
@@ -279,13 +213,11 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     pub async fn hydrate(&self) -> Result<(), S::Error> {
         for tree_id in self
             .sedimentrees
-            .lock()
-            .await
-            .keys()
-            .copied()
+            .iter()
+            .map(|e| *e.key())
             .collect::<Vec<_>>()
         {
-            if let Some(sedimentree) = self.sedimentrees.lock().await.get_mut(&tree_id) {
+            if let Some(mut sedimentree) = self.sedimentrees.get_mut(&tree_id) {
                 for commit in self.storage.load_loose_commits().await? {
                     tracing::trace!("Loaded commit {:?}", commit.digest());
                     sedimentree.add_commit(commit);
@@ -318,10 +250,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
 
         for tree_id in self
             .sedimentrees
-            .lock()
-            .await
-            .keys()
-            .copied()
+            .iter()
+            .map(|e| *e.key())
             .collect::<Vec<_>>()
         {
             self.request_peer_batch_sync(&peer_id, tree_id, None)
@@ -331,55 +261,55 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         Ok((fresh, conn_id))
     }
 
-    /// Gracefully shut down a connection.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
-    pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
-        let mut locked = self.conn_manager.lock().await;
-        locked.unstarted.remove(conn_id);
-        if let Some(conn) = locked.connections.remove(conn_id) {
-            conn.disconnect().await.map(|()| true)
-        } else {
-            Ok(false)
-        }
-    }
+    // /// Gracefully shut down a connection.
+    // ///
+    // /// # Errors
+    // ///
+    // /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
+    // pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
+    //     let mut locked = self.conn_manager.lock().await;
+    //     locked.unstarted.remove(conn_id);
+    //     if let Some(conn) = locked.connections.remove(conn_id) {
+    //         conn.disconnect().await.map(|()| true)
+    //     } else {
+    //         Ok(false)
+    //     }
+    // }
 
-    /// Gracefully disconnect from all connections to a given peer ID.
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(true)` if at least one connection was found and disconnected.
-    /// * `Ok(false)` if no connections to the given peer ID were found.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
-    pub async fn disconnect_from_peer(
-        &self,
-        peer_id: &PeerId,
-    ) -> Result<bool, C::DisconnectionError> {
-        let mut touched = false;
-        let mut locked = self.conn_manager.lock().await;
+    // /// Gracefully disconnect from all connections to a given peer ID.
+    // ///
+    // /// # Returns
+    // ///
+    // /// * `Ok(true)` if at least one connection was found and disconnected.
+    // /// * `Ok(false)` if no connections to the given peer ID were found.
+    // ///
+    // /// # Errors
+    // ///
+    // /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
+    // pub async fn disconnect_from_peer(
+    //     &self,
+    //     peer_id: &PeerId,
+    // ) -> Result<bool, C::DisconnectionError> {
+    //     let mut touched = false;
+    //     let mut locked = self.conn_manager.lock().await;
 
-        let mut conn_meta = Vec::new();
-        for (id, conn) in &locked.connections {
-            conn_meta.push((*id, conn.peer_id()));
-        }
+    //     let mut conn_meta = Vec::new();
+    //     for (id, conn) in &locked.connections {
+    //         conn_meta.push((*id, conn.peer_id()));
+    //     }
 
-        for (id, conn_peer_id) in &conn_meta {
-            if *conn_peer_id == *peer_id {
-                touched = true;
-                locked.unstarted.remove(id);
-                if let Some(conn) = locked.connections.remove(id) {
-                    conn.disconnect().await?;
-                }
-            }
-        }
+    //     for (id, conn_peer_id) in &conn_meta {
+    //         if *conn_peer_id == *peer_id {
+    //             touched = true;
+    //             locked.unstarted.remove(id);
+    //             if let Some(conn) = locked.connections.remove(id) {
+    //                 conn.disconnect().await?;
+    //             }
+    //         }
+    //     }
 
-        Ok(touched)
-    }
+    //     Ok(touched)
+    // }
 
     /****************************
      * LOW LEVEL CONNECTION API *
@@ -398,29 +328,27 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
     pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), ConnectionDisallowed> {
-        tracing::info!("#### Registering connection from peer {:?}", conn.peer_id());
+        tracing::info!("registering connection from peer {:?}", conn.peer_id());
         self.allowed_to_connect(&conn.peer_id()).await?;
 
-        let mut locked = self.conn_manager.lock().await;
-        if let Some((conn_id, _conn)) = locked.connections.iter().find(|(_, c)| **c == conn) {
-            Ok((false, *conn_id))
+        if let Some(hit) = self.conns.iter().find(|r| *r.value() == conn) {
+            Ok((false, hit.key().clone()))
         } else {
-            let conn_id = locked.next_connection_id();
-            // let _ = conn.recv().await.ok();
-            locked.unstarted.insert(conn_id);
-            locked.connections.insert(conn_id, conn);
-            if let Err(TrySendError::Closed(_)) = self.ready_setter.try_send(()) {
-                panic!("FIXME Ready channel closed unexpectedly");
-            }
+            let counter = self.next_connection_id.fetch_add(1, Ordering::Relaxed);
+            let conn_id: ConnectionId = ConnectionId::new(counter);
+
+            self.conns.insert(conn_id, conn.clone());
+            self.actor_channel
+                .unbounded_send((conn_id, conn))
+                .expect("FIXME");
+
             Ok((true, conn_id))
         }
     }
 
     /// Low-level unregistration of a connection.
     pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
-        let mut locked = self.conn_manager.lock().await;
-        locked.unstarted.remove(conn_id);
-        locked.connections.remove(conn_id).is_some()
+        self.conns.remove(conn_id).is_some()
     }
 
     /*********
@@ -459,7 +387,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         &self,
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
-        if let Some(sedimentree) = self.sedimentrees.lock().await.get(&id) {
+        if let Some(sedimentree) = self.sedimentrees.get(&id) {
             tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
 
@@ -505,10 +433,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         if let Some(maybe_blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
-            if let Some(tree) = self.sedimentrees.lock().await.get(&id) {
+            if let Some(tree) = self.sedimentrees.get(&id) {
                 let summary = tree.summarize();
-                let locked = self.conn_manager.lock().await;
-                for conn in locked.connections.values() {
+                for entry in self.conns.iter() {
+                    let conn = entry.value();
                     let req_id = conn.next_request_id().await;
                     let BatchSyncResponse {
                         id,
@@ -601,9 +529,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             .map_err(IoError::Storage)?;
 
         {
-            let locked = self.conn_manager.lock().await;
-            let conns = locked.connections.values().collect::<Vec<_>>();
-            for conn in conns {
+            for entry in self.conns.iter() {
+                let conn = entry.value();
                 conn.send(Message::LooseCommit {
                     id,
                     commit: commit.clone(),
@@ -642,8 +569,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         blob: Blob,
     ) -> Result<(), IoError<F, S, C>> {
         {
-            let mut sed = self.sedimentrees.lock().await;
-            let tree = sed.entry(id).or_default();
+            let mut tree = self.sedimentrees.entry(id).or_default();
             tree.add_fragment(fragment.clone());
         }
 
@@ -653,9 +579,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             .map_err(IoError::Storage)?;
 
         {
-            let locked = self.conn_manager.lock().await;
-            let conns = locked.connections.values().collect::<Vec<_>>();
-            for conn in conns {
+            for entry in self.conns.iter() {
+                let conn = entry.value();
                 conn.send(Message::Fragment {
                     id,
                     fragment: fragment.clone(),
@@ -693,8 +618,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             .map_err(IoError::Storage)?;
 
         if was_new {
-            let locked = self.conn_manager.lock().await;
-            for conn in locked.connections.values() {
+            for entry in self.conns.iter() {
+                let conn = entry.value();
                 if conn.peer_id() != *from {
                     conn.send(Message::LooseCommit {
                         id,
@@ -730,8 +655,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             .map_err(IoError::Storage)?;
 
         if was_new {
-            let locked = self.conn_manager.lock().await;
-            for conn in locked.connections.values() {
+            for entry in self.conns.iter() {
+                let conn = entry.value();
                 if conn.peer_id() != *from {
                     conn.send(Message::Fragment {
                         id,
@@ -770,8 +695,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         let mut our_missing_blobs = Vec::new();
 
         {
-            let mut guard = self.sedimentrees.lock().await;
-            let sedimentree = guard.entry(id).or_default();
+            let mut sedimentree = self.sedimentrees.entry(id).or_default();
             tracing::info!(
                 "Received batch sync request for sedimentree {:?} with {} commits and {} fragments",
                 id,
@@ -879,8 +803,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
 
     /// Find blobs from connected peers.
     pub async fn request_blobs(&self, digests: Vec<Digest>) {
-        let locked = self.conn_manager.lock().await;
-        for conn in locked.connections.values() {
+        for entry in self.conns.iter() {
+            let conn = entry.value();
             if let Err(e) = conn.send(Message::BlobsRequest(digests.clone())).await {
                 tracing::error!(
                     "Error requesting blobs {:?} from peer {:?}: {:?}",
@@ -916,12 +840,9 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
 
         let mut had_success = false;
         let mut peer_conns = Vec::new();
-        {
-            let locked = self.conn_manager.lock().await;
-            for (conn_id, conn) in &locked.connections {
-                if conn.peer_id() == *to_ask {
-                    peer_conns.push((*conn_id, conn.clone()));
-                }
+        for entry in &self.conns {
+            if entry.value().peer_id() == *to_ask {
+                peer_conns.push((entry.key().clone(), entry.value().clone()));
             }
         }
 
@@ -931,10 +852,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
             tracing::info!("Using connection {:?} to peer {:?}", conn_id, to_ask);
             let summary = self
                 .sedimentrees
-                .lock()
-                .await
                 .get(&id)
-                .map(Sedimentree::summarize)
+                .map(|e| Sedimentree::summarize(e.value()))
                 .unwrap_or_default();
 
             let req_id = conn.next_request_id().await;
@@ -1003,16 +922,11 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         );
         let mut peers: HashMap<PeerId, Vec<(ConnectionId, C)>> = HashMap::new();
         {
-            let conns = {
-                let locked = self.conn_manager.lock().await;
-                locked.connections.clone()
-            };
-
-            for (conn_id, conn) in conns {
+            for entry in self.conns.iter() {
                 peers
-                    .entry(conn.peer_id())
+                    .entry(entry.value().peer_id())
                     .or_default()
-                    .push((conn_id, conn));
+                    .push((entry.key().clone(), entry.value().clone()));
             }
         }
 
@@ -1037,10 +951,8 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
                     );
                     let summary = self
                         .sedimentrees
-                        .lock()
-                        .await
                         .get(&id)
-                        .map(Sedimentree::summarize)
+                        .map(|e| Sedimentree::summarize(e.value()))
                         .unwrap_or_default();
 
                     let req_id = conn.next_request_id().await;
@@ -1117,11 +1029,10 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
         let tree_ids = self
             .sedimentrees
-            .lock()
-            .await
-            .keys()
-            .copied()
+            .iter()
+            .map(|e| *e.key())
             .collect::<Vec<_>>();
+
         let mut had_success = false;
         for id in tree_ids {
             tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
@@ -1138,42 +1049,30 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
      ********************/
 
     /// Get an iterator over all known sedimentree IDs.
-    pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
+    pub fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
         self.sedimentrees
-            .lock()
-            .await
-            .keys()
-            .copied()
+            .iter()
+            .map(|e| *e.key())
             .collect::<Vec<_>>()
     }
 
     /// Get all commits for a given sedimentree ID.
-    pub async fn get_commits(&self, id: SedimentreeId) -> Option<Vec<LooseCommit>> {
+    pub fn get_commits(&self, id: SedimentreeId) -> Option<Vec<LooseCommit>> {
         self.sedimentrees
-            .lock()
-            .await
             .get(&id)
             .map(|tree| tree.loose_commits().cloned().collect())
     }
 
     /// Get all fragments for a given sedimentree ID.
-    pub async fn get_fragments(&self, id: SedimentreeId) -> Option<Vec<Fragment>> {
+    pub fn get_fragments(&self, id: SedimentreeId) -> Option<Vec<Fragment>> {
         self.sedimentrees
-            .lock()
-            .await
             .get(&id)
             .map(|tree| tree.fragments().cloned().collect())
     }
 
     /// Get the set of all connected peer IDs.
-    pub async fn peer_ids(&self) -> HashSet<PeerId> {
-        self.conn_manager
-            .lock()
-            .await
-            .connections
-            .values()
-            .map(Connection::peer_id)
-            .collect()
+    pub fn peer_ids(&self) -> HashSet<PeerId> {
+        self.conns.iter().map(|r| r.value().peer_id()).collect()
     }
 
     /*******************
@@ -1188,8 +1087,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     ) -> Result<bool, S::Error> {
         tracing::debug!("Inserting commit {:?} locally", commit.digest());
         {
-            let mut sed = self.sedimentrees.lock().await;
-            let tree = sed.entry(id).or_default();
+            let mut tree = self.sedimentrees.entry(id).or_default();
             if !tree.add_commit(commit.clone()) {
                 return Ok(false);
             }
@@ -1209,8 +1107,7 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
         blob: Blob,
     ) -> Result<bool, S::Error> {
         {
-            let mut sed = self.sedimentrees.lock().await;
-            let tree = sed.entry(id).or_default();
+            let mut tree = self.sedimentrees.entry(id).or_default();
             if !tree.add_fragment(fragment.clone()) {
                 return Ok(false);
             }
@@ -1230,21 +1127,86 @@ impl<F: FutureKind, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
     }
 }
 
-// FIXME temp pub for debugging
-#[derive(Debug, Default)]
-pub struct ConnectionManager<C> {
-    next_id: ConnectionId,
-    pub connections: HashMap<ConnectionId, C>, // FIXME temp pub for debguging
-    unstarted: HashSet<ConnectionId>,
+trait FireOnce<'a, C: Connection<Self>>: FutureKind {
+    fn fire_once(
+        conn_id: ConnectionId,
+        conn: C,
+        sender: async_channel::Sender<(ConnectionId, C, Message)>,
+    ) -> Self::Future<'a, ()>;
 }
 
-impl<C> ConnectionManager<C> {
-    fn next_connection_id(&mut self) -> ConnectionId {
-        let mut id = self.next_id.into();
-        while self.connections.contains_key(&ConnectionId::new(id)) {
-            id = id.wrapping_add(1);
+impl<'a, C: 'a + Connection<Sendable> + Send> FireOnce<'a, C> for Sendable {
+    fn fire_once(
+        conn_id: ConnectionId,
+        conn: C,
+        sender: async_channel::Sender<(ConnectionId, C, Message)>,
+    ) -> Self::Future<'a, ()> {
+        async move {
+            let msg = match conn.recv().await {
+                Ok(msg) => msg,
+                Err(e) => {
+                    tracing::error!("error when waiting for {conn_id} to receive: {e:?}");
+                    return;
+                }
+            };
+
+            if let Err(e) = sender.send((conn_id, conn, msg)).await {
+                tracing::error!("unable to send msg about {conn_id} to Subduction: {e:?}");
+            }
         }
-        self.next_id = id.wrapping_add(1).into();
-        id.into()
+        .boxed()
+    }
+}
+
+impl<'a, C: 'a + Connection<Local>> FireOnce<'a, C> for Local {
+    fn fire_once(
+        conn_id: ConnectionId,
+        conn: C,
+        sender: async_channel::Sender<(ConnectionId, C, Message)>,
+    ) -> Self::Future<'a, ()> {
+        async move {
+            match conn.recv().await {
+                Ok(msg) => {
+                    if let Err(e) = sender.send((conn_id, conn, msg)).await {
+                        tracing::error!("unable to send msg about {conn_id} to Subduction: {e:?}");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("error when waiting for {conn_id} to receive: {e:?}");
+                }
+            }
+        }
+        .boxed_local()
+    }
+}
+
+// FIXME rename
+pub struct Actor<'a, F: FutureKind, C: Connection<F>> {
+    inbox: UnboundedReceiver<(ConnectionId, C)>,
+    outbox: async_channel::Sender<(ConnectionId, C, Message)>,
+    queue: FuturesUnordered<F::Future<'a, ()>>,
+}
+
+impl<'a, F: FireOnce<'a, C>, C: Connection<F>> Actor<'a, F, C> {
+    pub async fn listen(&mut self) {
+        let mut inbox = self.inbox.by_ref().fuse();
+
+        loop {
+            if inbox.is_terminated() && self.queue.is_empty() {
+                break;
+            }
+
+            futures::select! {
+                maybe = inbox.next() => {
+                    if let Some((conn_id, conn)) = maybe {
+                        self.queue.push(F::fire_once(conn_id, conn, self.outbox.clone()));
+                    }
+                }
+
+                _maybe = self.queue.next().fuse() => {
+                    //  Just drain
+                }
+            }
+        }
     }
 }

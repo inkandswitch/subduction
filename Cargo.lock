@@ -1662,6 +1662,7 @@ dependencies = [
  "async-tungstenite",
  "bincode",
  "clap",
+ "dashmap",
  "futures",
  "futures-util",
  "rand",
@@ -1684,6 +1685,7 @@ version = "0.1.0"
 dependencies = [
  "arbitrary",
  "async-channel",
+ "dashmap",
  "futures",
  "nonempty",
  "sedimentree_core",

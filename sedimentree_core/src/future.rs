@@ -29,5 +29,3 @@ pub enum Local {}
 impl FutureKind for Local {
     type Future<'a, T: 'a> = LocalBoxFuture<'a, T>;
 }
-
-// FIXME add a generalized over boxing strategies so we can writ impls once

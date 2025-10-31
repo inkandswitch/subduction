@@ -107,9 +107,9 @@ where
                     res = tcp_listener.accept() => {
                         match res {
                             Ok((tcp, addr)) => {
-                                tracing::error!("New TCP connection from {addr}");
+                                tracing::info!("new TCP connection from {addr}");
 
-                                // HACK FIXME include client ID in welcome message instead of this hack?
+                                // FIXME HACK: this will be replaced with a pubkey
                                 let client_digest = {
                                     let mut hasher = blake3::Hasher::new();
                                     hasher.update(addr.ip().to_string().as_bytes());
@@ -117,25 +117,28 @@ where
                                     hasher.finalize().as_bytes().clone()
                                 };
                                 let client_id = PeerId::new(client_digest);
-                                let inner_timeout = timeout; // Copy
 
                                 let mut set = conns_for_task.lock().await;
                                 set.spawn({
                                     let sd = subd_actor.clone();
                                     async move {
-                                        let hs = accept_hdr_async(tcp, tungstenite::handshake::server::NoCallback)
-                                            .await
-                                            .expect("FIXME");
+                                        match accept_hdr_async(tcp, tungstenite::handshake::server::NoCallback).await {
+                                            Ok(hs) => {
+                                                let ws_conn = WebSocket::<TokioAdapter<TcpStream>>::new(
+                                                    hs,
+                                                    timeout,
+                                                    client_id,
+                                                );
 
-                                        let ws_conn = WebSocket::<TokioAdapter<TcpStream>>::new(
-                                            hs,
-                                            inner_timeout,
-                                            client_id,
-                                        );
-                                        tracing::info!("WebSocket handshake UPGRADED with {addr}");
+                                                tracing::info!("WebSocket handshake upgraded {addr}");
 
-                                        if let Err(e) = sd.tx.send(Cmd::Register { ws: ws_conn }).await {
-                                            tracing::error!("Failed to register new connection: {}", e);
+                                                if let Err(e) = sd.tx.send(Cmd::Register { ws: ws_conn }).await {
+                                                    tracing::error!("failed to register new connection: {}", e);
+                                                }
+                                            },
+                                            Err(e) => {
+                                                tracing::error!("WebSocket handshake error from {addr}: {}", e);
+                                            },
                                         }
                                     }
                                 });
@@ -207,88 +210,43 @@ where
     let handle = SubductionActor { tx };
 
     let join_handle = tokio::spawn(async move {
-        let arc_subduction = Arc::new(Subduction::new(
+        let (subduction, mut actor) = Subduction::new(
             Default::default(),
             storage,
             Default::default(),
             depth_metric,
-        ));
+        );
+
+        let arc_subduction = Arc::new(subduction);
+
+        tokio::spawn(async move { actor.listen().await });
 
         while let Some(cmd) = rx.recv().await {
-            tracing::info!("Subduction actor received command: {:?}", cmd); // FIXME
             match cmd {
                 Cmd::Start => {
                     tokio::spawn({
-                        tracing::debug!("Spawning Subduction run task");
+                        tracing::debug!("starting Subduction server");
                         let inner = arc_subduction.clone();
                         async move {
-                            if let Err(e) = inner.run().await {
+                            if let Err(e) = inner.listen().await {
                                 tracing::error!("Subduction run error: {}", e);
                             }
                         }
                     });
                 }
                 Cmd::Register { ws } => {
-                    tracing::info!("Registering new WebSocket connection");
-                    // FIXME here for debuggng
-                    let foo = ws.clone();
-                    let bar = ws.clone();
-                    let baz = ws.clone();
+                    tracing::info!("registering new WebSocket connection");
+
+                    let thread_ws = ws.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = foo.listen().await {
+                        if let Err(e) = thread_ws.listen().await {
                             tracing::error!("WebSocket listen error: {}", e);
                         }
                     });
-                    // FIXME
-                    // let _ = ws.listen().await;
-                    // let x = ws.inbound_reader.recv().await;
-                    // tokio::spawn(async move {
-                    //     tracing::error!(">>>>>>>>>>>>>>>> Inbound reader recv");
-                    //     bar.recv().await.map_err(|e| {
-                    //         tracing::error!("Error receiving from connection: {}", e);
-                    //     });
-                    tracing::error!("<<<<<<<<<<<<<<<");
-                    // });
-                    // tokio::spawn(async move {
-                    //     //     let mut counter = 0;
-                    //     //     loop {
-                    //     //         if counter % 100_000_000 == 0 {
-                    //     //             // tracing::info!("%%%%%%%%%%%: {}", baz.chan_id);
-                    //     for i in 1..=3 {
-                    //         tracing::error!(".............. {}", i);
-                    //         tracing::error!(
-                    //             "sending to\nchan_id: {}\npeer_id: {}",
-                    //             baz.chan_id,
-                    //             baz.peer_id()
-                    //         );
-                    //         let r = baz
-                    //             .inbound_writer
-                    //             // .send(Message::BlobsRequest(vec![]))
-                    //             // .await
-                    //             .try_send(Message::BlobsRequest(vec![]))
-                    //             .inspect_err(|e| {
-                    //                 tracing::error!("Error sending to connection: {}", e);
-                    //             });
-                    //     }
-                    //     //             // tracing::info!("&&&&&&&&&: {} {:?}", baz.chan_id, r);
-                    //     //         }
-                    //     //         counter += 1;
-                    //     //     }
-                    // });
-                    tracing::error!("..............");
-                    if let Err(e) = arc_subduction.register(ws).await {
-                        tracing::error!("Failed to register connection: {}", e);
-                    }
 
-                    // {
-                    //     let m = arc_subduction.conn_manager.lock().await;
-                    //     // for (pid, conn) in m.connections.iter() {
-                    //     //     tracing::info!("Currently registered connection: {:?}", pid);
-                    //     //     conn.recv().await.map_err(|e| {
-                    //     //         tracing::error!("Error receiving from connection {:?}: {}", pid, e);
-                    //     //     });
-                    //     // }
-                    // }
+                    if let Err(e) = arc_subduction.register(ws).await {
+                        tracing::error!("failed to register connection: {}", e);
+                    }
                 }
             }
         }

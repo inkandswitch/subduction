@@ -17,7 +17,7 @@ use crate::{
 use super::{Fragment, LooseCommit};
 
 /// Abstraction over storage for `Sedimentree` data.
-pub trait Storage<K: FutureKind> {
+pub trait Storage<K: FutureKind + ?Sized> {
     /// The error type for storage operations.
     type Error: core::error::Error;
 

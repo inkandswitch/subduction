@@ -122,8 +122,8 @@ impl Reconnect<Sendable> for TokioWebSocketClient {
         async move {
             *self = TokioWebSocketClient::new(
                 self.address.clone(),
-                self.socket.timeout,
-                self.socket.peer_id,
+                self.socket.timeout(),
+                self.socket.peer_id(),
             )
             .await?
             .start();
@@ -146,6 +146,6 @@ impl Reconnect<Sendable> for TokioWebSocketClient {
 
 impl PartialEq for TokioWebSocketClient {
     fn eq(&self, other: &Self) -> bool {
-        self.address == other.address && self.socket.peer_id == other.socket.peer_id
+        self.address == other.address && self.socket.peer_id() == other.socket.peer_id()
     }
 }
