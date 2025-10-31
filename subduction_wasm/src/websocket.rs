@@ -1,6 +1,6 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
+use std::{collections::HashMap, convert::Infallible, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
 
 use futures::{
     channel::{mpsc, oneshot},
@@ -23,6 +23,7 @@ use web_sys::{
     js_sys::{self, Promise},
     MessageEvent, Url, WebSocket,
 };
+use dashmap::DashMap;
 
 use super::peer_id::WasmPeerId;
 
@@ -33,11 +34,11 @@ pub struct WasmWebSocket {
     peer_id: PeerId,
     timeout_ms: u32,
 
-    request_id_counter: Arc<Mutex<u128>>,
+    request_id_counter: Arc<AtomicU64>,
     socket: WebSocket,
 
-    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
-    inbound_reader: Arc<Mutex<mpsc::UnboundedReceiver<Message>>>,
+    pending: Arc<DashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>,
+    inbound_reader: async_channel::Receiver<Message>,
 }
 
 #[wasm_bindgen(js_class = SubductionWebSocket)]
@@ -46,13 +47,12 @@ impl WasmWebSocket {
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(peer_id: WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
-        let (inbound_writer, raw_inbound_reader) = mpsc::unbounded();
-        let inbound_reader = Arc::new(Mutex::new(raw_inbound_reader));
+        let (inbound_writer, inbound_reader) = async_channel::unbounded::<Message>();
 
-        let pending = Arc::new(Mutex::new(HashMap::<
+        let pending = Arc::new(DashMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
-        >::new()));
+        >::new());
         let closure_pending = pending.clone();
 
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
@@ -70,8 +70,8 @@ impl WasmWebSocket {
                         match msg {
                             Message::BatchSyncResponse(resp) => {
                                 let req_id = resp.req_id;
-                                if let Some(waiting) =
-                                    inner_pending.clone().lock().await.remove(&req_id)
+                                if let Some((_req_id, waiting)) =
+                                    inner_pending.remove(&req_id)
                                 {
                                     tracing::info!("dispatching to waiter {:?}", req_id);
                                     let result = waiting.send(resp);
@@ -122,7 +122,7 @@ impl WasmWebSocket {
             peer_id: peer_id.into(),
             timeout_ms: timeout_milliseconds,
 
-            request_id_counter: Arc::new(Mutex::new(0)),
+            request_id_counter: Arc::new(AtomicU64::new(0)),
             socket,
 
             pending,
@@ -168,12 +168,11 @@ impl Connection<Local> for WasmWebSocket {
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         let counter = self.request_id_counter.clone();
         async move {
-            let mut counter = counter.lock().await;
-            *counter += 1;
-            tracing::debug!("generated message id {:?}", *counter);
+            let counter = counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated message id {:?}", counter);
             RequestId {
                 requestor: self.peer_id,
-                nonce: *counter,
+                nonce: counter,
             }
         }
         .boxed_local()
@@ -200,8 +199,7 @@ impl Connection<Local> for WasmWebSocket {
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
             tracing::debug!("Waiting for inbound message");
-            let mut chan = self.inbound_reader.lock().await;
-            let msg = chan.next().await.ok_or(ReadFromClosedChannel)?;
+            let msg = self.inbound_reader.recv().await.map_err(|_| ReadFromClosedChannel)?;
             tracing::info!("Received inbound message id {:?}", msg.request_id());
             Ok(msg)
         }
@@ -219,7 +217,7 @@ impl Connection<Local> for WasmWebSocket {
 
             // Pre-register channel
             let (tx, rx) = oneshot::channel();
-            self.pending.lock().await.insert(req_id, tx);
+            self.pending.insert(req_id, tx);
 
             let msg_bytes = bincode::serde::encode_to_vec(
                 Message::BatchSyncRequest(req),

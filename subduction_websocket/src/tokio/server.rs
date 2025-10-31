@@ -85,8 +85,7 @@ where
         depth_metric: M,
     ) -> Result<Unstarted<Self>, tungstenite::Error> {
         tracing::info!("Starting WebSocket server on {}", address);
-        let tcp_listener = TcpListener::bind(address).await.expect("FIXME");
-        // .map_err(|e| WsError::Io(std::io::Error::new(std::io::ErrorKind::Other, e)))?;
+        let tcp_listener = TcpListener::bind(address).await?;
 
         let (subduction_actor, _sd_task) = start_subduction_actor::<S, M>(storage, depth_metric);
 
@@ -170,12 +169,12 @@ where
         self.subduction_actor.tx.send(Cmd::Start).await
     }
 
-    // pub async fn register(
-    //     &self,
-    //     ws: WebSocket<TokioAdapter<TcpStream>>,
-    // ) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd>> {
-    //     self.subduction_actor.tx.send(Cmd::Register { ws }).await
-    // }
+    pub async fn register(
+        &self,
+        ws: WebSocket<TokioAdapter<TcpStream>>,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd>> {
+        self.subduction_actor.tx.send(Cmd::Register { ws }).await
+    }
 
     /// Graceful shutdown: cancel and await tasks.
     pub fn stop(&mut self) {

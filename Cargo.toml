@@ -23,6 +23,7 @@ authors = [
 [workspace.dependencies]
 automerge = "0.7.0"
 arbitrary = "1.4"
+async-channel = "2.5.0"
 async-tungstenite = "0.31.0"
 base58 = "0.2.0"
 blake3 = "1.8"

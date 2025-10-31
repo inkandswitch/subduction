@@ -1,7 +1,9 @@
 //! Manage connections to peers in the network.
 
+pub mod actor;
 pub mod id;
 pub mod message;
+pub mod recv_once;
 
 use std::{sync::Arc, time::Duration};
 

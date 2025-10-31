@@ -1698,8 +1698,10 @@ dependencies = [
 name = "subduction_wasm"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "bincode",
  "console_error_panic_hook",
+ "dashmap",
  "from_js_ref",
  "futures",
  "futures-timer",

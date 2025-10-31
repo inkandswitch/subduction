@@ -56,7 +56,7 @@ pub fn set_panic_hook() {
 
     let mut config = WasmLayerConfig::new();
     config.set_max_level(tracing::Level::TRACE);
-    wasm_tracing::set_as_global_default_with_config(config).expect("FIXME");
+    wasm_tracing::set_as_global_default_with_config(config).expect("unable to set global default");
     tracing::info!("We've just set panic hook");
     tracing::debug!("We've just set panic hook panic hook");
 }

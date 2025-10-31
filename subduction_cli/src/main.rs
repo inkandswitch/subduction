@@ -86,9 +86,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Some("connect") => {
             let (syncer, mut actor) = Subduction::new(
-                DashMap::from_iter([(sed_id, sed)]),
+                Arc::new(DashMap::from_iter([(sed_id, sed)])),
                 MemoryStorage::default(),
-                DashMap::new(),
+                Arc::new(DashMap::new()),
                 CountLeadingZeroBytes,
             );
 

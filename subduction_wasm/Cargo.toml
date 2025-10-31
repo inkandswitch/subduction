@@ -17,8 +17,10 @@ rust-version.workspace = true
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+async-channel = { workspace = true }
 bincode = { version = "2.0", features = ["serde"] }
 console_error_panic_hook = { version = "0.1.7", optional = true }
+dashmap = { workspace = true }
 from_js_ref = "0.1.2"
 futures = { workspace = true }
 futures-timer = { workspace = true }

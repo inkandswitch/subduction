@@ -1,7 +1,10 @@
 //! Subduction node.
 
-use std::{collections::HashMap, convert::Infallible, fmt::Debug, rc::Rc, time::Duration};
+use std::{
+    collections::HashMap, convert::Infallible, fmt::Debug, rc::Rc, sync::Arc, time::Duration,
+};
 
+use dashmap::DashMap;
 use from_js_ref::FromJsRef;
 use futures::lock::Mutex;
 use js_sys::Uint8Array;
@@ -36,7 +39,13 @@ use super::depth::WasmDepth;
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
 pub struct WasmSubduction {
-    core: Subduction<Local, JsStorage, WasmConnectionCallbackReader<WasmWebSocket>, WasmHashMetric>,
+    core: Subduction<
+        'static,
+        Local,
+        JsStorage,
+        WasmConnectionCallbackReader<WasmWebSocket>,
+        WasmHashMetric,
+    >,
     commit_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
     fragment_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
     blob_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
@@ -50,14 +59,17 @@ impl WasmSubduction {
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
 
-        let (core, actor) = Subduction::new(
-            HashMap::new(),
+        let (core, mut actor) = Subduction::new(
+            Arc::new(DashMap::new()),
             storage,
-            HashMap::new(),
+            Arc::new(DashMap::new()),
             WasmHashMetric(raw_fn),
         );
+
+        wasm_bindgen_futures::spawn_local(async move { actor.listen().await });
+
         Self {
-            core: _,
+            core,
             commit_callbacks: Rc::new(Mutex::new(Vec::new())),
             fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
             blob_callbacks: Rc::new(Mutex::new(Vec::new())),
@@ -75,15 +87,13 @@ impl WasmSubduction {
     }
 
     #[wasm_bindgen(js_name = addSedimentree)]
-    pub async fn add_sedimentree(&self, id: WasmSedimentreeId, sedimentree: WasmSedimentree) {
-        self.core
-            .add_sedimentree(id.into(), sedimentree.into())
-            .await;
+    pub fn add_sedimentree(&self, id: WasmSedimentreeId, sedimentree: WasmSedimentree) {
+        self.core.add_sedimentree(id.into(), sedimentree.into());
     }
 
     #[wasm_bindgen(js_name = removeSedimentree)]
-    pub async fn remove_sedimentree(&self, id: WasmSedimentreeId) -> bool {
-        self.core.remove_sedimentree(id.into()).await
+    pub fn remove_sedimentree(&self, id: WasmSedimentreeId) -> bool {
+        self.core.remove_sedimentree(id.into())
     }
 
     /// Attach a connection.
@@ -404,10 +414,9 @@ impl WasmSubduction {
 
     /// Get all known Sedimentree IDs
     #[wasm_bindgen(js_name = sedimentreeIds)]
-    pub async fn sedimentree_ids(&self) -> Vec<WasmSedimentreeId> {
+    pub fn sedimentree_ids(&self) -> Vec<WasmSedimentreeId> {
         self.core
             .sedimentree_ids()
-            .await
             .into_iter()
             .map(WasmSedimentreeId::from)
             .collect()
@@ -415,28 +424,25 @@ impl WasmSubduction {
 
     /// Get all commits for a given Sedimentree ID
     #[wasm_bindgen(js_name = getCommits)]
-    pub async fn get_commits(&self, id: WasmSedimentreeId) -> Option<Vec<WasmLooseCommit>> {
+    pub fn get_commits(&self, id: WasmSedimentreeId) -> Option<Vec<WasmLooseCommit>> {
         self.core
             .get_commits(id.into())
-            .await
             .map(|commits| commits.into_iter().map(WasmLooseCommit::from).collect())
     }
 
     /// Get all fragments for a given Sedimentree ID
     #[wasm_bindgen(js_name = getFragments)]
-    pub async fn get_fragments(&self, id: WasmSedimentreeId) -> Option<Vec<WasmFragment>> {
+    pub fn get_fragments(&self, id: WasmSedimentreeId) -> Option<Vec<WasmFragment>> {
         self.core
             .get_fragments(id.into())
-            .await
             .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
     }
 
     /// Get the peer IDs of all connected peers
     #[wasm_bindgen(js_name = getPeerIds)]
-    pub async fn peer_ids(&self) -> Vec<WasmPeerId> {
+    pub fn peer_ids(&self) -> Vec<WasmPeerId> {
         self.core
             .peer_ids()
-            .await
             .into_iter()
             .map(WasmPeerId::from)
             .collect()
