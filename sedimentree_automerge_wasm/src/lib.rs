@@ -26,9 +26,9 @@
 )]
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
-use base58::FromBase58;
+use base58::{FromBase58, FromBase58Error};
 use js_sys::{Array, Uint8Array};
 use sedimentree_core::{
     blob::Digest,
@@ -182,6 +182,93 @@ extern "C" {
 #[wasm_bindgen(js_name = FragmentState)]
 pub struct WasmFragmentState(FragmentState<HashSet<Digest>>);
 
+#[wasm_bindgen(js_class = FragmentState)]
+impl WasmFragmentState {
+    /// The "newest" element of the fragment.
+    ///
+    /// This digest provides a stable point from which
+    /// the rest of the fragment is built.
+    #[must_use]
+    pub fn head_digest(&self) -> WasmDigest {
+        self.0.head_digest().into()
+    }
+
+    /// All members of the fragment.
+    ///
+    /// This includes all history between the `head_digest`
+    /// and the `boundary` (not including the boundary elements).
+    #[must_use]
+    pub fn members(&self) -> Vec<WasmDigest> {
+        self.0
+            .members()
+            .iter()
+            .cloned()
+            .map(WasmDigest::from)
+            .collect()
+    }
+
+    /// The checkpoints of the fragment.
+    ///
+    /// These are all of the [`Digest`]s that match a valid level
+    /// below the target, so that it is possible to know which other fragments
+    /// this one covers.
+    #[must_use]
+    pub fn checkpoints(&self) -> Vec<WasmDigest> {
+        self.0
+            .checkpoints()
+            .iter()
+            .cloned()
+            .map(WasmDigest::from)
+            .collect()
+    }
+
+    /// The boundary from which the next set of fragments would be built.
+    #[must_use]
+    pub fn boundary(&self) -> WasmBoundary {
+        let boundary = self.0.boundary();
+
+        let mut map = HashMap::with_capacity(boundary.len());
+        for (key, value) in boundary.iter() {
+            let wasm_key: WasmDigest = key.clone().into();
+            let wasm_value: HashSet<WasmDigest> =
+                value.iter().cloned().map(WasmDigest::from).collect();
+            map.insert(wasm_key, wasm_value);
+        }
+        WasmBoundary(map)
+    }
+}
+
+impl From<FragmentState<HashSet<Digest>>> for WasmFragmentState {
+    fn from(state: FragmentState<HashSet<Digest>>) -> Self {
+        WasmFragmentState(state)
+    }
+}
+
+/// The boundary of a fragment.
+#[wasm_bindgen(js_name = Boundary)]
+pub struct WasmBoundary(HashMap<WasmDigest, HashSet<WasmDigest>>);
+
+#[wasm_bindgen(js_class = Boundary)]
+impl WasmBoundary {
+    /// Get the set of digests for a given key in the boundary.
+    pub fn get(&self, key: &WasmDigest) -> Option<Vec<WasmDigest>> {
+        self.0.get(key).map(|set| set.iter().cloned().collect())
+    }
+
+    /// Get all keys in the boundary.
+    pub fn keys(&self) -> Vec<WasmDigest> {
+        self.0.keys().cloned().collect()
+    }
+}
+
+impl From<HashMap<WasmDigest, HashSet<WasmDigest>>> for WasmBoundary {
+    fn from(boundary: HashMap<WasmDigest, HashSet<WasmDigest>>) -> Self {
+        WasmBoundary(boundary)
+    }
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
 pub struct WasmFragmentError(FragmentError<'static, WasmSedimentreeAutomerge>);
 
 impl From<WasmFragmentError> for JsValue {
@@ -192,18 +279,30 @@ impl From<WasmFragmentError> for JsValue {
     }
 }
 
-// FIXME err type
 #[wasm_bindgen(js_name = digestOfBase58Id)]
-pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, JsValue> {
-    let decoded = b58_str.from_base58().map_err(|e| {
-        let js_err = js_sys::Error::new(&"base58 decoding error");
-        js_err.set_name("Base58DecodeError");
-        JsValue::from(js_err)
-    })?;
-
+pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, WasmFromBase58Error> {
+    let decoded = b58_str.from_base58()?;
     let raw: [u8; 32] = blake3::hash(&decoded).into();
-
     Ok(Digest::from(raw).into())
+}
+
+/// An error while unpacking a base58 string to binary.
+#[derive(Debug, Error)]
+#[error("FromBase58Error: {0:?}")]
+pub struct WasmFromBase58Error(FromBase58Error);
+
+impl From<FromBase58Error> for WasmFromBase58Error {
+    fn from(err: FromBase58Error) -> Self {
+        WasmFromBase58Error(err)
+    }
+}
+
+impl From<WasmFromBase58Error> for JsValue {
+    fn from(err: WasmFromBase58Error) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("FromBase58Error");
+        js_err.into()
+    }
 }
 
 // FIXME what we actually want is base58docId -> sedimentreeId

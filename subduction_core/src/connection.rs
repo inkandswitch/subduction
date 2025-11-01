@@ -3,7 +3,8 @@
 pub mod actor;
 pub mod id;
 pub mod message;
-pub mod recv_once;
+
+pub(crate) mod recv_once;
 
 use std::{sync::Arc, time::Duration};
 

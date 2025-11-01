@@ -1,54 +1,19 @@
 //! # Subduction WebSocket server for Tokio
 
-use super::start::{Start, Unstarted};
-use crate::{
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    websocket::WebSocket,
-};
-use async_tungstenite::{
-    tokio::{accept_hdr_async, TokioAdapter},
-    WebSocketStream,
-};
-use dashmap::DashMap;
-use futures_util::StreamExt;
+use crate::websocket::WebSocket;
+use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
+use futures::FutureExt;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, future::Sendable, storage::Storage,
 };
-use std::{
-    collections::HashMap,
-    marker::PhantomData,
-    net::SocketAddr,
-    sync::{atomic::AtomicBool, Arc},
-    time::Duration,
-};
-use subduction_core::{
-    connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, Reconnect,
-    },
-    peer::id::PeerId,
-    Subduction,
-};
+use std::{marker::PhantomData, net::SocketAddr, sync::Arc, time::Duration};
+use subduction_core::{peer::id::PeerId, run::Run, unstarted::Unstarted, Subduction};
 use tokio::{
     net::{TcpListener, TcpStream},
     sync::Mutex,
-    task::{JoinError, JoinHandle, JoinSet},
+    task::{coop, JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
-use tungstenite::handshake::client::{Request, Response};
-
-#[derive(Debug, Clone)]
-pub struct SubductionActor {
-    tx: tokio::sync::mpsc::Sender<Cmd>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Cmd {
-    Start,
-    Register {
-        ws: WebSocket<TokioAdapter<TcpStream>>,
-    },
-}
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug)]
@@ -61,9 +26,9 @@ pub struct TokioWebSocketServer<
     server_peer_id: PeerId,
     address: SocketAddr,
     subduction_actor: SubductionActor,
-    accept_task: JoinHandle<()>,
+    accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
-    _phantom_storage: std::marker::PhantomData<(S, M)>,
+    _phantom: std::marker::PhantomData<(S, M)>,
 }
 
 impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric>
@@ -156,12 +121,12 @@ where
             server_peer_id,
             address,
             subduction_actor,
-            accept_task,
+            accept_task: Arc::new(accept_task),
             cancellation_token,
-            _phantom_storage: PhantomData,
+            _phantom: PhantomData,
         };
 
-        Ok(Unstarted(server))
+        Ok(Unstarted::new(server))
     }
 
     pub async fn start(&self) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd>> {
@@ -183,6 +148,39 @@ where
     }
 }
 
+impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric> Clone
+    for TokioWebSocketServer<S, M>
+where
+    S::Error: 'static + Send + Sync,
+{
+    fn clone(&self) -> Self {
+        Self {
+            server_peer_id: self.server_peer_id,
+            address: self.address,
+            subduction_actor: self.subduction_actor.clone(),
+            accept_task: self.accept_task.clone(),
+            cancellation_token: self.cancellation_token.clone(),
+            _phantom: PhantomData,
+        }
+    }
+}
+
+impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric> Run
+    for TokioWebSocketServer<S, M>
+where
+    S::Error: 'static + Send + Sync,
+{
+    fn run(self) -> Self {
+        let inner = self.clone();
+        tokio::spawn(async move {
+            if let Err(e) = inner.start().await {
+                tracing::error!("WebSocket server run error: {}", e);
+            }
+        });
+        self
+    }
+}
+
 impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric> Drop
     for TokioWebSocketServer<S, M>
 where
@@ -196,6 +194,7 @@ where
 
 #[tracing::instrument(skip_all)]
 fn start_subduction_actor<
+    'a,
     S: 'static + Send + Sync + Storage<Sendable>,
     M: 'static + Send + Sync + DepthMetric,
 >(
@@ -206,31 +205,25 @@ where
     S::Error: 'static + Send + Sync,
 {
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd>(1024);
-    let handle = SubductionActor { tx };
 
     let join_handle = tokio::spawn(async move {
-        let (subduction, mut actor) = Subduction::new(
-            Default::default(),
-            storage,
-            Default::default(),
-            depth_metric,
-        );
-
+        let (subduction, mut actor) = Subduction::new(storage, depth_metric);
         let arc_subduction = Arc::new(subduction);
-
         tokio::spawn(async move { actor.listen().await });
 
         while let Some(cmd) = rx.recv().await {
             match cmd {
                 Cmd::Start => {
+                    let inner = arc_subduction.clone();
+
                     tokio::spawn({
                         tracing::debug!("starting Subduction server");
-                        let inner = arc_subduction.clone();
-                        async move {
+                        coop::cooperative(async move {
                             if let Err(e) = inner.listen().await {
                                 tracing::error!("Subduction run error: {}", e);
                             }
-                        }
+                        })
+                        .boxed()
                     });
                 }
                 Cmd::Register { ws } => {
@@ -238,7 +231,7 @@ where
 
                     let thread_ws = ws.clone();
                     tokio::spawn(async move {
-                        if let Err(e) = thread_ws.listen().await {
+                        if let Err(e) = coop::cooperative(thread_ws.listen()).await {
                             tracing::error!("WebSocket listen error: {}", e);
                         }
                     });
@@ -251,5 +244,18 @@ where
         }
     });
 
-    (handle, join_handle)
+    (SubductionActor { tx }, join_handle)
+}
+
+#[derive(Debug, Clone)]
+pub struct SubductionActor {
+    tx: tokio::sync::mpsc::Sender<Cmd>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Cmd {
+    Start,
+    Register {
+        ws: WebSocket<TokioAdapter<TcpStream>>,
+    },
 }

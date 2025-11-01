@@ -61,15 +61,9 @@ impl WasmSubduction {
     #[wasm_bindgen(constructor)]
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        let (core, mut actor) = Subduction::new(storage, WasmHashMetric(raw_fn));
 
-        let (core, actor) = Subduction::new(
-            Arc::new(DashMap::new()),
-            storage,
-            Arc::new(DashMap::new()),
-            WasmHashMetric(raw_fn),
-        );
-
-        //  wasm_bindgen_futures::spawn_local(async move { actor.listen().await });
+        wasm_bindgen_futures::spawn_local(async move { actor.listen().await });
 
         Self {
             core,

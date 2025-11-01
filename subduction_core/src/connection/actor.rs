@@ -1,3 +1,5 @@
+//! Actor for handling connections and messages.
+
 use futures::{
     channel::mpsc::UnboundedReceiver,
     stream::{FusedStream, FuturesUnordered},
@@ -7,6 +9,7 @@ use sedimentree_core::future::FutureKind;
 
 use super::{id::ConnectionId, message::Message, recv_once::RecvOnce, Connection};
 
+/// An actor that listens for incoming connections and processes messages.
 #[derive(Debug)]
 pub struct ConnectionActor<'a, F: FutureKind, C: Connection<F>> {
     inbox: UnboundedReceiver<(ConnectionId, C)>,
@@ -15,6 +18,7 @@ pub struct ConnectionActor<'a, F: FutureKind, C: Connection<F>> {
 }
 
 impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
+    /// Create a new [`ConnectionActor`].
     pub fn new(
         inbox: UnboundedReceiver<(ConnectionId, C)>,
         outbox: async_channel::Sender<(ConnectionId, C, Message)>,
@@ -26,6 +30,7 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
         }
     }
 
+    /// Listen for incoming connections and process messages.
     pub async fn listen(&mut self) {
         let mut inbox = self.inbox.by_ref().fuse();
 

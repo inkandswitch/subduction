@@ -16,7 +16,7 @@ use crate::{
 use dashmap::DashMap;
 use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    channel::mpsc::{unbounded, TrySendError, UnboundedSender},
+    channel::mpsc::{unbounded, UnboundedSender},
     stream::FuturesUnordered,
     StreamExt,
 };
@@ -35,9 +35,9 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    thread::yield_now,
     time::Duration,
 };
-use thiserror::Error;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -72,11 +72,24 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
     ///
     /// * Returns `ListenError` if a storage or network error occurs.
     pub async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
+        let mut n = 0usize;
         while let Ok((conn_id, conn, msg)) = self.msg_queue.recv().await {
             self.dispatch(conn_id, &conn, msg).await?;
             self.actor_channel
                 .unbounded_send((conn_id, conn))
-                .expect("FIXME")
+                .map_err(|e| {
+                    tracing::error!(
+                        "Error re-sending connection {:?} to actor channel: {:?}",
+                        conn_id,
+                        e
+                    );
+                    ListenError::TrySendError
+                })?;
+
+            n += 1;
+            if (n & 63) == 0 {
+                yield_now();
+            }
         }
         Ok(())
     }
@@ -147,12 +160,7 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
     }
 
     /// Initialize a new `Subduction` with the given storage backend and network adapters.
-    pub fn new(
-        sedimentrees: Arc<DashMap<SedimentreeId, Sedimentree>>,
-        storage: S,
-        conns: Arc<DashMap<ConnectionId, C>>,
-        depth_metric: M,
-    ) -> (Self, ConnectionActor<'a, F, C>) {
+    pub fn new(storage: S, depth_metric: M) -> (Self, ConnectionActor<'a, F, C>) {
         // FIXME NOTE: UNSTARTED ACTOR
         let (actor_sender, actor_receiver) = unbounded();
         let (queue_sender, queue_receiver) = async_channel::unbounded();
@@ -161,9 +169,9 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
 
         let sd = Self {
             depth_metric,
-            sedimentrees,
+            sedimentrees: Arc::new(DashMap::new()),
             next_connection_id: Arc::new(AtomicUsize::new(0)),
-            conns,
+            conns: Arc::new(DashMap::new()),
             storage,
             actor_channel: actor_sender,
             msg_queue: queue_receiver,

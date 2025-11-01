@@ -2,7 +2,6 @@
 
 use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    tokio::start::Unstarted,
     websocket::WebSocket,
 };
 use async_tungstenite::tokio::{connect_async, ConnectStream};
@@ -15,11 +14,10 @@ use subduction_core::{
         Connection, Reconnect,
     },
     peer::id::PeerId,
+    run::Run,
+    unstarted::Unstarted,
 };
-use tokio::task::JoinHandle;
 use tungstenite::http::Uri;
-
-use super::start::Start;
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug, Clone)]
@@ -41,7 +39,7 @@ impl TokioWebSocketClient {
     ) -> Result<Unstarted<Self>, tungstenite::Error> {
         tracing::info!("Connecting to WebSocket server at {address}");
         let (ws_stream, _resp) = connect_async(address.clone()).await?;
-        Ok(Unstarted(TokioWebSocketClient {
+        Ok(Unstarted::new(TokioWebSocketClient {
             address,
             socket: WebSocket::<_>::new(ws_stream, timeout, peer_id),
         }))
@@ -60,10 +58,11 @@ impl TokioWebSocketClient {
     }
 }
 
-impl Start for TokioWebSocketClient {
-    fn start(&self) -> JoinHandle<Result<(), RunError>> {
+impl Run for TokioWebSocketClient {
+    fn run(self) -> Self {
         let inner = self.clone();
-        tokio::spawn(async move { inner.socket.listen().await })
+        tokio::spawn(async move { inner.socket.listen().await });
+        self
     }
 }
 

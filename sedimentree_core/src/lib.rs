@@ -442,6 +442,7 @@ impl Sedimentree {
         }
     }
 
+    /// Merge another [`Sedimentree`] into this one.
     pub fn merge(&mut self, other: Sedimentree) {
         self.fragments.extend(other.fragments);
         self.commits.extend(other.commits);

@@ -1,5 +1,4 @@
 use clap::Parser;
-use dashmap::DashMap;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, storage::MemoryStorage, Sedimentree, SedimentreeId,
 };
@@ -11,17 +10,24 @@ use std::{
     },
     time::Duration,
 };
-use subduction_core::{peer::id::PeerId, Subduction};
-use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, start::Unstarted,
-};
+use subduction_core::{peer::id::PeerId, unstarted::Unstarted, Subduction};
+use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;
+use tracing_subscriber::{prelude::*, util::SubscriberInitExt, EnvFilter};
 use tungstenite::http::Uri;
 
 #[tokio::main(flavor = "multi_thread", worker_threads = 10)]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+    let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
+
+    let console_layer = console_subscriber::ConsoleLayer::builder()
+        .with_default_env()
+        .spawn();
+
+    tracing_subscriber::registry()
+        .with(console_layer.with_filter(console_filter))
+        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
         .init();
 
     let token = CancellationToken::new();
@@ -64,9 +70,6 @@ async fn main() -> anyhow::Result<()> {
 
     let args = Arguments::parse();
 
-    let sed = Sedimentree::new(vec![], vec![]);
-    let sed_id = SedimentreeId::new([0u8; 32]);
-
     match args.command.as_deref() {
         Some("start") => {
             let addr: SocketAddr = args.ws.parse()?;
@@ -80,17 +83,12 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
 
-            let inner = server.ignore();
-            inner.start().await?; // FIXME use unstarted run
+            server.start();
             futures::future::pending::<()>().await; // Keep alive
         }
         Some("connect") => {
-            let (syncer, mut actor) = Subduction::new(
-                Arc::new(DashMap::from_iter([(sed_id, sed)])),
-                MemoryStorage::default(),
-                Arc::new(DashMap::new()),
-                CountLeadingZeroBytes,
-            );
+            let (syncer, mut actor) =
+                Subduction::new(MemoryStorage::default(), CountLeadingZeroBytes);
 
             tokio::spawn(async move { actor.listen().await });
 

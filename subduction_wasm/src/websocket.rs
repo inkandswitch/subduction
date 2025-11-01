@@ -1,12 +1,11 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use std::{collections::HashMap, convert::Infallible, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
+use std::{ convert::Infallible, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
 
 use futures::{
-    channel::{mpsc, oneshot},
+    channel::{oneshot},
     future::LocalBoxFuture,
-    lock::Mutex,
-    FutureExt, SinkExt, StreamExt,
+    FutureExt,
 };
 use sedimentree_core::future::Local;
 use subduction_core::{

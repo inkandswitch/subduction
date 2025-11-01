@@ -251,6 +251,7 @@
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
               pkgs.rust-analyzer
+              pkgs.tokio-console
               pkgs.wasm-pack
               pkgs.websocat
             ]
