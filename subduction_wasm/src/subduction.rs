@@ -23,10 +23,7 @@ use crate::{
     connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::WasmDigest,
-    error::{
-        WasmCallError, WasmConnectionDisallowed, WasmDisconnectionError, WasmIoError,
-        WasmListenError, WasmRegistrationError,
-    },
+    error::{WasmCallError, WasmDisconnectionError, WasmIoError, WasmRegistrationError},
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
@@ -42,12 +39,14 @@ use super::depth::WasmDepth;
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
 pub struct WasmSubduction {
-    core: Subduction<
-        'static,
-        Local,
-        JsStorage,
-        WasmConnectionCallbackReader<WasmWebSocket>,
-        WasmHashMetric,
+    core: Arc<
+        Subduction<
+            'static,
+            Local,
+            JsStorage,
+            WasmConnectionCallbackReader<WasmWebSocket>,
+            WasmHashMetric,
+        >,
     >,
     commit_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
     fragment_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
@@ -61,11 +60,17 @@ impl WasmSubduction {
     #[wasm_bindgen(constructor)]
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
-        let (core, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
+        let (core, listener_fut, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
 
         wasm_bindgen_futures::spawn_local(async move {
             if let Err(Aborted) = actor_fut.await {
                 tracing::debug!("Subduction actor aborted");
+            }
+        });
+
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(Aborted) = listener_fut.await {
+                tracing::debug!("Subduction listener aborted");
             }
         });
 
@@ -75,16 +80,6 @@ impl WasmSubduction {
             fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
             blob_callbacks: Rc::new(Mutex::new(Vec::new())),
         }
-    }
-
-    /// Run the Subduction instance.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `WasmListenError` if the instance fails to run.
-    pub async fn listen(&mut self) -> Result<(), WasmListenError> {
-        self.core.listen().await?;
-        Ok(())
     }
 
     #[wasm_bindgen(js_name = addSedimentree)]

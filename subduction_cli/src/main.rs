@@ -1,5 +1,4 @@
 use clap::Parser;
-use futures::stream::Aborted;
 use sedimentree_core::{commit::CountLeadingZeroBytes, storage::MemoryStorage};
 use std::{
     net::SocketAddr,
@@ -9,11 +8,10 @@ use std::{
     },
     time::Duration,
 };
-use subduction_core::{peer::id::PeerId, unstarted::Unstarted, Subduction};
-use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
+use subduction_core::peer::id::PeerId;
+use subduction_websocket::tokio::server::TokioWebSocketServer;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{prelude::*, util::SubscriberInitExt, EnvFilter};
-use tungstenite::http::Uri;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -79,36 +77,35 @@ async fn main() -> anyhow::Result<()> {
                 MemoryStorage::default(),
                 CountLeadingZeroBytes,
             )
-            .await?
-            .start();
+            .await?;
 
             tracing::info!("WebSocket server started on {}", addr);
             futures::future::pending::<()>().await; // Keep alive
             tracing::error!("Error starting server");
         }
-        Some("connect") => {
-            let (syncer, actor_fut) =
-                Subduction::new(MemoryStorage::default(), CountLeadingZeroBytes);
+        // Some("connect") => {
+        //     let (syncer, actor_fut) =
+        //         Subduction::new(MemoryStorage::default(), CountLeadingZeroBytes);
 
-            tokio::spawn(async move {
-                if let Err(Aborted) = actor_fut.await {
-                    tracing::debug!("Subduction actor aborted");
-                }
-            });
+        //     tokio::spawn(async move {
+        //         if let Err(Aborted) = actor_fut.await {
+        //             tracing::debug!("Subduction actor aborted");
+        //         }
+        //     });
 
-            let ws = TokioWebSocketClient::new(
-                Uri::try_from(&args.ws)?,
-                Duration::from_secs(5),
-                PeerId::new([0; 32]),
-            )
-            .await?
-            .start();
+        //     let ws = TokioWebSocketClient::new(
+        //         Uri::try_from(&args.ws)?,
+        //         Duration::from_secs(5),
+        //         PeerId::new([0; 32]),
+        //     )
+        //     .await?
+        //     .start();
 
-            syncer.register(ws).await?;
-            let listen = syncer.listen();
-            syncer.request_all_batch_sync_all(None).await?;
-            listen.await?;
-        }
+        //     syncer.register(ws).await?;
+        //     let listen = syncer.listen();
+        //     syncer.request_all_batch_sync_all(None).await?;
+        //     listen.await?;
+        // }
         _ => {
             eprintln!("Please specify either 'start' or 'connect' command");
             std::process::exit(1);
