@@ -81,7 +81,7 @@ async fn main() -> anyhow::Result<()> {
 
             tracing::info!("WebSocket server started on {}", addr);
             futures::future::pending::<()>().await; // Keep alive
-            tracing::error!("Error starting server");
+            tracing::error!("error starting server");
         }
         // Some("connect") => {
         //     let (syncer, actor_fut) =

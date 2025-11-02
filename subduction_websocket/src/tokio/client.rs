@@ -86,7 +86,7 @@ impl Connection<Sendable> for TokioWebSocketClient {
 
     fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
         async {
-            tracing::debug!("Client sending message: {:?}", message);
+            tracing::debug!("client sending message: {:?}", message);
             Connection::<Sendable>::send(&self.socket, message).await
         }
         .boxed()
@@ -94,7 +94,7 @@ impl Connection<Sendable> for TokioWebSocketClient {
 
     fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            tracing::debug!("Client waiting to receive message");
+            tracing::debug!("client waiting to receive message");
             Connection::<Sendable>::recv(&self.socket).await
         }
         .boxed()
@@ -106,7 +106,7 @@ impl Connection<Sendable> for TokioWebSocketClient {
         override_timeout: Option<Duration>,
     ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         async move {
-            tracing::debug!("Client making call with request: {:?}", req);
+            tracing::debug!("client making call with request: {:?}", req);
             Connection::<Sendable>::call(&self.socket, req, override_timeout).await
         }
         .boxed()

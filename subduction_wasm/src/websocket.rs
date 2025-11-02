@@ -91,7 +91,7 @@ impl WasmWebSocket {
                                         .send(Message::BatchSyncResponse(resp))
                                         .await
                                         .map_err(|e| {
-                                            tracing::error!("Failed to send inbound message: {e}");
+                                            tracing::error!("failed to send inbound message: {e}");
                                             e
                                         });
                                 }
@@ -99,17 +99,17 @@ impl WasmWebSocket {
                             other => {
                                 let _ =
                                     inner_inbound_writer.clone().send(other).await.map_err(|e| {
-                                        tracing::error!("Failed to send inbound message: {e}");
+                                        tracing::error!("failed to send inbound message: {e}");
                                         e
                                     });
                             }
                         }
                     });
                 } else {
-                    tracing::error!("Failed to decode message: {:?}", event.data());
+                    tracing::error!("failed to decode message: {:?}", event.data());
                 }
             } else {
-                tracing::error!("Unexpected message event: {:?}", event.data());
+                tracing::error!("unexpected message event: {:?}", event.data());
             }
         });
 
@@ -197,9 +197,9 @@ impl Connection<Local> for WasmWebSocket {
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            tracing::debug!("Waiting for inbound message");
+            tracing::debug!("waiting for inbound message");
             let msg = self.inbound_reader.recv().await.map_err(|_| ReadFromClosedChannel)?;
-            tracing::info!("Received inbound message id {:?}", msg.request_id());
+            tracing::info!("received inbound message id {:?}", msg.request_id());
             Ok(msg)
         }
         .boxed_local()
@@ -355,7 +355,7 @@ impl WasmTimeout {
         if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
             .and_then(JsCast::dyn_into::<js_sys::Function>)
             && let Err(e) = clear_timeout.call1(&global, &self.id) {
-                tracing::error!("Failed to clear timeout: {:?}", e);
+                tracing::error!("failed to clear timeout: {:?}", e);
             }
     }
 }

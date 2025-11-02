@@ -110,7 +110,7 @@ impl<
         message: Message,
     ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
-        tracing::info!("Received message from peer {:?}: {:?}", from, message);
+        tracing::info!("received message from peer {:?}: {:?}", from, message);
 
         match message {
             Message::LooseCommit { id, commit, blob } => {
@@ -740,14 +740,14 @@ impl<
                 {
                     their_missing_fragments.push((fragment.clone(), blob)); // TODO lots of cloning
                 } else {
-                    tracing::warn!("Missing blob for fragment {:?} ", fragment.digest(),);
+                    tracing::warn!("missing blob for fragment {:?} ", fragment.digest(),);
                     our_missing_blobs.push(fragment.summary().blob_meta().digest());
                 }
             }
         }
 
         tracing::info!(
-            "Sending batch sync response for sedimentree {:?} with {} missing commits and {} missing fragments",
+            "sending batch sync response for sedimentree {:?} with {} missing commits and {} missing fragments",
             id,
             their_missing_commits.len(),
             their_missing_fragments.len()
@@ -1091,7 +1091,7 @@ impl<
         commit: LooseCommit,
         blob: Blob,
     ) -> Result<bool, S::Error> {
-        tracing::debug!("Inserting commit {:?} locally", commit.digest());
+        tracing::debug!("inserting commit {:?} locally", commit.digest());
         {
             let mut tree = self.sedimentrees.entry(id).or_default();
             if !tree.add_commit(commit.clone()) {

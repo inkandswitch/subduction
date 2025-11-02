@@ -50,7 +50,7 @@ async fn rend_receive() -> TestResult {
             .start();
 
             let msg = server_ws.recv().await?;
-            tracing::info!("Server received: {msg:?}");
+            tracing::info!("server received: {msg:?}");
             tx.send(msg).unwrap();
 
             Ok::<(), anyhow::Error>(())
