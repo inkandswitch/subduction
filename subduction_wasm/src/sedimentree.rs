@@ -1,3 +1,5 @@
+//! The main data type for Sedimentree.
+
 use sedimentree_core::Sedimentree;
 use wasm_bindgen::prelude::*;
 

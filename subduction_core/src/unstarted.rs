@@ -1,3 +1,5 @@
+//! Unstarted async runners.
+
 use crate::run::Run;
 
 /// A wrapper type indicating that the inner `T` has not yet been started.

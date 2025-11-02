@@ -17,8 +17,8 @@ use dashmap::DashMap;
 use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
     channel::mpsc::{unbounded, UnboundedSender},
-    stream::FuturesUnordered,
-    StreamExt,
+    stream::{AbortHandle, AbortRegistration, Abortable, FuturesUnordered},
+    FutureExt, StreamExt,
 };
 use nonempty::NonEmpty;
 use request::FragmentRequested;
@@ -26,6 +26,7 @@ use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
+    future::{FutureKind, Local, Sendable},
     storage::Storage,
     Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
@@ -43,7 +44,7 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct Subduction<
     'a,
-    F: RecvOnce<'a, C>,
+    F: FutureKind + RecvOnce<'a, C> + StartActor<'a, C>,
     S: Storage<F>,
     C: Connection<F> + PartialEq,
     M: DepthMetric = CountLeadingZeroBytes,
@@ -55,13 +56,19 @@ pub struct Subduction<
     storage: S,
 
     actor_channel: UnboundedSender<(ConnectionId, C)>,
+    abort_actor: AbortHandle,
     msg_queue: async_channel::Receiver<(ConnectionId, C, Message)>,
 
     _phantom: std::marker::PhantomData<&'a F>,
 }
 
-impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
-    Subduction<'a, F, S, C, M>
+impl<
+        'a,
+        F: RecvOnce<'a, C> + StartActor<'a, C>,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq,
+        M: DepthMetric,
+    > Subduction<'a, F, S, C, M>
 {
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
@@ -160,12 +167,14 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
     }
 
     /// Initialize a new `Subduction` with the given storage backend and network adapters.
-    pub fn new(storage: S, depth_metric: M) -> (Self, ConnectionActor<'a, F, C>) {
+    pub fn new(storage: S, depth_metric: M) -> (Self, Abortable<F::Future<'a, ()>>) {
         // FIXME NOTE: UNSTARTED ACTOR
         let (actor_sender, actor_receiver) = unbounded();
         let (queue_sender, queue_receiver) = async_channel::unbounded();
 
+        let (abort_actor, abort_reg) = AbortHandle::new_pair();
         let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
+        let actor_fut = F::start_actor(actor, abort_reg);
 
         let sd = Self {
             depth_metric,
@@ -175,10 +184,11 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
             storage,
             actor_channel: actor_sender,
             msg_queue: queue_receiver,
+            abort_actor,
             _phantom: std::marker::PhantomData,
         };
 
-        (sd, actor)
+        (sd, actor_fut)
     }
 
     /// Add a [`Sedimentree`] to sync.
@@ -1102,10 +1112,67 @@ impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: Dep
     }
 }
 
-impl<'a, F: RecvOnce<'a, C>, S: Storage<F>, C: Connection<F> + PartialEq, M: DepthMetric>
-    ConnectionPolicy for Subduction<'a, F, S, C, M>
+impl<
+        'a,
+        F: RecvOnce<'a, C> + StartActor<'a, C>,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq,
+        M: DepthMetric,
+    > Drop for Subduction<'a, F, S, C, M>
+{
+    fn drop(&mut self) {
+        self.abort_actor.abort();
+    }
+}
+
+impl<
+        'a,
+        F: RecvOnce<'a, C> + StartActor<'a, C>,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq,
+        M: DepthMetric,
+    > ConnectionPolicy for Subduction<'a, F, S, C, M>
 {
     async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
         Ok(()) // TODO currently allows all
+    }
+}
+
+pub trait StartActor<'a, C: Connection<Self>>: FutureKind + Sized {
+    fn start_actor(
+        actor: ConnectionActor<'a, Self, C>,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>>;
+}
+
+impl<'a, C: Connection<Sendable> + Send + 'a> StartActor<'a, C> for Sendable {
+    fn start_actor(
+        actor: ConnectionActor<'a, Self, C>,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>> {
+        Abortable::new(
+            async move {
+                let mut inner = actor;
+                ConnectionActor::listen(&mut inner).await;
+            }
+            .boxed(),
+            abort_reg,
+        )
+    }
+}
+
+impl<'a, C: Connection<Local> + 'a> StartActor<'a, C> for Local {
+    fn start_actor(
+        actor: ConnectionActor<'a, Self, C>,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>> {
+        Abortable::new(
+            async move {
+                let mut inner = actor;
+                ConnectionActor::listen(&mut inner).await;
+            }
+            .boxed_local(),
+            abort_reg,
+        )
     }
 }

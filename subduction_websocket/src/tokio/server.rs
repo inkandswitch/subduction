@@ -2,7 +2,7 @@
 
 use crate::websocket::WebSocket;
 use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
-use futures::FutureExt;
+use futures::{future::Aborted, FutureExt};
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, future::Sendable, storage::Storage,
 };
@@ -181,17 +181,6 @@ where
     }
 }
 
-impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric> Drop
-    for TokioWebSocketServer<S, M>
-where
-    S::Error: 'static + Send + Sync,
-{
-    fn drop(&mut self) {
-        tracing::info!("Shutting down WebSocket server at {}", self.address);
-        self.stop()
-    }
-}
-
 #[tracing::instrument(skip_all)]
 fn start_subduction_actor<
     'a,
@@ -207,9 +196,13 @@ where
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd>(1024);
 
     let join_handle = tokio::spawn(async move {
-        let (subduction, mut actor) = Subduction::new(storage, depth_metric);
+        let (subduction, actor_fut) = Subduction::new(storage, depth_metric);
         let arc_subduction = Arc::new(subduction);
-        tokio::spawn(async move { actor.listen().await });
+        tokio::spawn(async move {
+            if let Err(Aborted) = actor_fut.await {
+                tracing::debug!("Subduction actor aborted");
+            }
+        });
 
         while let Some(cmd) = rx.recv().await {
             match cmd {

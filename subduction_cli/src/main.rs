@@ -1,7 +1,6 @@
 use clap::Parser;
-use sedimentree_core::{
-    commit::CountLeadingZeroBytes, storage::MemoryStorage, Sedimentree, SedimentreeId,
-};
+use futures::stream::Aborted;
+use sedimentree_core::{commit::CountLeadingZeroBytes, storage::MemoryStorage};
 use std::{
     net::SocketAddr,
     sync::{
@@ -16,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{prelude::*, util::SubscriberInitExt, EnvFilter};
 use tungstenite::http::Uri;
 
-#[tokio::main(flavor = "multi_thread", worker_threads = 10)]
+#[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
     let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
@@ -73,24 +72,29 @@ async fn main() -> anyhow::Result<()> {
     match args.command.as_deref() {
         Some("start") => {
             let addr: SocketAddr = args.ws.parse()?;
-            let server: Unstarted<TokioWebSocketServer<MemoryStorage>> =
-                TokioWebSocketServer::setup(
-                    addr,
-                    Duration::from_secs(5),
-                    PeerId::new([0; 32]),
-                    MemoryStorage::default(),
-                    CountLeadingZeroBytes,
-                )
-                .await?;
+            let _server: TokioWebSocketServer<MemoryStorage> = TokioWebSocketServer::setup(
+                addr,
+                Duration::from_secs(5),
+                PeerId::new([0; 32]),
+                MemoryStorage::default(),
+                CountLeadingZeroBytes,
+            )
+            .await?
+            .start();
 
-            server.start();
+            tracing::info!("WebSocket server started on {}", addr);
             futures::future::pending::<()>().await; // Keep alive
+            tracing::error!("Error starting server");
         }
         Some("connect") => {
-            let (syncer, mut actor) =
+            let (syncer, actor_fut) =
                 Subduction::new(MemoryStorage::default(), CountLeadingZeroBytes);
 
-            tokio::spawn(async move { actor.listen().await });
+            tokio::spawn(async move {
+                if let Err(Aborted) = actor_fut.await {
+                    tracing::debug!("Subduction actor aborted");
+                }
+            });
 
             let ws = TokioWebSocketClient::new(
                 Uri::try_from(&args.ws)?,

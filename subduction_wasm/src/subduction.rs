@@ -6,7 +6,7 @@ use std::{
 
 use dashmap::DashMap;
 use from_js_ref::FromJsRef;
-use futures::lock::Mutex;
+use futures::{lock::Mutex, stream::Aborted};
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::{Blob, Digest},
@@ -61,9 +61,13 @@ impl WasmSubduction {
     #[wasm_bindgen(constructor)]
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
-        let (core, mut actor) = Subduction::new(storage, WasmHashMetric(raw_fn));
+        let (core, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
 
-        wasm_bindgen_futures::spawn_local(async move { actor.listen().await });
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Err(Aborted) = actor_fut.await {
+                tracing::debug!("Subduction actor aborted");
+            }
+        });
 
         Self {
             core,
