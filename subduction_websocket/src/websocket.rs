@@ -9,7 +9,6 @@ use futures::{
     FutureExt,
 };
 use futures_timer::Delay;
-use futures_util::stream::TryStreamExt;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::future::{Local, Sendable};
 use std::{
@@ -25,7 +24,7 @@ use subduction_core::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
     },
-    peer::{self, id::PeerId},
+    peer::id::PeerId,
 };
 
 /// A WebSocket implementation for [`Connection`].
@@ -229,7 +228,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                             if let Some(waiting) = self.pending.lock().await.remove(&req_id) {
                                 tracing::info!("dispatching to waiter {:?}", req_id);
                                 let result = waiting.send(resp);
-                                debug_assert!(result.is_ok());
                                 if result.is_err() {
                                     tracing::error!(
                                         "oneshot channel closed before sending response for req_id {:?}",

@@ -19,8 +19,7 @@ use thiserror::Error;
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    js_sys::{self, Promise},
-    MessageEvent, Url, WebSocket,
+    js_sys::{self, Promise}, BinaryType, MessageEvent, Url, WebSocket
 };
 use dashmap::DashMap;
 
@@ -55,6 +54,7 @@ impl WasmWebSocket {
         let closure_pending = pending.clone();
 
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
+            tracing::debug!("WS message event received");
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
                 if let Ok((msg, _size)) = bincode::serde::decode_from_slice::<Message, _>(
@@ -86,24 +86,17 @@ impl WasmWebSocket {
                                         "dispatching to inbound channel {:?}",
                                         resp.req_id
                                     );
-                                    let _ = inner_inbound_writer
-                                        .clone()
-                                        .send(Message::BatchSyncResponse(resp))
-                                        .await
-                                        .map_err(|e| {
+                                    if let Err(e) = inner_inbound_writer.clone().send(Message::BatchSyncResponse(resp)).await {
                                             tracing::error!("failed to send inbound message: {e}");
-                                            e
-                                        });
+                                        };
                                 }
                             }
                             other => {
-                                let _ =
-                                    inner_inbound_writer.clone().send(other).await.map_err(|e| {
+                                    if let Err(e) = inner_inbound_writer.clone().send(other).await {
                                         tracing::error!("failed to send inbound message: {e}");
-                                        e
-                                    });
+                                    };
+                                }
                             }
-                        }
                     });
                 } else {
                     tracing::error!("failed to decode message: {:?}", event.data());
@@ -113,9 +106,11 @@ impl WasmWebSocket {
             }
         });
 
-        let socket = ws.clone();
-        socket.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        ws.set_binary_type(BinaryType::Arraybuffer);
         onmessage.forget();
+
+        let socket = ws.clone();
 
         Self {
             peer_id: peer_id.into(),

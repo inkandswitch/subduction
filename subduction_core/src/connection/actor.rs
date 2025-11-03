@@ -35,19 +35,20 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
         let mut inbox = self.inbox.by_ref().fuse();
 
         loop {
-            if inbox.is_terminated() && self.queue.is_empty() {
-                break;
-            }
-
             futures::select! {
                 maybe = inbox.next() => {
                     if let Some((conn_id, conn)) = maybe {
+                        tracing::debug!("ConnectionActor: new connection {:?}", conn_id);
                         self.queue.push(F::recv_once(conn_id, conn, self.outbox.clone()));
                     }
                 }
 
-                _maybe = self.queue.next().fuse() => {
-                    //  Just drain
+                maybe = self.queue.next() => {
+                    if let Some(()) = maybe {
+                        tracing::debug!("ConnectionActor: connection processed");
+                    } else {
+                        tracing::debug!("ConnectionActor: no more connections to process, exiting");
+                    }
                 }
             }
         }

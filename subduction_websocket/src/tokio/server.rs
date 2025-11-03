@@ -56,9 +56,9 @@ where
 
         let cancellation_token = CancellationToken::new();
         let child_cancellation_token = cancellation_token.child_token();
-        let conns = Arc::new(Mutex::new(JoinSet::new()));
 
         let accept_task: JoinHandle<()> = tokio::spawn(async move {
+            let mut conns = JoinSet::new();
             loop {
                 tokio::select! {
                     _ = child_cancellation_token.cancelled() => {
@@ -79,8 +79,7 @@ where
                                 };
                                 let client_id = PeerId::new(client_digest);
 
-                                let mut set = conns.lock().await;
-                                set.spawn({
+                                conns.spawn({
                                     let sd = task_subduction_actor_handle.clone();
                                     async move {
                                         match accept_hdr_async(tcp, tungstenite::handshake::server::NoCallback).await {
@@ -110,8 +109,7 @@ where
                 }
             }
 
-            let mut set = conns.lock().await;
-            while let Some(_) = set.join_next().await {}
+            while let Some(_) = conns.join_next().await {}
         });
 
         Ok(Self {

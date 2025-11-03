@@ -129,6 +129,8 @@ impl<
                     .await
                 {
                     self.request_blobs(missing).await;
+                    self.recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
+                        .await?; // try responing again
                 }
             }
             Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
@@ -183,9 +185,6 @@ impl<
         let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
 
-        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
-        let actor_fut = F::start_actor(actor, abort_actor_reg);
-
         let sd = Arc::new(Self {
             depth_metric,
             sedimentrees: Arc::new(DashMap::new()),
@@ -199,6 +198,8 @@ impl<
             _phantom: std::marker::PhantomData,
         });
 
+        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
+        let actor_fut = F::start_actor(actor, abort_actor_reg);
         let sd_fut = F::start_listener(sd.clone(), abort_listener_reg);
 
         (sd, sd_fut, actor_fut)
@@ -703,8 +704,7 @@ impl<
         {
             let mut sedimentree = self.sedimentrees.entry(id).or_default();
             tracing::info!(
-                "Received batch sync request for sedimentree {:?} with {} commits and {} fragments",
-                id,
+                "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commits and {} fragments",
                 their_summary.loose_commits().len(),
                 their_summary.fragment_summaries().len()
             );
@@ -726,7 +726,7 @@ impl<
                 {
                     their_missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
                 } else {
-                    tracing::warn!("Missing blob for commit {:?}", commit.digest(),);
+                    tracing::warn!("missing blob for commit {:?}", commit.digest(),);
                     our_missing_blobs.push(commit.blob().digest());
                 }
             }
@@ -747,8 +747,7 @@ impl<
         }
 
         tracing::info!(
-            "sending batch sync response for sedimentree {:?} with {} missing commits and {} missing fragments",
-            id,
+            "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments",
             their_missing_commits.len(),
             their_missing_fragments.len()
         );
@@ -785,7 +784,7 @@ impl<
         diff: &SyncDiff,
     ) -> Result<(), IoError<F, S, C>> {
         tracing::info!(
-            "Received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
+            "received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
             id,
             from,
             diff.missing_commits.len(),

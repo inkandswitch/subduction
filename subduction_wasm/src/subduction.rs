@@ -1,22 +1,34 @@
 //! Subduction node.
 
 use std::{
-    collections::HashMap, convert::Infallible, fmt::Debug, rc::Rc, sync::Arc, time::Duration,
+    collections::HashMap,
+    convert::Infallible,
+    fmt::Debug,
+    rc::Rc,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
 };
 
 use dashmap::DashMap;
 use from_js_ref::FromJsRef;
-use futures::{lock::Mutex, stream::Aborted};
+use futures::{
+    future::{poll_fn, FusedFuture},
+    lock::Mutex,
+    stream::{Aborted, FuturesUnordered},
+    FutureExt,
+};
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    future::Local,
+    future::{Local, Sendable},
 };
 use subduction_core::{connection::Connection, peer::id::PeerId, Subduction};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::JsFuture;
 
 use crate::{
     connection_callback_reader::WasmConnectionCallbackReader,
@@ -59,18 +71,29 @@ impl WasmSubduction {
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
+        tracing::debug!("initializing Subduction");
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let (core, listener_fut, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
 
         wasm_bindgen_futures::spawn_local(async move {
-            if let Err(Aborted) = actor_fut.await {
-                tracing::debug!("Subduction actor aborted");
-            }
-        });
+            let mut actor = actor_fut.fuse();
+            let mut listener = listener_fut.fuse();
 
-        wasm_bindgen_futures::spawn_local(async move {
-            if let Err(Aborted) = listener_fut.await {
-                tracing::debug!("Subduction listener aborted");
+            futures::select! {
+                actor_result = actor => {
+                    if let Err(Aborted) = actor_result {
+                        tracing::error!("Subduction actor aborted");
+                    }
+                }
+                listener_result = listener => {
+                    if let Err(Aborted) = listener_result {
+                        tracing::error!("Subduction listener aborted");
+                    }
+                }
+            }
+
+            if actor.is_terminated() && listener.is_terminated() {
+                tracing::debug!("Subduction task exited normally");
             }
         });
 
