@@ -1260,13 +1260,15 @@ impl<
         M: DepthMetric,
     > ListenerFuture<'a, F, S, C, M>
 {
-    pub fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
+    /// Create a new ListenerFuture wrapping the given abortable future.
+    pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
         Self {
             fut: Box::pin(fut),
             _phantom: PhantomData,
         }
     }
 
+    /// Check if the listener future has been aborted.
     pub fn is_aborted(&self) -> bool {
         self.fut.is_aborted()
     }

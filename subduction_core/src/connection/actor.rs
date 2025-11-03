@@ -108,7 +108,7 @@ pub struct ConnectionActorFuture<'a, F: StartConnectionActor<'a, C>, C: Connecti
 }
 
 impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F>> ConnectionActorFuture<'a, F, C> {
-    pub fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
+    pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
         Self {
             fut: Box::pin(fut),
             _phantom: PhantomData,
