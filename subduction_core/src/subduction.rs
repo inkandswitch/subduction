@@ -5,7 +5,7 @@ pub mod request;
 
 use crate::{
     connection::{
-        actor::ConnectionActor,
+        actor::{ConnectionActor, ConnectionActorFuture, StartConnectionActor},
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
         recv_once::RecvOnce,
@@ -17,7 +17,7 @@ use dashmap::DashMap;
 use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
     channel::mpsc::{unbounded, UnboundedSender},
-    stream::{AbortHandle, AbortRegistration, Abortable, FuturesUnordered},
+    stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
 use nonempty::NonEmpty;
@@ -26,16 +26,20 @@ use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    future::{FutureKind, Local, Sendable},
+    future::{Local, Sendable},
     storage::Storage,
     Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
 use std::{
     collections::{HashMap, HashSet},
+    marker::PhantomData,
+    ops::Deref,
+    pin::Pin,
     sync::{
         atomic::{AtomicUsize, Ordering},
         Arc,
     },
+    task::{Context, Poll},
     thread::yield_now,
     time::Duration,
 };
@@ -44,7 +48,7 @@ use std::{
 #[derive(Debug, Clone)]
 pub struct Subduction<
     'a,
-    F: FutureKind + RecvOnce<'a, C> + StartActor<'a, C> + StartListener<'a, S, C, M>,
+    F: SubductionFutureKind<'a, S, C, M>,
     S: Storage<F>,
     C: Connection<F> + PartialEq,
     M: DepthMetric = CountLeadingZeroBytes,
@@ -66,12 +70,48 @@ pub struct Subduction<
 
 impl<
         'a,
-        F: RecvOnce<'a, C> + StartActor<'a, C> + StartListener<'a, S, C, M>,
+        F: SubductionFutureKind<'a, S, C, M>,
         S: Storage<F>,
         C: Connection<F> + PartialEq,
         M: DepthMetric,
     > Subduction<'a, F, S, C, M>
 {
+    /// Initialize a new `Subduction` with the given storage backend and network adapters.
+    pub fn new(
+        storage: S,
+        depth_metric: M,
+    ) -> (
+        Arc<Self>,
+        ListenerFuture<'a, F, S, C, M>,
+        ConnectionActorFuture<'a, F, C>,
+    ) {
+        let (actor_sender, actor_receiver) = unbounded();
+        let (queue_sender, queue_receiver) = async_channel::unbounded();
+        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
+
+        let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();
+        let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
+
+        let sd = Arc::new(Self {
+            depth_metric,
+            sedimentrees: Arc::new(DashMap::new()),
+            next_connection_id: Arc::new(AtomicUsize::new(0)),
+            conns: Arc::new(DashMap::new()),
+            storage,
+            actor_channel: actor_sender,
+            msg_queue: queue_receiver,
+            abort_actor_handle,
+            abort_listener_handle,
+            _phantom: std::marker::PhantomData,
+        });
+
+        (
+            sd.clone(),
+            ListenerFuture::new(F::start_listener(sd, abort_listener_reg)),
+            ConnectionActorFuture::new(F::start_actor(actor, abort_actor_reg)),
+        )
+    }
+
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -168,41 +208,6 @@ impl<
             }
         }
         Ok(())
-    }
-
-    /// Initialize a new `Subduction` with the given storage backend and network adapters.
-    pub fn new(
-        storage: S,
-        depth_metric: M,
-    ) -> (
-        Arc<Self>,
-        Abortable<F::Future<'a, ()>>,
-        Abortable<F::Future<'a, ()>>,
-    ) {
-        let (actor_sender, actor_receiver) = unbounded();
-        let (queue_sender, queue_receiver) = async_channel::unbounded();
-
-        let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();
-        let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
-
-        let sd = Arc::new(Self {
-            depth_metric,
-            sedimentrees: Arc::new(DashMap::new()),
-            next_connection_id: Arc::new(AtomicUsize::new(0)),
-            conns: Arc::new(DashMap::new()),
-            storage,
-            actor_channel: actor_sender,
-            msg_queue: queue_receiver,
-            abort_actor_handle,
-            abort_listener_handle,
-            _phantom: std::marker::PhantomData,
-        });
-
-        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
-        let actor_fut = F::start_actor(actor, abort_actor_reg);
-        let sd_fut = F::start_listener(sd.clone(), abort_listener_reg);
-
-        (sd, sd_fut, actor_fut)
     }
 
     /// Add a [`Sedimentree`] to sync.
@@ -1126,7 +1131,7 @@ impl<
 
 impl<
         'a,
-        F: RecvOnce<'a, C> + StartActor<'a, C> + StartListener<'a, S, C, M>,
+        F: SubductionFutureKind<'a, S, C, M>,
         S: Storage<F>,
         C: Connection<F> + PartialEq,
         M: DepthMetric,
@@ -1140,7 +1145,7 @@ impl<
 
 impl<
         'a,
-        F: RecvOnce<'a, C> + StartActor<'a, C> + StartListener<'a, S, C, M>,
+        F: SubductionFutureKind<'a, S, C, M>,
         S: Storage<F>,
         C: Connection<F> + PartialEq,
         M: DepthMetric,
@@ -1151,48 +1156,36 @@ impl<
     }
 }
 
-pub trait StartActor<'a, C: Connection<Self>>: FutureKind + Sized {
-    fn start_actor(
-        actor: ConnectionActor<'a, Self, C>,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>>;
+/// A trait alias for the kinds of futures that can be used with Subduction.
+///
+/// This helps us switch between `Send` and `!Send` futures via type parameter
+/// rather than creating `Send` and `!Send` versions of the entire Subduction implementation.
+///
+/// Similarly, the trait alias helps us avoid repeating the same complex trait bounds everywhere,
+/// and needing to update them in many places if the constraints change.
+pub trait SubductionFutureKind<
+    'a,
+    S: Storage<Self>,
+    C: Connection<Self> + PartialEq,
+    M: DepthMetric,
+>: RecvOnce<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>
+{
 }
 
-impl<'a, C: Connection<Sendable> + Send + 'a> StartActor<'a, C> for Sendable {
-    fn start_actor(
-        actor: ConnectionActor<'a, Self, C>,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>> {
-        Abortable::new(
-            async move {
-                let mut inner = actor;
-                ConnectionActor::listen(&mut inner).await;
-            }
-            .boxed(),
-            abort_reg,
-        )
-    }
-}
-
-impl<'a, C: Connection<Local> + 'a> StartActor<'a, C> for Local {
-    fn start_actor(
-        actor: ConnectionActor<'a, Self, C>,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>> {
-        Abortable::new(
-            async move {
-                let mut inner = actor;
-                ConnectionActor::listen(&mut inner).await;
-            }
-            .boxed_local(),
-            abort_reg,
-        )
-    }
+impl<
+        'a,
+        S: Storage<Self>,
+        C: Connection<Self> + PartialEq,
+        M: DepthMetric,
+        T: RecvOnce<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>,
+    > SubductionFutureKind<'a, S, C, M> for T
+{
 }
 
 pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq, M: DepthMetric>:
-    RecvOnce<'a, C> + StartActor<'a, C>
+    RecvOnce<'a, C> + StartConnectionActor<'a, C>
 {
+    /// Start the listener task for Subduction.
     fn start_listener(
         subduction: Arc<Subduction<'a, Self, S, C, M>>,
         abort_reg: AbortRegistration,
@@ -1245,4 +1238,76 @@ impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMe
             abort_reg,
         )
     }
+}
+
+#[derive(Debug)]
+pub struct ListenerFuture<
+    'a,
+    F: StartListener<'a, S, C, M>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq,
+    M: DepthMetric,
+> {
+    fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
+    _phantom: PhantomData<(S, C, M)>,
+}
+
+impl<
+        'a,
+        F: StartListener<'a, S, C, M>,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq,
+        M: DepthMetric,
+    > ListenerFuture<'a, F, S, C, M>
+{
+    pub fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
+        Self {
+            fut: Box::pin(fut),
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn is_aborted(&self) -> bool {
+        self.fut.is_aborted()
+    }
+}
+
+impl<
+        'a,
+        F: StartListener<'a, S, C, M>,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq,
+        M: DepthMetric,
+    > Deref for ListenerFuture<'a, F, S, C, M>
+{
+    type Target = Abortable<F::Future<'a, ()>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.fut
+    }
+}
+
+impl<
+        'a,
+        F: StartListener<'a, S, C, M>,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq,
+        M: DepthMetric,
+    > Future for ListenerFuture<'a, F, S, C, M>
+{
+    type Output = Result<(), Aborted>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.fut.as_mut().poll(cx)
+    }
+}
+
+impl<
+        'a,
+        F: StartListener<'a, S, C, M>,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq,
+        M: DepthMetric,
+    > Unpin for ListenerFuture<'a, F, S, C, M>
+{
 }

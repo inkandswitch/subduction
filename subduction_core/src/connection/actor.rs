@@ -1,11 +1,18 @@
 //! Actor for handling connections and messages.
 
+use std::{
+    marker::PhantomData,
+    ops::Deref,
+    pin::Pin,
+    task::{Context, Poll},
+};
+
 use futures::{
     channel::mpsc::UnboundedReceiver,
-    stream::{FusedStream, FuturesUnordered},
+    stream::{AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
-use sedimentree_core::future::FutureKind;
+use sedimentree_core::future::{FutureKind, Local, Sendable};
 
 use super::{id::ConnectionId, message::Message, recv_once::RecvOnce, Connection};
 
@@ -52,5 +59,88 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
                 }
             }
         }
+    }
+}
+
+pub trait StartConnectionActor<'a, C: Connection<Self>>: FutureKind + Sized {
+    fn start_actor(
+        actor: ConnectionActor<'a, Self, C>,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>>;
+}
+
+impl<'a, C: Connection<Sendable> + Send + 'a> StartConnectionActor<'a, C> for Sendable {
+    fn start_actor(
+        actor: ConnectionActor<'a, Self, C>,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>> {
+        Abortable::new(
+            async move {
+                let mut inner = actor;
+                ConnectionActor::listen(&mut inner).await;
+            }
+            .boxed(),
+            abort_reg,
+        )
+    }
+}
+
+impl<'a, C: Connection<Local> + 'a> StartConnectionActor<'a, C> for Local {
+    fn start_actor(
+        actor: ConnectionActor<'a, Self, C>,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>> {
+        Abortable::new(
+            async move {
+                let mut inner = actor;
+                ConnectionActor::listen(&mut inner).await;
+            }
+            .boxed_local(),
+            abort_reg,
+        )
+    }
+}
+
+#[derive(Debug)]
+pub struct ConnectionActorFuture<'a, F: StartConnectionActor<'a, C>, C: Connection<F>> {
+    fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
+    _phantom: PhantomData<C>,
+}
+
+impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F>> ConnectionActorFuture<'a, F, C> {
+    pub fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
+        Self {
+            fut: Box::pin(fut),
+            _phantom: PhantomData,
+        }
+    }
+
+    pub fn is_aborted(&self) -> bool {
+        self.fut.is_aborted()
+    }
+}
+
+impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F> + PartialEq> Future
+    for ConnectionActorFuture<'a, F, C>
+{
+    type Output = Result<(), Aborted>;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        self.fut.as_mut().poll(cx)
+    }
+}
+
+impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F> + PartialEq> Unpin
+    for ConnectionActorFuture<'a, F, C>
+{
+}
+
+impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F> + PartialEq> Deref
+    for ConnectionActorFuture<'a, F, C>
+{
+    type Target = Abortable<F::Future<'a, ()>>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.fut
     }
 }
