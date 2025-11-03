@@ -14,8 +14,6 @@ use subduction_core::{
         Connection, Reconnect,
     },
     peer::id::PeerId,
-    run::Run,
-    unstarted::Unstarted,
 };
 use tungstenite::http::Uri;
 
@@ -32,17 +30,20 @@ impl TokioWebSocketClient {
     /// # Errors
     ///
     /// Returns an error if the connection could not be established.
-    pub async fn new(
+    pub async fn new<'a>(
         address: Uri,
         timeout: Duration,
         peer_id: PeerId,
-    ) -> Result<Unstarted<Self>, tungstenite::Error> {
+    ) -> Result<(Self, BoxFuture<'a, Result<(), RunError>>), tungstenite::Error> {
         tracing::info!("Connecting to WebSocket server at {address}");
         let (ws_stream, _resp) = connect_async(address.clone()).await?;
-        Ok(Unstarted::new(TokioWebSocketClient {
-            address,
-            socket: WebSocket::<_>::new(ws_stream, timeout, peer_id),
-        }))
+
+        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id);
+        let fut_socket = socket.clone();
+
+        let socket_listener = async move { fut_socket.listen().await }.boxed();
+        let client = TokioWebSocketClient { address, socket };
+        Ok((client, socket_listener))
     }
 
     /// Start listening for incoming messages.
@@ -55,14 +56,6 @@ impl TokioWebSocketClient {
     /// * a message could not be parsed
     pub async fn listen(&self) -> Result<(), RunError> {
         self.socket.listen().await
-    }
-}
-
-impl Run for TokioWebSocketClient {
-    fn run(self) -> Self {
-        let inner = self.clone();
-        tokio::spawn(async move { inner.socket.listen().await });
-        self
     }
 }
 
@@ -115,29 +108,24 @@ impl Connection<Sendable> for TokioWebSocketClient {
 
 impl Reconnect<Sendable> for TokioWebSocketClient {
     type ConnectError = tungstenite::Error;
-    type RunError = RunError;
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ConnectError>> {
         async move {
-            *self = TokioWebSocketClient::new(
+            let (new_instance, new_fut) = TokioWebSocketClient::new(
                 self.address.clone(),
                 self.socket.timeout(),
                 self.socket.peer_id(),
             )
-            .await?
-            .start();
+            .await?;
+
+            *self = new_instance;
+            tokio::spawn(async move {
+                if let Err(e) = new_fut.await {
+                    tracing::error!("WebSocket client listener error after reconnect: {e:?}");
+                }
+            });
 
             Ok(())
-        }
-        .boxed()
-    }
-
-    fn run(&mut self) -> BoxFuture<'_, Result<(), Self::RunError>> {
-        async move {
-            loop {
-                self.socket.listen().await?;
-                self.reconnect().await?;
-            }
         }
         .boxed()
     }

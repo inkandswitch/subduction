@@ -250,7 +250,6 @@ impl Connection<Local> for WasmWebSocket {
 
 impl Reconnect<Local> for WasmWebSocket {
     type ConnectError = WebsocketConnectionError;
-    type RunError = WebsocketConnectionError;
 
     fn reconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::ConnectError>> {
         async {
@@ -263,16 +262,6 @@ impl Reconnect<Local> for WasmWebSocket {
                 self.timeout_ms,
             )?;
             Ok(())
-        }
-        .boxed_local()
-    }
-
-    /// Run the connection send/receive loop.
-    fn run(&mut self) -> LocalBoxFuture<'_, Result<(), Self::RunError>> {
-        async move {
-            loop {
-                self.reconnect().await?;
-            }
         }
         .boxed_local()
     }

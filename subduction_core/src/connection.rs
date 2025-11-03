@@ -94,14 +94,8 @@ pub trait Reconnect<K: FutureKind>: Connection<K> {
     /// A problem when creating the connection.
     type ConnectError: core::error::Error;
 
-    /// A problem when running the connection.
-    type RunError: core::error::Error;
-
     /// Setup the connection, but don't run it.
     fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ConnectError>>;
-
-    /// Run the connection send/receive loop.
-    fn run(&mut self) -> K::Future<'_, Result<(), Self::RunError>>;
 }
 
 /// A policy for allowing or disallowing connections from peers.
