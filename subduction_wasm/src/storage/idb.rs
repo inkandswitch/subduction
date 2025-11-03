@@ -25,10 +25,10 @@ pub const BLOB_STORE_NAME: &str = "blobs";
 /// `IndexedDB` storage backend.
 #[wasm_bindgen(js_name = IndexedDbStorage)]
 #[derive(Debug, Clone)]
-pub struct IndexedDbStorage(IdbDatabase); // FIXME rename WasmIndexedDbStorage
+pub struct WasmIndexedDbStorage(IdbDatabase); 
 
 #[wasm_bindgen(js_class = "IndexedDbStorage")]
-impl IndexedDbStorage {
+impl WasmIndexedDbStorage {
     /// Create a new `IndexedDbStorage` instance, opening (or creating) the database.
     ///
     /// # Errors
@@ -36,6 +36,11 @@ impl IndexedDbStorage {
     /// Returns a `JsValue` if the database could not be opened.
     #[wasm_bindgen]
     pub async fn setup(factory: &IdbFactory) -> Result<Self, JsValue> {
+        let span = tracing::debug_span!("IndexedDbStorage::setup");
+        let _enter = span.enter();
+
+        tracing::debug!("opening IndexedDB database '{}'", DB_NAME);
+
         let open_req: IdbOpenDbRequest = factory.open_with_u32(DB_NAME, DB_VERSION)?;
 
         // Create object stores on first open

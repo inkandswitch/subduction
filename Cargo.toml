@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = [
+  "build_info",
   "sedimentree_automerge",
   "sedimentree_automerge_wasm",
   "sedimentree_core",

@@ -71,7 +71,7 @@ impl WasmSubduction {
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
-        tracing::debug!("initializing Subduction");
+        tracing::debug!("new Subduction node");
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let (core, listener_fut, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
 

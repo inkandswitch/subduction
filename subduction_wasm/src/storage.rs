@@ -82,6 +82,10 @@ impl Storage<Local> for JsStorage {
         loose_commit: LooseCommit,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
+            let span = tracing::debug_span!("JsStorage::save_loose_commit");
+            let _enter = span.enter();
+
+            tracing::debug!("saving loose commit {:?}", loose_commit.digest());
             let js_loose_commit: WasmLooseCommit = loose_commit.into();
             let promise = self
                 .js_save_loose_commit(js_loose_commit)
@@ -96,6 +100,13 @@ impl Storage<Local> for JsStorage {
 
     fn save_fragment(&self, fragment: Fragment) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
+            let span = tracing::debug_span!("JsStorage::save_fragment");
+            let _enter = span.enter();
+
+            tracing::debug!(
+                "saving fragment {:?}",
+                fragment.summary().blob_meta().digest()
+            );
             let js_fragment: WasmFragment = fragment.into();
             let promise = self
                 .js_save_fragment(js_fragment)
@@ -110,6 +121,9 @@ impl Storage<Local> for JsStorage {
 
     fn save_blob(&self, blob: Blob) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
         async move {
+            let span = tracing::debug_span!("JsStorage::save_blob");
+            let _enter = span.enter();
+
             let promise = self
                 .js_save_blob(blob.as_slice())
                 .map_err(JsStorageError::SaveBlobError)?;
@@ -125,6 +139,9 @@ impl Storage<Local> for JsStorage {
 
     fn load_loose_commits(&self) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
         async move {
+            let span = tracing::debug_span!("JsStorage::load_loose_commits");
+            let _enter = span.enter();
+
             let promise = self
                 .js_load_loose_commits()
                 .map_err(JsStorageError::LoadLooseCommitsError)?;
@@ -140,6 +157,9 @@ impl Storage<Local> for JsStorage {
 
     fn load_fragments(&self) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
         async move {
+            let span = tracing::debug_span!("JsStorage::load_fragments");
+            let _enter = span.enter();
+
             let promise = self
                 .js_load_fragments()
                 .map_err(JsStorageError::LoadFragmentsError)?;
@@ -158,6 +178,11 @@ impl Storage<Local> for JsStorage {
         blob_digest: Digest,
     ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
         async move {
+            let span = tracing::debug_span!("JsStorage::load_blob");
+            let _enter = span.enter();
+
+            tracing::debug!("blob {blob_digest}");
+
             let promise = self
                 .js_load_blob(blob_digest.into())
                 .map_err(JsStorageError::LoadBlobError)?;
