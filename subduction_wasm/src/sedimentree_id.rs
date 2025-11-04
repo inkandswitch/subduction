@@ -50,8 +50,15 @@ impl From<WasmSedimentreeId> for SedimentreeId {
 }
 
 /// Error indicating that the provided byte array is not exactly 32 bytes long.
-#[wasm_bindgen]
 #[derive(Debug, Error)]
 #[error("ID must be exactly 32 bytes")]
 #[allow(missing_copy_implementations)]
 pub struct Not32Bytes;
+
+impl From<Not32Bytes> for JsValue {
+    fn from(err: Not32Bytes) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("Not32Bytes");
+        js_err.into()
+    }
+}
