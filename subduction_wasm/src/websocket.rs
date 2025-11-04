@@ -44,7 +44,7 @@ impl WasmWebSocket {
     /// Create a new [`WasmWebSocket`] instance.
     #[must_use]
     #[wasm_bindgen(constructor)]
-    pub fn new(peer_id: WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
+    pub fn new(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::unbounded::<Message>();
 
         let pending = Arc::new(DashMap::<
@@ -113,7 +113,7 @@ impl WasmWebSocket {
         let socket = ws.clone();
 
         Self {
-            peer_id: peer_id.into(),
+            peer_id: peer_id.clone().into(),
             timeout_ms: timeout_milliseconds,
 
             request_id_counter: Arc::new(AtomicU64::new(0)),
@@ -135,7 +135,7 @@ impl WasmWebSocket {
         timeout_milliseconds: u32,
     ) -> Result<Self, WebsocketConnectionError> {
         Ok(Self::new(
-            peer_id.clone(),
+            peer_id,
             &WebSocket::new(&address.href())
                 .map_err(WebsocketConnectionError::SocketCreationFailed)?,
             timeout_milliseconds,

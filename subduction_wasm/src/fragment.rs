@@ -11,6 +11,10 @@ use wasm_refgen::wasm_refgen;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WasmFragment(Fragment);
 
+#[wasm_refgen(js_ref = JsFragment)]
+#[wasm_bindgen(js_class = Fragment)]
+impl WasmFragment {}
+
 impl From<Fragment> for WasmFragment {
     fn from(fragment: Fragment) -> Self {
         Self(fragment)

@@ -2,6 +2,7 @@
 
 use sedimentree_core::{blob::BlobMeta, LooseCommit};
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 use super::digest::WasmDigest;
 
@@ -10,6 +11,7 @@ use super::digest::WasmDigest;
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WasmLooseCommit(LooseCommit);
 
+#[wasm_refgen(js_ref = JsLooseCommit)]
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
     /// Get the digest of the commit.
