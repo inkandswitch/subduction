@@ -16,17 +16,23 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
 [dependencies]
 automerge = { workspace = true }
 base58 = { workspace = true }
 blake3 = { workspace = true }
+build_info = { path = "../build_info" }
 getrandom = { version = "0.3.3", features = ["wasm_js"] }
 js-sys = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core" }
 subduction_wasm = { path = "../subduction_wasm" }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
-
-[features]
-default = ["console_error_panic_hook"]
-console_error_panic_hook = ["dep:console_error_panic_hook"]
+wasm_refgen = { workspace = true }

@@ -1838,12 +1838,15 @@ dependencies = [
  "automerge",
  "base58",
  "blake3",
+ "build_info",
  "getrandom",
  "js-sys",
  "sedimentree_core",
  "subduction_wasm",
  "thiserror",
+ "tracing",
  "wasm-bindgen",
+ "wasm_refgen",
 ]
 
 [[package]]
