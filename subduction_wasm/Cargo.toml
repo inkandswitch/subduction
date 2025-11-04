@@ -16,6 +16,13 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
+[profile.release]
+opt-level = "z"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = "symbols"
+
 [dependencies]
 async-channel = { workspace = true }
 bincode = { version = "2.0", features = ["serde"] }
