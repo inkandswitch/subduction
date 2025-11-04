@@ -26,3 +26,7 @@ sedimentree_core = { path = "../sedimentree_core" }
 subduction_wasm = { path = "../subduction_wasm" }
 thiserror = { workspace = true }
 wasm-bindgen = { workspace = true }
+
+[features]
+default = ["console_error_panic_hook"]
+console_error_panic_hook = ["dep:console_error_panic_hook"]

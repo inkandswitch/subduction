@@ -62,7 +62,7 @@ pub fn set_panic_hook() {
 pub fn start() {
     set_panic_hook();
     tracing::info!(
-        "🏔️ Subduction v{} ({})",
+        "🏔️ subduction_wasm v{} ({})",
         env!("CARGO_PKG_VERSION"),
         build_info::GIT_HASH
     );
