@@ -13,7 +13,7 @@ use crate::{
     },
     peer::id::PeerId,
 };
-use dashmap::DashMap;
+use dashmap::{DashMap, DashSet};
 use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
     channel::mpsc::{unbounded, UnboundedSender},
@@ -841,13 +841,14 @@ impl<
         to_ask: &PeerId,
         id: SedimentreeId,
         timeout: Option<Duration>,
-    ) -> Result<(bool, Vec<(C, C::CallError)>), IoError<F, S, C>> {
+    ) -> Result<(bool, Vec<Blob>, Vec<(C, C::CallError)>), IoError<F, S, C>> {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from peer {:?}",
             id,
             to_ask
         );
 
+        let mut blobs = Vec::new();
         let mut had_success = false;
         let mut peer_conns = Vec::new();
         for entry in self.conns.iter() {
@@ -893,12 +894,14 @@ impl<
                         self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                             .await
                             .map_err(IoError::Storage)?;
+                        blobs.push(blob);
                     }
 
                     for (fragment, blob) in missing_fragments {
                         self.insert_fragment_locally(id, fragment.clone(), blob.clone())
                             .await
                             .map_err(IoError::Storage)?;
+                        blobs.push(blob);
                     }
 
                     had_success = true;
@@ -907,7 +910,7 @@ impl<
             }
         }
 
-        Ok((had_success, conn_errs))
+        Ok((had_success, blobs, conn_errs))
     }
 
     /// Request a batch sync from all connected peers for a given sedimentree ID.
@@ -924,8 +927,10 @@ impl<
         &self,
         id: SedimentreeId,
         timeout: Option<Duration>,
-    ) -> Result<HashMap<PeerId, (bool, Vec<(C, <C as Connection<F>>::CallError)>)>, IoError<F, S, C>>
-    {
+    ) -> Result<
+        HashMap<PeerId, (bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>)>,
+        IoError<F, S, C>,
+    > {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
@@ -941,83 +946,94 @@ impl<
         }
 
         tracing::debug!("Found {} peer(s)", peers.len());
+        let blobs = Arc::new(DashSet::<Blob>::new());
         let mut set: FuturesUnordered<_> = peers
             .iter()
-            .map(|(peer_id, peer_conns)| async move {
-                tracing::debug!(
-                    "Requesting batch sync for sedimentree {:?} from {} connections",
-                    id,
-                    peer_conns.len(),
-                );
-
-                let mut had_success = false;
-                let mut conn_errs = Vec::new();
-
-                for (conn_id, conn) in peer_conns {
+            .map(|(peer_id, peer_conns)| {
+                let inner_blobs = blobs.clone();
+                async move {
                     tracing::debug!(
-                        "Using connection {:?} to peer {:?}",
-                        conn_id,
-                        conn.peer_id()
+                        "Requesting batch sync for sedimentree {:?} from {} connections",
+                        id,
+                        peer_conns.len(),
                     );
-                    let summary = self
-                        .sedimentrees
-                        .get(&id)
-                        .map(|e| Sedimentree::summarize(e.value()))
-                        .unwrap_or_default();
 
-                    let req_id = conn.next_request_id().await;
+                    let mut had_success = false;
+                    let mut conn_errs = Vec::new();
 
-                    let result = conn
-                        .call(
-                            BatchSyncRequest {
-                                id,
-                                req_id,
-                                sedimentree_summary: summary,
-                            },
-                            timeout,
-                        )
-                        .await;
+                    for (conn_id, conn) in peer_conns {
+                        tracing::debug!(
+                            "Using connection {:?} to peer {:?}",
+                            conn_id,
+                            conn.peer_id()
+                        );
+                        let summary = self
+                            .sedimentrees
+                            .get(&id)
+                            .map(|e| Sedimentree::summarize(e.value()))
+                            .unwrap_or_default();
 
-                    match result {
-                        Err(e) => conn_errs.push((conn.clone(), e)),
-                        Ok(BatchSyncResponse {
-                            diff:
-                                SyncDiff {
-                                    missing_commits,
-                                    missing_fragments,
+                        let req_id = conn.next_request_id().await;
+
+                        let result = conn
+                            .call(
+                                BatchSyncRequest {
+                                    id,
+                                    req_id,
+                                    sedimentree_summary: summary,
                                 },
-                            ..
-                        }) => {
-                            for (commit, blob) in missing_commits {
-                                self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
+                                timeout,
+                            )
+                            .await;
+
+                        match result {
+                            Err(e) => conn_errs.push((conn.clone(), e)),
+                            Ok(BatchSyncResponse {
+                                diff:
+                                    SyncDiff {
+                                        missing_commits,
+                                        missing_fragments,
+                                    },
+                                ..
+                            }) => {
+                                for (commit, blob) in missing_commits {
+                                    self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
+                                        .await
+                                        .map_err(IoError::<F, S, C>::Storage)?;
+                                    inner_blobs.insert(blob);
+                                }
+
+                                for (fragment, blob) in missing_fragments {
+                                    self.insert_fragment_locally(
+                                        id,
+                                        fragment.clone(),
+                                        blob.clone(),
+                                    )
                                     .await
                                     .map_err(IoError::<F, S, C>::Storage)?;
-                            }
+                                    inner_blobs.insert(blob);
+                                }
 
-                            for (fragment, blob) in missing_fragments {
-                                self.insert_fragment_locally(id, fragment.clone(), blob.clone())
-                                    .await
-                                    .map_err(IoError::<F, S, C>::Storage)?;
+                                had_success = true;
+                                break;
                             }
-
-                            had_success = true;
-                            break;
                         }
                     }
-                }
 
-                Ok::<(PeerId, bool, Vec<(C, _)>), IoError<F, S, C>>((
-                    *peer_id,
-                    had_success,
-                    conn_errs,
-                ))
+                    Ok::<(PeerId, bool, Vec<(C, _)>), IoError<F, S, C>>((
+                        *peer_id,
+                        had_success,
+                        conn_errs,
+                    ))
+                }
             })
             .collect();
 
         let mut out = HashMap::new();
         while let Some(result) = set.next().await {
             let (peer_id, success, errs) = result?;
-            out.insert(peer_id, (success, errs));
+            let blob_vec = blobs.iter().map(|b| b.clone()).collect::<Vec<Blob>>();
+            out.insert(peer_id, (success, blob_vec, errs));
         }
         Ok(out)
     }
@@ -1035,7 +1051,8 @@ impl<
     pub async fn request_all_batch_sync_all(
         &self,
         timeout: Option<Duration>,
-    ) -> Result<bool, IoError<F, S, C>> {
+    ) -> Result<(bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>), IoError<F, S, C>>
+    {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
         let tree_ids = self
             .sedimentrees
@@ -1044,14 +1061,24 @@ impl<
             .collect::<Vec<_>>();
 
         let mut had_success = false;
+        let mut blobs: Vec<Blob> = Vec::new();
+        let mut errs = Vec::new();
         for id in tree_ids {
             tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
             let all_results = self.request_all_batch_sync(id, timeout).await?;
-            if all_results.values().any(|(success, _)| *success) {
+            if all_results
+                .values()
+                .any(|(success, _blobs, _errs)| *success)
+            {
+                for (_, (_, step_blobs, step_errs)) in all_results.into_iter() {
+                    blobs.extend(step_blobs);
+                    errs.extend(step_errs);
+                }
+
                 had_success = true;
             }
         }
-        Ok(had_success)
+        Ok((had_success, blobs, errs))
     }
 
     /********************

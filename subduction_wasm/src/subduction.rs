@@ -361,7 +361,7 @@ impl WasmSubduction {
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let (success, conn_errors) = self
+        let (success, blobs, conn_errors) = self
             .core
             .request_peer_batch_sync(&to_ask.into(), id.into(), timeout)
             .await
@@ -369,6 +369,10 @@ impl WasmSubduction {
 
         Ok(PeerBatchSyncResult {
             success,
+            blobs: blobs
+                .into_iter()
+                .map(|blob| Uint8Array::from(blob.as_slice()))
+                .collect(),
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(ws, err)| ConnErrPair {
@@ -395,11 +399,12 @@ impl WasmSubduction {
         Ok(PeerResultMap(
             peer_map
                 .into_iter()
-                .map(|(peer_id, (success, conn_errs))| {
+                .map(|(peer_id, (success, blobs, conn_errs))| {
                     (
                         peer_id,
                         (
                             success,
+                            blobs,
                             conn_errs
                                 .into_iter()
                                 .map(|(ws, err)| (ws.conn.clone(), WasmCallError::from(err)))
@@ -420,12 +425,28 @@ impl WasmSubduction {
     pub async fn request_all_batch_sync_all(
         &self,
         timeout_milliseconds: Option<u64>,
-    ) -> Result<bool, WasmIoError> {
+    ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        self.core
+        let (success, blobs, errs) = self
+            .core
             .request_all_batch_sync_all(timeout)
             .await
-            .map_err(WasmIoError::from)
+            .map_err(WasmIoError::from)?;
+
+        Ok(PeerBatchSyncResult {
+            success,
+            blobs: blobs
+                .into_iter()
+                .map(|blob| Uint8Array::from(blob.as_slice()))
+                .collect(),
+            conn_errors: errs
+                .into_iter()
+                .map(|(ws, err)| ConnErrPair {
+                    ws: ws.conn.clone(),
+                    err: WasmCallError::from(err),
+                })
+                .collect(),
+        })
     }
 
     /// Get all known Sedimentree IDs
@@ -497,6 +518,7 @@ impl Registered {
 #[derive(Debug)]
 pub struct PeerBatchSyncResult {
     success: bool,
+    blobs: Vec<Uint8Array>,
     conn_errors: Vec<ConnErrPair>,
 }
 
@@ -508,6 +530,14 @@ impl PeerBatchSyncResult {
     #[allow(clippy::missing_const_for_fn)]
     pub fn success(&self) -> bool {
         self.success
+    }
+
+    /// Whether the batch sync was successful with at least one connection.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn blobs(&self) -> Vec<Uint8Array> {
+        self.blobs.clone()
     }
 
     /// List of connection errors that occurred during the batch sync.
@@ -546,7 +576,7 @@ impl ConnErrPair {
 /// Map of peer IDs to their batch sync results.
 #[wasm_bindgen(js_name = PeerResultMap)]
 #[derive(Debug)]
-pub struct PeerResultMap(HashMap<PeerId, (bool, Vec<(WasmWebSocket, WasmCallError)>)>);
+pub struct PeerResultMap(HashMap<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>);
 
 #[wasm_bindgen(js_class = PeerResultMap)]
 impl PeerResultMap {
@@ -555,8 +585,12 @@ impl PeerResultMap {
     pub fn get_result(&self, peer_id: WasmPeerId) -> Option<PeerBatchSyncResult> {
         self.0
             .get(&peer_id.into())
-            .map(|(success, conn_errs)| PeerBatchSyncResult {
+            .map(|(success, blobs, conn_errs)| PeerBatchSyncResult {
                 success: *success,
+                blobs: blobs
+                    .iter()
+                    .map(|blob| Uint8Array::from(blob.as_slice()))
+                    .collect(),
                 conn_errors: conn_errs
                     .iter()
                     .map(|(ws, err)| ConnErrPair {
