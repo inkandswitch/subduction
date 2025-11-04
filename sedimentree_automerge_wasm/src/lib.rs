@@ -38,16 +38,6 @@ use subduction_wasm::{digest::WasmDigest, subduction::WasmHashMetric};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-/// Entry point called when the wasm module is instantiated.
-#[wasm_bindgen(start)]
-pub fn start() {
-    tracing::info!(
-        "🌲 sedimentree_automerge_wasm v{} ({})",
-        env!("CARGO_PKG_VERSION"),
-        build_info::GIT_HASH
-    );
-}
-
 /// A Wasm wrapper around a duck-typed `Automerge` instance.
 #[wasm_bindgen(js_name = SedimentreeAutomerge)]
 pub struct WasmSedimentreeAutomerge(JsAutomerge);
