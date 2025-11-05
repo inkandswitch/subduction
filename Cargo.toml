@@ -5,6 +5,7 @@ members = [
   "sedimentree_automerge",
   "sedimentree_automerge_wasm",
   "sedimentree_core",
+  "subduction_automerge_wasm",
   "subduction_cli",
   "subduction_core",
   "subduction_wasm",

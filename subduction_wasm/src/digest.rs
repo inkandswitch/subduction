@@ -1,5 +1,6 @@
 //! Hash digests.
 
+use base58::FromBase58;
 use sedimentree_core::blob::{error::InvalidDigest, Digest};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -30,8 +31,16 @@ impl WasmDigest {
     /// # Errors
     ///
     /// Returns a `WasmValue` error if the byte slice is not a valid digest.
+    #[wasm_bindgen(js_name = fromBytes)]
     pub fn from_bytes(bytes: &[u8]) -> Result<WasmDigest, JsValue> {
         let digest = Digest::from_bytes(bytes).map_err(WasmInvalidDigest::from)?;
+        Ok(WasmDigest(digest))
+    }
+
+    #[wasm_bindgen(js_name = fromBase58)]
+    pub fn from_base58(s: &str) -> Result<WasmDigest, JsValue> {
+        let bytes: Vec<u8> = s.from_base58().expect("FIXME");
+        let digest = Digest::from_bytes(&bytes[..32]).map_err(WasmInvalidDigest::from)?;
         Ok(WasmDigest(digest))
     }
 
