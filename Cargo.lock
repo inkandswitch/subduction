@@ -182,16 +182,19 @@ dependencies = [
  "hex",
  "hexane",
  "itertools",
+ "js-sys",
  "leb128",
  "rand",
  "rustc-hash",
  "serde",
- "sha2",
+ "sha2 0.11.0-rc.2",
  "smol_str",
  "thiserror",
  "tinyvec",
  "tracing",
  "unicode-segmentation",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -413,6 +416,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad8646f98db542e39fc66e68a20b2144f6a732636df7c2354e74645faaa433ce"
 dependencies = [
  "cfg_aliases",
+]
+
+[[package]]
+name = "bs58"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bf88ba1141d185c399bee5288d850d63b8369520c1eafc32a0430b5b6c287bf4"
+dependencies = [
+ "sha2 0.10.9",
+ "tinyvec",
 ]
 
 [[package]]
@@ -994,6 +1007,7 @@ checksum = "f117759ffbdfa82096cd01c7adcc8465486df830eeafb5033502074f8df3f0c7"
 dependencies = [
  "leb128",
  "thiserror",
+ "web-sys",
 ]
 
 [[package]]
@@ -1838,6 +1852,7 @@ dependencies = [
  "automerge",
  "base58",
  "blake3",
+ "bs58",
  "build_info",
  "getrandom",
  "js-sys",
@@ -1914,6 +1929,17 @@ name = "sha1"
 version = "0.10.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
 dependencies = [
  "cfg-if",
  "cpufeatures",
@@ -2009,6 +2035,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 name = "subduction_automerge_wasm"
 version = "0.1.0"
 dependencies = [
+ "automerge",
  "build_info",
  "console_error_panic_hook",
  "sedimentree_automerge_wasm",

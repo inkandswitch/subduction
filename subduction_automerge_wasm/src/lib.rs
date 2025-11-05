@@ -29,6 +29,7 @@
 use wasm_bindgen::prelude::*;
 use wasm_tracing::WasmLayerConfig;
 
+pub use automerge;
 pub use sedimentree_automerge_wasm;
 pub use subduction_wasm;
 

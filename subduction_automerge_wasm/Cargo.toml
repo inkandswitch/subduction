@@ -1,5 +1,5 @@
 [package]
-name = "subduction_automerge_wasm"
+name = "subduction_automerge_wasm" # FIXME reverse namingto automerge subdutcion (reads better)
 version = "0.1.0"
 description = "Wasm exports for Subduction + Automerge"
 
@@ -24,6 +24,7 @@ panic = "abort"
 strip = "symbols"
 
 [dependencies]
+automerge = { workspace = true, features = ["wasm"] }
 build_info = { path = "../build_info" }
 console_error_panic_hook = { version = "0.1.7", optional = true }
 sedimentree_automerge_wasm = { path = "../sedimentree_automerge_wasm" }
