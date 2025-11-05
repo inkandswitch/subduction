@@ -7,8 +7,8 @@ use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 /// A data fragment used in the Sedimentree system.
-#[wasm_bindgen(js_name = Fragment)]
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[wasm_bindgen(js_name = Fragment)]
 pub struct WasmFragment(Fragment);
 
 #[wasm_refgen(js_ref = JsFragment)]
