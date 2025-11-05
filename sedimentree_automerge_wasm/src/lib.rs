@@ -77,13 +77,20 @@ impl WasmSedimentreeAutomerge {
         head_digests: Vec<JsDigest>,
         known_fragment_states: &mut WasmFragmentStateStore,
         strategy: &WasmHashMetric,
-    ) -> Result<(), WasmFragmentError> {
+    ) -> Result<Vec<WasmFragmentState>, WasmFragmentError> {
         let heads: Vec<Digest> = head_digests
             .into_iter()
             .map(|js_digest| WasmDigest::from(&js_digest).into())
             .collect();
 
-        Ok(self.build_fragment_store(&heads, &mut known_fragment_states.0, strategy)?)
+        let fresh = self
+            .build_fragment_store(&heads, &mut known_fragment_states.0, strategy)?
+            .into_iter()
+            .cloned()
+            .map(WasmFragmentState)
+            .collect();
+
+        Ok(fresh)
     }
 }
 

@@ -160,12 +160,13 @@ pub trait CommitStore<'a> {
     /// # Errors
     ///
     /// Returns a [`FragmentError`] if any lookup fails.
-    fn build_fragment_store<D: DepthMetric>(
+    fn build_fragment_store<'b, D: DepthMetric>(
         &self,
         head_digests: &[Digest],
-        known_fragment_states: &mut HashMap<Digest, FragmentState<Self::Node>>,
+        known_fragment_states: &'b mut HashMap<Digest, FragmentState<Self::Node>>,
         strategy: &D,
-    ) -> Result<(), FragmentError<'a, Self>> {
+    ) -> Result<Vec<&'b FragmentState<Self::Node>>, FragmentError<'a, Self>> {
+        let mut fresh_heads = Vec::new();
         let mut horizon = head_digests.to_vec();
         while let Some(head) = horizon.pop() {
             if let Some(state) = known_fragment_states.get(&head) {
@@ -174,10 +175,17 @@ pub trait CommitStore<'a> {
             }
 
             let fragment_state = self.fragment(head, known_fragment_states, strategy)?;
+            fresh_heads.push(head);
             horizon.extend(fragment_state.boundary().keys().cloned());
             known_fragment_states.insert(head, fragment_state);
         }
-        Ok(())
+
+        let mut fresh = Vec::with_capacity(fresh_heads.len());
+        for head in fresh_heads {
+            let r = known_fragment_states.get(&head).expect("just inserted");
+            fresh.push(r);
+        }
+        Ok(fresh)
     }
 }
 
