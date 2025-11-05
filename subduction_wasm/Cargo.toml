@@ -31,7 +31,6 @@ console_error_panic_hook = { version = "0.1.7", optional = true }
 dashmap = { workspace = true }
 from_js_ref = "0.1.2"
 futures = { workspace = true }
-futures-timer = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { version = "0.3.3", features = ["wasm_js"] }
 js-sys = { workspace = true }

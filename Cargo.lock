@@ -2057,7 +2057,6 @@ dependencies = [
  "dashmap",
  "from_js_ref",
  "futures",
- "futures-timer",
  "futures-util",
  "getrandom",
  "js-sys",

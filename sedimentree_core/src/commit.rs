@@ -9,7 +9,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{depth::DepthMetric, Depth, Digest};
+use crate::{depth::DepthMetric, Depth, Digest, Fragment};
 
 /// An error indicating that a commit is missing from the store.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -63,6 +63,7 @@ pub trait CommitStore<'a> {
     fn fragment<D: DepthMetric>(
         &self,
         head_digest: Digest,
+        known_fragment_states: &HashMap<Digest, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
         let min_depth = strategy.to_depth(head_digest);
@@ -111,9 +112,18 @@ pub trait CommitStore<'a> {
         let mut cleanup_horizon: Vec<Digest> = Vec::new();
         for (boundary_hash, boundary_change) in &boundary {
             members.remove(boundary_hash);
-            let deps = boundary_change.parents();
-            cleanup_horizon.extend(deps);
+
+            if let Some(fragment_state) = known_fragment_states.get(boundary_hash) {
+                for member in fragment_state.members() {
+                    members.remove(member);
+                }
+                cleanup_horizon.extend(fragment_state.boundary().keys().cloned());
+            } else {
+                let deps = boundary_change.parents();
+                cleanup_horizon.extend(deps);
+            }
         }
+
         while !cleanup_horizon.is_empty() {
             let local_cleanup_horizon = take(&mut cleanup_horizon);
             for digest in local_cleanup_horizon {
@@ -141,6 +151,26 @@ pub trait CommitStore<'a> {
             checkpoints,
             boundary,
         ))
+    }
+
+    pub fn build_fragment_store<D: DepthMetric>(
+        &self,
+        head_digests: &[Digest],
+        known_fragment_states: &mut HashMap<Digest, FragmentState<Self::Node>>,
+        strategy: &D,
+    ) -> Result<(), FragmentError<'a, Self>> {
+        let mut horizon = head_digests.to_vec();
+        while let Some(head) = horizon.pop() {
+            if let Some(state) = known_fragment_states.get(&head) {
+                horizon.extend(state.boundary().keys().cloned());
+                continue;
+            }
+
+            let fragment_state = self.fragment(head, known_fragment_states, strategy)?;
+            horizon.extend(fragment_state.boundary().keys().cloned());
+            known_fragment_states.insert(head, fragment_state);
+        }
+        Ok(())
     }
 }
 
@@ -209,7 +239,7 @@ impl DepthMetric for CountTrailingZerosInBase {
 
         #[allow(clippy::expect_used)]
         let int = u32::try_from(bytes.into_iter().rev().take_while(|&i| i == 0).count())
-            .expect("u32 is big enough");
+            .expect("u32 should be big enough, but isn't");
 
         Depth(int)
     }

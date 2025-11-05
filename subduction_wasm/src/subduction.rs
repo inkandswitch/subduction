@@ -534,7 +534,6 @@ impl PeerBatchSyncResult {
     /// Whether the batch sync was successful with at least one connection.
     #[must_use]
     #[wasm_bindgen(getter)]
-    #[allow(clippy::missing_const_for_fn)]
     pub fn blobs(&self) -> Vec<Uint8Array> {
         self.blobs.clone()
     }
@@ -583,6 +582,7 @@ pub struct WasmPeerResultMap(
 impl WasmPeerResultMap {
     /// Get the result for a specific peer ID.
     #[must_use]
+    #[wasm_bindgen(js_name = getResult)]
     pub fn get_result(&self, peer_id: &WasmPeerId) -> Option<PeerBatchSyncResult> {
         self.0
             .get(&peer_id.clone().into())

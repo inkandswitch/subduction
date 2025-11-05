@@ -42,12 +42,6 @@ use wasm_bindgen::prelude::*;
 #[wasm_bindgen(js_name = SedimentreeAutomerge)]
 pub struct WasmSedimentreeAutomerge(JsAutomerge);
 
-impl std::fmt::Debug for WasmSedimentreeAutomerge {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_tuple("WasmSedimentreeAutomerge").finish()
-    }
-}
-
 #[wasm_bindgen(js_class = SedimentreeAutomerge)]
 impl WasmSedimentreeAutomerge {
     /// Create a new `WasmSedimentreeAutomerge` instance.
@@ -56,16 +50,25 @@ impl WasmSedimentreeAutomerge {
         Self(automerge)
     }
 
+    // NOTE `js_` prefix to avoid conflict
+    // with CommitStore::fragment (trait method)
     #[wasm_bindgen(js_name = fragment)]
     pub fn js_fragment(
         &self,
-        wasm_digest: &WasmDigest,
+        digest: &WasmDigest,
+        known_states: &WasmFragmentStateStore,
         hash_metric: &WasmHashMetric,
     ) -> Result<WasmFragmentState, WasmFragmentError> {
-        let digest: Digest = wasm_digest.clone().into();
-        self.fragment(digest, hash_metric)
+        let digest: Digest = digest.clone().into();
+        self.fragment(digest, &known_states.0, hash_metric)
             .map(WasmFragmentState)
             .map_err(WasmFragmentError)
+    }
+}
+
+impl std::fmt::Debug for WasmSedimentreeAutomerge {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("WasmSedimentreeAutomerge").finish()
     }
 }
 
@@ -177,6 +180,31 @@ extern "C" {
     /// Get change metadata by its hash.
     #[wasm_bindgen(method, js_name = getChangeMetaByHash, catch)]
     fn get_change_meta_by_hash(this: &JsAutomerge, hash: JsValue) -> Result<JsValue, JsValue>;
+}
+
+#[wasm_bindgen(js_name = FragmentStateStore)]
+pub struct WasmFragmentStateStore(HashMap<Digest, FragmentState<HashSet<Digest>>>);
+
+#[wasm_bindgen(js_class = FragmentStateStore)]
+impl WasmFragmentStateStore {
+    /// Create a new empty `WasmFragmentStateStore`.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    /// Insert a fragment state into the store.
+    pub fn insert(&mut self, digest: &WasmDigest, state: &WasmFragmentState) {
+        self.0.insert(digest.clone().into(), state.0.clone());
+    }
+
+    /// Get a fragment state from the store.
+    pub fn get(&self, digest: &WasmDigest) -> Option<WasmFragmentState> {
+        self.0
+            .get(&digest.clone().into())
+            .cloned()
+            .map(WasmFragmentState)
+    }
 }
 
 #[wasm_bindgen(js_name = FragmentState)]

@@ -63,11 +63,14 @@ pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
     TrySendError,
 }
 
-#[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
+/// An error that can occur during registration of a new connection.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
 pub enum RegistrationError {
+    /// The connection was disallowed by the [`ConnectionPolicy`].
     #[error(transparent)]
     ConnectionDisallowed(#[from] ConnectionDisallowed),
 
+    /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
     SendToClosedChannel,
 }

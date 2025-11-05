@@ -470,18 +470,18 @@ impl Sedimentree {
         MinimalTreeHash(*h.finalize().as_bytes())
     }
 
-    /// Add a fragment to the [`Sedimentree`].
-    ///
-    /// Returns `true` if the stratum was not already present
-    pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        self.fragments.insert(fragment)
-    }
-
     /// Add a loose commit to the [`Sedimentree`].
     ///
     /// Returns `true` if the commit was not already present
     pub fn add_commit(&mut self, commit: LooseCommit) -> bool {
         self.commits.insert(commit)
+    }
+
+    /// Add a fragment to the [`Sedimentree`].
+    ///
+    /// Returns `true` if the stratum was not already present
+    pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
+        self.fragments.insert(fragment)
     }
 
     /// Compute the difference between two local [`Sedimentree`]s.
