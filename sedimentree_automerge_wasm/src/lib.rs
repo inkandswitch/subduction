@@ -108,7 +108,8 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
         // let js_change_hash: JsValue = digest.as_bytes().to_vec().into();
         // let bs58ck_hash: String = bs58::encode(digest.as_bytes()).with_check().into_string();
         let bs58ck_hash = hex::encode(digest.as_bytes());
-        tracing::debug!("looking up change meta for hash {}", bs58ck_hash);
+
+        tracing::warn!("!! looking up change meta for hash {}", bs58ck_hash);
         let js_value_should_be_change_meta = self
             .0
             .get_change_meta_by_hash(js_sys::JsString::from(bs58ck_hash).into())
