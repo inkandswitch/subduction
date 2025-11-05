@@ -52,9 +52,8 @@ pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
 
-    let config = WasmLayerConfig::new()
-        .with_max_level(tracing::Level::TRACE)
-        .with_colorless_logs();
+    let mut config = WasmLayerConfig::new().with_max_level(tracing::Level::TRACE);
+    config.use_console_methods = true;
 
     wasm_tracing::set_as_global_default_with_config(config).expect("unable to set global default");
 }
