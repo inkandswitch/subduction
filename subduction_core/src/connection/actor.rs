@@ -62,7 +62,11 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
     }
 }
 
+/// Trait for starting a [`ConnectionActor`] as an abortable future.
+///
+/// This trait is implemented for both `Send` and `!Send` futures,
 pub trait StartConnectionActor<'a, C: Connection<Self>>: FutureKind + Sized {
+    /// Make a future for the actor's run loop.
     fn start_actor(
         actor: ConnectionActor<'a, Self, C>,
         abort_reg: AbortRegistration,
@@ -101,6 +105,9 @@ impl<'a, C: Connection<Local> + 'a> StartConnectionActor<'a, C> for Local {
     }
 }
 
+/// A future representing the running [`ConnectionActor`].
+///
+/// This allows the caller to monitor and control the lifecycle of the [`ConnectionActor`].
 #[derive(Debug)]
 pub struct ConnectionActorFuture<'a, F: StartConnectionActor<'a, C>, C: Connection<F>> {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
@@ -115,6 +122,7 @@ impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F>> ConnectionActorFuture
         }
     }
 
+    /// Check if the actor future has been aborted.
     pub fn is_aborted(&self) -> bool {
         self.fut.is_aborted()
     }

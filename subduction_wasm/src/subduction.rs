@@ -91,12 +91,14 @@ impl WasmSubduction {
         }
     }
 
+    /// Add a Sedimentree.
     #[wasm_bindgen(js_name = addSedimentree)]
     pub fn add_sedimentree(&self, id: &WasmSedimentreeId, sedimentree: &WasmSedimentree) {
         self.core
             .add_sedimentree(id.clone().into(), sedimentree.clone().into());
     }
 
+    /// Remove a Sedimentree by its ID.
     #[wasm_bindgen(js_name = removeSedimentree)]
     pub fn remove_sedimentree(&self, id: &WasmSedimentreeId) -> bool {
         self.core.remove_sedimentree(id.clone().into())

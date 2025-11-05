@@ -9,7 +9,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{depth::DepthMetric, Depth, Digest, Fragment};
+use crate::{depth::DepthMetric, Depth, Digest};
 
 /// An error indicating that a commit is missing from the store.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -153,7 +153,14 @@ pub trait CommitStore<'a> {
         ))
     }
 
-    pub fn build_fragment_store<D: DepthMetric>(
+    /// Builds a fragment store starting from the given head digests.
+    ///
+    /// This reuses known fragment states to avoid redundant work.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`FragmentError`] if any lookup fails.
+    fn build_fragment_store<D: DepthMetric>(
         &self,
         head_digests: &[Digest],
         known_fragment_states: &mut HashMap<Digest, FragmentState<Self::Node>>,

@@ -183,10 +183,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
         }
     }
 
+    /// The timeout for requests.
     pub fn timeout(&self) -> Duration {
         self.timeout
     }
 
+    /// Get the [`PeerId`] associated with this connection.
     pub fn peer_id(&self) -> PeerId {
         self.peer_id
     }

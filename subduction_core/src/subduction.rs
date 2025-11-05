@@ -1209,6 +1209,9 @@ impl<
 {
 }
 
+/// A trait for starting the listener task for Subduction.
+///
+/// This lets us abstract over `Send` and `!Send` futures.
 pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq, M: DepthMetric>:
     RecvOnce<'a, C> + StartConnectionActor<'a, C>
 {
@@ -1267,6 +1270,9 @@ impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMe
     }
 }
 
+/// A future representing the listener task for Subduction.
+///
+/// This lets the caller decide how they want to manage the listener's lifecycle.
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,

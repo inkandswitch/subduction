@@ -100,8 +100,10 @@ impl From<&CallError> for WasmCallErrorInner {
     }
 }
 
+/// An error that occurred during registration.
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
 #[error(transparent)]
+#[allow(missing_copy_implementations)]
 pub struct WasmRegistrationError(RegistrationError);
 
 impl From<RegistrationError> for WasmRegistrationError {

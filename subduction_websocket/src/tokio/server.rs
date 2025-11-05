@@ -10,7 +10,6 @@ use std::{marker::PhantomData, net::SocketAddr, sync::Arc, time::Duration};
 use subduction_core::{peer::id::PeerId, Subduction};
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::Mutex,
     task::{coop, JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
@@ -192,7 +191,6 @@ where
 
                 let t2 = task_child_cancel_token.clone();
                 tokio::spawn(async move {
-                    let t = task_child_cancel_token.clone();
                     tokio::select! {
                         result = coop::cooperative(listener_fut) => {
                             if let Err(Aborted) = result {
