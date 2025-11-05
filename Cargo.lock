@@ -2624,8 +2624,6 @@ dependencies = [
 [[package]]
 name = "wasm_refgen"
 version = "0.1.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6e3e3c61c949b233c86a4f26641c453a1e009c6d0e77050bec0fb20b63a37547"
 dependencies = [
  "from_js_ref",
  "heck",

@@ -48,6 +48,7 @@ tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.2", features = ["env-filter"] }
 wasm-bindgen-futures = "0.4.53"
 wasm-bindgen = "0.2.103"
-wasm_refgen = "0.1.2"
+wasm_refgen = { path = "../keyhive/wasm_refgen" }
+# wasm_refgen = "0.1.2"
 wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
 
