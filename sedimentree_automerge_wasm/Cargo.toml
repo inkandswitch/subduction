@@ -29,6 +29,7 @@ base58 = { workspace = true }
 bs58 = { version = "0.5", default-features = false, features = ["alloc", "check"] }
 blake3 = { workspace = true }
 build_info = { path = "../build_info" }
+hex = "0.4.3"
 getrandom = { version = "0.3.3", features = ["wasm_js"] }
 js-sys = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core" }

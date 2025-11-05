@@ -1855,6 +1855,7 @@ dependencies = [
  "bs58",
  "build_info",
  "getrandom",
+ "hex",
  "js-sys",
  "sedimentree_core",
  "subduction_wasm",
