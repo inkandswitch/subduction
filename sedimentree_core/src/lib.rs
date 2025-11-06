@@ -359,17 +359,17 @@ impl FragmentSummary {
 pub struct LooseCommit {
     digest: Digest,
     parents: Vec<Digest>,
-    blob: BlobMeta,
+    blob_meta: BlobMeta,
 }
 
 impl LooseCommit {
     /// Constructor for a [`LooseCommit`].
     #[must_use]
-    pub const fn new(digest: Digest, parents: Vec<Digest>, blob: BlobMeta) -> Self {
+    pub const fn new(digest: Digest, parents: Vec<Digest>, blob_meta: BlobMeta) -> Self {
         Self {
             digest,
             parents,
-            blob,
+            blob_meta,
         }
     }
 
@@ -387,8 +387,8 @@ impl LooseCommit {
 
     /// Metadata about the payload blob.
     #[must_use]
-    pub const fn blob(&self) -> &BlobMeta {
-        &self.blob
+    pub const fn blob_meta(&self) -> &BlobMeta {
+        &self.blob_meta
     }
 }
 

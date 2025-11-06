@@ -9,7 +9,11 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{depth::DepthMetric, Depth, Digest};
+use crate::{
+    blob::{Blob, BlobMeta},
+    depth::DepthMetric,
+    Depth, Digest, Fragment,
+};
 
 /// An error indicating that a commit is missing from the store.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -326,5 +330,16 @@ impl<T> FragmentState<T> {
     #[must_use]
     pub const fn boundary(&self) -> &HashMap<Digest, T> {
         &self.boundary
+    }
+
+    /// Converts into a [`Fragment`] with the given [`BlobMeta`].
+    #[must_use]
+    pub fn to_fragment(self, blob_meta: BlobMeta) -> Fragment {
+        Fragment::new(
+            self.head_digest,
+            self.boundary.keys().copied().collect(),
+            self.checkpoints.iter().copied().collect(),
+            blob_meta,
+        )
     }
 }

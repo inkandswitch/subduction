@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use sedimentree_core::{blob::Digest, commit::FragmentState};
-use subduction_wasm::digest::WasmDigest;
+use subduction_wasm::{digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmBlobMeta};
 use wasm_bindgen::prelude::*;
 
 /// The state of a fragment while being built.
@@ -64,6 +64,13 @@ impl WasmFragmentState {
             map.insert(wasm_key, wasm_value);
         }
         WasmBoundary(map)
+    }
+
+    /// Convert the fragment state into a fragment.
+    #[must_use]
+    #[wasm_bindgen(js_name = intoFragment)]
+    pub fn into_fragment(&self, blob_meta: &WasmBlobMeta) -> WasmFragment {
+        self.0.clone().to_fragment(blob_meta.clone().into()).into()
     }
 }
 

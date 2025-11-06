@@ -405,7 +405,7 @@ impl<
 
             for digest in sedimentree
                 .loose_commits()
-                .map(|loose| loose.blob().digest())
+                .map(|loose| loose.blob_meta().digest())
                 .chain(
                     sedimentree
                         .fragments()
@@ -557,10 +557,7 @@ impl<
 
         let depth = self.depth_metric.to_depth(commit.digest());
         if depth != Depth(0) {
-            maybe_requested_fragment = Some(FragmentRequested {
-                head: commit.digest(),
-                depth,
-            });
+            maybe_requested_fragment = Some(FragmentRequested::new(commit.digest(), depth));
         }
 
         Ok(maybe_requested_fragment)
@@ -725,14 +722,14 @@ impl<
             for commit in diff.local_commits {
                 if let Some(blob) = self
                     .storage
-                    .load_blob(commit.blob().digest())
+                    .load_blob(commit.blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?
                 {
                     their_missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
                 } else {
                     tracing::warn!("missing blob for commit {:?}", commit.digest(),);
-                    our_missing_blobs.push(commit.blob().digest());
+                    our_missing_blobs.push(commit.blob_meta().digest());
                 }
             }
 
@@ -1209,9 +1206,6 @@ impl<
 {
 }
 
-/// A trait for starting the listener task for Subduction.
-///
-/// This lets us abstract over `Send` and `!Send` futures.
 pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq, M: DepthMetric>:
     RecvOnce<'a, C> + StartConnectionActor<'a, C>
 {
@@ -1272,7 +1266,8 @@ impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMe
 
 /// A future representing the listener task for Subduction.
 ///
-/// This lets the caller decide how they want to manage the listener's lifecycle.
+/// This lets the caller decide how they want to manage the listener's lifecycle,
+/// including the ability to abort it when needed.
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,

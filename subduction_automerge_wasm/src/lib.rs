@@ -49,6 +49,7 @@ pub fn set_panic_hook() {
 #[wasm_bindgen(start)]
 pub fn start() {
     set_panic_hook();
+
     tracing::info!(
         "🏔️ subduction_automerge_wasm v{} ({})",
         env!("CARGO_PKG_VERSION"),

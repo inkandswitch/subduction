@@ -1,10 +1,13 @@
 //! Individual/"loose" commits.
 
-use sedimentree_core::{blob::BlobMeta, LooseCommit};
+use sedimentree_core::{
+    blob::{BlobMeta, Digest},
+    LooseCommit,
+};
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
-use super::digest::WasmDigest;
+use super::digest::{JsDigest, WasmDigest};
 
 /// A Wasm wrapper around the [`LooseCommit`] type.
 #[wasm_bindgen(js_name = LooseCommit)]
@@ -14,6 +17,20 @@ pub struct WasmLooseCommit(LooseCommit);
 #[wasm_refgen(js_ref = JsLooseCommit)]
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
+    #[wasm_bindgen(constructor)]
+    pub fn new(digest: &WasmDigest, parents: Vec<JsDigest>, blob_meta: &WasmBlobMeta) -> Self {
+        let core_parents: Vec<Digest> =
+            parents.iter().map(|d| WasmDigest::from(d).into()).collect();
+
+        let core_commit = LooseCommit::new(
+            digest.clone().into(),
+            core_parents,
+            blob_meta.clone().into(),
+        );
+
+        Self(core_commit)
+    }
+
     /// Get the digest of the commit.
     #[must_use]
     #[wasm_bindgen(getter)]
@@ -31,7 +48,7 @@ impl WasmLooseCommit {
     #[must_use]
     #[wasm_bindgen(getter, js_name = blobMeta)]
     pub fn blob_meta(&self) -> WasmBlobMeta {
-        self.0.blob().to_owned().into()
+        self.0.blob_meta().to_owned().into()
     }
 }
 
@@ -55,6 +72,11 @@ pub struct WasmBlobMeta(BlobMeta);
 
 #[wasm_bindgen(js_class = BlobMeta)]
 impl WasmBlobMeta {
+    #[wasm_bindgen(constructor)]
+    pub fn new(blob: &[u8]) -> Self {
+        BlobMeta::new(blob).into()
+    }
+
     /// Get the digest of the blob.
     #[must_use]
     pub fn digest(&self) -> WasmDigest {

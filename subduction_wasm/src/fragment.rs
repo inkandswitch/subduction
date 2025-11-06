@@ -6,6 +6,12 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
+use crate::{
+    depth::WasmDepth,
+    digest::{JsDigest, WasmDigest},
+    loose_commit::WasmBlobMeta,
+};
+
 /// A data fragment used in the Sedimentree system.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[wasm_bindgen(js_name = Fragment)]
@@ -13,7 +19,55 @@ pub struct WasmFragment(Fragment);
 
 #[wasm_refgen(js_ref = JsFragment)]
 #[wasm_bindgen(js_class = Fragment)]
-impl WasmFragment {}
+impl WasmFragment {
+    #[wasm_bindgen(constructor)]
+    pub fn new(
+        head: WasmDigest,
+        boundary: Vec<JsDigest>,
+        checkpoints: Vec<JsDigest>,
+        blob_meta: WasmBlobMeta,
+    ) -> Self {
+        Fragment::new(
+            head.into(),
+            boundary
+                .iter()
+                .map(|d| WasmDigest::from(d).into())
+                .collect(),
+            checkpoints
+                .iter()
+                .map(|d| WasmDigest::from(d).into())
+                .collect(),
+            blob_meta.into(),
+        )
+        .into()
+    }
+
+    /// Get the head digest of the fragment.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn head(&self) -> WasmDigest {
+        self.0.head().into()
+    }
+
+    /// Get the boundary digests of the fragment.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn boundary(&self) -> Vec<WasmDigest> {
+        self.0.boundary().iter().copied().map(Into::into).collect()
+    }
+
+    /// Get the checkpoints of the fragment.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn checkpoints(&self) -> Vec<WasmDigest> {
+        self.0
+            .checkpoints()
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect()
+    }
+}
 
 impl From<Fragment> for WasmFragment {
     fn from(fragment: Fragment) -> Self {
@@ -32,6 +86,29 @@ impl From<WasmFragment> for Fragment {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[allow(missing_copy_implementations)]
 pub struct WasmFragmentRequested(FragmentRequested);
+
+#[wasm_bindgen(js_class = FragmentRequested)]
+impl WasmFragmentRequested {
+    /// Create a new fragment request from the given digest.
+    #[wasm_bindgen(constructor)]
+    pub fn new(digest: &WasmDigest, depth: &WasmDepth) -> Self {
+        FragmentRequested::new(digest.clone().into(), depth.clone().into()).into()
+    }
+
+    /// Get the digest of the requested fragment.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn head(&self) -> WasmDigest {
+        (*self.0.head()).into()
+    }
+
+    /// Get the depth of the requested fragment.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn depth(&self) -> WasmDepth {
+        (*self.0.depth()).into()
+    }
+}
 
 impl From<FragmentRequested> for WasmFragmentRequested {
     fn from(req: FragmentRequested) -> Self {

@@ -105,14 +105,11 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
     type LookupError = WasmLookupError;
 
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {
-        // let js_change_hash: JsValue = digest.as_bytes().to_vec().into();
-        // let bs58ck_hash: String = bs58::encode(digest.as_bytes()).with_check().into_string();
-        let bs58ck_hash = hex::encode(digest.as_bytes());
+        let hash_hex = hex::encode(digest.as_bytes());
 
-        tracing::warn!("!! looking up change meta for hash {}", bs58ck_hash);
         let js_value_should_be_change_meta = self
             .0
-            .get_change_meta_by_hash(js_sys::JsString::from(bs58ck_hash).into())
+            .get_change_meta_by_hash(hash_hex)
             .map_err(WasmLookupError::ProblemCallingGetChangeMetaByHash)?;
 
         let _obj: &js_sys::Object = js_value_should_be_change_meta
@@ -179,5 +176,5 @@ extern "C" {
 
     /// Get change metadata by its hash.
     #[wasm_bindgen(method, js_name = getChangeMetaByHash, catch)]
-    fn get_change_meta_by_hash(this: &JsAutomerge, hash: JsValue) -> Result<JsValue, JsValue>;
+    fn get_change_meta_by_hash(this: &JsAutomerge, hash: String) -> Result<JsValue, JsValue>;
 }

@@ -79,7 +79,7 @@ impl Storage<Sendable> for MemoryStorage {
         loose_commit: LooseCommit,
     ) -> BoxFuture<'_, Result<(), Self::Error>> {
         async move {
-            let digest = loose_commit.blob().digest();
+            let digest = loose_commit.blob_meta().digest();
             self.commits.lock().await.insert(digest, loose_commit);
             Ok(())
         }
@@ -137,7 +137,7 @@ impl Storage<Local> for MemoryStorage {
         loose_commit: LooseCommit,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
-            let digest = loose_commit.blob().digest();
+            let digest = loose_commit.blob_meta().digest();
             self.commits.lock().await.insert(digest, loose_commit);
             Ok(())
         }
