@@ -16,9 +16,11 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
-    digest::WasmDigest,
-    fragment::{WasmConvertJsValueToFragmentArrayError, WasmFragment, WasmFragmentsArray},
-    loose_commit::{WasmLooseCommit, WasmLooseCommitsArray},
+    digest::{JsDigest, WasmDigest},
+    fragment::{
+        JsFragment, WasmConvertJsValueToFragmentArrayError, WasmFragment, WasmFragmentsArray,
+    },
+    loose_commit::{JsLooseCommit, WasmLooseCommit, WasmLooseCommitsArray},
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -41,31 +43,28 @@ extern "C" {
     pub type JsStorage;
 
     /// Save a blob to storage.
-    #[wasm_bindgen(method, catch, js_name = saveBlob)]
-    fn js_save_blob(this: &JsStorage, blob: &[u8]) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(method, js_name = saveBlob)]
+    fn js_save_blob(this: &JsStorage, blob: &[u8]) -> Promise;
 
     /// Load all loose commits from storage.
-    #[wasm_bindgen(method, catch, js_name = loadWasmLooseCommits)]
-    fn js_load_loose_commits(this: &JsStorage) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(method, js_name = loadWasmLooseCommits)]
+    fn js_load_loose_commits(this: &JsStorage) -> Promise;
 
     /// Save a loose commit to storage.
-    #[wasm_bindgen(method, catch, js_name = saveWasmLooseCommit)]
-    fn js_save_loose_commit(
-        this: &JsStorage,
-        loose_commit: WasmLooseCommit,
-    ) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(method, js_name = saveWasmLooseCommit)]
+    fn js_save_loose_commit(this: &JsStorage, loose_commit: JsLooseCommit) -> Promise;
 
     /// Save a fragment to storage.
-    #[wasm_bindgen(method, catch, js_name = saveWasmFragment)]
-    fn js_save_fragment(this: &JsStorage, fragment: WasmFragment) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(method, js_name = saveWasmFragment)]
+    fn js_save_fragment(this: &JsStorage, fragment: JsFragment) -> Promise;
 
     /// Load all fragments from storage.
-    #[wasm_bindgen(method, catch, js_name = loadWasmFragments)]
-    fn js_load_fragments(this: &JsStorage) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(method, js_name = loadWasmFragments)]
+    fn js_load_fragments(this: &JsStorage) -> Promise;
 
     /// Load a blob from storage.
-    #[wasm_bindgen(method, catch, js_name = loadBlob)]
-    fn js_load_blob(this: &JsStorage, blob_digest: WasmDigest) -> Result<Promise, JsValue>;
+    #[wasm_bindgen(method, js_name = loadBlob)]
+    fn js_load_blob(this: &JsStorage, blob_digest: JsDigest) -> Promise;
 }
 
 impl std::fmt::Debug for JsStorage {
@@ -86,13 +85,11 @@ impl Storage<Local> for JsStorage {
             let _enter = span.enter();
 
             tracing::debug!("saving loose commit {:?}", loose_commit.digest());
-            let js_loose_commit: WasmLooseCommit = loose_commit.into();
-            let promise = self
-                .js_save_loose_commit(js_loose_commit)
-                .map_err(JsStorageError::SaveLooseCommitError)?;
-            JsFuture::from(promise)
+            let wasm_loose_commit: WasmLooseCommit = loose_commit.into();
+            let js_promise = self.js_save_loose_commit(wasm_loose_commit.into());
+            JsFuture::from(js_promise)
                 .await
-                .map_err(JsStorageError::ConvertFromWasmPromiseError)?;
+                .map_err(JsStorageError::SaveLooseCommitError)?;
             Ok(())
         }
         .boxed_local()
@@ -108,12 +105,10 @@ impl Storage<Local> for JsStorage {
                 fragment.summary().blob_meta().digest()
             );
             let js_fragment: WasmFragment = fragment.into();
-            let promise = self
-                .js_save_fragment(js_fragment)
-                .map_err(JsStorageError::SaveFragmentError)?;
+            let promise = self.js_save_fragment(js_fragment.into());
             JsFuture::from(promise)
                 .await
-                .map_err(JsStorageError::ConvertFromWasmPromiseError)?;
+                .map_err(JsStorageError::SaveFragmentError)?;
             Ok(())
         }
         .boxed_local()
@@ -124,12 +119,10 @@ impl Storage<Local> for JsStorage {
             let span = tracing::debug_span!("JsStorage::save_blob");
             let _enter = span.enter();
 
-            let promise = self
-                .js_save_blob(blob.as_slice())
-                .map_err(JsStorageError::SaveBlobError)?;
-            let js_value = wasm_bindgen_futures::JsFuture::from(promise)
+            let promise = self.js_save_blob(blob.as_slice());
+            let js_value = JsFuture::from(promise)
                 .await
-                .map_err(JsStorageError::ConvertFromWasmPromiseError)?;
+                .map_err(JsStorageError::SaveBlobError)?;
             let wasm_digest =
                 WasmDigest::try_from_js_value(&js_value).ok_or(JsStorageError::NotDigest)?;
             Ok(wasm_digest.into())
@@ -142,12 +135,10 @@ impl Storage<Local> for JsStorage {
             let span = tracing::debug_span!("JsStorage::load_loose_commits");
             let _enter = span.enter();
 
-            let promise = self
-                .js_load_loose_commits()
-                .map_err(JsStorageError::LoadLooseCommitsError)?;
-            let js_value = wasm_bindgen_futures::JsFuture::from(promise)
+            let promise = self.js_load_loose_commits();
+            let js_value = JsFuture::from(promise)
                 .await
-                .map_err(JsStorageError::ConvertFromWasmPromiseError)?;
+                .map_err(JsStorageError::LoadLooseCommitsError)?;
             let js_loose_commits = WasmLooseCommitsArray::try_from(&js_value)
                 .map_err(JsStorageError::NotLooseCommitArray)?;
             Ok(js_loose_commits.0.into_iter().map(Into::into).collect())
@@ -160,12 +151,10 @@ impl Storage<Local> for JsStorage {
             let span = tracing::debug_span!("JsStorage::load_fragments");
             let _enter = span.enter();
 
-            let promise = self
-                .js_load_fragments()
-                .map_err(JsStorageError::LoadFragmentsError)?;
+            let promise = self.js_load_fragments();
             let js_value = JsFuture::from(promise)
                 .await
-                .map_err(JsStorageError::ConvertFromWasmPromiseError)?;
+                .map_err(JsStorageError::LoadFragmentsError)?;
             let js_fragments = WasmFragmentsArray::try_from(&js_value)
                 .map_err(JsStorageError::NotFragmentsArray)?;
             Ok(js_fragments.0.into_iter().map(Into::into).collect())
@@ -183,13 +172,10 @@ impl Storage<Local> for JsStorage {
 
             tracing::debug!("blob {blob_digest}");
 
-            let promise = self
-                .js_load_blob(blob_digest.into())
-                .map_err(JsStorageError::LoadBlobError)?;
-
+            let promise = self.js_load_blob(WasmDigest::from(blob_digest).into());
             let js_value = JsFuture::from(promise)
                 .await
-                .map_err(JsStorageError::ConvertFromWasmPromiseError)?;
+                .map_err(JsStorageError::LoadBlobError)?;
 
             let maybe_blob = if js_value.is_null() || js_value.is_undefined() {
                 None
@@ -231,10 +217,6 @@ pub enum JsStorageError {
     /// An error occurred while loading fragments.
     #[error("JavaScript load fragments error: {0:?}")]
     LoadFragmentsError(JsValue),
-
-    /// An error occurred while converting a `Promise` result to a Rust future.
-    #[error("Promise conversion error: {0:?}")]
-    ConvertFromWasmPromiseError(JsValue),
 
     /// The `JsValue` could not be converted into bytes.
     #[error("Value was not bytes")]

@@ -21,10 +21,7 @@ use crate::{
     connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::{JsDigest, WasmDigest},
-    error::{
-        WasmCallError, WasmConnectionDisallowed, WasmDisconnectionError, WasmIoError,
-        WasmRegistrationError,
-    },
+    error::{WasmCallError, WasmDisconnectionError, WasmIoError, WasmRegistrationError},
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
@@ -92,18 +89,6 @@ impl WasmSubduction {
             fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
             blob_callbacks: Rc::new(Mutex::new(Vec::new())),
         }
-    }
-
-    #[wasm_bindgen(js_name = testThrow)]
-    pub fn test_throw() -> Result<(), WasmConnectionDisallowed> {
-        Err(subduction_core::connection::ConnectionDisallowed.into())
-    }
-
-    #[wasm_bindgen(js_name = testNotThrow)]
-    pub fn test_not_thow() -> JsError {
-        JsError::from(WasmConnectionDisallowed::from(
-            subduction_core::connection::ConnectionDisallowed,
-        ))
     }
 
     /// Add a Sedimentree.

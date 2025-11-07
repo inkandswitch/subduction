@@ -2,7 +2,7 @@
 
 use futures::channel::oneshot;
 use js_sys::Uint8Array;
-use sedimentree_core::blob::Digest;
+use sedimentree_core::{blob::Digest, Fragment, LooseCommit};
 use std::{cell::RefCell, rc::Rc};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -11,7 +11,7 @@ use web_sys::{
     IdbVersionChangeEvent,
 };
 
-use crate::digest::WasmDigest;
+use crate::{digest::WasmDigest, fragment::{JsFragment, WasmFragment}, loose_commit::{JsLooseCommit, WasmLooseCommit}};
 
 /// The version number of the [`IndexedDB`] database schema.
 pub const DB_VERSION: u32 = 1;
@@ -21,6 +21,12 @@ pub const DB_NAME: &str = "@automerge/subduction/db";
 
 /// The name of the object store for blobs.
 pub const BLOB_STORE_NAME: &str = "blobs";
+
+/// The name of the object store for loose commits.
+pub const LOOSE_COMMIT_STORE_NAME: &str = "commits";
+
+/// The name of the object store for fragments.
+pub const FRAGMENT_STORE_NAME: &str = "fragments";
 
 /// `IndexedDB` storage backend.
 #[wasm_bindgen(js_name = IndexedDbStorage)]
@@ -76,26 +82,125 @@ impl WasmIndexedDbStorage {
         Ok(Self(db))
     }
 
-    /// Load a blob from the database by its digest.
-    ///
-    /// # Errors
-    ///
-    /// Returns a `JsValue` if the blob could not be loaded.
-    #[wasm_bindgen(js_name = loadBlob)]
-    pub async fn load_blob(&self, digest: WasmDigest) -> Result<Option<Vec<u8>>, JsValue> {
+    #[wasm_bindgen(js_name = looseCommitStoreName)]
+    pub fn loose_commit_store_name(&self) -> String {
+        LOOSE_COMMIT_STORE_NAME.to_string()
+    }
+
+    #[wasm_bindgen(js_name = fragmentStoreName)]
+    pub fn fragment_store_name(&self) -> String {
+        FRAGMENT_STORE_NAME.to_string()
+    }
+
+    #[wasm_bindgen(js_name = blobStoreName)]
+    pub fn blob_store_name(&self) -> String {
+        BLOB_STORE_NAME.to_string()
+    }
+
+    /// Save a loose commit to storage.
+    #[wasm_bindgen( js_name = saveWasmLooseCommit)]
+    pub async fn wasm_save_loose_commit(
+        &self,
+        loose_commit: &WasmLooseCommit,
+    ) -> Result<(), FIXME> {
+        let core_commit = LooseCommit::from(loose_commit.clone());
+        let digest = core_commit.digest().clone();
+        let value: JsValue = bincode::serde::encode_to_vec(core_commit, bincode::config::standard())
+            .map_err(|_| FIXME)?.into();
+
         let req = self
             .0
-            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readonly)?
-            .object_store(BLOB_STORE_NAME)?
-            .get(&JsValue::from_str(&Digest::from(digest).to_string()))?;
+            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(|_| FIXME)?
+            .object_store(LOOSE_COMMIT_STORE_NAME).map_err(|_| FIXME)?
+            .put_with_key(
+                &value,
+                &digest.as_bytes().to_vec().into()
+            ).map_err(|_| FIXME)?;
 
-        let js_value = await_idb(&req).await?;
+        let key = await_idb(&req).await.map_err(|_| FIXME)?;
+        drop(key);
+
+        Ok(())
+    }
+
+    /// Load all loose commits from storage.
+    #[wasm_bindgen( js_name = loadWasmLooseCommits)]
+    pub async fn wasm_load_loose_commits(&self) -> Result<Vec<JsLooseCommit>, FIXME> {
+        let req = self
+            .0
+            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readonly).map_err(|_| FIXME)?
+            .object_store(LOOSE_COMMIT_STORE_NAME).map_err(|_| FIXME)?
+            .get_all().map_err(|_| FIXME)?;
+
+        let js_value = await_idb(&req).await.map_err(|_| FIXME)?;
         if js_value.is_undefined() || js_value.is_null() {
-            Ok(None)
-        } else if js_value.is_instance_of::<Uint8Array>() {
-            Ok(Some(Uint8Array::new(&js_value).to_vec()))
+            Ok(Vec::new())
+        } else if js_value.is_instance_of::<js_sys::Array>() {
+            let mut xs = Vec::new();
+            for js_item in js_sys::Array::from(&js_value).iter() {
+                let bytes = js_item.dyn_into::<Uint8Array>().map_err(|_| FIXME)?.to_vec();
+                let (fragment, _size) = bincode::serde::decode_from_slice::<LooseCommit, _>(
+                    &bytes,
+                    bincode::config::standard(),
+                ).map_err(|_| FIXME)?;
+                xs.push(WasmLooseCommit::from(fragment).into());
+            }
+            Ok(xs)
         } else {
-            Err(JsValue::from(InvalidIndexedDbValue))
+            Err(FIXME)
+            // FIXME Err(JsValue::from(InvalidIndexedDbValue))
+        }
+    }
+
+    /// Save a fragment to storage.
+    #[wasm_bindgen(js_name = saveWasmFragment)]
+   pub  async fn wasm_save_fragment(&self, fragment: &WasmFragment) -> Result<(), FIXME> {
+        let core_fragment = Fragment::from(fragment.clone());
+        let digest = core_fragment.digest().clone();
+        let value: JsValue = bincode::serde::encode_to_vec(core_fragment, bincode::config::standard())
+            .map_err(|_| FIXME)?.into();
+
+        let req = self
+            .0
+            .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(|_| FIXME)?
+            .object_store(FRAGMENT_STORE_NAME).map_err(|_| FIXME)?
+            .put_with_key(
+                &value,
+                &digest.as_bytes().to_vec().into()
+            ).map_err(|_| FIXME)?;
+
+        let key = await_idb(&req).await.map_err(|_| FIXME)?;
+        drop(key);
+
+        Ok(())
+    }
+
+    /// Load all fragments from storage.
+    #[wasm_bindgen(js_name = loadWasmFragments)]
+    pub async fn wasm_load_fragments(&self) -> Result<Vec<JsFragment>, FIXME> {
+        let req = self
+            .0
+            .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readonly).map_err(|_| FIXME)?
+            .object_store(FRAGMENT_STORE_NAME).map_err(|_| FIXME)?
+            .get_all().map_err(|_| FIXME)?;
+
+        let js_value = await_idb(&req).await.map_err(|_| FIXME)?;
+        if js_value.is_undefined() || js_value.is_null() {
+            Ok(Vec::new())
+        } else if js_value.is_instance_of::<js_sys::Array>() {
+            let mut xs = Vec::new();
+            for js_item in js_sys::Array::from(&js_value).iter() {
+                let bytes = js_item.dyn_into::<Uint8Array>().map_err(|_| FIXME)?.to_vec();
+                let (fragment, _size) = bincode::serde::decode_from_slice::<Fragment, _>(
+                    &bytes,
+                    bincode::config::standard(),
+                ).map_err(|_| FIXME)?;
+                xs.push(WasmFragment::from(fragment).into());
+            }
+            Ok(xs)
+        } else {
+            Err(FIXME)
+            // FIXME Err(JsValue::from(InvalidIndexedDbValue))
         }
     }
 
@@ -106,21 +211,45 @@ impl WasmIndexedDbStorage {
     /// Returns a `JsValue` if the JS transaction could not be opened,
     /// or if the blob could not be saved.
     #[wasm_bindgen(js_name = saveBlob)]
-    pub async fn save_blob(&self, bytes: &[u8]) -> Result<WasmDigest, JsValue> {
+    pub async fn wasm_save_blob(&self, bytes: &[u8]) -> Result<WasmDigest, FIXME> {
         let digest = Digest::hash(bytes);
         let req = self
             .0
-            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite)?
-            .object_store(BLOB_STORE_NAME)?
+            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite).map_err(|_| FIXME)?
+            .object_store(BLOB_STORE_NAME).map_err(|_| FIXME)?
             .put_with_key(
                 &JsValue::from(bytes.to_vec()),
                 &JsValue::from_str(&digest.to_string()),
-            )?;
+            ).map_err(|_| FIXME)?;
 
-        let key = await_idb(&req).await?;
+        let key = await_idb(&req).await.map_err(|_| FIXME)?;
         drop(key);
 
         Ok(digest.into())
+    }
+
+    /// Load a blob from the database by its digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `JsValue` if the blob could not be loaded.
+    #[wasm_bindgen(js_name = loadBlob)]
+    pub async fn wasm_load_blob(&self, digest: WasmDigest) -> Result<Option<Vec<u8>>, FIXME> {
+        let req = self
+            .0
+            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readonly).map_err(|_| FIXME)?
+            .object_store(BLOB_STORE_NAME).map_err(|_| FIXME)?
+            .get(&JsValue::from_str(&Digest::from(digest).to_string())).map_err(|_| FIXME)?;
+
+        let js_value = await_idb(&req).await.map_err(|_| FIXME)?;
+        if js_value.is_undefined() || js_value.is_null() {
+            Ok(None)
+        } else if js_value.is_instance_of::<Uint8Array>() {
+            Ok(Some(Uint8Array::new(&js_value).to_vec()))
+        } else {
+            Err(FIXME)
+            // FIXME Err(JsValue::from(InvalidIndexedDbValue))
+        }
     }
 }
 
@@ -191,6 +320,18 @@ impl From<InvalidIndexedDbValue> for JsValue {
     fn from(err: InvalidIndexedDbValue) -> Self {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("InvalidIndexedDbValue");
+        err.into()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("FIXME")]
+pub struct FIXME;
+
+impl From<FIXME> for JsValue {
+    fn from(err: FIXME) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("FIXME");
         err.into()
     }
 }
