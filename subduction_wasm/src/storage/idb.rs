@@ -101,8 +101,10 @@ impl WasmIndexedDbStorage {
     #[wasm_bindgen( js_name = saveLooseCommit)]
     pub async fn wasm_save_loose_commit(
         &self,
-        loose_commit: &WasmLooseCommit,
+        loose_commit: &JsValue, // &WasmLooseCommit,
     ) -> Result<(), WasmSaveLooseCommitError> {
+        let loose_commit: WasmLooseCommit = (&loose_commit.clone()
+            .unchecked_into::<JsLooseCommit>()).into();
         let core_commit = LooseCommit::from(loose_commit.clone());
         let digest = core_commit.digest().clone();
         let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_commit, bincode::config::standard())?;

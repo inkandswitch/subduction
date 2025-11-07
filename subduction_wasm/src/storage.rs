@@ -52,7 +52,7 @@ extern "C" {
     fn js_save_loose_commit(
         this: &JsStorage,
         sedimentree_id: &JsSedimentreeId,
-        loose_commit: &JsLooseCommit,
+        loose_commit: &JsValue,
     ) -> Promise;
 
     /// Save a fragment to storage.
