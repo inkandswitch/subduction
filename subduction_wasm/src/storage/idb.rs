@@ -166,13 +166,17 @@ impl WasmIndexedDbStorage {
         let digest = core_commit.digest().clone();
         let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_commit, bincode::config::standard())?;
 
+        let key = Key {
+            sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
+            digest,
+        };
         let req = self
             .0
             .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveLooseCommitError::TransactionError)?
             .object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmSaveLooseCommitError::ObjectStoreError)?
             .put_with_key(
                 &bytes.into(),
-                &digest.as_bytes().to_vec().into()
+                &key.into()
             ).map_err(WasmSaveLooseCommitError::UnableToStoreLooseCommit)?;
 
         let key = await_idb(&req).await?;
