@@ -48,11 +48,11 @@ extern "C" {
     fn js_save_blob(this: &JsStorage, blob: &[u8]) -> Promise;
 
     /// Save a loose commit to storage.
-    #[wasm_bindgen(method, js_name = saveLooseCommit)]
+    #[wasm_bindgen(method, structural, js_name = saveLooseCommit)]
     fn js_save_loose_commit(
         this: &JsStorage,
         sedimentree_id: &JsSedimentreeId,
-        loose_commit: &JsValue,
+        loose_commit: &JsLooseCommit,
     ) -> Promise;
 
     /// Save a fragment to storage.
