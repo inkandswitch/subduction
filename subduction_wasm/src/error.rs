@@ -18,33 +18,61 @@ use super::{
 ///
 /// This includes errors related to I/O operations,
 /// such as networking or storage issues.
-#[wasm_bindgen(js_name = IoError)]
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmIoError(
     #[from] IoError<Local, JsStorage, WasmConnectionCallbackReader<WasmWebSocket>>,
 );
 
+impl From<WasmIoError> for JsValue {
+    fn from(err: WasmIoError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("IoError");
+        js_err.into()
+    }
+}
+
 /// A Wasm wrapper around the [`ConnectionDisallowed`] type.
-#[wasm_bindgen(js_name = ConnectionDisallowed)]
 #[derive(Debug, Clone, Error)]
 #[error(transparent)]
 #[allow(missing_copy_implementations)]
 pub struct WasmConnectionDisallowed(#[from] ConnectionDisallowed);
 
+impl From<WasmConnectionDisallowed> for JsValue {
+    fn from(err: WasmConnectionDisallowed) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("ConnectionDisallowed");
+        js_err.into()
+    }
+}
+
 /// A Wasm wrapper around the [`ListenError`] type.
-#[wasm_bindgen(js_name = ListenError)]
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmListenError(
     #[from] ListenError<Local, JsStorage, WasmConnectionCallbackReader<WasmWebSocket>>,
 );
 
+impl From<WasmListenError> for JsValue {
+    fn from(err: WasmListenError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("ListenError");
+        js_err.into()
+    }
+}
+
 /// A Wasm wrapper around the [`CallError`] type.
-#[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone, Error)]
 #[error(transparent)]
 pub struct WasmCallError(#[from] WasmCallErrorInner);
+
+impl From<WasmCallError> for JsValue {
+    fn from(err: WasmCallError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("CallError");
+        js_err.into()
+    }
+}
 
 impl From<CallError> for WasmCallError {
     fn from(err: CallError) -> Self {

@@ -21,7 +21,10 @@ use crate::{
     connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::{JsDigest, WasmDigest},
-    error::{WasmCallError, WasmDisconnectionError, WasmIoError, WasmRegistrationError},
+    error::{
+        WasmCallError, WasmConnectionDisallowed, WasmDisconnectionError, WasmIoError,
+        WasmRegistrationError,
+    },
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
@@ -89,6 +92,18 @@ impl WasmSubduction {
             fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
             blob_callbacks: Rc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    #[wasm_bindgen(js_name = testThrow)]
+    pub fn test_throw() -> Result<(), WasmConnectionDisallowed> {
+        Err(subduction_core::connection::ConnectionDisallowed.into())
+    }
+
+    #[wasm_bindgen(js_name = testNotThrow)]
+    pub fn test_not_thow() -> JsError {
+        JsError::from(WasmConnectionDisallowed::from(
+            subduction_core::connection::ConnectionDisallowed,
+        ))
     }
 
     /// Add a Sedimentree.
@@ -303,13 +318,12 @@ impl WasmSubduction {
         commit: &WasmLooseCommit,
         blob: &Uint8Array,
     ) -> Result<Option<WasmFragmentRequested>, WasmIoError> {
+        let core_id = id.clone().into();
+        let core_commit = commit.clone().into();
+        let blob: Blob = blob.clone().to_vec().into();
         let maybe_fragment_requested = self
             .core
-            .add_commit(
-                id.clone().into(),
-                &commit.clone().into(),
-                Blob::from(blob.clone().to_vec()),
-            )
+            .add_commit(core_id, &core_commit, blob)
             .await
             .map_err(WasmIoError::from)?;
 
@@ -328,9 +342,11 @@ impl WasmSubduction {
         fragment: &WasmFragment,
         blob: &Uint8Array,
     ) -> Result<(), WasmIoError> {
+        let owned_id = id.clone().into();
+        let owned_fragment = fragment.clone().into();
         let blob: Blob = blob.clone().to_vec().into();
         self.core
-            .add_fragment(id.clone().into(), &fragment.clone().into(), blob)
+            .add_fragment(owned_id, &owned_fragment, blob)
             .await
             .map_err(WasmIoError::from)?;
         Ok(())
@@ -392,11 +408,13 @@ impl WasmSubduction {
         id: &WasmSedimentreeId,
         timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
+        tracing::debug!("WasmSubduction::request_all_batch_sync");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let peer_map = self
             .core
             .request_all_batch_sync(id.clone().into(), timeout)
             .await?;
+        tracing::debug!("WasmSubduction::request_all_batch_sync - done");
         Ok(WasmPeerResultMap(
             peer_map
                 .into_iter()
@@ -568,8 +586,8 @@ impl ConnErrPair {
     /// The error that occurred during the call.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn err(&self) -> WasmCallError {
-        self.err.clone()
+    pub fn err(&self) -> JsError {
+        self.err.clone().into()
     }
 }
 
