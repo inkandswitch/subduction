@@ -3,12 +3,13 @@
 use futures::{channel::oneshot, future::LocalBoxFuture};
 use js_sys::Uint8Array;
 use sedimentree_core::{blob::{Blob, Digest}, future::Local, storage::Storage, Fragment, LooseCommit, SedimentreeId};
+use wasm_bindgen_futures::JsFuture;
 use std::{cell::RefCell, convert::Infallible, rc::Rc};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::{
     Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
-    IdbVersionChangeEvent,
+    IdbVersionChangeEvent, IdbObjectStoreParameters, IdbKeyRange, IdbIndex, IdbCursorWithValue,
 };
 
 use crate::{digest::WasmDigest, fragment::{JsFragment, WasmFragment}, loose_commit::{JsLooseCommit, WasmLooseCommit}, sedimentree_id::{self, WasmSedimentreeId}};
@@ -27,6 +28,8 @@ pub const LOOSE_COMMIT_STORE_NAME: &str = "commits";
 
 /// The name of the object store for fragments.
 pub const FRAGMENT_STORE_NAME: &str = "fragments";
+
+pub const INDEX_BY_SEDIMENTREE_ID: &str = "by_sedimentree_id";
 
 /// `IndexedDB` storage backend.
 #[wasm_bindgen(js_name = IndexedDbStorage)]
@@ -57,15 +60,69 @@ impl WasmIndexedDbStorage {
                     .and_then(|t| t.dyn_into::<IdbOpenDbRequest>().ok())
                     && let Ok(db_val) = req.result()
                     && let Ok(db) = db_val.dyn_into::<IdbDatabase>() {
+                        let mut params = IdbObjectStoreParameters::new();
+                        let kp = js_sys::Array::of2(&"sedimentree_id".into(), &"digest".into());
+                        params.set_key_path(&kp.into());
+                        params.set_auto_increment(false);
+
                         let names = db.object_store_names();
-                        if !names.contains(BLOB_STORE_NAME)
-                            && let Err(e) = db.create_object_store(BLOB_STORE_NAME) {
-                                tracing::error!(
-                                    "failed to create object store '{}': {:?}",
-                                    BLOB_STORE_NAME,
-                                    e
-                                );
+
+                        if !names.contains(BLOB_STORE_NAME) {
+                            match db.create_object_store(BLOB_STORE_NAME) {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    tracing::error!(
+                                        "failed to create object store '{}': {:?}",
+                                        BLOB_STORE_NAME,
+                                        e
+                                    );
+                                }
                             }
+                        }
+
+                        if !names.contains(LOOSE_COMMIT_STORE_NAME) {
+                            match db.create_object_store_with_optional_parameters(LOOSE_COMMIT_STORE_NAME, &params) {
+                                Ok(store) => {
+                                    if let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
+                                        tracing::error!(
+                                            "failed to create index '{}' on object store '{}': {:?}",
+                                            INDEX_BY_SEDIMENTREE_ID,
+                                            LOOSE_COMMIT_STORE_NAME,
+                                            e
+                                        );
+                                    };
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "failed to create object store '{}': {:?}",
+                                        LOOSE_COMMIT_STORE_NAME,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
+                        if !names.contains(FRAGMENT_STORE_NAME) {
+                            match db.create_object_store_with_optional_parameters(FRAGMENT_STORE_NAME, &params) {
+                                Ok(store) => {
+                                    if let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
+                                        tracing::error!(
+                                            "failed to create index '{}' on object store '{}': {:?}",
+                                            INDEX_BY_SEDIMENTREE_ID,
+                                            FRAGMENT_STORE_NAME,
+                                            e
+                                        );
+                                    };
+                                }
+                                Err(e) => {
+                                    tracing::error!(
+                                        "failed to create object store '{}': {:?}",
+                                        FRAGMENT_STORE_NAME,
+                                        e
+                                    );
+                                }
+                            }
+                        }
                     }
             }) as Box<dyn FnMut(_)>);
             open_req.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
@@ -88,14 +145,14 @@ impl WasmIndexedDbStorage {
     }
 
     #[wasm_bindgen(js_name = looseCommitStoreName)]
-    pub fn loose_commit_store_name(&self, sedimentree_id: &WasmSedimentreeId) -> String {
-        format!("{LOOSE_COMMIT_STORE_NAME}/{}", sedimentree_id.to_string())
+    pub fn loose_commit_store_name(&self) -> String {
+        LOOSE_COMMIT_STORE_NAME.to_string()
     }
 
 
     #[wasm_bindgen(js_name = fragmentStoreName)]
-    pub fn fragment_store_name(&self, sedimentree_id: &WasmSedimentreeId) -> String {
-        format!("{FRAGMENT_STORE_NAME}/{}", sedimentree_id.to_string())
+    pub fn fragment_store_name(&self) -> String {
+        FRAGMENT_STORE_NAME.to_string()
     }
 
     /// Save a loose commit to storage.
@@ -109,11 +166,10 @@ impl WasmIndexedDbStorage {
         let digest = core_commit.digest().clone();
         let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_commit, bincode::config::standard())?;
 
-        let commit_store_name = self.loose_commit_store_name(sedimentree_id);
         let req = self
             .0
-            .transaction_with_str_and_mode(&commit_store_name, IdbTransactionMode::Readwrite).map_err(WasmSaveLooseCommitError::TransactionError)?
-            .object_store(&commit_store_name).map_err(WasmSaveLooseCommitError::ObjectStoreError)?
+            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveLooseCommitError::TransactionError)?
+            .object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmSaveLooseCommitError::ObjectStoreError)?
             .put_with_key(
                 &bytes.into(),
                 &digest.as_bytes().to_vec().into()
@@ -127,31 +183,29 @@ impl WasmIndexedDbStorage {
 
     /// Load all loose commits from storage.
     #[wasm_bindgen( js_name = loadLooseCommits)]
-    pub async fn wasm_load_loose_commits(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<JsLooseCommit>, WasmLoadLooseCommitsError> {
-        let commit_store_name = self.loose_commit_store_name(sedimentree_id);
-        let req = self
-            .0
-            .transaction_with_str_and_mode(&commit_store_name, IdbTransactionMode::Readonly).map_err(WasmLoadLooseCommitsError::TransactionError)?
-            .object_store(&commit_store_name).map_err(WasmLoadLooseCommitsError::ObjectStoreError)?
-            .get_all().map_err(WasmLoadLooseCommitsError::UnableToGetLooseCommits)?;
+    pub async fn wasm_load_loose_commits(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<WasmLooseCommit>, WasmLoadLooseCommitsError> {
+        let tx = self.0
+                     .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadLooseCommitsError::TransactionError)?;
+        let store = tx.object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmLoadLooseCommitsError::ObjectStoreError)?;
+        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmLoadLooseCommitsError::ObjectStoreError)?;
 
-        let js_value = await_idb(&req).await?;
-        if js_value.is_undefined() || js_value.is_null() {
-            Ok(Vec::new())
-        } else if js_value.is_instance_of::<js_sys::Array>() {
-            let mut xs = Vec::new();
-            for js_item in js_sys::Array::from(&js_value).iter() {
-                let bytes = js_item.dyn_into::<Uint8Array>().map_err(WasmLoadLooseCommitsError::NotUint8Array)?.to_vec();
-                let (fragment, _size) = bincode::serde::decode_from_slice::<LooseCommit, _>(
-                    &bytes,
-                    bincode::config::standard(),
-                )?;
-                xs.push(WasmLooseCommit::from(fragment).into());
-            }
-            Ok(xs)
-        } else {
-            Err(WasmLoadLooseCommitsError::NotALooseCommitArray)
+        let key = JsValue::from_str(&sedimentree_id.to_string());
+        let req = idx.get_all_with_key(&key).map_err(WasmLoadLooseCommitsError::UnableToGetLooseCommits)?;
+
+        let vals = await_idb(&req).await?;
+        let arr = js_sys::Array::from(&vals);
+
+        let mut out: Vec<WasmLooseCommit> = Vec::new();
+        for js_val in arr.iter() {
+            let u8s = js_val.unchecked_into::<Uint8Array>();
+            let (fragment, _) = bincode::serde::decode_from_slice::<LooseCommit, _>(
+                &u8s.to_vec(),
+                bincode::config::standard(),
+            )?;
+            out.push(fragment.into())
         }
+
+        Ok(out)
     }
 
     /// Save a fragment to storage.
@@ -161,14 +215,17 @@ impl WasmIndexedDbStorage {
         let digest = core_fragment.digest().clone();
         let value: Vec<u8> = bincode::serde::encode_to_vec(core_fragment, bincode::config::standard())?;
 
-       let fragment_store_name = self.fragment_store_name(sedimentree_id);
+        let key = Key {
+            sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
+            digest,
+        };
         let req = self
             .0
-            .transaction_with_str_and_mode(&fragment_store_name, IdbTransactionMode::Readwrite).map_err(WasmSaveFragmentError::TransactionError)?
-            .object_store(&fragment_store_name).map_err(WasmSaveFragmentError::ObjectStoreError)?
+            .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveFragmentError::TransactionError)?
+            .object_store(FRAGMENT_STORE_NAME).map_err(WasmSaveFragmentError::ObjectStoreError)?
             .put_with_key(
                 &value.into(),
-                &digest.as_bytes().to_vec().into()
+                &key.into()
             ).map_err(WasmSaveFragmentError::UnableToStoreFragment)?;
 
         let key = await_idb(&req).await?;
@@ -179,29 +236,29 @@ impl WasmIndexedDbStorage {
 
     /// Load all fragments from storage.
     #[wasm_bindgen(js_name = loadFragments)]
-    pub async fn wasm_load_fragments(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<JsFragment>, WasmLoadFragmentsError> {
-        let req = self
-            .0
-            .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadFragmentsError::TransactionError)?
-            .object_store(FRAGMENT_STORE_NAME).map_err(WasmLoadFragmentsError::ObjectStoreError)?
-            .get_all().map_err(WasmLoadFragmentsError::UnableToGetFragments)?;
+    pub async fn wasm_load_fragments(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<WasmFragment>, WasmLoadFragmentsError> {
+        let tx = self.0
+                     .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadFragmentsError::TransactionError)?;
+        let store = tx.object_store(FRAGMENT_STORE_NAME).map_err(WasmLoadFragmentsError::ObjectStoreError)?;
+        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmLoadFragmentsError::ObjectStoreError)?;
 
-        let js_value = await_idb(&req).await?;
-        if js_value.is_undefined() || js_value.is_null() {
-            Ok(Vec::new())
-        } else if js_value.is_instance_of::<js_sys::Array>() {
-            let mut xs = Vec::new();
-            for js_item in js_sys::Array::from(&js_value).iter() {
-                let bytes = js_item.dyn_into::<Uint8Array>().map_err(WasmLoadFragmentsError::NotUint8Array)?.to_vec();
-                let (fragment, _size) = bincode::serde::decode_from_slice::<Fragment, _>(
-                    &bytes,
-                    bincode::config::standard())?;
-                xs.push(WasmFragment::from(fragment).into());
-            }
-            Ok(xs)
-        } else {
-            Err(WasmLoadFragmentsError::NotAFragmentArray)
+        let key = JsValue::from_str(&sedimentree_id.to_string());
+        let req = idx.get_all_with_key(&key).map_err(WasmLoadFragmentsError::UnableToGetFragments)?;
+
+        let vals = await_idb(&req).await?;
+        let arr = js_sys::Array::from(&vals);
+
+        let mut out: Vec<WasmFragment> = Vec::new();
+        for js_val in arr.iter() {
+            let u8s = js_val.unchecked_into::<Uint8Array>();
+            let (fragment, _) = bincode::serde::decode_from_slice::<Fragment, _>(
+                &u8s.to_vec(),
+                bincode::config::standard(),
+            )?;
+            out.push(fragment.into())
         }
+
+        Ok(out)
     }
 
     /// Save a blob to the database, returning its digest.
@@ -428,10 +485,10 @@ pub enum WasmLoadFragmentsError {
     #[error("value loaded via loadFragment is not a Uint8Array: {0:?}")]
     NotUint8Array(JsValue),
 
-    #[error("value loaded via loadFragment is not a Uint8Array")]
-    NotAFragmentArray,
+    #[error("value loaded via loadFragment is not a Fragment array: {0:?}")]
+    IndexError(JsValue),
 
-    #[error("error decoding blob from IndexedDB: {0:?}")]
+    #[error("error decoding blob to fragment from IndexedDB: {0:?}")]
     DecodeError(#[from] bincode::error::DecodeError),
 
     #[error("error awaiting IndexedDB operation: {0:?}")]
@@ -475,22 +532,22 @@ impl From<WasmSaveLooseCommitError> for JsValue {
 
 #[derive(Debug, Error)]
 pub enum WasmLoadLooseCommitsError {
-    #[error("loadLooseCommit IndexedDB transaction error: {0:?}")]
+    #[error("loadlooseCommits IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
-    #[error("loadLooseCommit IndexedDB object store error: {0:?}")]
+    #[error("loadlooseCommits IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
-    #[error("unable to get looseCommit(s) from IndexedDB: {0:?}")]
+    #[error("unable to get loose commit(s) from IndexedDB: {0:?}")]
     UnableToGetLooseCommits(JsValue),
 
-    #[error("value loaded via loadLooseCommit is not a Uint8Array: {0:?}")]
+    #[error("value loaded via loadlooseCommits is not a Uint8Array: {0:?}")]
     NotUint8Array(JsValue),
 
-    #[error("value loaded via loadLooseCommit is not a Uint8Array")]
-    NotALooseCommitArray,
+    #[error("value loaded via loadlooseCommits is not a looseCommit array: {0:?}")]
+    IndexError(JsValue),
 
-    #[error("error decoding blob from IndexedDB: {0:?}")]
+    #[error("error decoding blob to loose commit from IndexedDB: {0:?}")]
     DecodeError(#[from] bincode::error::DecodeError),
 
     #[error("error awaiting IndexedDB operation: {0:?}")]
@@ -505,79 +562,22 @@ impl From<WasmLoadLooseCommitsError> for JsValue {
     }
 }
 
-// impl Storage<Local> for WasmIndexedDbStorage {
-//     type Error = Infallible;
-// 
-//     /// Load all loose commits from storage.
-//     fn load_loose_commits(
-//         &self,
-//         sedimentree_id: SedimentreeId,
-//     ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>>{
-//         async move {
-//             self.wasm_load_loose_commits(sedimentree_id.into()).await.expect("FIXME Infallible") 
-//         }
-//         .boxed_local()
-//     }
-// 
-//     /// Save a loose commit to storage.
-//     fn save_loose_commit(
-//         &self,
-//         sedimentree_id: SedimentreeId,
-//         loose_commit: LooseCommit,
-//     ) -> Local::Future<'_, Result<(), Self::Error>> {
-//         async move {
-//             self.wasm_save_loose_commit(&WasmLooseCommit::from(loose_commit).into()).await.expect("FIXME Infallible")
-//         }
-//         .boxed_local()
-//     }
-// 
-//     /// Save a fragment to storage.
-//     fn save_fragment(
-//         &self,
-//         sedimentree_id: SedimentreeId,
-//         fragment: Fragment,
-//     ) -> Local::Future<'_, Result<(), Self::Error>> {
-//         async move {
-//             self.wasm_save_fragment(&WasmFragment::from(fragment)).await.expect("FIXME Infallible")
-//         }
-//         .boxed_local()
-//     }
-// 
-//     /// Load all fragments from storage.
-//     fn load_fragments(
-//         &self,
-//         sedimentree_id: SedimentreeId,
-//     ) -> Local::Future<'_, Result<Vec<Fragment>, Self::Error>> {
-//         async move {
-//             let js_fragments = self.wasm_load_fragments().await.expect("FIXME Infallible");
-//             Ok(js_fragments
-//                 .into_iter()
-//                 .map(|jf| Fragment::from(WasmFragment::from(jf)))
-//                 .collect())
-//         }
-//         .boxed_local()
-//     }
-// 
-//     /// Save a blob to storage.
-//     fn save_blob(&self, blob: Blob) -> Local::Future<'_, Result<Digest, Self::Error>> {
-//         async move {
-//             let digest = self
-//                 .wasm_save_blob(blob.contents())
-//                 .await
-//                 .expect("FIXME Infallible");
-//             Ok(Digest::from(digest))
-//         }
-//         .boxed_local()
-//     }
-// 
-//     /// Load a blob from storage.
-//     fn load_blob(&self, blob_digest: Digest) -> Local::Future<'_, Result<Option<Blob>, Self::Error>> {
-//         async move {
-//             let maybe_bytes = self
-//                 .wasm_load_blob(blob_digest.into())
-//                 .await
-//                 .expect("FIXME Infallible");
-//             Ok(maybe_bytes.map(|bytes| Blob::new(bytes)))
-//         }.boxed_local()
-//     }
-// }
+struct Key {
+    sedimentree_id: SedimentreeId,
+    digest: Digest,
+}
+
+impl From<Key> for js_sys::Array {
+    fn from(key: Key) -> Self {
+        js_sys::Array::of2(
+            &key.sedimentree_id.to_string().into(),
+            &key.digest.as_bytes().to_vec().into(),
+        )
+    }
+}
+
+impl From<Key> for JsValue {
+    fn from(key: Key) -> Self {
+        js_sys::Array::from(&key.into()).into()
+    }
+}
