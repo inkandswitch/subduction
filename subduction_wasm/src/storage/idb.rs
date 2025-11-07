@@ -1,15 +1,14 @@
 //! [`IndexedDB`] storage backend for Sedimentree.
 
-use futures::{channel::oneshot, future::LocalBoxFuture};
+use futures::{channel::oneshot};
 use js_sys::Uint8Array;
-use sedimentree_core::{blob::{Blob, Digest}, future::Local, storage::Storage, Fragment, LooseCommit, SedimentreeId};
-use wasm_bindgen_futures::JsFuture;
-use std::{cell::RefCell, convert::Infallible, rc::Rc};
+use sedimentree_core::{blob::{ Digest}, Fragment, LooseCommit, SedimentreeId};
+use std::{cell::RefCell, rc::Rc};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use web_sys::{
     Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
-    IdbVersionChangeEvent, IdbObjectStoreParameters, IdbKeyRange, IdbIndex, IdbCursorWithValue,
+    IdbVersionChangeEvent, IdbObjectStoreParameters, 
 };
 
 use crate::{digest::WasmDigest, fragment::{JsFragment, WasmFragment}, loose_commit::{JsLooseCommit, WasmLooseCommit}, sedimentree_id::{self, WasmSedimentreeId}};
@@ -582,6 +581,7 @@ impl From<Key> for js_sys::Array {
 
 impl From<Key> for JsValue {
     fn from(key: Key) -> Self {
-        js_sys::Array::from(&key.into()).into()
+        let arr: js_sys::Array = key.into();
+        arr.into()
     }
 }
