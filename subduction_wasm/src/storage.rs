@@ -27,12 +27,12 @@ use crate::{
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
 export interface Storage {
-    saveWasmLooseCommit(sedimentreeId: SedimentreeId, commit: LooseCommit): Promise<void>;
-    saveWasmFragment(sedimentreeId: SedimentreeId, fragment: Fragment): Promise<void>;
+    saveLooseCommit(sedimentreeId: SedimentreeId, commit: LooseCommit): Promise<void>;
+    saveFragment(sedimentreeId: SedimentreeId, fragment: Fragment): Promise<void>;
     saveBlob(data: Uint8Array): Promise<Digest>;
 
-    loadWasmLooseCommits(sedimentreeId: SedimentreeId): Promise<LooseCommit[]>;
-    loadWasmFragments(sedimentreeId: SedimentreeId): Promise<Fragment[]>;
+    loadLooseCommits(sedimentreeId: SedimentreeId): Promise<LooseCommit[]>;
+    loadFragments(sedimentreeId: SedimentreeId): Promise<Fragment[]>;
     loadBlob(digest: Digest): Promise<Uint8Array | null>;
 }
 "#;
@@ -48,15 +48,15 @@ extern "C" {
     fn js_save_blob(this: &JsStorage, blob: &[u8]) -> Promise;
 
     /// Save a loose commit to storage.
-    #[wasm_bindgen(method, js_name = saveWasmLooseCommit)]
+    #[wasm_bindgen(method, js_name = saveLooseCommit)]
     fn js_save_loose_commit(
         this: &JsStorage,
         sedimentree_id: &JsSedimentreeId,
-        loose_commit: &JsValue,
+        loose_commit: &JsLooseCommit,
     ) -> Promise;
 
     /// Save a fragment to storage.
-    #[wasm_bindgen(method, js_name = saveWasmFragment)]
+    #[wasm_bindgen(method, js_name = saveFragment)]
     fn js_save_fragment(
         this: &JsStorage,
         sedimentree_id: &JsSedimentreeId,
@@ -64,11 +64,11 @@ extern "C" {
     ) -> Promise;
 
     /// Load all loose commits from storage.
-    #[wasm_bindgen(method, js_name = loadWasmLooseCommits)]
+    #[wasm_bindgen(method, js_name = loadLooseCommits)]
     fn js_load_loose_commits(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
 
     /// Load all fragments from storage.
-    #[wasm_bindgen(method, js_name = loadWasmFragments)]
+    #[wasm_bindgen(method, js_name = loadFragments)]
     fn js_load_fragments(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
 
     /// Load a blob from storage.

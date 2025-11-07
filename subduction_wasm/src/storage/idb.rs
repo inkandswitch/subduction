@@ -98,7 +98,7 @@ impl WasmIndexedDbStorage {
     }
 
     /// Save a loose commit to storage.
-    #[wasm_bindgen( js_name = saveWasmLooseCommit)]
+    #[wasm_bindgen( js_name = saveLooseCommit)]
     pub async fn wasm_save_loose_commit(
         &self,
         loose_commit: &WasmLooseCommit,
@@ -123,7 +123,7 @@ impl WasmIndexedDbStorage {
     }
 
     /// Load all loose commits from storage.
-    #[wasm_bindgen( js_name = loadWasmLooseCommits)]
+    #[wasm_bindgen( js_name = loadLooseCommits)]
     pub async fn wasm_load_loose_commits(&self) -> Result<Vec<JsLooseCommit>, WasmLoadLooseCommitsError> {
         let req = self
             .0
@@ -151,7 +151,7 @@ impl WasmIndexedDbStorage {
     }
 
     /// Save a fragment to storage.
-    #[wasm_bindgen(js_name = saveWasmFragment)]
+    #[wasm_bindgen(js_name = saveFragment)]
    pub  async fn wasm_save_fragment(&self, fragment: &WasmFragment) -> Result<(), WasmSaveFragmentError> {
         let core_fragment = Fragment::from(fragment.clone());
         let digest = core_fragment.digest().clone();
@@ -173,7 +173,7 @@ impl WasmIndexedDbStorage {
     }
 
     /// Load all fragments from storage.
-    #[wasm_bindgen(js_name = loadWasmFragments)]
+    #[wasm_bindgen(js_name = loadFragments)]
     pub async fn wasm_load_fragments(&self) -> Result<Vec<JsFragment>, WasmLoadFragmentsError> {
         let req = self
             .0
