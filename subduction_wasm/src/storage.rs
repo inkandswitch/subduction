@@ -9,7 +9,7 @@ use sedimentree_core::{
     blob::{Blob, Digest},
     future::Local,
     storage::Storage,
-    Fragment, LooseCommit,
+    Fragment, LooseCommit, SedimentreeId,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -21,17 +21,18 @@ use crate::{
         JsFragment, WasmConvertJsValueToFragmentArrayError, WasmFragment, WasmFragmentsArray,
     },
     loose_commit::{JsLooseCommit, WasmLooseCommit, WasmLooseCommitsArray},
+    sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
 };
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
 export interface Storage {
-    saveWasmLooseCommit(commit: LooseCommit): Promise<void>;
-    saveWasmFragment(fragment: Fragment): Promise<void>;
+    saveWasmLooseCommit(sedimentreeId: SedimentreeId, commit: LooseCommit): Promise<void>;
+    saveWasmFragment(sedimentreeId: SedimentreeId, fragment: Fragment): Promise<void>;
     saveBlob(data: Uint8Array): Promise<Digest>;
 
-    loadWasmLooseCommits(): Promise<LooseCommit[]>;
-    loadWasmFragments(): Promise<Fragment[]>;
+    loadWasmLooseCommits(sedimentreeId: SedimentreeId): Promise<LooseCommit[]>;
+    loadWasmFragments(sedimentreeId: SedimentreeId): Promise<Fragment[]>;
     loadBlob(digest: Digest): Promise<Uint8Array | null>;
 }
 "#;
@@ -46,25 +47,33 @@ extern "C" {
     #[wasm_bindgen(method, js_name = saveBlob)]
     fn js_save_blob(this: &JsStorage, blob: &[u8]) -> Promise;
 
-    /// Load all loose commits from storage.
-    #[wasm_bindgen(method, js_name = loadWasmLooseCommits)]
-    fn js_load_loose_commits(this: &JsStorage) -> Promise;
-
     /// Save a loose commit to storage.
     #[wasm_bindgen(method, js_name = saveWasmLooseCommit)]
-    fn js_save_loose_commit(this: &JsStorage, loose_commit: JsLooseCommit) -> Promise;
+    fn js_save_loose_commit(
+        this: &JsStorage,
+        sedimentree_id: &JsSedimentreeId,
+        loose_commit: &JsLooseCommit,
+    ) -> Promise;
 
     /// Save a fragment to storage.
     #[wasm_bindgen(method, js_name = saveWasmFragment)]
-    fn js_save_fragment(this: &JsStorage, fragment: JsFragment) -> Promise;
+    fn js_save_fragment(
+        this: &JsStorage,
+        sedimentree_id: &JsSedimentreeId,
+        fragment: &JsFragment,
+    ) -> Promise;
+
+    /// Load all loose commits from storage.
+    #[wasm_bindgen(method, js_name = loadWasmLooseCommits)]
+    fn js_load_loose_commits(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
 
     /// Load all fragments from storage.
     #[wasm_bindgen(method, js_name = loadWasmFragments)]
-    fn js_load_fragments(this: &JsStorage) -> Promise;
+    fn js_load_fragments(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
 
     /// Load a blob from storage.
     #[wasm_bindgen(method, js_name = loadBlob)]
-    fn js_load_blob(this: &JsStorage, blob_digest: JsDigest) -> Promise;
+    fn js_load_blob(this: &JsStorage, blob_digest: &JsDigest) -> Promise;
 }
 
 impl std::fmt::Debug for JsStorage {
@@ -78,6 +87,7 @@ impl Storage<Local> for JsStorage {
 
     fn save_loose_commit(
         &self,
+        sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
@@ -86,7 +96,10 @@ impl Storage<Local> for JsStorage {
 
             tracing::debug!("saving loose commit {:?}", loose_commit.digest());
             let wasm_loose_commit: WasmLooseCommit = loose_commit.into();
-            let js_promise = self.js_save_loose_commit(wasm_loose_commit.into());
+            let js_promise = self.js_save_loose_commit(
+                &WasmSedimentreeId::from(sedimentree_id).into(),
+                &wasm_loose_commit.into(),
+            );
             JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::SaveLooseCommitError)?;
@@ -95,7 +108,11 @@ impl Storage<Local> for JsStorage {
         .boxed_local()
     }
 
-    fn save_fragment(&self, fragment: Fragment) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    fn save_fragment(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
             let span = tracing::debug_span!("JsStorage::save_fragment");
             let _enter = span.enter();
@@ -105,7 +122,10 @@ impl Storage<Local> for JsStorage {
                 fragment.summary().blob_meta().digest()
             );
             let js_fragment: WasmFragment = fragment.into();
-            let promise = self.js_save_fragment(js_fragment.into());
+            let promise = self.js_save_fragment(
+                &WasmSedimentreeId::from(sedimentree_id).into(),
+                &js_fragment.into(),
+            );
             JsFuture::from(promise)
                 .await
                 .map_err(JsStorageError::SaveFragmentError)?;
@@ -130,12 +150,16 @@ impl Storage<Local> for JsStorage {
         .boxed_local()
     }
 
-    fn load_loose_commits(&self) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+    fn load_loose_commits(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
         async move {
             let span = tracing::debug_span!("JsStorage::load_loose_commits");
             let _enter = span.enter();
 
-            let promise = self.js_load_loose_commits();
+            let promise =
+                self.js_load_loose_commits(&WasmSedimentreeId::from(sedimentree_id).into());
             let js_value = JsFuture::from(promise)
                 .await
                 .map_err(JsStorageError::LoadLooseCommitsError)?;
@@ -146,12 +170,15 @@ impl Storage<Local> for JsStorage {
         .boxed_local()
     }
 
-    fn load_fragments(&self) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+    fn load_fragments(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
         async move {
             let span = tracing::debug_span!("JsStorage::load_fragments");
             let _enter = span.enter();
 
-            let promise = self.js_load_fragments();
+            let promise = self.js_load_fragments(&WasmSedimentreeId::from(sedimentree_id).into());
             let js_value = JsFuture::from(promise)
                 .await
                 .map_err(JsStorageError::LoadFragmentsError)?;
@@ -172,7 +199,7 @@ impl Storage<Local> for JsStorage {
 
             tracing::debug!("blob {blob_digest}");
 
-            let promise = self.js_load_blob(WasmDigest::from(blob_digest).into());
+            let promise = self.js_load_blob(&WasmDigest::from(blob_digest).into());
             let js_value = JsFuture::from(promise)
                 .await
                 .map_err(JsStorageError::LoadBlobError)?;

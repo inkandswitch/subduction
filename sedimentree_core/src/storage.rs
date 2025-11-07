@@ -1,17 +1,17 @@
 //! Storage abstraction for `Sedimentree` data.
 
-use std::{collections::HashMap, sync::Arc};
+use dashmap::mapref::entry::Entry;
 
+use dashmap::{DashMap, DashSet};
 use futures::{
     future::{BoxFuture, LocalBoxFuture},
-    lock::Mutex,
     FutureExt,
 };
 
 use crate::{
     blob::Blob,
     future::{FutureKind, Local, Sendable},
-    Digest,
+    Digest, SedimentreeId,
 };
 
 use super::{Fragment, LooseCommit};
@@ -22,19 +22,30 @@ pub trait Storage<K: FutureKind + ?Sized> {
     type Error: core::error::Error;
 
     /// Load all loose commits from storage.
-    fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<LooseCommit>, Self::Error>>;
+    fn load_loose_commits(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> K::Future<'_, Result<Vec<LooseCommit>, Self::Error>>;
 
     /// Save a loose commit to storage.
     fn save_loose_commit(
         &self,
+        sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
     /// Save a fragment to storage.
-    fn save_fragment(&self, fragment: Fragment) -> K::Future<'_, Result<(), Self::Error>>;
+    fn save_fragment(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+    ) -> K::Future<'_, Result<(), Self::Error>>;
 
     /// Load all fragments from storage.
-    fn load_fragments(&self) -> K::Future<'_, Result<Vec<Fragment>, Self::Error>>;
+    fn load_fragments(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> K::Future<'_, Result<Vec<Fragment>, Self::Error>>;
 
     /// Save a blob to storage.
     fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest, Self::Error>>;
@@ -58,105 +69,92 @@ pub enum LoadTreeData {
 /// An in-memory storage backend.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStorage {
-    fragments: Arc<Mutex<HashMap<Digest, Fragment>>>,
-    commits: Arc<Mutex<HashMap<Digest, LooseCommit>>>,
-    blobs: Arc<Mutex<HashMap<Digest, Blob>>>,
-}
-
-impl Storage<Sendable> for MemoryStorage {
-    type Error = std::convert::Infallible;
-
-    fn load_loose_commits(&self) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        async move {
-            let commits = self.commits.lock().await.values().cloned().collect();
-            Ok(commits)
-        }
-        .boxed()
-    }
-
-    fn save_loose_commit(
-        &self,
-        loose_commit: LooseCommit,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            let digest = loose_commit.blob_meta().digest();
-            self.commits.lock().await.insert(digest, loose_commit);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn save_fragment(&self, fragment: Fragment) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            let digest = fragment.summary().blob_meta().digest();
-            self.fragments.lock().await.insert(digest, fragment);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn load_fragments(&self) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
-        async move {
-            let fragments = self.fragments.lock().await.values().cloned().collect();
-            Ok(fragments)
-        }
-        .boxed()
-    }
-
-    fn save_blob(&self, blob: Blob) -> BoxFuture<'_, Result<Digest, Self::Error>> {
-        async move {
-            let digest = Digest::hash(blob.contents());
-            self.blobs.lock().await.insert(digest, blob);
-            Ok(digest)
-        }
-        .boxed()
-    }
-
-    fn load_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<Option<Blob>, Self::Error>> {
-        async move {
-            let maybe_blob = self.blobs.lock().await.get(&blob_digest).cloned();
-            Ok(maybe_blob)
-        }
-        .boxed()
-    }
+    fragments: DashMap<SedimentreeId, DashSet<Fragment>>,
+    commits: DashMap<SedimentreeId, DashSet<LooseCommit>>,
+    blobs: DashMap<Digest, Blob>,
 }
 
 impl Storage<Local> for MemoryStorage {
     type Error = std::convert::Infallible;
 
-    fn load_loose_commits(&self) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        async move {
-            let commits = self.commits.lock().await.values().cloned().collect();
-            Ok(commits)
-        }
-        .boxed_local()
-    }
-
     fn save_loose_commit(
         &self,
+        sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
-            let digest = loose_commit.blob_meta().digest();
-            self.commits.lock().await.insert(digest, loose_commit);
+            // NOTE match to avoid cloning when using `.or_insert_with`
+            match self.commits.entry(sedimentree_id) {
+                Entry::Occupied(e) => {
+                    e.get().insert(loose_commit);
+                }
+                Entry::Vacant(e) => {
+                    let set = DashSet::new();
+                    set.insert(loose_commit);
+                    e.insert(set);
+                }
+            }
             Ok(())
         }
         .boxed_local()
     }
 
-    fn save_fragment(&self, fragment: Fragment) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    fn load_loose_commits(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
         async move {
-            let digest = fragment.summary().blob_meta().digest();
-            self.fragments.lock().await.insert(digest, fragment);
+            if let Some(commit_entry) = self.commits.get(&sedimentree_id) {
+                let set = commit_entry.value();
+                let mut commits = Vec::with_capacity(set.len());
+                for commit in set.iter() {
+                    commits.push(commit.clone());
+                }
+                Ok(commits)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        .boxed_local()
+    }
+
+    fn save_fragment(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            // NOTE match to avoid cloning when using `.or_insert_with`
+            match self.fragments.entry(sedimentree_id) {
+                Entry::Occupied(e) => {
+                    e.get().insert(fragment);
+                }
+                Entry::Vacant(e) => {
+                    let set = DashSet::new();
+                    set.insert(fragment);
+                    e.insert(set);
+                }
+            }
             Ok(())
         }
         .boxed_local()
     }
 
-    fn load_fragments(&self) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+    fn load_fragments(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
         async move {
-            let fragments = self.fragments.lock().await.values().cloned().collect();
-            Ok(fragments)
+            if let Some(fragment_entry) = self.fragments.get(&sedimentree_id) {
+                let set = fragment_entry.value();
+                let mut fragments = Vec::with_capacity(set.len());
+                for commit in set.iter() {
+                    fragments.push(commit.clone());
+                }
+                Ok(fragments)
+            } else {
+                Ok(Vec::new())
+            }
         }
         .boxed_local()
     }
@@ -164,7 +162,7 @@ impl Storage<Local> for MemoryStorage {
     fn save_blob(&self, blob: Blob) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
         async move {
             let digest = Digest::hash(blob.contents());
-            self.blobs.lock().await.insert(digest, blob);
+            self.blobs.entry(digest).or_insert(blob);
             Ok(digest)
         }
         .boxed_local()
@@ -175,9 +173,112 @@ impl Storage<Local> for MemoryStorage {
         blob_digest: Digest,
     ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
         async move {
-            let maybe_blob = self.blobs.lock().await.get(&blob_digest).cloned();
-            Ok(maybe_blob)
+            let maybe_entry = self.blobs.get(&blob_digest);
+            Ok(maybe_entry.map(|e| e.value().clone()))
         }
         .boxed_local()
+    }
+}
+
+impl Storage<Sendable> for MemoryStorage {
+    type Error = std::convert::Infallible;
+
+    fn save_loose_commit(
+        &self,
+        sedimentree_id: SedimentreeId,
+        loose_commit: LooseCommit,
+    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            // NOTE match to avoid cloning when using `.or_insert_with`
+            match self.commits.entry(sedimentree_id) {
+                Entry::Occupied(e) => {
+                    e.get().insert(loose_commit);
+                }
+                Entry::Vacant(e) => {
+                    let set = DashSet::new();
+                    set.insert(loose_commit);
+                    e.insert(set);
+                }
+            }
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn load_loose_commits(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        async move {
+            if let Some(commit_entry) = self.commits.get(&sedimentree_id) {
+                let set = commit_entry.value();
+                let mut commits = Vec::with_capacity(set.len());
+                for commit in set.iter() {
+                    commits.push(commit.clone());
+                }
+                Ok(commits)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        .boxed()
+    }
+
+    fn save_fragment(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            // NOTE match to avoid cloning when using `.or_insert_with`
+            match self.fragments.entry(sedimentree_id) {
+                Entry::Occupied(e) => {
+                    e.get().insert(fragment);
+                }
+                Entry::Vacant(e) => {
+                    let set = DashSet::new();
+                    set.insert(fragment);
+                    e.insert(set);
+                }
+            }
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn load_fragments(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+        async move {
+            if let Some(fragment_entry) = self.fragments.get(&sedimentree_id) {
+                let set = fragment_entry.value();
+                let mut fragments = Vec::with_capacity(set.len());
+                for commit in set.iter() {
+                    fragments.push(commit.clone());
+                }
+                Ok(fragments)
+            } else {
+                Ok(Vec::new())
+            }
+        }
+        .boxed()
+    }
+
+    fn save_blob(&self, blob: Blob) -> BoxFuture<'_, Result<Digest, Self::Error>> {
+        async move {
+            let digest = Digest::hash(blob.contents());
+            self.blobs.entry(digest).or_insert(blob);
+            Ok(digest)
+        }
+        .boxed()
+    }
+
+    fn load_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<Option<Blob>, Self::Error>> {
+        async move {
+            let maybe_entry = self.blobs.get(&blob_digest);
+            Ok(maybe_entry.map(|e| e.value().clone()))
+        }
+        .boxed()
     }
 }

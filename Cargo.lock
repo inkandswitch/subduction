@@ -1872,6 +1872,7 @@ dependencies = [
  "arbitrary",
  "blake3",
  "bolero",
+ "dashmap",
  "futures",
  "hex",
  "num",

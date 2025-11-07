@@ -234,12 +234,12 @@ impl<
             .collect::<Vec<_>>()
         {
             if let Some(mut sedimentree) = self.sedimentrees.get_mut(&tree_id) {
-                for commit in self.storage.load_loose_commits().await? {
+                for commit in self.storage.load_loose_commits(tree_id).await? {
                     tracing::trace!("Loaded commit {:?}", commit.digest());
                     sedimentree.add_commit(commit);
                 }
 
-                for fragment in self.storage.load_fragments().await? {
+                for fragment in self.storage.load_fragments(tree_id).await? {
                     tracing::trace!("Loaded fragment {:?}", fragment.digest());
                     sedimentree.add_fragment(fragment);
                 }
@@ -1127,7 +1127,7 @@ impl<
             }
         }
 
-        self.storage.save_loose_commit(commit).await?;
+        self.storage.save_loose_commit(id, commit).await?;
         self.storage.save_blob(blob).await?;
 
         Ok(true)
@@ -1147,7 +1147,7 @@ impl<
             }
         }
 
-        self.storage.save_fragment(fragment).await?;
+        self.storage.save_fragment(id, fragment).await?;
         self.storage.save_blob(blob).await?;
         Ok(true)
     }

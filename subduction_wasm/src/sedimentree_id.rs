@@ -3,6 +3,7 @@
 use sedimentree_core::SedimentreeId;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 /// A Wasm wrapper around the [`SedimentreeId`] type.
 #[wasm_bindgen(js_name = SedimentreeId)]
@@ -10,6 +11,7 @@ use wasm_bindgen::prelude::*;
 #[allow(missing_copy_implementations)]
 pub struct WasmSedimentreeId(SedimentreeId);
 
+#[wasm_refgen(js_ref = JsSedimentreeId)]
 #[wasm_bindgen(js_class = SedimentreeId)]
 impl WasmSedimentreeId {
     /// Create an ID from a byte array.
