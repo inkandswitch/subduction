@@ -186,7 +186,7 @@ impl WasmIndexedDbStorage {
             .0
             .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveLooseCommitError::TransactionError)?
             .object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmSaveLooseCommitError::ObjectStoreError)?
-            .put(&record.try_into().expect("FIXME"))
+            .put(&record.into())
             .map_err(WasmSaveLooseCommitError::UnableToStoreLooseCommit)?;
 
         drop(await_idb(&req).await?);
@@ -238,7 +238,7 @@ impl WasmIndexedDbStorage {
             .0
             .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveFragmentError::TransactionError)?
             .object_store(FRAGMENT_STORE_NAME).map_err(WasmSaveFragmentError::ObjectStoreError)?
-            .put(&record.try_into().expect("FIXME"))
+            .put(&record.into())
             .map_err(WasmSaveFragmentError::UnableToStoreFragment)?;
 
         drop(await_idb(&req).await?);
@@ -289,12 +289,10 @@ impl WasmIndexedDbStorage {
             .object_store(BLOB_STORE_NAME).map_err(WasmSaveBlobError::ObjectStoreError)?
             .put_with_key(
                 &Uint8Array::from(bytes).into(),
-                &JsValue::from_str(&digest.to_string()),
+                &JsValue::from_str(&digest.to_string()), // Hex
             ).map_err(WasmSaveBlobError::UnableToStoreBlob)?;
 
-        let key = await_idb(&req).await?;
-        drop(key);
-
+        drop(await_idb(&req).await?);
         Ok(digest.into())
     }
 
@@ -304,12 +302,12 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns a `JsValue` if the blob could not be loaded.
     #[wasm_bindgen(js_name = loadBlob)]
-    pub async fn wasm_load_blob(&self, digest: WasmDigest) -> Result<Option<Vec<u8>>, WasmLoadBlobError> {
+    pub async fn wasm_load_blob(&self, wasm_digest: WasmDigest) -> Result<Option<Vec<u8>>, WasmLoadBlobError> {
         let req = self
             .0
             .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadBlobError::TransactionError)?
             .object_store(BLOB_STORE_NAME).map_err(WasmLoadBlobError::ObjectStoreError)?
-            .get(&JsValue::from_str(&Digest::from(digest).to_string())).map_err(WasmLoadBlobError::UnableToGetBlob)?;
+            .get(&JsValue::from_str(&wasm_digest.to_hex_string())).map_err(WasmLoadBlobError::UnableToGetBlob)?;
 
         let js_value = await_idb(&req).await?;
         if js_value.is_undefined() || js_value.is_null() {
@@ -588,14 +586,12 @@ impl From<WasmLoadLooseCommitsError> for JsValue {
     payload: Vec<u8>,
 }
 
-impl TryFrom<Record> for JsValue {
-    type Error = JsValue;
-
-    fn try_from(record: Record) -> Result<Self, JsValue> {
+impl From<Record> for JsValue {
+    fn from(record: Record) -> Self {
         let obj = js_sys::Object::new();
-        js_sys::Reflect::set(&obj, &RECORD_FIELD_SEDIMENTREE_ID.into(), &record.sedimentree_id.to_string().into()).expect("FIXME");
-        js_sys::Reflect::set(&obj, &RECORD_FIELD_DIGEST.into(), &record.digest.as_bytes().to_vec().into())?;
-        js_sys::Reflect::set(&obj, &RECORD_FIELD_PAYLOAD.into(), &js_sys::Uint8Array::from(record.payload.as_slice()))?;
-        Ok(obj.into())
+        js_sys::Reflect::set(&obj, &RECORD_FIELD_SEDIMENTREE_ID.into(), &record.sedimentree_id.to_string().into()).expect("SedimentreeId to string failed");
+        js_sys::Reflect::set(&obj, &RECORD_FIELD_DIGEST.into(), &record.digest.to_string().into()).expect("Digest to bytes failed");
+        js_sys::Reflect::set(&obj, &RECORD_FIELD_PAYLOAD.into(), &js_sys::Uint8Array::from(record.payload.as_slice())).expect("Payload to Uint8Array failed");
+        obj.into()
     }
 }

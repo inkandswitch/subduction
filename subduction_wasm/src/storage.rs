@@ -143,8 +143,8 @@ impl Storage<Local> for JsStorage {
             let js_value = JsFuture::from(promise)
                 .await
                 .map_err(JsStorageError::SaveBlobError)?;
-            let wasm_digest =
-                WasmDigest::try_from_js_value(&js_value).ok_or(JsStorageError::NotDigest)?;
+            let wasm_digest = WasmDigest::try_from_js_value(&js_value)
+                .ok_or(JsStorageError::NotDigest(js_value))?;
             Ok(wasm_digest.into())
         }
         .boxed_local()
@@ -258,8 +258,8 @@ pub enum JsStorageError {
     NotFragmentsArray(WasmConvertJsValueToFragmentArrayError),
 
     /// The `JsValue` could not be converted into a `WasmDigest`.
-    #[error("Value was not a Digest")]
-    NotDigest,
+    #[error("Value was not a Digest: {0:?}")]
+    NotDigest(JsValue),
 }
 
 impl From<JsStorageError> for JsValue {

@@ -50,6 +50,12 @@ impl WasmDigest {
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.as_bytes().to_vec()
     }
+
+    #[must_use]
+    #[wasm_bindgen(js_name = toHexString)]
+    pub fn to_hex_string(&self) -> String {
+        self.0.to_string()
+    }
 }
 
 impl From<Digest> for WasmDigest {
