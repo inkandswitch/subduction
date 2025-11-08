@@ -144,12 +144,9 @@ impl Storage<Local> for JsStorage {
                 .await
                 .map_err(JsStorageError::SaveBlobError)?;
 
-            let ctor = js_sys::Reflect::get(&js_value, &"constructor".into()).expect("FIXME");
-            let name = js_sys::Reflect::get(&ctor, &"name".into()).expect("FIXME");
-            tracing::warn!(">>>>>>>>>>>>>>> {:?}", name.as_string());
-
-            let js_digest: JsDigest = JsCast::unchecked_into(js_value); // FIXME .ok_or(JsStorageError::NotDigest(js_value))?;
+            let js_digest: JsDigest = JsCast::unchecked_into(js_value); // What could possibly go wrong?
             let wasm_digest = WasmDigest::from(&js_digest);
+            tracing::debug!("saved blob {:?}", wasm_digest);
             Ok(wasm_digest.into())
         }
         .boxed_local()

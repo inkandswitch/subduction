@@ -178,12 +178,22 @@ impl Connection<Local> for WasmWebSocket {
 
     fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         async move {
+            tracing::debug!("sending outbound message id {:?}", message.request_id());
+            
             let msg_bytes = bincode::serde::encode_to_vec(&message, bincode::config::standard())
                 .map_err(SendError::Encoding)?;
+
+            tracing::debug!(
+                "sending outbound message id {:?} that's {} bytes long",
+                message.request_id(),
+                msg_bytes.len()
+            );
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
                 .map_err(SendError::SocketSend)?;
+
+            tracing::debug!("sent outbound message id {:?}", message.request_id());
 
             Ok(())
         }

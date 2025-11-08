@@ -37,6 +37,7 @@ impl WasmDigest {
         Ok(WasmDigest(digest))
     }
 
+    /// Creates a new digest from its Base58 string representation.
     #[wasm_bindgen(js_name = fromBase58)]
     pub fn from_base58(s: &str) -> Result<WasmDigest, JsValue> {
         let bytes: Vec<u8> = s.from_base58().expect("FIXME");
@@ -51,6 +52,7 @@ impl WasmDigest {
         self.0.as_bytes().to_vec()
     }
 
+    /// Returns the hexadecimal string representation of the digest.
     #[must_use]
     #[wasm_bindgen(js_name = toHexString)]
     pub fn to_hex_string(&self) -> String {

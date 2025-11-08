@@ -85,6 +85,8 @@ impl<
         ListenerFuture<'a, F, S, C, M>,
         ConnectionActorFuture<'a, F, C>,
     ) {
+        tracing::info!("initializing Subduction instance");
+
         let (actor_sender, actor_receiver) = unbounded();
         let (queue_sender, queue_receiver) = async_channel::unbounded();
         let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
@@ -121,6 +123,7 @@ impl<
     ///
     /// * Returns `ListenError` if a storage or network error occurs.
     pub async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
+        tracing::info!("starting Subduction listener");
         let mut n = 0usize;
         while let Ok((conn_id, conn, msg)) = self.msg_queue.recv().await {
             self.dispatch(conn_id, &conn, msg).await?;
@@ -212,12 +215,14 @@ impl<
 
     /// Add a [`Sedimentree`] to sync.
     pub fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) {
+        tracing::debug!("Adding sedimentree with id {:?}", id);
         let existing = &mut self.sedimentrees.entry(id).or_default();
         existing.merge(sedimentree)
     }
 
     /// Remove a [`Sedimentree`].
     pub fn remove_sedimentree(&self, id: SedimentreeId) -> bool {
+        tracing::debug!("Removing sedimentree with id {:?}", id);
         self.sedimentrees.remove(&id).is_some()
     }
 
@@ -283,6 +288,7 @@ impl<
     ///
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
     pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
+        tracing::info!("Disconnecting connection {:?}", conn_id);
         if let Some((_conn_id, conn)) = self.conns.remove(conn_id) {
             conn.disconnect().await.map(|()| true)
         } else {
@@ -378,6 +384,7 @@ impl<
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
     pub async fn get_local_blob(&self, digest: Digest) -> Result<Option<Blob>, S::Error> {
+        tracing::debug!("Looking for blob with digest {:?}", digest);
         if let Some(data) = self.storage.load_blob(digest).await? {
             Ok(Some(data))
         } else {
@@ -399,6 +406,7 @@ impl<
         &self,
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
+        tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
         if let Some(sedimentree) = self.sedimentrees.get(&id) {
             tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
@@ -442,6 +450,7 @@ impl<
         id: SedimentreeId,
         timeout: Option<Duration>,
     ) -> Result<Option<NonEmpty<Blob>>, IoError<F, S, C>> {
+        tracing::debug!("Fetching blobs for sedimentree with id {:?}", id);
         if let Some(maybe_blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
@@ -536,12 +545,25 @@ impl<
         commit: &LooseCommit,
         blob: Blob,
     ) -> Result<Option<FragmentRequested>, IoError<F, S, C>> {
+        tracing::debug!(
+            "Adding commit {:?} to sedimentree {:?}",
+            commit.digest(),
+            id
+        );
+
         self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
         {
             for entry in self.conns.iter() {
+                tracing::debug!(
+                    "Propagating commit {:?} for sedimentree {:?} to peer {:?}",
+                    commit.digest(),
+                    id,
+                    entry.value().peer_id()
+                );
+
                 let conn = entry.value();
                 conn.send(Message::LooseCommit {
                     id,
@@ -577,27 +599,35 @@ impl<
         fragment: &Fragment,
         blob: Blob,
     ) -> Result<(), IoError<F, S, C>> {
-        {
-            let mut tree = self.sedimentrees.entry(id).or_default();
-            tree.add_fragment(fragment.clone());
-        }
+        tracing::debug!(
+            "Adding fragment {:?} to sedimentree {:?}",
+            fragment.digest(),
+            id
+        );
+
+        let mut tree = self.sedimentrees.entry(id).or_default();
+        tree.add_fragment(fragment.clone());
 
         self.storage
             .save_blob(blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
-        {
-            for entry in self.conns.iter() {
-                let conn = entry.value();
-                conn.send(Message::Fragment {
-                    id,
-                    fragment: fragment.clone(),
-                    blob: blob.clone(),
-                })
-                .await
-                .map_err(IoError::ConnSend)?;
-            }
+        for entry in self.conns.iter() {
+            tracing::debug!(
+                "Propagating fragment {:?} for sedimentree {:?} to peer {:?}",
+                fragment.digest(),
+                id,
+                entry.value().peer_id()
+            );
+            let conn = entry.value();
+            conn.send(Message::Fragment {
+                id,
+                fragment: fragment.clone(),
+                blob: blob.clone(),
+            })
+            .await
+            .map_err(IoError::ConnSend)?;
         }
 
         Ok(())
@@ -1206,6 +1236,9 @@ impl<
 {
 }
 
+/// A trait for starting the listener task for Subduction.
+///
+/// This lets us abstract over `Send` and `!Send` futures
 pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq, M: DepthMetric>:
     RecvOnce<'a, C> + StartConnectionActor<'a, C>
 {
