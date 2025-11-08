@@ -1,9 +1,9 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use std::{ convert::Infallible, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
+use std::{ cell::RefCell, convert::Infallible, rc::Rc, sync::{atomic::{AtomicU64, Ordering}, Arc}, time::Duration};
 
 use futures::{
-    channel::{oneshot},
+    channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
     FutureExt,
 };
@@ -19,7 +19,7 @@ use thiserror::Error;
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    js_sys::{self, Promise}, BinaryType, MessageEvent, Url, WebSocket
+    js_sys::{self, Promise}, BinaryType, Event, MessageEvent, Url, WebSocket
 };
 use dashmap::DashMap;
 
@@ -43,8 +43,8 @@ pub struct WasmWebSocket {
 impl WasmWebSocket {
     /// Create a new [`WasmWebSocket`] instance.
     #[must_use]
-    #[wasm_bindgen(constructor)]
-    pub fn new(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
+    #[wasm_bindgen]
+    pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
         let (inbound_writer, inbound_reader) = async_channel::unbounded::<Message>();
 
         let pending = Arc::new(DashMap::<
@@ -106,40 +106,92 @@ impl WasmWebSocket {
             }
         });
 
-        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        let onclose = Closure::<dyn FnMut(_)>::new(move |event: Event| {
+            tracing::warn!("WebSocket connection closed: {:?}", event);
+        });
+        
+        let ws_clone = ws.clone();
+        let (tx, rx) = oneshot::channel();
+        let maybe_tx = Rc::new(RefCell::new(Some(tx)));
+        let maybe_tx_clone = maybe_tx.clone();
+
+        // HACK: keeps the `onopen` closure alive until caled
+        let keep_closure_alive: Rc<RefCell<Option<Closure<dyn FnMut(Event)>>>> = Rc::new(RefCell::new(None));
+        let keep_closure_alive_clone = keep_closure_alive.clone();
+        let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            tracing::info!("WebSocket connection opened");
+            if let Some(tx) = maybe_tx_clone.borrow_mut().take() {
+                let _ = tx.send(());
+            }
+            ws_clone.set_onopen(None);
+            keep_closure_alive_clone.borrow_mut().take();
+        });
+
         ws.set_binary_type(BinaryType::Arraybuffer);
+        // ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+
         onmessage.forget();
+        onclose.forget();
+        // *keep_closure_alive.borrow_mut() = Some(onopen);
+        // NOTE no onopen.forget() because we only want it to fire once,
+        // so we're doing manual handling with the `keep_alive` slots.
 
-        let socket = ws.clone();
+        if ws.ready_state() == WebSocket::CONNECTING {
+            ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+            *keep_closure_alive.borrow_mut() = Some(onopen);
 
-        Self {
+            // Re-check to close the race where it opened between lines above
+            if ws.ready_state() == WebSocket::OPEN {
+                if let Some(tx) = maybe_tx.borrow_mut().take() {
+                    let _ = tx.send(());
+                }
+                ws.set_onopen(None);
+                keep_closure_alive.borrow_mut().take();
+            }
+        } else if ws.ready_state() == WebSocket::OPEN {
+            // already open
+            if let Some(tx) = maybe_tx.borrow_mut().take() {
+                let _ = tx.send(());
+            }
+        } else {
+            // CLOSING/CLOSED
+            if let Some(tx) = maybe_tx.borrow_mut().take() {
+                let _ = tx.send(());
+            }
+        }
+
+        rx.await?;
+
+        Ok(Self {
             peer_id: peer_id.clone().into(),
             timeout_ms: timeout_milliseconds,
 
             request_id_counter: Arc::new(AtomicU64::new(0)),
-            socket,
+            socket: ws.clone(),
 
             pending,
             inbound_reader,
-        }
+        })
     }
 
     /// Connect to a WebSocket server at the given address.
     ///
     /// # Errors
     ///
-    /// Returns [`WebsocketConnectionError`] if establishing the connection fails.
-    pub fn connect(
+    /// Returns [`WebSocketConnectionError`] if establishing the connection fails.
+    pub async fn connect(
         address: &Url,
         peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<Self, WebsocketConnectionError> {
-        Ok(Self::new(
+    ) -> Result<Self, WebSocketConnectionError> {
+        Ok(Self::setup(
             peer_id,
             &WebSocket::new(&address.href())
-                .map_err(WebsocketConnectionError::SocketCreationFailed)?,
+                .map_err(WebSocketConnectionError::SocketCreationFailed)?,
             timeout_milliseconds,
-        ))
+        ).await?)
     }
 }
 
@@ -246,7 +298,7 @@ impl Connection<Local> for WasmWebSocket {
                 }
                 Ok(Err(e)) => {
                     tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ChannelCancelled)
+                    Err(CallError::ChannelCanceled)
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {:?} timed out", req_id);
@@ -259,7 +311,7 @@ impl Connection<Local> for WasmWebSocket {
 }
 
 impl Reconnect<Local> for WasmWebSocket {
-    type ConnectError = WebsocketConnectionError;
+    type ConnectError = WebSocketConnectionError;
 
     fn reconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::ConnectError>> {
         async {
@@ -267,10 +319,10 @@ impl Reconnect<Local> for WasmWebSocket {
             let peer_id = self.peer_id;
 
             *self = WasmWebSocket::connect(
-                &Url::new(&address).map_err(WebsocketConnectionError::InvalidUrl)?,
+                &Url::new(&address).map_err(WebSocketConnectionError::InvalidUrl)?,
                 &peer_id.into(),
                 self.timeout_ms,
-            )?;
+            ).await?;
             Ok(())
         }
         .boxed_local()
@@ -397,9 +449,9 @@ pub enum CallError {
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
 
-    /// Tried to read from a cancelled channel.
-    #[error("Channel cancelled")]
-    ChannelCancelled,
+    /// Tried to read from a canceled channel.
+    #[error("Channel canceled")]
+    ChannelCanceled,
 
     /// Timed out waiting for response.
     #[error("Timed out waiting for response")]
@@ -408,7 +460,7 @@ pub enum CallError {
 
 /// Problem while attempting to connect or reconnect the WebSocket.
 #[derive(Debug, Clone, Error)]
-pub enum WebsocketConnectionError {
+pub enum WebSocketConnectionError {
     /// Problem creating the WebSocket.
     #[error("WebSocket creation failed: {0:?}")]
     SocketCreationFailed(JsValue),
@@ -416,12 +468,34 @@ pub enum WebsocketConnectionError {
     /// Problem creating the URL.
     #[error("invalid URL: {0:?}")]
     InvalidUrl(JsValue),
+
+    /// WebSocket setup was canceled.
+    #[error(transparent)]
+    WasmSetupCanceled(#[from] WasmWebSocketSetupCanceled),
 }
 
-impl From<WebsocketConnectionError> for JsValue {
-    fn from(err: WebsocketConnectionError) -> Self {
+impl From<WebSocketConnectionError> for JsValue {
+    fn from(err: WebSocketConnectionError) -> Self {
         let err = js_sys::Error::new(&err.to_string());
-        err.set_name("WebsocketConnectionError");
+        err.set_name("WebSocketConnectionError");
         err.into()
+    }
+}
+
+#[derive(Debug, Clone, Error)]
+#[error("WebSocket setup was canceled")]
+pub struct WasmWebSocketSetupCanceled(Canceled);
+
+impl From<Canceled> for WasmWebSocketSetupCanceled {
+    fn from(err: Canceled) -> Self {
+        Self(err)
+    }
+}
+
+impl From<WasmWebSocketSetupCanceled> for JsValue {
+    fn from(err: WasmWebSocketSetupCanceled) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("CancelWebSocketSetup");
+        js_err.into()
     }
 }

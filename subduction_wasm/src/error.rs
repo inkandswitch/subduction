@@ -97,9 +97,9 @@ pub enum WasmCallErrorInner {
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
 
-    /// Tried to read from a cancelled channel.
-    #[error("Channel cancelled")]
-    ChannelCancelled,
+    /// Tried to read from a canceled channel.
+    #[error("Channel canceled")]
+    ChannelCanceled,
 
     /// Timed out waiting for response.
     #[error("Timed out waiting for response")]
@@ -111,7 +111,7 @@ impl From<CallError> for WasmCallErrorInner {
         match err {
             CallError::Encoding(e) => Self::Encoding(e.to_string()),
             CallError::SocketSend(e) => Self::SocketSend(e),
-            CallError::ChannelCancelled => Self::ChannelCancelled,
+            CallError::ChannelCanceled => Self::ChannelCanceled,
             CallError::TimedOut => Self::TimedOut,
         }
     }
@@ -122,7 +122,7 @@ impl From<&CallError> for WasmCallErrorInner {
         match err {
             CallError::Encoding(e) => Self::Encoding(e.to_string()),
             CallError::SocketSend(e) => Self::SocketSend(e.clone()),
-            CallError::ChannelCancelled => Self::ChannelCancelled,
+            CallError::ChannelCanceled => Self::ChannelCanceled,
             CallError::TimedOut => Self::TimedOut,
         }
     }
