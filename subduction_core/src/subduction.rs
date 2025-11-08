@@ -13,10 +13,11 @@ use crate::{
     },
     peer::id::PeerId,
 };
+use async_channel::{bounded, Receiver, Sender};
 use dashmap::{DashMap, DashSet};
 use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    channel::mpsc::{unbounded, UnboundedSender},
+    sink::SinkExt,
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
@@ -59,7 +60,7 @@ pub struct Subduction<
     conns: Arc<DashMap<ConnectionId, C>>,
     storage: S,
 
-    actor_channel: UnboundedSender<(ConnectionId, C)>,
+    actor_channel: Sender<(ConnectionId, C)>,
     msg_queue: async_channel::Receiver<(ConnectionId, C, Message)>,
 
     abort_actor_handle: AbortHandle,
@@ -87,7 +88,7 @@ impl<
     ) {
         tracing::info!("initializing Subduction instance");
 
-        let (actor_sender, actor_receiver) = unbounded();
+        let (actor_sender, actor_receiver) = bounded(1024);
         let (queue_sender, queue_receiver) = async_channel::unbounded();
         let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
 
@@ -128,7 +129,8 @@ impl<
         while let Ok((conn_id, conn, msg)) = self.msg_queue.recv().await {
             self.dispatch(conn_id, &conn, msg).await?;
             self.actor_channel
-                .unbounded_send((conn_id, conn))
+                .send((conn_id, conn))
+                .await
                 .map_err(|e| {
                     tracing::error!(
                         "Error re-sending connection {:?} to actor channel: {:?}",
@@ -357,7 +359,8 @@ impl<
 
             self.conns.insert(conn_id, conn.clone());
             self.actor_channel
-                .unbounded_send((conn_id, conn))
+                .send((conn_id, conn))
+                .await
                 .map_err(|_| RegistrationError::SendToClosedChannel)?;
 
             Ok((true, conn_id))

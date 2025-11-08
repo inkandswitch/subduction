@@ -8,7 +8,6 @@ use std::{
 };
 
 use futures::{
-    channel::mpsc::UnboundedReceiver,
     stream::{AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
@@ -19,7 +18,7 @@ use super::{id::ConnectionId, message::Message, recv_once::RecvOnce, Connection}
 /// An actor that listens for incoming connections and processes messages.
 #[derive(Debug)]
 pub struct ConnectionActor<'a, F: FutureKind, C: Connection<F>> {
-    inbox: UnboundedReceiver<(ConnectionId, C)>,
+    inbox: async_channel::Receiver<(ConnectionId, C)>,
     outbox: async_channel::Sender<(ConnectionId, C, Message)>,
     queue: FuturesUnordered<F::Future<'a, ()>>,
 }
@@ -27,7 +26,7 @@ pub struct ConnectionActor<'a, F: FutureKind, C: Connection<F>> {
 impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
     /// Create a new [`ConnectionActor`].
     pub fn new(
-        inbox: UnboundedReceiver<(ConnectionId, C)>,
+        inbox: async_channel::Receiver<(ConnectionId, C)>,
         outbox: async_channel::Sender<(ConnectionId, C, Message)>,
     ) -> Self {
         ConnectionActor {
@@ -39,12 +38,13 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
 
     /// Listen for incoming connections and process messages.
     pub async fn listen(&mut self) {
-        let mut inbox = self.inbox.by_ref().fuse();
+        // let mut inbox = self.inbox.by_ref().fuse();
 
         loop {
             futures::select! {
-                maybe = inbox.next() => {
-                    if let Some((conn_id, conn)) = maybe {
+                maybe = self.inbox.by_ref().recv().fuse() => {
+                    // FIXME match and log errs
+                    if let Ok((conn_id, conn)) = maybe {
                         tracing::debug!("ConnectionActor: new connection {:?}", conn_id);
                         self.queue.push(F::recv_once(conn_id, conn, self.outbox.clone()));
                     }
