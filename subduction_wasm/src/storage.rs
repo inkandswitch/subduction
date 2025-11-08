@@ -146,7 +146,7 @@ impl Storage<Local> for JsStorage {
 
             let ctor = js_sys::Reflect::get(&js_value, &"constructor".into()).expect("FIXME");
             let name = js_sys::Reflect::get(&ctor, &"name".into()).expect("FIXME");
-            tracing::warn!(">>>>>>>>>>>>>>> {}", name.as_string());
+            tracing::warn!(">>>>>>>>>>>>>>> {:?}", name.as_string());
 
             let js_digest: JsDigest = JsCast::unchecked_into(js_value); // FIXME .ok_or(JsStorageError::NotDigest(js_value))?;
             let wasm_digest = WasmDigest::from(&js_digest);
