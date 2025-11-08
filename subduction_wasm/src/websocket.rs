@@ -128,13 +128,11 @@ impl WasmWebSocket {
         });
 
         ws.set_binary_type(BinaryType::Arraybuffer);
-        // ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
         ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
         ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
 
         onmessage.forget();
         onclose.forget();
-        // *keep_closure_alive.borrow_mut() = Some(onopen);
         // NOTE no onopen.forget() because we only want it to fire once,
         // so we're doing manual handling with the `keep_alive` slots.
 
@@ -482,8 +480,10 @@ impl From<WebSocketConnectionError> for JsValue {
     }
 }
 
+/// WebSocket setup was canceled.
 #[derive(Debug, Clone, Error)]
 #[error("WebSocket setup was canceled")]
+#[allow(missing_copy_implementations)]
 pub struct WasmWebSocketSetupCanceled(Canceled);
 
 impl From<Canceled> for WasmWebSocketSetupCanceled {
