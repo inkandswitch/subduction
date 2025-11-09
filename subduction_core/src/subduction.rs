@@ -155,7 +155,7 @@ impl<
         message: Message,
     ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
-        tracing::info!("received message from peer {:?}: {:?}", from, message);
+        tracing::info!("dispatch: {:?}: {:?}", from, message);
 
         match message {
             Message::LooseCommit { id, commit, blob } => {
@@ -173,6 +173,11 @@ impl<
                     .recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
                     .await
                 {
+                    tracing::warn!(
+                        "Missing blobs for batch sync request from peer {:?}: {:?}",
+                        from,
+                        missing
+                    );
                     self.request_blobs(missing).await;
                     self.recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
                         .await?; // try responing again

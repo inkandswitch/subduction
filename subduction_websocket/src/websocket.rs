@@ -325,7 +325,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
 
     fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
         async move {
-            tracing::debug!("sending outbound message id {:?}", message.request_id());
+            tracing::debug!(
+                "sending outbound message id {:?} / {message:?}",
+                message.request_id()
+            );
             self.outbound
                 .lock()
                 .await
