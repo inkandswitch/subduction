@@ -1271,8 +1271,8 @@ where
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
             async move {
-                if let Err(_e) = subduction.listen().await {
-                    tracing::error!("Subduction listen error");
+                if let Err(e) = subduction.listen().await {
+                    tracing::error!("Subduction listen error: {}", e.to_string());
                 }
             }
             .boxed(),
@@ -1290,8 +1290,8 @@ impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMe
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
             async move {
-                if let Err(_e) = subduction.listen().await {
-                    tracing::error!("Subduction listen error");
+                if let Err(e) = subduction.listen().await {
+                    tracing::error!("Subduction listen error: {}", e.to_string());
                 }
             }
             .boxed_local(),

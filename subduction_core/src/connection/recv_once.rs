@@ -43,6 +43,7 @@ impl<'a, C: 'a + Connection<Local>> RecvOnce<'a, C> for Local {
         sender: async_channel::Sender<(ConnectionId, C, Message)>,
     ) -> Self::Future<'a, ()> {
         async move {
+            tracing::debug!("waiting to receive message from {conn_id}");
             let msg = match conn.recv().await {
                 Ok(msg) => msg,
                 Err(e) => {

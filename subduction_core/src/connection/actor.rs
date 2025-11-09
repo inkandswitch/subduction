@@ -71,7 +71,7 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
                 }
                 done = self.queue.next() => {
                     if let Some(()) = done {
-                        tracing::debug!("ConnectionActor: connection processed");
+                        tracing::debug!("ConnectionActor: queued request processed");
                     }
                     // else: nothing in the queue -- totally normal, start the next loop
                 }
