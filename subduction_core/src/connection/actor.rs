@@ -38,24 +38,42 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
 
     /// Listen for incoming connections and process messages.
     pub async fn listen(&mut self) {
-        // let mut inbox = self.inbox.by_ref().fuse();
-
         loop {
-            futures::select! {
-                maybe = self.inbox.by_ref().recv().fuse() => {
-                    // FIXME match and log errs
-                    if let Ok((conn_id, conn)) = maybe {
+            if self.queue.is_empty() {
+                match self.inbox.recv().await {
+                    Ok((conn_id, conn)) => {
                         tracing::debug!("ConnectionActor: new connection {:?}", conn_id);
-                        self.queue.push(F::recv_once(conn_id, conn, self.outbox.clone()));
+                        self.queue
+                            .push(F::recv_once(conn_id, conn, self.outbox.clone()));
+                    }
+                    Err(e) => {
+                        tracing::warn!("ConnectionActor: inbox closed: {e:?}; draining tasks");
+                        while let Some(()) = self.queue.next().await {}
+                        break;
                     }
                 }
+                continue;
+            }
 
-                maybe = self.queue.next() => {
-                    if let Some(()) = maybe {
-                        tracing::debug!("ConnectionActor: connection processed");
-                    } else {
-                        tracing::debug!("ConnectionActor: no more connections to process, exiting");
+            futures::select! {
+                maybe = self.inbox.recv().fuse() => {
+                    match maybe {
+                        Ok((conn_id, conn)) => {
+                            tracing::debug!("ConnectionActor: new connection {:?}", conn_id);
+                            self.queue.push(F::recv_once(conn_id, conn, self.outbox.clone()));
+                        }
+                        Err(e) => {
+                            tracing::warn!("ConnectionActor: inbox closed: {e:?}; draining tasks");
+                            while let Some(()) = self.queue.next().await {}
+                            break;
+                        }
                     }
+                }
+                done = self.queue.next() => {
+                    if let Some(()) = done {
+                        tracing::debug!("ConnectionActor: connection processed");
+                    }
+                    // else: nothing in the queue -- totally normal, start the next loop
                 }
             }
         }
