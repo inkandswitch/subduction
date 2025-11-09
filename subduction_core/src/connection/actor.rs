@@ -39,6 +39,11 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
     /// Listen for incoming connections and process messages.
     pub async fn listen(&mut self) {
         loop {
+            tracing::debug!(
+                "ConnectionActor: waiting (queue size: {})",
+                self.queue.len()
+            );
+
             if self.queue.is_empty() {
                 match self.inbox.recv().await {
                     Ok((conn_id, conn)) => {

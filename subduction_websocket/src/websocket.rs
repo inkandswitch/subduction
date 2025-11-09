@@ -72,7 +72,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Local> for WebSocket<T
 
     fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         async move {
-            tracing::debug!("sending outbound message id {:?}", message.request_id());
+            tracing::debug!(
+                "ws: sending outbound with message id {:?} to peer_id {}",
+                message.request_id(),
+                self.peer_id
+            );
             self.outbound
                 .lock()
                 .await
@@ -164,7 +168,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
-        let (inbound_writer, inbound_reader) = async_channel::unbounded();
+        let (inbound_writer, inbound_reader) = async_channel::bounded(1024);
         let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
 

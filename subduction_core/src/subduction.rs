@@ -89,7 +89,7 @@ impl<
         tracing::info!("initializing Subduction instance");
 
         let (actor_sender, actor_receiver) = bounded(1024);
-        let (queue_sender, queue_receiver) = async_channel::unbounded();
+        let (queue_sender, queue_receiver) = async_channel::bounded(1024);
         let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
 
         let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();
@@ -125,8 +125,12 @@ impl<
     /// * Returns `ListenError` if a storage or network error occurs.
     pub async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
         tracing::info!("starting Subduction listener");
-        let mut n = 0usize;
         while let Ok((conn_id, conn, msg)) = self.msg_queue.recv().await {
+            tracing::debug!(
+                "Subduction listener received message from {:?}: {:?}",
+                conn_id,
+                msg
+            );
             self.dispatch(conn_id, &conn, msg).await?;
             self.actor_channel
                 .send((conn_id, conn))
@@ -139,11 +143,6 @@ impl<
                     );
                     ListenError::TrySendError
                 })?;
-
-            n += 1;
-            if (n & 63) == 0 {
-                yield_now();
-            }
         }
         Ok(())
     }
@@ -209,12 +208,16 @@ impl<
                 }
             }
             Message::BlobsResponse(blobs) => {
+                let len = blobs.len();
                 for blob in blobs {
                     self.storage
                         .save_blob(blob)
                         .await
                         .map_err(IoError::Storage)?;
                 }
+                tracing::info!(
+                    "Saved {len} blobs from blob response from peer {from}, no reply needed",
+                );
             }
         }
         Ok(())

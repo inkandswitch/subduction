@@ -45,7 +45,7 @@ impl WasmWebSocket {
     #[must_use]
     #[wasm_bindgen]
     pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
-        let (inbound_writer, inbound_reader) = async_channel::unbounded::<Message>();
+        let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(1024);
 
         let pending = Arc::new(DashMap::<
             RequestId,
