@@ -26,7 +26,7 @@ impl<'a, C: 'a + Connection<Sendable> + Send> RecvOnce<'a, C> for Sendable {
                 }
             };
 
-            tracing::debug!("received message from {conn_id}: {msg:?}");
+            tracing::debug!("recv_once: received message from {conn_id}: {msg:?}");
 
             if let Err(e) = sender.send((conn_id, conn, msg)).await {
                 tracing::error!("unable to send msg about {conn_id} to Subduction: {e:?}");
@@ -52,7 +52,7 @@ impl<'a, C: 'a + Connection<Local>> RecvOnce<'a, C> for Local {
                 }
             };
 
-            tracing::debug!("received message from {conn_id}: {msg:?}");
+            tracing::debug!("recv_once: received message from {conn_id}: {msg:?}");
 
             if let Err(e) = sender.send((conn_id, conn, msg)).await {
                 tracing::error!("unable to send msg about {conn_id} to Subduction: {e:?}");

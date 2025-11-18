@@ -37,3 +37,6 @@ url = "2.5"
 [dependencies.subduction_websocket]
 path = "../subduction_websocket"
 features = ["tokio_client", "tokio_server"]
+
+[lints]
+workspace = true

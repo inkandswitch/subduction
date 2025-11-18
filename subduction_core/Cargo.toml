@@ -26,3 +26,6 @@ tracing = { workspace = true }
 default = []
 arbitrary = ["dep:arbitrary"]
 serde = ["dep:serde"]
+
+[lints]
+workspace = true

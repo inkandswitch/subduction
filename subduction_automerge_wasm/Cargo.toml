@@ -37,3 +37,6 @@ wasm_refgen = { workspace = true }
 [features]
 default = ["console_error_panic_hook"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
+
+[lints]
+workspace = true

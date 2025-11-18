@@ -38,3 +38,6 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
 wasm_refgen = { workspace = true }
+
+[lints]
+workspace = true

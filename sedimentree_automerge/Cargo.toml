@@ -19,3 +19,6 @@ sedimentree_core = { path = "../sedimentree_core" }
 
 [features]
 default = []
+
+[lints]
+workspace = true

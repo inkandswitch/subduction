@@ -44,3 +44,6 @@ default = []
 tokio_client = ["tokio"]
 tokio_server = ["tokio"]
 tokio = ["dep:tokio", "dep:tokio-util", "async-tungstenite/tokio-native-tls"]
+
+[lints]
+workspace = true

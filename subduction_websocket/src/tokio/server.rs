@@ -13,6 +13,7 @@ use tokio::{
     task::{coop, JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
+use tungstenite::handshake::server::NoCallback;
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug)]
@@ -81,7 +82,7 @@ where
                                 conns.spawn({
                                     let sd = task_subduction_actor_handle.clone();
                                     async move {
-                                        match accept_hdr_async(tcp, tungstenite::handshake::server::NoCallback).await {
+                                        match accept_hdr_async(tcp, NoCallback).await {
                                             Ok(hs) => {
                                                 let ws_conn = WebSocket::<TokioAdapter<TcpStream>>::new(
                                                     hs,
