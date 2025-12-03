@@ -2,7 +2,7 @@
   description = "subduction";
 
   inputs = {
-    nixpkgs.url = "nixpkgs/nixos-25.05";
+    nixpkgs.url = "nixpkgs/nixos-25.11";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
 
     command-utils.url = "github:expede/nix-command-utils";

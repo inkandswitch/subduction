@@ -9,11 +9,7 @@ use std::{
 
 use thiserror::Error;
 
-use crate::{
-    blob::{Blob, BlobMeta},
-    depth::DepthMetric,
-    Depth, Digest, Fragment,
-};
+use crate::{blob::BlobMeta, depth::DepthMetric, Depth, Digest, Fragment};
 
 /// An error indicating that a commit is missing from the store.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]

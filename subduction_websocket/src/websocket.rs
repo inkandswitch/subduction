@@ -263,6 +263,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                                 );
                                 e
                             })?;
+
+                            tracing::debug!(
+                                "forwarded inbound message to channel {}",
+                                self.chan_id
+                            );
                         }
                     }
                 }

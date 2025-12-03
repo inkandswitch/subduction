@@ -131,18 +131,35 @@ impl<
                 conn_id,
                 msg
             );
-            self.dispatch(conn_id, &conn, msg).await?;
-            self.actor_channel
-                .send((conn_id, conn))
-                .await
-                .map_err(|e| {
+
+            let should_reregister = if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
+                tracing::error!(
+                    "Error dispatching message from connection {:?}: {}",
+                    conn_id,
+                    e
+                );
+                // Connection is broken - unregister it but keep draining messages
+                self.unregister(&conn_id).await;
+                tracing::info!("Unregistered failed connection {:?}", conn_id);
+
+                // Re-register temporarily to drain remaining messages from the channel
+                // This prevents messages from piling up in inbound_writer
+                true
+            } else {
+                true
+            };
+
+            if should_reregister {
+                if let Err(e) = self.actor_channel.send((conn_id, conn)).await {
                     tracing::error!(
                         "Error re-sending connection {:?} to actor channel: {:?}",
                         conn_id,
                         e
                     );
-                    ListenError::TrySendError
-                })?;
+                    // Channel closed, exit loop
+                    break;
+                }
+            }
         }
         Ok(())
     }
@@ -753,6 +770,11 @@ impl<
             );
 
             let local_sedimentree = sedimentree.clone();
+            tracing::debug!(
+                "local sedimentree summary {:?} / {:?}",
+                id,
+                local_sedimentree
+            ); // FIXME temp
             let diff: RemoteDiff<'_> =
                 local_sedimentree.diff_remote(their_summary, &self.depth_metric);
 

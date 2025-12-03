@@ -18,8 +18,12 @@ impl<'a, C: 'a + Connection<Sendable> + Send> RecvOnce<'a, C> for Sendable {
         sender: async_channel::Sender<(ConnectionId, C, Message)>,
     ) -> Self::Future<'a, ()> {
         async move {
+            tracing::info!("recv_once (Sendable): BEFORE conn.recv() for {conn_id}");
             let msg = match conn.recv().await {
-                Ok(msg) => msg,
+                Ok(msg) => {
+                    tracing::debug!("received message from {conn_id}: {msg:?}");
+                    msg
+                }
                 Err(e) => {
                     tracing::error!("error when waiting for {conn_id} to receive: {e:?}");
                     return;
@@ -45,7 +49,10 @@ impl<'a, C: 'a + Connection<Local>> RecvOnce<'a, C> for Local {
         async move {
             tracing::debug!("waiting to receive message from {conn_id}");
             let msg = match conn.recv().await {
-                Ok(msg) => msg,
+                Ok(msg) => {
+                    tracing::debug!("received message from {conn_id}: {msg:?}");
+                    msg
+                }
                 Err(e) => {
                     tracing::error!("error when waiting for {conn_id} to receive: {e:?}");
                     return;
