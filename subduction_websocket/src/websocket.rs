@@ -188,12 +188,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     }
 
     /// The timeout for requests.
-    pub fn timeout(&self) -> Duration {
+    #[must_use]
+    pub const fn timeout(&self) -> Duration {
         self.timeout
     }
 
     /// Get the [`PeerId`] associated with this connection.
-    pub fn peer_id(&self) -> PeerId {
+    #[must_use]
+    pub const fn peer_id(&self) -> PeerId {
         self.peer_id
     }
 
@@ -202,6 +204,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     /// # Errors
     ///
     /// If there is an error reading from the WebSocket or processing messages.
+    #[allow(clippy::too_many_lines)] // 101/100 allowed lines
     pub async fn listen(&self) -> Result<(), RunError> {
         tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
         let mut in_chan = self.ws_reader.lock().await;
@@ -254,7 +257,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                                     })?;
                             }
                         }
-                        other => {
+                        other @ (Message::LooseCommit { .. }
+                        | Message::Fragment { .. }
+                        | Message::BlobsRequest(_)
+                        | Message::BlobsResponse(_)
+                        | Message::BatchSyncRequest(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {
                                 tracing::error!(
                                     "failed to send inbound message to channel {}: {}",
@@ -297,7 +304,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                 }
                 Err(e) => {
                     tracing::error!("error reading from websocket: {}", e);
-                    Err(e)?
+                    Err(e)?;
                 }
             }
         }

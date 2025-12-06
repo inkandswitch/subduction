@@ -59,7 +59,12 @@ impl CommitDag {
         };
 
         for commit in commits {
-            let child_idx = dag.node_map[&commit.digest()];
+            #[allow(clippy::expect_used)]
+            let child_idx = *dag
+                .node_map
+                .get(&commit.digest())
+                .expect("commit digest not in node_map");
+
             for parent in commit.parents() {
                 if let Some(parent) = dag.node_map.get(parent) {
                     dag.add_edge(*parent, child_idx);
@@ -79,11 +84,25 @@ impl CommitDag {
         };
         self.edges.push(new_edge);
 
-        let target_node = &mut self.nodes[target.0];
+        #[allow(clippy::expect_used)]
+        let target_node = self
+            .nodes
+            .get_mut(target.0)
+            .expect("NodeId not in self.nodes");
+
         if let Some(edge_idx) = target_node.parents {
-            let mut edge = &mut self.edges[edge_idx.0];
+            #[allow(clippy::expect_used)]
+            let mut edge = self
+                .edges
+                .get_mut(edge_idx.0)
+                .expect("NodeId not in self.nodes");
+
+            #[allow(clippy::expect_used)]
             while let Some(next) = edge.next {
-                edge = &mut self.edges[next.0];
+                edge = self
+                    .edges
+                    .get_mut(next.0)
+                    .expect("NodeId not in self.nodes");
             }
             edge.next = Some(new_edge_idx);
         } else {
@@ -99,11 +118,24 @@ impl CommitDag {
         };
         self.edges.push(new_edge);
 
-        let source_node = &mut self.nodes[source.0];
+        #[allow(clippy::expect_used)]
+        let source_node = self
+            .nodes
+            .get_mut(source.0)
+            .expect("NodeId not in self.nodes");
         if let Some(edge_idx) = source_node.children {
-            let mut edge = &mut self.edges[edge_idx.0];
+            #[allow(clippy::expect_used)]
+            let mut edge = self
+                .edges
+                .get_mut(edge_idx.0)
+                .expect("NodeId not in self.nodes");
+
+            #[allow(clippy::expect_used)]
             while let Some(next) = edge.next {
-                edge = &mut self.edges[next.0];
+                edge = self
+                    .edges
+                    .get_mut(next.0)
+                    .expect("next NodeId not in self.nodes");
             }
             edge.next = Some(new_edge_idx);
         } else {
@@ -169,7 +201,13 @@ impl CommitDag {
         let mut blockless_commits = HashSet::new();
 
         let mut tips = self.tips().collect::<Vec<_>>();
-        tips.sort_by_key(|idx| self.nodes[idx.0].hash);
+        tips.sort_by_key(|idx| {
+            #[allow(clippy::expect_used)]
+            self.nodes
+                .get(idx.0)
+                .expect("NodeId not in self.nodes")
+                .hash
+        });
 
         for tip in tips {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
@@ -276,7 +314,15 @@ impl CommitDag {
     fn parents_of_hash(&self, hash: Digest) -> impl Iterator<Item = Digest> + '_ {
         self.node_map
             .get(&hash)
-            .map(|idx| self.parents(*idx).map(|i| self.nodes[i.0].hash))
+            .map(|idx| {
+                self.parents(*idx).map(|i| {
+                    #[allow(clippy::expect_used)]
+                    self.nodes
+                        .get(i.0)
+                        .expect("nodeId wasn't in self.nodes")
+                        .hash
+                })
+            })
             .into_iter()
             .flatten()
     }
@@ -340,7 +386,10 @@ impl CommitDag {
                     if let Some(idx) = self.node_map.get(&commit) {
                         let mut parents = self
                             .parents(*idx)
-                            .map(|i| self.nodes[i.0].hash)
+                            .map(|i| {
+                                #[allow(clippy::expect_used)]
+                                self.nodes.get(i.0).expect("node is not in self.nodes").hash
+                            })
                             .collect::<Vec<_>>();
                         parents.sort();
                         stack.extend(parents);
@@ -397,9 +446,12 @@ impl Iterator for ReverseTopo<'_> {
             }
             self.visited.insert(node);
             let mut parents = self.dag.parents(node).collect::<Vec<_>>();
-            parents.sort_by_key(|p| self.dag.nodes[p.0].hash);
+            parents.sort_by_key(|p| {
+                #[allow(clippy::expect_used)]
+                self.dag.nodes.get(p.0).expect("node is not in DAG").hash
+            });
             self.stack.extend(parents);
-            return Some(self.dag.nodes[node.0].hash);
+            return Some(self.dag.nodes.get(node.0)?.hash);
         }
         None
     }
@@ -414,7 +466,7 @@ impl<'a> Parents<'a> {
     fn new(dag: &'a CommitDag, node: NodeIdx) -> Self {
         Parents {
             dag,
-            edge: dag.nodes[node.0].parents,
+            edge: dag.nodes.get(node.0).and_then(|x| x.parents),
         }
     }
 }
@@ -424,7 +476,7 @@ impl Iterator for Parents<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(edge) = self.edge {
-            let edge = &self.dag.edges[edge.0];
+            let edge: &Edge = self.dag.edges.get(edge.0)?;
             self.edge = edge.next;
             Some(edge.source)
         } else {
@@ -496,7 +548,7 @@ mod tests {
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
                 commits.push(LooseCommit {
                     #[allow(clippy::unwrap_used)]
-                    blob: *self.commits.get(hash).unwrap(),
+                    blob_meta: *self.commits.get(hash).unwrap(),
                     digest: *hash,
                     parents,
                 });

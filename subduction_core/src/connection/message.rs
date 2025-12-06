@@ -56,7 +56,10 @@ impl Message {
         match self {
             Message::BatchSyncRequest(BatchSyncRequest { req_id, .. })
             | Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
-            _ => None,
+            Message::LooseCommit { .. }
+            | Message::Fragment { .. }
+            | Message::BlobsRequest(_)
+            | Message::BlobsResponse(_) => None,
         }
     }
 }

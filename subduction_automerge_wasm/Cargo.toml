@@ -16,13 +16,6 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[profile.release]
-opt-level = "z"
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = "symbols"
-
 [dependencies]
 automerge = { workspace = true, features = ["wasm"] }
 build_info = { path = "../build_info" }

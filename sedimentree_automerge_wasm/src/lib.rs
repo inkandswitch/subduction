@@ -26,6 +26,8 @@ pub struct WasmSedimentreeAutomerge(JsAutomerge);
 impl WasmSedimentreeAutomerge {
     /// Create a new `WasmSedimentreeAutomerge` instance.
     #[wasm_bindgen(constructor)]
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)] // wasm_bindgen does not support const constructors
     pub fn new(automerge: JsAutomerge) -> Self {
         Self(automerge)
     }
@@ -33,6 +35,10 @@ impl WasmSedimentreeAutomerge {
     // NOTE `js_` prefix to avoid conflict
     // with CommitStore::fragment (trait method)
     /// Build the fragment state for a given head.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `WasmFragmentError` if building the fragment state fails.
     #[wasm_bindgen(js_name = fragment)]
     pub fn js_fragment(
         &self,
@@ -47,6 +53,10 @@ impl WasmSedimentreeAutomerge {
 
     // NOTE `js_` prefix to avoid conflict
     /// Build a fragment store starting from the given head digests.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `WasmFragmentError` if building the fragment store fails.
     #[wasm_bindgen(js_name = buildFragmentStore)]
     pub fn js_build_fragment_store(
         &self,
@@ -117,6 +127,10 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
                     let b = raw
                         .as_f64()
                         .ok_or_else(|| WasmLookupError::UnexpectedNonNumericValue(raw))?;
+                    if !(0.0..=255.0).contains(&b) {
+                        return Err(WasmLookupError::ByteValueOutOfRange(b));
+                    }
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     v.push(b as u8);
                 }
                 v
@@ -138,6 +152,10 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
 }
 
 /// Compute the digest of a base58-encoded ID string.
+///
+/// # Errors
+///
+/// Returns a `WasmFromBase58Error` if the input string is not valid base58.
 #[wasm_bindgen(js_name = digestOfBase58Id)]
 pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, WasmFromBase58Error> {
     let decoded = b58_str.from_base58()?;

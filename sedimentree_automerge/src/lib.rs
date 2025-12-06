@@ -2,7 +2,7 @@
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::{cell::RefCell, collections::HashSet, convert::Infallible, rc::Rc};
+use std::{cell::RefCell, collections::HashSet, convert::Infallible, hash::RandomState, rc::Rc};
 
 use automerge::{AutoCommit, Automerge, ChangeHash, ChangeMetadata};
 use sedimentree_core::{
@@ -82,6 +82,8 @@ impl<'a> From<SedimentreeChangeMetadata<'a>> for ChangeMetadata<'a> {
 }
 
 impl Parents for SedimentreeChangeMetadata<'_> {
+    type Hasher = RandomState;
+
     fn parents(&self) -> HashSet<Digest> {
         self.0
             .deps

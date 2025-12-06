@@ -2,7 +2,6 @@
 
 pub mod idb;
 
-use from_js_ref::FromJsRef;
 use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{

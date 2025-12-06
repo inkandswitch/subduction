@@ -17,7 +17,10 @@ pub struct WasmLooseCommit(LooseCommit);
 #[wasm_refgen(js_ref = JsLooseCommit)]
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
+    /// Create a new `LooseCommit` from the given digest, parents, and blob metadata.
     #[wasm_bindgen(constructor)]
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(digest: &WasmDigest, parents: Vec<JsDigest>, blob_meta: &WasmBlobMeta) -> Self {
         let core_parents: Vec<Digest> =
             parents.iter().map(|d| WasmDigest::from(d).into()).collect();
@@ -72,7 +75,9 @@ pub struct WasmBlobMeta(BlobMeta);
 
 #[wasm_bindgen(js_class = BlobMeta)]
 impl WasmBlobMeta {
+    /// Create a new `BlobMeta` from the given blob contents.
     #[wasm_bindgen(constructor)]
+    #[must_use]
     pub fn new(blob: &[u8]) -> Self {
         BlobMeta::new(blob).into()
     }

@@ -863,7 +863,7 @@ mod tests {
                 let mut result = Vec::with_capacity(num_commits as usize);
                 for _ in 0..num_commits {
                     let contents = Vec::<u8>::arbitrary(u)?;
-                    let blob = BlobMeta::new(&contents);
+                    let blob_meta = BlobMeta::new(&contents);
                     let hash = crate::Digest::arbitrary(u)?;
                     let mut parents = Vec::new();
                     let mut num_parents = u.int_in_range(0..=frontier.len())?;
@@ -881,7 +881,7 @@ mod tests {
                     result.push(super::LooseCommit {
                         digest: hash,
                         parents,
-                        blob,
+                        blob_meta,
                     });
                 }
                 Ok(Scenario { commits: result })

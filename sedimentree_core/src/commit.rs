@@ -3,6 +3,7 @@
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
+    hash::BuildHasher,
     mem::take,
     num::NonZero,
 };
@@ -18,12 +19,17 @@ pub struct MissingCommitError(Digest);
 
 /// A trait for types that have parent hashes.
 pub trait Parents {
+    /// The hasher used for the parent set.
+    type Hasher: BuildHasher + Default;
+
     /// The parent digests of this node.
-    fn parents(&self) -> HashSet<Digest>;
+    fn parents(&self) -> HashSet<Digest, Self::Hasher>;
 }
 
-impl Parents for HashSet<Digest> {
-    fn parents(&self) -> HashSet<Digest> {
+impl<S: BuildHasher + Default + Clone> Parents for HashSet<Digest, S> {
+    type Hasher = S;
+
+    fn parents(&self) -> HashSet<Digest, Self::Hasher> {
         self.clone()
     }
 }
@@ -78,7 +84,7 @@ pub trait CommitStore<'a> {
             .lookup(head_digest)
             .map_err(|e| FragmentError::LookupError(e))?
             .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
-        let mut horizon: HashSet<Digest> = head_change.parents();
+        let mut horizon: HashSet<Digest, _> = head_change.parents();
 
         while !horizon.is_empty() {
             let local_horizon = take(&mut horizon);
@@ -117,7 +123,7 @@ pub trait CommitStore<'a> {
                 for member in fragment_state.members() {
                     members.remove(member);
                 }
-                cleanup_horizon.extend(fragment_state.boundary().keys().cloned());
+                cleanup_horizon.extend(fragment_state.boundary().keys().copied());
             } else {
                 let deps = boundary_change.parents();
                 cleanup_horizon.extend(deps);
@@ -170,18 +176,19 @@ pub trait CommitStore<'a> {
         let mut horizon = head_digests.to_vec();
         while let Some(head) = horizon.pop() {
             if let Some(state) = known_fragment_states.get(&head) {
-                horizon.extend(state.boundary().keys().cloned());
+                horizon.extend(state.boundary().keys().copied());
                 continue;
             }
 
             let fragment_state = self.fragment(head, known_fragment_states, strategy)?;
             fresh_heads.push(head);
-            horizon.extend(fragment_state.boundary().keys().cloned());
+            horizon.extend(fragment_state.boundary().keys().copied());
             known_fragment_states.insert(head, fragment_state);
         }
 
         let mut fresh = Vec::with_capacity(fresh_heads.len());
         for head in fresh_heads {
+            #[allow(clippy::expect_used)]
             let r = known_fragment_states.get(&head).expect("just inserted");
             fresh.push(r);
         }

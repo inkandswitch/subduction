@@ -21,8 +21,8 @@ impl WasmDigest {
     ///
     /// Returns a `WasmValue` error if the byte slice is not a valid digest.
     #[wasm_bindgen(constructor)]
-    pub fn new(bytes: &[u8]) -> Result<WasmDigest, JsValue> {
-        let digest = Digest::from_bytes(bytes).map_err(WasmInvalidDigest::from)?;
+    pub fn new(bytes: &[u8]) -> Result<WasmDigest, WasmInvalidDigest> {
+        let digest = Digest::from_bytes(bytes).map_err(InternalWasmInvalidDigest::InvalidDigest)?;
         Ok(WasmDigest(digest))
     }
 
@@ -32,16 +32,25 @@ impl WasmDigest {
     ///
     /// Returns a `WasmValue` error if the byte slice is not a valid digest.
     #[wasm_bindgen(js_name = fromBytes)]
-    pub fn from_bytes(bytes: &[u8]) -> Result<WasmDigest, JsValue> {
-        let digest = Digest::from_bytes(bytes).map_err(WasmInvalidDigest::from)?;
+    pub fn from_bytes(bytes: &[u8]) -> Result<WasmDigest, WasmInvalidDigest> {
+        let digest = Digest::from_bytes(bytes).map_err(InternalWasmInvalidDigest::InvalidDigest)?;
         Ok(WasmDigest(digest))
     }
 
     /// Creates a new digest from its Base58 string representation.
+    ///
+    /// # Errors
+    ///
+    /// Returns a `WasmInvalidDigest` error if the string cannot be decoded or is not a valid digest.
     #[wasm_bindgen(js_name = fromBase58)]
-    pub fn from_base58(s: &str) -> Result<WasmDigest, JsValue> {
-        let bytes: Vec<u8> = s.from_base58().expect("FIXME");
-        let digest = Digest::from_bytes(&bytes[..32]).map_err(WasmInvalidDigest::from)?;
+    pub fn from_base58(s: &str) -> Result<WasmDigest, WasmInvalidDigest> {
+        let bytes: Vec<u8> = s
+            .from_base58()
+            .map_err(InternalWasmInvalidDigest::Base58DecodeError)?;
+        let digest = Digest::from_bytes(bytes.get(..32).ok_or(
+            InternalWasmInvalidDigest::InvalidDigest(InvalidDigest::InvalidLength),
+        )?)
+        .map_err(InternalWasmInvalidDigest::InvalidDigest)?;
         Ok(WasmDigest(digest))
     }
 
@@ -76,7 +85,19 @@ impl From<WasmDigest> for Digest {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmInvalidDigest(#[from] InvalidDigest);
+pub struct WasmInvalidDigest(#[from] InternalWasmInvalidDigest);
+
+/// An internal error indicating an invalid [`Digest`].
+#[derive(Debug, Error)]
+pub enum InternalWasmInvalidDigest {
+    /// The digest is invalid.
+    #[error(transparent)]
+    InvalidDigest(#[from] InvalidDigest),
+
+    /// The Base58 decoding failed.
+    #[error("Base58 decode error: {0:?}")]
+    Base58DecodeError(base58::FromBase58Error),
+}
 
 impl From<WasmInvalidDigest> for JsValue {
     fn from(err: WasmInvalidDigest) -> Self {

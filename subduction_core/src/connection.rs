@@ -54,7 +54,7 @@ pub trait Connection<K: FutureKind + ?Sized>: Clone {
     ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>>;
 }
 
-impl<T: Connection<K> + ?Sized, K: FutureKind> Connection<K> for Arc<T> {
+impl<T: Connection<K>, K: FutureKind> Connection<K> for Arc<T> {
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = T::RecvError;

@@ -141,7 +141,7 @@ impl Digest {
             return Err(error::InvalidDigest::InvalidLength);
         }
         let mut hash = [0; 32];
-        hash.copy_from_slice(&bytes[..32]);
+        hash.copy_from_slice(bytes.get(..32).ok_or(error::InvalidDigest::InvalidLength)?);
         Ok(Digest(hash))
     }
 }

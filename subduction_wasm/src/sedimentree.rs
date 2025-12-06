@@ -17,6 +17,8 @@ pub struct WasmSedimentree(Sedimentree);
 impl WasmSedimentree {
     /// Create a new Sedimentree from fragments and loose commits.
     #[wasm_bindgen(constructor)]
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen requires owned types
     pub fn new(fragments: Vec<JsFragment>, commits: Vec<JsLooseCommit>) -> Self {
         let core_fragments = fragments
             .iter()
@@ -30,6 +32,7 @@ impl WasmSedimentree {
     }
 
     /// Create an empty Sedimentree.
+    #[must_use]
     pub fn empty() -> Self {
         Sedimentree::default().into()
     }

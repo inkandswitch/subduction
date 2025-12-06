@@ -137,7 +137,7 @@ impl<T: Connection<Local>> Connection<Local> for WasmConnectionCallbackReader<T>
                         }
                     }
                 }
-                _otherwise => { /* Noop */ }
+                Message::BlobsRequest(_) | Message::BatchSyncRequest(_) => { /* Noop */ }
             }
 
             Ok(msg)

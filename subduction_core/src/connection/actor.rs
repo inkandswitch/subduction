@@ -25,6 +25,7 @@ pub struct ConnectionActor<'a, F: FutureKind, C: Connection<F>> {
 
 impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
     /// Create a new [`ConnectionActor`].
+    #[must_use]
     pub fn new(
         inbox: async_channel::Receiver<(ConnectionId, C)>,
         outbox: async_channel::Sender<(ConnectionId, C, Message)>,
@@ -146,6 +147,7 @@ impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F>> ConnectionActorFuture
     }
 
     /// Check if the actor future has been aborted.
+    #[must_use]
     pub fn is_aborted(&self) -> bool {
         self.fut.is_aborted()
     }

@@ -1,3 +1,5 @@
+//! Build script to embed the current Git commit hash into the compiled binary.
+
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -5,10 +7,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+#[allow(clippy::unwrap_used)]
 fn main() {
-    let ws = env::var("CARGO_WORKSPACE_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()));
+    let ws = env::var("CARGO_WORKSPACE_DIR").map_or_else(
+        |_| PathBuf::from(env::var("CARGO_MANIFEST_DIR").unwrap()),
+        PathBuf::from,
+    );
 
     let repo_root = find_repo_root(&ws).unwrap_or(ws.clone());
     let git_dir = repo_root.join(".git");
@@ -19,6 +23,7 @@ fn main() {
         "git",
         &[
             "-C",
+            #[allow(clippy::unwrap_used)]
             repo_root.to_str().unwrap(),
             "rev-parse",
             "--short",
@@ -31,8 +36,7 @@ fn main() {
         "git",
         &["-C", repo_root.to_str().unwrap(), "status", "--porcelain"],
     )
-    .map(|s| !s.is_empty())
-    .unwrap_or(false);
+    .is_some_and(|s| !s.is_empty());
 
     let git_hash = if dirty {
         let secs = SystemTime::now()
@@ -72,7 +76,7 @@ fn watch_git(git_dir: &Path) {
     println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
 
     if let Ok(head) = fs::read_to_string(git_dir.join("HEAD")) {
-        if let Some(rest) = head.strip_prefix("ref: ").map(|s| s.trim()) {
+        if let Some(rest) = head.strip_prefix("ref: ").map(str::trim) {
             println!("cargo:rerun-if-changed={}", git_dir.join(rest).display());
             println!(
                 "cargo:rerun-if-changed={}",

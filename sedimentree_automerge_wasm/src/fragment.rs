@@ -31,7 +31,7 @@ impl WasmFragmentState {
         self.0
             .members()
             .iter()
-            .cloned()
+            .copied()
             .map(WasmDigest::from)
             .collect()
     }
@@ -46,7 +46,7 @@ impl WasmFragmentState {
         self.0
             .checkpoints()
             .iter()
-            .cloned()
+            .copied()
             .map(WasmDigest::from)
             .collect()
     }
@@ -57,10 +57,10 @@ impl WasmFragmentState {
         let boundary = self.0.boundary();
 
         let mut map = HashMap::with_capacity(boundary.len());
-        for (key, value) in boundary.iter() {
-            let wasm_key: WasmDigest = key.clone().into();
+        for (key, value) in boundary {
+            let wasm_key: WasmDigest = (*key).into();
             let wasm_value: HashSet<WasmDigest> =
-                value.iter().cloned().map(WasmDigest::from).collect();
+                value.iter().copied().map(WasmDigest::from).collect();
             map.insert(wasm_key, wasm_value);
         }
         WasmBoundary(map)
@@ -88,11 +88,13 @@ pub struct WasmBoundary(HashMap<WasmDigest, HashSet<WasmDigest>>);
 #[wasm_bindgen(js_class = Boundary)]
 impl WasmBoundary {
     /// Get the set of digests for a given key in the boundary.
+    #[must_use]
     pub fn get(&self, key: &WasmDigest) -> Option<Vec<WasmDigest>> {
         self.0.get(key).map(|set| set.iter().cloned().collect())
     }
 
     /// Get all keys in the boundary.
+    #[must_use]
     pub fn keys(&self) -> Vec<WasmDigest> {
         self.0.keys().cloned().collect()
     }
@@ -105,7 +107,7 @@ impl From<HashMap<WasmDigest, HashSet<WasmDigest>>> for WasmBoundary {
 }
 
 /// A store for fragment states.
-#[derive(Debug, Clone)]
+#[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
 pub struct WasmFragmentStateStore(pub(crate) HashMap<Digest, FragmentState<HashSet<Digest>>>);
 
@@ -113,6 +115,7 @@ pub struct WasmFragmentStateStore(pub(crate) HashMap<Digest, FragmentState<HashS
 impl WasmFragmentStateStore {
     /// Create a new empty `WasmFragmentStateStore`.
     #[wasm_bindgen(constructor)]
+    #[must_use]
     pub fn new() -> Self {
         Self(HashMap::new())
     }
@@ -131,6 +134,7 @@ impl WasmFragmentStateStore {
     }
 }
 
+#[allow(clippy::implicit_hasher)]
 impl From<WasmFragmentStateStore> for HashMap<Digest, FragmentState<HashSet<Digest>>> {
     fn from(store: WasmFragmentStateStore) -> Self {
         store.0

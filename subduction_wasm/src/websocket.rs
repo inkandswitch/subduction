@@ -42,7 +42,11 @@ pub struct WasmWebSocket {
 #[wasm_bindgen(js_class = SubductionWebSocket)]
 impl WasmWebSocket {
     /// Create a new [`WasmWebSocket`] instance.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmWebSocketSetupCanceled`] if the setup was canceled.
+    #[allow(clippy::too_many_lines)]
     #[wasm_bindgen]
     pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(1024);
@@ -88,13 +92,13 @@ impl WasmWebSocket {
                                     );
                                     if let Err(e) = inner_inbound_writer.clone().send(Message::BatchSyncResponse(resp)).await {
                                             tracing::error!("failed to send inbound message: {e}");
-                                        };
+                                        }
                                 }
                             }
-                            other => {
+                            other @ (Message::LooseCommit { .. } | Message::Fragment { .. } | Message::BlobsRequest(_) | Message::BlobsResponse(_) | Message::BatchSyncRequest(_)) => {
                                     if let Err(e) = inner_inbound_writer.clone().send(other).await {
                                         tracing::error!("failed to send inbound message: {e}");
-                                    };
+                                    }
                                 }
                             }
                     });
@@ -116,6 +120,7 @@ impl WasmWebSocket {
         let maybe_tx_clone = maybe_tx.clone();
 
         // HACK: keeps the `onopen` closure alive until caled
+        #[allow(clippy::type_complexity)]
         let keep_closure_alive: Rc<RefCell<Option<Closure<dyn FnMut(Event)>>>> = Rc::new(RefCell::new(None));
         let keep_closure_alive_clone = keep_closure_alive.clone();
         let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {

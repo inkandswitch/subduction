@@ -20,7 +20,10 @@ pub struct WasmFragment(Fragment);
 #[wasm_refgen(js_ref = JsFragment)]
 #[wasm_bindgen(js_class = Fragment)]
 impl WasmFragment {
+    /// Create a new fragment from the given head, boundary, checkpoints, and blob metadata.
     #[wasm_bindgen(constructor)]
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
         head: WasmDigest,
         boundary: Vec<JsDigest>,
@@ -91,6 +94,7 @@ pub struct WasmFragmentRequested(FragmentRequested);
 impl WasmFragmentRequested {
     /// Create a new fragment request from the given digest.
     #[wasm_bindgen(constructor)]
+    #[must_use]
     pub fn new(digest: &WasmDigest, depth: &WasmDepth) -> Self {
         FragmentRequested::new(digest.clone().into(), depth.clone().into()).into()
     }

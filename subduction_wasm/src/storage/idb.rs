@@ -11,7 +11,7 @@ use web_sys::{
     IdbVersionChangeEvent, IdbObjectStoreParameters, 
 };
 
-use crate::{digest::WasmDigest, fragment::{JsFragment, WasmFragment}, loose_commit::{JsLooseCommit, WasmLooseCommit}, sedimentree_id::{self, WasmSedimentreeId}};
+use crate::{digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit, sedimentree_id::WasmSedimentreeId};
 
 /// The version number of the [`IndexedDB`] database schema.
 pub const DB_VERSION: u32 = 1;
@@ -28,12 +28,16 @@ pub const LOOSE_COMMIT_STORE_NAME: &str = "commits";
 /// The name of the object store for fragments.
 pub const FRAGMENT_STORE_NAME: &str = "fragments";
 
+/// The name of the index for looking up records by Sedimentree ID.
 pub const INDEX_BY_SEDIMENTREE_ID: &str = "by_sedimentree_id";
 
+/// The name of the field containing the Sedimentree ID in a record.
 pub const RECORD_FIELD_SEDIMENTREE_ID: &str = "sedimentree_id";
 
+/// The name of the field containing the digest in a record.
 pub const RECORD_FIELD_DIGEST: &str = "digest";
 
+/// The name of the field containing the payload in a record.
 pub const RECORD_FIELD_PAYLOAD: &str = "payload";
 
 /// `IndexedDB` storage backend.
@@ -89,8 +93,8 @@ impl WasmIndexedDbStorage {
                             match db.create_object_store_with_optional_parameters(LOOSE_COMMIT_STORE_NAME, &params) {
                                 Ok(store) => {
                                     let idx_names = store.index_names();
-                                    if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID) {
-                                        if let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
+                                    if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID)
+                                        && let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
                                             tracing::error!(
                                                 "failed to create index '{}' on object store '{}': {:?}",
                                                 INDEX_BY_SEDIMENTREE_ID,
@@ -98,7 +102,6 @@ impl WasmIndexedDbStorage {
                                                 e
                                             );
                                         }
-                                    }
                                 }
                                 Err(e) => {
                                     tracing::error!(
@@ -114,8 +117,8 @@ impl WasmIndexedDbStorage {
                             match db.create_object_store_with_optional_parameters(FRAGMENT_STORE_NAME, &params) {
                                 Ok(store) => {
                                     let idx_names = store.index_names();
-                                    if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID) {
-                                        if let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
+                                    if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID)
+                                        && let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
                                             tracing::error!(
                                                 "failed to create index '{}' on object store '{}': {:?}",
                                                 INDEX_BY_SEDIMENTREE_ID,
@@ -123,7 +126,6 @@ impl WasmIndexedDbStorage {
                                                 e
                                             );
                                         }
-                                    }
                                 }
                                 Err(e) => {
                                     tracing::error!(
@@ -150,23 +152,32 @@ impl WasmIndexedDbStorage {
         Ok(Self(db))
     }
 
+    /// Get the name of the blob store.
     #[wasm_bindgen(js_name = blobStoreName)]
+    #[must_use]
     pub fn blob_store_name(&self) -> String {
         BLOB_STORE_NAME.to_string()
     }
 
+    /// Get the name of the loose commit store.
     #[wasm_bindgen(js_name = looseCommitStoreName)]
+    #[must_use]
     pub fn loose_commit_store_name(&self) -> String {
         LOOSE_COMMIT_STORE_NAME.to_string()
     }
 
-
+    /// Get the name of the fragment store.
     #[wasm_bindgen(js_name = fragmentStoreName)]
+    #[must_use]
     pub fn fragment_store_name(&self) -> String {
         FRAGMENT_STORE_NAME.to_string()
     }
 
     /// Save a loose commit to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmSaveLooseCommitError`] if the loose commit could not be saved.
     #[wasm_bindgen( js_name = saveLooseCommit)]
     pub async fn wasm_save_loose_commit(
         &self,
@@ -174,7 +185,7 @@ impl WasmIndexedDbStorage {
         loose_commit: &WasmLooseCommit,
     ) -> Result<(), WasmSaveLooseCommitError> {
         let core_commit = LooseCommit::from(loose_commit.clone());
-        let digest = core_commit.digest().clone();
+        let digest = core_commit.digest();
         let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_commit, bincode::config::standard())?;
 
         let record = Record {
@@ -194,6 +205,10 @@ impl WasmIndexedDbStorage {
     }
 
     /// Load all loose commits from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmLoadLooseCommitsError`] if loose commits could not be loaded.
     #[wasm_bindgen( js_name = loadLooseCommits)]
     pub async fn wasm_load_loose_commits(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<WasmLooseCommit>, WasmLoadLooseCommitsError> {
         let tx = self.0
@@ -210,7 +225,7 @@ impl WasmIndexedDbStorage {
         let mut out: Vec<WasmLooseCommit> = Vec::new();
         for js_val in arr.iter() {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
-                .map_err(|e| WasmLoadLooseCommitsError::IndexError(e))?;
+                .map_err(WasmLoadLooseCommitsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
             let (commit, _) = bincode::serde::decode_from_slice::<LooseCommit, _>(
                 &bytes,
@@ -223,10 +238,14 @@ impl WasmIndexedDbStorage {
     }
 
     /// Save a fragment to storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmSaveFragmentError`] if the fragment could not be saved.
     #[wasm_bindgen(js_name = saveFragment)]
    pub  async fn wasm_save_fragment(&self, sedimentree_id: &WasmSedimentreeId, fragment: &WasmFragment) -> Result<(), WasmSaveFragmentError> {
         let core_fragment = Fragment::from(fragment.clone());
-        let digest = core_fragment.digest().clone();
+        let digest = core_fragment.digest();
         let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_fragment, bincode::config::standard())?;
 
         let record = Record {
@@ -246,6 +265,10 @@ impl WasmIndexedDbStorage {
     }
 
     /// Load all fragments from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmLoadFragmentsError`] if fragments could not be loaded.
     #[wasm_bindgen(js_name = loadFragments)]
     pub async fn wasm_load_fragments(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<WasmFragment>, WasmLoadFragmentsError> {
         let tx = self.0
@@ -262,7 +285,7 @@ impl WasmIndexedDbStorage {
         let mut out: Vec<WasmFragment> = Vec::new();
         for js_val in arr.iter() {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
-                .map_err(|e| WasmLoadFragmentsError::IndexError(e))?;
+                .map_err(WasmLoadFragmentsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
             let (commit, _) = bincode::serde::decode_from_slice::<Fragment, _>(
                 &bytes,
@@ -314,9 +337,7 @@ impl WasmIndexedDbStorage {
             return Ok(None);
         }
 
-        let u8s = if js_value.is_instance_of::<Uint8Array>() {
-            Uint8Array::new(&js_value)
-        } else if js_value.is_instance_of::<js_sys::ArrayBuffer>() {
+        let u8s = if js_value.is_instance_of::<Uint8Array>() || js_value.is_instance_of::<js_sys::ArrayBuffer>() {
             Uint8Array::new(&js_value)
         } else {
             return Err(WasmLoadBlobError::NotABlob);
@@ -371,7 +392,7 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, AwaitIdbError> {
     req.set_onerror(Some(error.as_ref().unchecked_ref()));
     error.forget();
 
-    Ok(rx.await?.map_err(AwaitIdbError::JsPromiseRejected)?)
+    rx.await?.map_err(AwaitIdbError::JsPromiseRejected)
 }
 
 /// Error indicating that a `JsValue` was expected to be a `Uint8Array` but was not.
@@ -396,11 +417,14 @@ impl From<InvalidIndexedDbValue> for JsValue {
     }
 }
 
+/// Errors that can occur while awaiting an `IndexedDB` operation.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum AwaitIdbError {
+    /// The channel was canceled.
     #[error("Channel dropped")]
     Canceled(#[from] oneshot::Canceled),
 
+    /// The JS Promise was rejected.
     #[error("JS Promise rejected: {0:?}")]
     JsPromiseRejected(JsValue),
 }
@@ -413,17 +437,22 @@ impl From<AwaitIdbError> for JsValue {
     }
 }
 
+/// Error types for `saveBlob`.
 #[derive(Debug, Error)]
 pub enum WasmSaveBlobError {
+    /// An error indicating that there was an issue during the transaction.
     #[error("saveBlob IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// An error indicating that there was an issue accessing the object store.
     #[error("saveBlob IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// An error indicating that the blob could not be stored in `IndexedDB`.
     #[error("unable to store fragment(s) from IndexedDB: {0:?}")]
     UnableToStoreBlob(JsValue),
 
+    /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -436,20 +465,26 @@ impl From<WasmSaveBlobError> for JsValue {
     }
 }
 
+/// Error types for `loadBlob`.
 #[derive(Debug, Clone, PartialEq, Error)]
 pub enum WasmLoadBlobError {
+    /// An error indicating that there was an issue during the transaction.
     #[error("loadBlob IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// An error indicating that there was an issue accessing the object store.
     #[error("loadBlob IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// An error indicating that the blob could not be retrieved from `IndexedDB`.
     #[error("unable to get blob from IndexedDB: {0:?}")]
     UnableToGetBlob(JsValue),
 
+    /// An error indicating that the loaded JS value is not a `Uint8Array` blob.
     #[error("value loaded via loadBlob is not a Uint8Array")]
     NotABlob,
 
+    /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -462,20 +497,26 @@ impl From<WasmLoadBlobError> for JsValue {
     }
 }
 
+/// Error types for `saveFragment`.
 #[derive(Debug, Error)]
 pub enum WasmSaveFragmentError {
+    /// An error indicating that there was an issue during the transaction.
     #[error("saveFragment IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// An error indicating that there was an issue accessing the object store.
     #[error("saveFragment IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// An error indicating that fragments could not be stored in `IndexedDB`.
     #[error("unable to store fragment(s) from IndexedDB: {0:?}")]
     UnableToStoreFragment(JsValue),
 
+    /// An error occurred while encoding a blob to be stored in `IndexedDB`.
     #[error("error encoding blob from IndexedDB: {0:?}")]
     EncodeError(#[from] bincode::error::EncodeError),
 
+    /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -488,26 +529,34 @@ impl From<WasmSaveFragmentError> for JsValue {
     }
 }
 
+/// Error types for `loadFragment`.
 #[derive(Debug, Error)]
 pub enum WasmLoadFragmentsError {
+    /// An error indicating that there was an issue during the transaction.
     #[error("loadFragment IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// An error indicating that there was an issue accessing the object store.
     #[error("loadFragment IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// An error indicating that fragments could not be retrieved from `IndexedDB`.
     #[error("unable to get fragment(s) from IndexedDB: {0:?}")]
     UnableToGetFragments(JsValue),
 
+    /// An error indicating that the loaded value is not a `Uint8Array`.
     #[error("value loaded via loadFragment is not a Uint8Array: {0:?}")]
     NotUint8Array(JsValue),
 
+    /// An error indicating that the loaded value is not an array of fragments.
     #[error("value loaded via loadFragment is not a Fragment array: {0:?}")]
     IndexError(JsValue),
 
+    /// An error occurred while decoding a fragment from `IndexedDB`.
     #[error("error decoding blob to fragment from IndexedDB: {0:?}")]
     DecodeError(#[from] bincode::error::DecodeError),
 
+    /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -521,20 +570,26 @@ impl From<WasmLoadFragmentsError> for JsValue {
 }
 
 
+/// Error types for `saveLooseCommit`.
 #[derive(Debug, Error)]
 pub enum WasmSaveLooseCommitError {
+    /// An error indicating that there was an issue during the transaction.
     #[error("saveLooseCommit IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// An error indicating that there was an issue accessing the object store.
     #[error("saveLooseCommit IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// An error indicating that loose commits could not be stored in `IndexedDB`.
     #[error("unable to store looseCommit(s) from IndexedDB: {0:?}")]
     UnableToStoreLooseCommit(JsValue),
 
+    /// An error occurred while encoding a blob to be stored in `IndexedDB`.
     #[error("error encoding blob from IndexedDB: {0:?}")]
     EncodeError(#[from] bincode::error::EncodeError),
 
+    /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -547,26 +602,34 @@ impl From<WasmSaveLooseCommitError> for JsValue {
     }
 }
 
+/// Error types for `loadLooseCommits`.
 #[derive(Debug, Error)]
 pub enum WasmLoadLooseCommitsError {
+    /// An error indicating that there was an issue during the transaction.
     #[error("loadlooseCommits IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// An error indicating that there was an issue accessing the object store.
     #[error("loadlooseCommits IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// An error indicating that loose commits could not be retrieved from `IndexedDB`.
     #[error("unable to get loose commit(s) from IndexedDB: {0:?}")]
     UnableToGetLooseCommits(JsValue),
 
+    /// An error indicating that the loaded value is not a `Uint8Array`.
     #[error("value loaded via loadlooseCommits is not a Uint8Array: {0:?}")]
     NotUint8Array(JsValue),
 
+    /// An error indicating that the loaded value is not an array of loose commits.
     #[error("value loaded via loadlooseCommits is not a looseCommit array: {0:?}")]
     IndexError(JsValue),
 
+    /// An error occurred while decoding a loose commit from `IndexedDB`.
     #[error("error decoding blob to loose commit from IndexedDB: {0:?}")]
     DecodeError(#[from] bincode::error::DecodeError),
 
+    /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -589,8 +652,13 @@ impl From<WasmLoadLooseCommitsError> for JsValue {
 impl From<Record> for JsValue {
     fn from(record: Record) -> Self {
         let obj = js_sys::Object::new();
+        #[allow(clippy::expect_used)]
         js_sys::Reflect::set(&obj, &RECORD_FIELD_SEDIMENTREE_ID.into(), &record.sedimentree_id.to_string().into()).expect("SedimentreeId to string failed");
+
+        #[allow(clippy::expect_used)]
         js_sys::Reflect::set(&obj, &RECORD_FIELD_DIGEST.into(), &record.digest.to_string().into()).expect("Digest to bytes failed");
+
+        #[allow(clippy::expect_used)]
         js_sys::Reflect::set(&obj, &RECORD_FIELD_PAYLOAD.into(), &js_sys::Uint8Array::from(record.payload.as_slice())).expect("Payload to Uint8Array failed");
         obj.into()
     }

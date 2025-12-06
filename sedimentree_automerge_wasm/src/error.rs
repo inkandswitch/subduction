@@ -58,6 +58,10 @@ pub enum WasmLookupError {
     #[error("invalid hash length: expected 32 bytes, got {0:?}")]
     InvalidHashLength(Vec<u8>),
 
+    /// A byte value was out of the valid range (0-255).
+    #[error("byte value out of range: expected 0-255, got {0}")]
+    ByteValueOutOfRange(f64),
+
     /// The expected hash was not a byte array.
     #[error("expected hash to be a byte array: got {0:?}")]
     ExpectedHashNotByteArray(JsValue),

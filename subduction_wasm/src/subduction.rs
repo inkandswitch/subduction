@@ -99,6 +99,7 @@ impl WasmSubduction {
     }
 
     /// Remove a Sedimentree by its ID.
+    #[must_use]
     #[wasm_bindgen(js_name = removeSedimentree)]
     pub fn remove_sedimentree(&self, id: &WasmSedimentreeId) -> bool {
         self.core.remove_sedimentree(id.clone().into())
@@ -178,8 +179,9 @@ impl WasmSubduction {
     /// Unregister a connection by its ID.
     ///
     /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
-    pub async fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core.unregister(&conn_id.clone().into()).await
+    #[must_use]
+    pub fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
+        self.core.unregister(&conn_id.clone().into())
     }
 
     /// Add a callback for commit events.
@@ -464,6 +466,7 @@ impl WasmSubduction {
     }
 
     /// Get all commits for a given Sedimentree ID
+    #[must_use]
     #[wasm_bindgen(js_name = getCommits)]
     pub fn get_commits(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmLooseCommit>> {
         self.core
@@ -472,6 +475,7 @@ impl WasmSubduction {
     }
 
     /// Get all fragments for a given Sedimentree ID
+    #[must_use]
     #[wasm_bindgen(js_name = getFragments)]
     pub fn get_fragments(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmFragment>> {
         self.core
@@ -579,6 +583,7 @@ impl ConnErrPair {
 /// Map of peer IDs to their batch sync results.
 #[wasm_bindgen(js_name = PeerResultMap)]
 #[derive(Debug)]
+#[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
     HashMap<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
 );
@@ -641,6 +646,8 @@ impl WasmHashMetric {
     /// Create a new `WasmHashMetric` with an optional JavaScript function.
     ///
     /// Defaults to counting leading zero bytes if no function is provided.
+    #[must_use]
+    #[allow(clippy::missing_const_for_fn)]
     #[wasm_bindgen(constructor)]
     pub fn new(func: Option<js_sys::Function>) -> Self {
         Self(func)

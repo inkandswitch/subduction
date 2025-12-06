@@ -16,13 +16,6 @@ rust-version.workspace = true
 [lib]
 crate-type = ["cdylib", "rlib"]
 
-[profile.release]
-opt-level = "z"
-lto = "fat"
-codegen-units = 1
-panic = "abort"
-strip = "symbols"
-
 [dependencies]
 automerge = { workspace = true }
 base58 = { workspace = true }
@@ -33,6 +26,7 @@ hex = "0.4.3"
 getrandom = { version = "0.3.3", features = ["wasm_js"] }
 js-sys = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core" }
+sha2 = { workspace = true }
 subduction_wasm = { path = "../subduction_wasm" }
 thiserror = { workspace = true }
 tracing = { workspace = true }

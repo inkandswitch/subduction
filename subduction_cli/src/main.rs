@@ -1,3 +1,5 @@
+//! Subduction CLI
+
 use clap::Parser;
 use sedimentree_core::{commit::CountLeadingZeroBytes, storage::MemoryStorage};
 use std::{
@@ -69,7 +71,7 @@ async fn main() -> anyhow::Result<()> {
 
     match args.command.as_deref() {
         Some("start") => {
-            let addr: SocketAddr = args.ws.parse()?;
+            let addr: SocketAddr = args.socket.parse()?;
             let _server: TokioWebSocketServer<MemoryStorage> = TokioWebSocketServer::setup(
                 addr,
                 Duration::from_secs(5),
@@ -121,5 +123,5 @@ struct Arguments {
     command: Option<String>,
 
     #[arg(short, long, default_value = "0.0.0.0:8080")]
-    ws: String,
+    socket: String,
 }

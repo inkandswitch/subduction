@@ -61,7 +61,7 @@ where
             let mut conns = JoinSet::new();
             loop {
                 tokio::select! {
-                    _ = child_cancellation_token.cancelled() => {
+                    () = child_cancellation_token.cancelled() => {
                             tracing::info!("accept loop canceled");
                             break;
                         }
@@ -75,7 +75,7 @@ where
                                     let mut hasher = blake3::Hasher::new();
                                     hasher.update(addr.ip().to_string().as_bytes());
                                     hasher.update(addr.port().to_le_bytes().as_ref());
-                                    hasher.finalize().as_bytes().clone()
+                                    *hasher.finalize().as_bytes()
                                 };
                                 let client_id = PeerId::new(client_digest);
 
@@ -109,7 +109,7 @@ where
                 }
             }
 
-            while let Some(_) = conns.join_next().await {}
+            while (conns.join_next().await).is_some() {}
         });
 
         Ok(Self {
@@ -122,6 +122,10 @@ where
     }
 
     /// Register a new WebSocket connection with the server.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the registration message send fails over the internal channel.
     pub async fn register(
         &self,
         ws: WebSocket<TokioAdapter<TcpStream>>,
@@ -135,7 +139,7 @@ where
     /// Graceful shutdown: cancel and await tasks.
     pub fn stop(&mut self) {
         self.cancellation_token.cancel();
-        self.accept_task.abort()
+        self.accept_task.abort();
     }
 }
 
@@ -186,7 +190,7 @@ where
                                 tracing::debug!("Subduction actor aborted");
                             }
                         }
-                        _ = t1.cancelled() => {}
+                        () = t1.cancelled() => {}
                     }
                 });
 
@@ -198,7 +202,7 @@ where
                                 tracing::error!("Subduction listener aborted");
                             }
                         }
-                        _ = t2.cancelled() => {}
+                        () = t2.cancelled() => {}
                     }
                 });
 

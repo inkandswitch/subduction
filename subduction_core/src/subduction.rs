@@ -13,11 +13,10 @@ use crate::{
     },
     peer::id::PeerId,
 };
-use async_channel::{bounded, Receiver, Sender};
+use async_channel::{bounded, Sender};
 use dashmap::{DashMap, DashSet};
 use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    sink::SinkExt,
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
@@ -41,7 +40,6 @@ use std::{
         Arc,
     },
     task::{Context, Poll},
-    thread::yield_now,
     time::Duration,
 };
 
@@ -78,6 +76,7 @@ impl<
     > Subduction<'a, F, S, C, M>
 {
     /// Initialize a new `Subduction` with the given storage backend and network adapters.
+    #[allow(clippy::type_complexity)]
     pub fn new(
         storage: S,
         depth_metric: M,
@@ -139,7 +138,7 @@ impl<
                     e
                 );
                 // Connection is broken - unregister it but keep draining messages
-                self.unregister(&conn_id).await;
+                self.unregister(&conn_id);
                 tracing::info!("Unregistered failed connection {:?}", conn_id);
 
                 // Re-register temporarily to drain remaining messages from the channel
@@ -149,8 +148,8 @@ impl<
                 true
             };
 
-            if should_reregister {
-                if let Err(e) = self.actor_channel.send((conn_id, conn)).await {
+            if should_reregister
+                && let Err(e) = self.actor_channel.send((conn_id, conn)).await {
                     tracing::error!(
                         "Error re-sending connection {:?} to actor channel: {:?}",
                         conn_id,
@@ -159,7 +158,6 @@ impl<
                     // Channel closed, exit loop
                     break;
                 }
-            }
         }
         Ok(())
     }
@@ -244,7 +242,7 @@ impl<
     pub fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) {
         tracing::debug!("Adding sedimentree with id {:?}", id);
         let existing = &mut self.sedimentrees.entry(id).or_default();
-        existing.merge(sedimentree)
+        existing.merge(sedimentree);
     }
 
     /// Remove a [`Sedimentree`].
@@ -377,7 +375,7 @@ impl<
         self.allowed_to_connect(&conn.peer_id()).await?;
 
         if let Some(hit) = self.conns.iter().find(|r| *r.value() == conn) {
-            Ok((false, hit.key().clone()))
+            Ok((false, *hit.key()))
         } else {
             let counter = self.next_connection_id.fetch_add(1, Ordering::Relaxed);
             let conn_id: ConnectionId = ConnectionId::new(counter);
@@ -393,7 +391,7 @@ impl<
     }
 
     /// Low-level unregistration of a connection.
-    pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
+    pub fn unregister(&self, conn_id: &ConnectionId) -> bool {
         self.conns.remove(conn_id).is_some()
     }
 
@@ -913,7 +911,7 @@ impl<
         let mut peer_conns = Vec::new();
         for entry in self.conns.iter() {
             if entry.value().peer_id() == *to_ask {
-                peer_conns.push((entry.key().clone(), entry.value().clone()));
+                peer_conns.push((*entry.key(), entry.value().clone()));
             }
         }
 
@@ -1001,7 +999,7 @@ impl<
                 peers
                     .entry(entry.value().peer_id())
                     .or_default()
-                    .push((entry.key().clone(), entry.value().clone()));
+                    .push((*entry.key(), entry.value().clone()));
             }
         }
 
@@ -1130,7 +1128,7 @@ impl<
                 .values()
                 .any(|(success, _blobs, _errs)| *success)
             {
-                for (_, (_, step_blobs, step_errs)) in all_results.into_iter() {
+                for (_, (_, step_blobs, step_errs)) in all_results {
                     blobs.extend(step_blobs);
                     errs.extend(step_errs);
                 }
@@ -1354,7 +1352,7 @@ impl<
         M: DepthMetric,
     > ListenerFuture<'a, F, S, C, M>
 {
-    /// Create a new ListenerFuture wrapping the given abortable future.
+    /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
         Self {
             fut: Box::pin(fut),
@@ -1363,6 +1361,7 @@ impl<
     }
 
     /// Check if the listener future has been aborted.
+    #[must_use]
     pub fn is_aborted(&self) -> bool {
         self.fut.is_aborted()
     }
