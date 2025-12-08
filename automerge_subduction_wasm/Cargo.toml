@@ -1,10 +1,10 @@
 [package]
-name = "subduction_automerge_wasm" # FIXME reverse namingto automerge subdutcion (reads better)
+name = "automerge_subduction_wasm"
 version = "0.1.0"
-description = "Wasm exports for Subduction + Automerge"
+description = "Wasm exports for Automerge over Subduction"
 
 categories = ["web-programming"]
-keywords = ["sedimentree", "automerge", "wasm"]
+keywords = ["automerge", "sedimentree", "wasm"]
 readme = "./README.md"
 
 authors.workspace = true
@@ -20,7 +20,7 @@ crate-type = ["cdylib", "rlib"]
 automerge = { workspace = true, features = ["wasm"] }
 build_info = { path = "../build_info" }
 console_error_panic_hook = { version = "0.1.7", optional = true }
-sedimentree_automerge_wasm = { path = "../sedimentree_automerge_wasm" }
+automerge_sedimentree_wasm = { path = "../automerge_sedimentree_wasm" }
 subduction_wasm = { path = "../subduction_wasm" }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }

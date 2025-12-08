@@ -1,10 +1,10 @@
 [package]
-name = "sedimentree_automerge"
+name = "automerge_sedimentree"
 version = "0.1.0"
 description = "Automerge integration for Sedimentree"
 
 categories = ["web-programming"]
-keywords = ["sedimentree", "automerge"]
+keywords = ["automerge", "sedimentree"]
 readme = "./README.md"
 
 authors.workspace = true

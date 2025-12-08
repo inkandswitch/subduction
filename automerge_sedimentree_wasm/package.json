@@ -3,7 +3,7 @@
   "version": "0.0.0-alpha.0",
   "description": "",
   "private": true,
-  "main": "pkg/sedimentree_automerge_wasm.js",
+  "main": "pkg/automerge_sedimentree_wasm.js",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
@@ -14,8 +14,8 @@
   "author": "",
   "license": "Apache-2.0",
   "type": "module",
-  "module": "pkg/sedimentree_automerge_wasm.js",
-  "types": "pkg/sedimentree_automerge_wasm.d.ts",
+  "module": "pkg/automerge_sedimentree_wasm.js",
+  "types": "pkg/automerge_sedimentree_wasm.d.ts",
   "files": [
     "pkg/*",
     "pkg-node/*",
@@ -24,22 +24,22 @@
   "exports": {
     ".": {
       "node": {
-        "import": "./pkg-node/sedimentree_automerge_wasm.js",
-        "require": "./pkg-node/sedimentree_automerge_wasm.js",
-        "types": "./pkg-node/sedimentree_automerge_wasm.d.ts"
+        "import": "./pkg-node/automerge_sedimentree_wasm.js",
+        "require": "./pkg-node/automerge_sedimentree_wasm.js",
+        "types": "./pkg-node/automerge_sedimentree_wasm.d.ts"
       },
-      "import": "./pkg/sedimentree_automerge_wasm.js",
-      "require": "./pkg/sedimentree_automerge_wasm.js",
-      "types": "./pkg/sedimentree_automerge_wasm.d.ts"
+      "import": "./pkg/automerge_sedimentree_wasm.js",
+      "require": "./pkg/automerge_sedimentree_wasm.js",
+      "types": "./pkg/automerge_sedimentree_wasm.d.ts"
     },
     "./slim": {
       "types": "./pkg-slim/index.d.ts",
       "import": "./pkg-slim/index.js"
     },
-    "./sedimentree_automerge_wasm.wasm": "./pkg-slim/sedimentree_automerge_wasm_bg.wasm",
-    "./sedimentree_automerge_wasm.base64.js": {
-      "import": "./pkg-slim/sedimentree_automerge_wasm_bg.wasm.base64.js",
-      "types": "./pkg-slim/sedimentree_automerge_wasm_bg.wasm.base64.d.ts"
+    "./automerge_sedimentree_wasm.wasm": "./pkg-slim/automerge_sedimentree_wasm_bg.wasm",
+    "./automerge_sedimentree_wasm.base64.js": {
+      "import": "./pkg-slim/automerge_sedimentree_wasm_bg.wasm.base64.js",
+      "types": "./pkg-slim/automerge_sedimentree_wasm_bg.wasm.base64.d.ts"
     }
   },
   "devDependencies": {

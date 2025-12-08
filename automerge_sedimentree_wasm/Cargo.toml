@@ -1,10 +1,10 @@
 [package]
-name = "sedimentree_automerge_wasm"
+name = "automerge_sedimentree_wasm"
 version = "0.1.0"
-description = "Wasm bindings for sedimentree_automerge"
+description = "Wasm bindings for automerge_sedimentree"
 
 categories = ["web-programming"]
-keywords = ["sedimentree", "automerge", "wasm"]
+keywords = ["automerge", "sedimentree", "wasm"]
 readme = "./README.md"
 
 authors.workspace = true

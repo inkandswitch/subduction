@@ -6,7 +6,7 @@ use wasm_bindgen::prelude::*;
 use wasm_tracing::WasmLayerConfig;
 
 pub use automerge;
-pub use sedimentree_automerge_wasm;
+pub use automerge_sedimentree_wasm;
 pub use subduction_wasm;
 
 /// Set a panic hook to get better error messages if the code panics.
@@ -27,7 +27,7 @@ pub fn start() {
     set_panic_hook();
 
     tracing::info!(
-        "🏔️ subduction_automerge_wasm v{} ({})",
+        "🏔️ automerge_subduction_wasm v{} ({})",
         env!("CARGO_PKG_VERSION"),
         build_info::GIT_HASH
     );

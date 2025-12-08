@@ -198,6 +198,50 @@ dependencies = [
 ]
 
 [[package]]
+name = "automerge_sedimentree"
+version = "0.1.0"
+dependencies = [
+ "automerge",
+ "sedimentree_core",
+]
+
+[[package]]
+name = "automerge_sedimentree_wasm"
+version = "0.1.0"
+dependencies = [
+ "automerge",
+ "base58",
+ "blake3",
+ "bs58",
+ "build_info",
+ "getrandom",
+ "hex",
+ "js-sys",
+ "sedimentree_core",
+ "sha2 0.10.9",
+ "subduction_wasm",
+ "thiserror",
+ "tracing",
+ "wasm-bindgen",
+ "wasm_refgen",
+]
+
+[[package]]
+name = "automerge_subduction_wasm"
+version = "0.1.0"
+dependencies = [
+ "automerge",
+ "automerge_sedimentree_wasm",
+ "build_info",
+ "console_error_panic_hook",
+ "subduction_wasm",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-tracing",
+ "wasm_refgen",
+]
+
+[[package]]
 name = "axum"
 version = "0.8.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -452,9 +496,9 @@ checksum = "b35204fbdc0b3f4446b89fc1ac2cf84a8a68971995d0bf2e925ec7cd960f9cb3"
 
 [[package]]
 name = "cc"
-version = "1.2.48"
+version = "1.2.49"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c481bdbf0ed3b892f6f806287d72acd515b352a4ec27a208489b8c1bc839633a"
+checksum = "90583009037521a116abf44494efecd645ba48b6622457080f080b85544e2215"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -777,9 +821,9 @@ checksum = "3a3076410a55c90011c298b04d0cfa770b00fa04e1e3c97d3f6c9de105a03844"
 
 [[package]]
 name = "flate2"
-version = "1.1.7"
+version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a2152dbcb980c05735e2a651d96011320a949eb31a0c8b38b72645ce97dec676"
+checksum = "bfe33edd8e85a12a67454e37f8c75e730830d83e313556ab9ebf9ee7fbeb3bfb"
 dependencies = [
  "crc32fast",
  "miniz_oxide",
@@ -1837,35 +1881,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "sedimentree_automerge"
-version = "0.1.0"
-dependencies = [
- "automerge",
- "sedimentree_core",
-]
-
-[[package]]
-name = "sedimentree_automerge_wasm"
-version = "0.1.0"
-dependencies = [
- "automerge",
- "base58",
- "blake3",
- "bs58",
- "build_info",
- "getrandom",
- "hex",
- "js-sys",
- "sedimentree_core",
- "sha2 0.10.9",
- "subduction_wasm",
- "thiserror",
- "tracing",
- "wasm-bindgen",
- "wasm_refgen",
-]
-
-[[package]]
 name = "sedimentree_core"
 version = "0.1.0"
 dependencies = [
@@ -2032,21 +2047,6 @@ name = "strsim"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
-
-[[package]]
-name = "subduction_automerge_wasm"
-version = "0.1.0"
-dependencies = [
- "automerge",
- "build_info",
- "console_error_panic_hook",
- "sedimentree_automerge_wasm",
- "subduction_wasm",
- "tracing",
- "wasm-bindgen",
- "wasm-tracing",
- "wasm_refgen",
-]
 
 [[package]]
 name = "subduction_cli"

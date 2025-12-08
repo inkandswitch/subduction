@@ -643,7 +643,7 @@ impl From<WasmLoadLooseCommitsError> for JsValue {
 }
 
 #[derive(Debug, Clone)]
- struct Record {
+pub(crate) struct Record {
     sedimentree_id: SedimentreeId,
     digest: Digest,
     payload: Vec<u8>,

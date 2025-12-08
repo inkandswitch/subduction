@@ -1,4 +1,4 @@
-//! Wasm bindings for `sedimentree_automerge`
+//! Wasm bindings for `automerge_sedimentree`
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 

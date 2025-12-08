@@ -1,11 +1,11 @@
 [workspace]
 resolver = "3"
 members = [
+  "automerge_sedimentree",
+  "automerge_sedimentree_wasm",
+  "automerge_subduction_wasm",
   "build_info",
-  "sedimentree_automerge",
-  "sedimentree_automerge_wasm",
   "sedimentree_core",
-  "subduction_automerge_wasm",
   "subduction_cli",
   "subduction_core",
   "subduction_wasm",

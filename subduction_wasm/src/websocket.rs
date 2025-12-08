@@ -119,7 +119,7 @@ impl WasmWebSocket {
         let maybe_tx = Rc::new(RefCell::new(Some(tx)));
         let maybe_tx_clone = maybe_tx.clone();
 
-        // HACK: keeps the `onopen` closure alive until caled
+        // HACK: keeps the `onopen` closure alive until called
         #[allow(clippy::type_complexity)]
         let keep_closure_alive: Rc<RefCell<Option<Closure<dyn FnMut(Event)>>>> = Rc::new(RefCell::new(None));
         let keep_closure_alive_clone = keep_closure_alive.clone();

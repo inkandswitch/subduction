@@ -2,8 +2,8 @@
 // produce a stub in the `@automerge/subduction/slim` subpath export
 // which knows how to initialize the wasm module from a base64
 // encoded string
-import * as subduction from "./sedimentree_automerge_wasm.js";
-export * from "./sedimentree_automerge_wasm.js";
+import * as subduction from "./automerge_sedimentree_wasm.js";
+export * from "./automerge_sedimentree_wasm.js";
 
 export function initFromBase64Wasm(base64Wasm: string) {
   const wasm = new Uint8Array(

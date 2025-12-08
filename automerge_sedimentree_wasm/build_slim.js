@@ -53,9 +53,9 @@ execSync(
 console.log("=========================================");
 console.log("  base64 encoding wasm file");
 console.log("=========================================");
-// Also base64 encode the wasm file and write it to pkg-slim/subduction_automerge_wasm_bg.wasm.base64
-const wasmFile = path.join(SLIM_PKG_DIR, "subduction_automerge_wasm_bg.wasm");
-const base64File = path.join(SLIM_PKG_DIR, "subduction_automerge_wasm_bg.wasm.base64.js");
+// Also base64 encode the wasm file and write it to pkg-slim/automerge_sedimentree_wasm_bg.wasm.base64
+const wasmFile = path.join(SLIM_PKG_DIR, "automerge_sedimentree_wasm_bg.wasm");
+const base64File = path.join(SLIM_PKG_DIR, "automerge_sedimentree_wasm_bg.wasm.base64.js");
 
 const wasmBase64 = Buffer.from(readFileSync(wasmFile))
   .toString("base64")
@@ -66,9 +66,9 @@ const fileContents = `
 writeFileSync(base64File, fileContents);
 
 // Now also write the types for the base64 module
-const typesFile = path.join(SLIM_PKG_DIR, "subduction_automerge_wasm_bg.wasm.base64.d.ts");
+const typesFile = path.join(SLIM_PKG_DIR, "automerge_sedimentree_wasm_bg.wasm.base64.d.ts");
 const typesContents = `
-  declare module "subduction_automerge_wasm_bg.wasm" {
+  declare module "automerge_sedimentree_wasm_bg.wasm" {
     export const wasmBase64: string;
   }
 `;

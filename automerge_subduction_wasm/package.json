@@ -3,7 +3,7 @@
   "version": "0.0.0-alpha.0",
   "description": "",
   "private": true,
-  "main": "pkg/subduction_automerge_wasm.js",
+  "main": "pkg/automerge_subduction_wasm.js",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
@@ -14,8 +14,8 @@
   "author": "",
   "license": "Apache-2.0",
   "type": "module",
-  "module": "pkg/subduction_automerge_wasm.js",
-  "types": "pkg/subduction_automerge_wasm.d.ts",
+  "module": "pkg/automerge_subduction_wasm.js",
+  "types": "pkg/automerge_subduction_wasm.d.ts",
   "files": [
     "pkg/*",
     "pkg-node/*",
@@ -24,22 +24,22 @@
   "exports": {
     ".": {
       "node": {
-        "import": "./pkg-node/subduction_automerge_wasm.js",
-        "require": "./pkg-node/subduction_automerge_wasm.js",
-        "types": "./pkg-node/subduction_automerge_wasm.d.ts"
+        "import": "./pkg-node/automerge_subduction_wasm.js",
+        "require": "./pkg-node/automerge_subduction_wasm.js",
+        "types": "./pkg-node/automerge_subduction_wasm.d.ts"
       },
-      "import": "./pkg/subduction_automerge_wasm.js",
-      "require": "./pkg/subduction_automerge_wasm.js",
-      "types": "./pkg/subduction_automerge_wasm.d.ts"
+      "import": "./pkg/automerge_subduction_wasm.js",
+      "require": "./pkg/automerge_subduction_wasm.js",
+      "types": "./pkg/automerge_subduction_wasm.d.ts"
     },
     "./slim": {
       "types": "./pkg-slim/index.d.ts",
       "import": "./pkg-slim/index.js"
     },
-    "./subduction_automerge_wasm.wasm": "./pkg-slim/subduction_automerge_wasm_bg.wasm",
-    "./subduction_automerge_wasm.base64.js": {
-      "import": "./pkg-slim/subduction_automerge_wasm_bg.wasm.base64.js",
-      "types": "./pkg-slim/subduction_automerge_wasm_bg.wasm.base64.d.ts"
+    "./automerge_subduction_wasm.wasm": "./pkg-slim/automerge_subduction_wasm_bg.wasm",
+    "./automerge_subduction_wasm.base64.js": {
+      "import": "./pkg-slim/automerge_subduction_wasm_bg.wasm.base64.js",
+      "types": "./pkg-slim/automerge_subduction_wasm_bg.wasm.base64.d.ts"
     }
   },
   "devDependencies": {
