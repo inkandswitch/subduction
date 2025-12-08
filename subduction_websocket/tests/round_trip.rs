@@ -94,12 +94,15 @@ async fn batch_sync() -> TestResult {
     let commit3 = LooseCommit::new(commit_digest3, vec![], BlobMeta::new(blob3.as_slice()));
 
     let server_storage = MemoryStorage::default();
-    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&server_storage, commit1.clone())
-        .await?;
-    <MemoryStorage as Storage<Sendable>>::save_blob(&server_storage, blob1.clone()).await?;
-
     let server_tree = Sedimentree::new(vec![], vec![commit1.clone()]);
     let sed_id = sedimentree_core::SedimentreeId::new([0u8; 32]);
+    <MemoryStorage as Storage<Sendable>>::save_loose_commit(
+        &server_storage,
+        sed_id,
+        commit1.clone(),
+    )
+    .await?;
+    <MemoryStorage as Storage<Sendable>>::save_blob(&server_storage, blob1.clone()).await?;
 
     let server = Arc::new(
         Subduction::<Sendable, MemoryStorage, TokioWebSocketServer>::new(
@@ -136,19 +139,25 @@ async fn batch_sync() -> TestResult {
     let client_sed_id = sedimentree_core::SedimentreeId::new([0u8; 32]);
 
     let client_storage = MemoryStorage::default();
-    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&client_storage, commit2.clone())
-        .await?;
+    <MemoryStorage as Storage<Sendable>>::save_loose_commit(
+        &client_storage,
+        client_sed_id,
+        commit2.clone(),
+    )
+    .await?;
     <MemoryStorage as Storage<Sendable>>::save_blob(&client_storage, blob2.clone()).await?;
-    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&client_storage, commit3.clone())
-        .await?;
+    <MemoryStorage as Storage<Sendable>>::save_loose_commit(
+        &client_storage,
+        client_sed_id,
+        commit3.clone(),
+    )
+    .await?;
     <MemoryStorage as Storage<Sendable>>::save_blob(&client_storage, blob3.clone()).await?;
 
-    let client = Arc::new(Subduction::new(
-        HashMap::from_iter([(client_sed_id, client_tree)]),
-        client_storage,
-        HashMap::new(),
-        CountLeadingZeroBytes,
-    ));
+    let (client, listener_fut, actor_fut) = Subduction::new(client_storage, CountLeadingZeroBytes);
+
+    tokio::spawn(async move { actor_fut.await });
+    tokio::spawn(async move { listener_fut.await });
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
     let client_ws = TokioWebSocketClient::new(uri, Duration::from_secs(5), PeerId::new([1; 32]))

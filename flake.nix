@@ -235,7 +235,7 @@
 
       in rec {
         devShells.default = pkgs.mkShell {
-          name = "sedimentree";
+          name = "subduction shell";
 
           nativeBuildInputs = with pkgs;
             [
@@ -252,6 +252,7 @@
               pkgs.playwright-driver.browsers
               pkgs.rust-analyzer
               pkgs.tokio-console
+              pkgs.typescript
               pkgs.wasm-pack
               pkgs.websocat
             ]
