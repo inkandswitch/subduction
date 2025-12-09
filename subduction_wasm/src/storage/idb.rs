@@ -79,6 +79,19 @@ impl WasmIndexedDbStorage {
 
                         let names = db.object_store_names();
 
+                        if !names.contains(SEDIMENTREE_ID_STORE_NAME) {
+                            match db.create_object_store(SEDIMENTREE_ID_STORE_NAME) {
+                                Ok(_) => {},
+                                Err(e) => {
+                                    tracing::error!(
+                                        "failed to create object store '{}': {:?}",
+                                        SEDIMENTREE_ID_STORE_NAME,
+                                        e
+                                    );
+                                }
+                            }
+                        }
+
                         if !names.contains(BLOB_STORE_NAME) {
                             match db.create_object_store(BLOB_STORE_NAME) {
                                 Ok(_) => {},
@@ -155,6 +168,13 @@ impl WasmIndexedDbStorage {
         Ok(Self(db))
     }
 
+    /// Get the name of the `sedimentreeId` store.
+    #[wasm_bindgen(js_name = sedimentreeIdStoreName)]
+    #[must_use]
+    pub fn sedimentree_id_store_name(&self) -> String {
+        SEDIMENTREE_ID_STORE_NAME.to_string()
+    }
+
     /// Get the name of the blob store.
     #[wasm_bindgen(js_name = blobStoreName)]
     #[must_use]
@@ -177,7 +197,7 @@ impl WasmIndexedDbStorage {
     }
 
     /// Insert a Sedimentree ID into storage.
-    #[wasm_bindgen(js_name = insertSedimentreeId)]
+    #[wasm_bindgen(js_name = saveSedimentreeId)]
     pub async fn wasm_save_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Result<(), WasmSaveSedimentreeIdError> {
         let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveSedimentreeIdError::TransactionError)?;
         let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmSaveSedimentreeIdError::ObjectStoreError)?;

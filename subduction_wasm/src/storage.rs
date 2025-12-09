@@ -102,7 +102,7 @@ impl Storage<Local> for JsStorage {
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         async move {
-            let span = tracing::debug_span!("JsStorage::insert_sedimentree_id");
+            let span = tracing::debug_span!("JsStorage::save_sedimentree_id");
             let _enter = span.enter();
 
             tracing::debug!("inserting sedimentree id {:?}", sedimentree_id);
