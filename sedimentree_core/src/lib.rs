@@ -22,6 +22,7 @@ use std::{
 
 use blob::{BlobMeta, Digest};
 use depth::{Depth, DepthMetric, MAX_STRATA_DEPTH};
+use thiserror::Error;
 
 pub mod blob;
 pub mod commit;
@@ -57,7 +58,8 @@ impl SedimentreeId {
 }
 
 /// An error indicating that a [`SedimentreeId`] could not be parsed from a string.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Error)]
+#[error("Invalid SedimentreeId")]
 pub struct BadSedimentreeId;
 
 impl FromStr for SedimentreeId {

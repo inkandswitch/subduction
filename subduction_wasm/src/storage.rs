@@ -2,16 +2,18 @@
 
 pub mod idb;
 
+use std::{collections::HashSet, str::FromStr};
+
 use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::{Blob, Digest},
     future::Local,
     storage::Storage,
-    Fragment, LooseCommit, SedimentreeId,
+    BadSedimentreeId, Fragment, LooseCommit, SedimentreeId,
 };
 use thiserror::Error;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
@@ -26,6 +28,9 @@ use crate::{
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
 export interface Storage {
+    saveSedimentreeId(sedimentreeId: SedimentreeId): Promise<void>;
+    loadSedimentreeIds(): Promise<SedimentreeId[]>;
+
     saveLooseCommit(sedimentreeId: SedimentreeId, commit: LooseCommit): Promise<void>;
     saveFragment(sedimentreeId: SedimentreeId, fragment: Fragment): Promise<void>;
     saveBlob(data: Uint8Array): Promise<Digest>;
@@ -41,6 +46,14 @@ extern "C" {
     /// A duck-typed storage backend interface.
     #[wasm_bindgen(js_name = Storage, typescript_type = "Storage")]
     pub type JsStorage;
+
+    /// Insert a sedimentree ID to know which sedimentrees have data stored.
+    #[wasm_bindgen(method, js_name = saveSedimentreeId)]
+    fn js_save_sedimentree_id(this: &JsStorage, sedimentree_id: &JsSedimentreeId) -> Promise;
+
+    /// Get all sedimentree IDs that have loose commits stored.
+    #[wasm_bindgen(method, js_name = loadAllSedimentreeIds)]
+    fn js_load_all_sedimentree_ids(this: &JsStorage) -> Promise;
 
     /// Save a blob to storage.
     #[wasm_bindgen(method, js_name = saveBlob)]
@@ -83,6 +96,51 @@ impl std::fmt::Debug for JsStorage {
 
 impl Storage<Local> for JsStorage {
     type Error = JsStorageError;
+
+    fn save_sedimentree_id(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            let span = tracing::debug_span!("JsStorage::insert_sedimentree_id");
+            let _enter = span.enter();
+
+            tracing::debug!("inserting sedimentree id {:?}", sedimentree_id);
+            let js_promise =
+                self.js_save_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
+            JsFuture::from(js_promise)
+                .await
+                .map_err(JsStorageError::SaveLooseCommitError)?;
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn load_all_sedimentree_ids(
+        &self,
+    ) -> LocalBoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
+        async move {
+            let span = tracing::debug_span!("JsStorage::get_sedimentree_ids");
+            let _enter = span.enter();
+
+            let js_promise = self.js_load_all_sedimentree_ids();
+            let js_value = JsFuture::from(js_promise)
+                .await
+                .map_err(JsStorageError::LoadLooseCommitsError)?;
+            let js_ids_array = js_sys::Array::try_from_js_value_ref(&js_value)
+                .ok_or_else(|| JsStorageError::NotSedimentreeIdArray(js_value.clone()))?;
+            let mut sedimentree_ids_set = HashSet::new();
+            for js_id in js_ids_array.iter() {
+                let string_id = js_id
+                    .as_string()
+                    .ok_or_else(|| JsStorageError::SedimentreeIdNotAString(js_id.clone()))?;
+                let id = SedimentreeId::from_str(&string_id)?;
+                sedimentree_ids_set.insert(id);
+            }
+            Ok(sedimentree_ids_set)
+        }
+        .boxed_local()
+    }
 
     fn save_loose_commit(
         &self,
@@ -222,6 +280,18 @@ impl Storage<Local> for JsStorage {
 /// Errors that can occur when using `JsStorage`.
 #[derive(Error, Debug)]
 pub enum JsStorageError {
+    /// The `JsValue` could not be converted into an array of `SedimentreeId`s.
+    #[error("Value was not an array of SedimentreeIds: {0:?}")]
+    NotSedimentreeIdArray(JsValue),
+
+    /// A sedimentree ID was not a string.
+    #[error("SedimentreeId was not a string: {0:?}")]
+    SedimentreeIdNotAString(JsValue),
+
+    /// A sedimentree ID string was invalid.
+    #[error(transparent)]
+    BadSedimentreeId(#[from] BadSedimentreeId),
+
     /// An error occurred while saving a blob.
     #[error("JavaScript save blob error: {0:?}")]
     SaveBlobError(JsValue),

@@ -2,10 +2,10 @@
 
 use futures::{channel::oneshot};
 use js_sys::Uint8Array;
-use sedimentree_core::{blob::{ Digest}, Fragment, LooseCommit, SedimentreeId};
-use std::{cell::RefCell, rc::Rc};
+use sedimentree_core::{BadSedimentreeId, Fragment, LooseCommit, SedimentreeId, blob::Digest};
+use std::{cell::RefCell, rc::Rc, str::FromStr};
 use thiserror::Error;
-use wasm_bindgen::prelude::*;
+use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use web_sys::{
     Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
     IdbVersionChangeEvent, IdbObjectStoreParameters, 
@@ -18,6 +18,9 @@ pub const DB_VERSION: u32 = 1;
 
 /// The name of the [`IndexedDB`] database.
 pub const DB_NAME: &str = "@automerge/subduction/db";
+
+/// The name of the object store for blobs.
+pub const SEDIMENTREE_ID_STORE_NAME: &str = "sedimentree_ids";
 
 /// The name of the object store for blobs.
 pub const BLOB_STORE_NAME: &str = "blobs";
@@ -171,6 +174,41 @@ impl WasmIndexedDbStorage {
     #[must_use]
     pub fn fragment_store_name(&self) -> String {
         FRAGMENT_STORE_NAME.to_string()
+    }
+
+    /// Insert a Sedimentree ID into storage.
+    #[wasm_bindgen(js_name = insertSedimentreeId)]
+    pub async fn wasm_save_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Result<(), WasmSaveSedimentreeIdError> {
+        let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveSedimentreeIdError::TransactionError)?;
+        let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmSaveSedimentreeIdError::ObjectStoreError)?;
+        let req = store
+            .put_with_key(
+                &JsValue::NULL,
+                &JsValue::from_str(&sedimentree_id.to_string()),
+            ).map_err(WasmSaveSedimentreeIdError::PutError)?;
+
+        drop(await_idb(&req).await?);
+        Ok(())
+    }
+
+    /// Load all Sedimentree IDs from storage.
+    #[wasm_bindgen(js_name = loadAllSedimentreeIds)]
+    pub async fn wasm_load_all_sedimentree_ids(&self) -> Result<Vec<WasmSedimentreeId>, WasmLoadAllSedimentreeIdsError> {
+        let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadAllSedimentreeIdsError::TransactionError)?;
+        let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmLoadAllSedimentreeIdsError::ObjectStoreError)?;
+        let req = store.get_all_keys().map_err(WasmLoadAllSedimentreeIdsError::GetAllKeysError)?;
+
+        let js_value = await_idb(&req).await?;
+        let array = js_sys::Array::try_from_js_value_ref(&js_value).ok_or_else(||WasmLoadAllSedimentreeIdsError::NotAnArray(js_value))?;
+
+        let mut xs = Vec::new();
+        for js_val in array.iter() {
+            let s = js_val.as_string().ok_or_else(|| WasmLoadAllSedimentreeIdsError::StoredElementNotAString(js_val.clone()))?;
+            let sedimentree_id = SedimentreeId::from_str(&s).map_err(WasmLoadAllSedimentreeIdsError::BadSedimentreeId)?;
+            xs.push(sedimentree_id.into());
+        }
+
+        Ok(xs)
     }
 
     /// Save a loose commit to storage.
@@ -493,6 +531,74 @@ impl From<WasmLoadBlobError> for JsValue {
     fn from(err: WasmLoadBlobError) -> Self {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("WasmLoadBlobError");
+        err.into()
+    }
+}
+
+/// Error types for `saveSedimentreeId`.
+#[derive(Debug, Error)]
+pub enum WasmSaveSedimentreeIdError {
+    /// An error indicating that there was an issue during the transaction.
+    #[error("saveSedimentreeId IndexedDB transaction error: {0:?}")]
+    TransactionError(JsValue),
+
+    /// An error indicating that there was an issue accessing the object store.
+    #[error("saveSedimentreeId IndexedDB object store error: {0:?}")]
+    ObjectStoreError(JsValue),
+
+    /// An error indicating that the sedimentree ID could not be saveed into `IndexedDB`.
+    #[error("unable to `put` sedimentree ID into IndexedDB: {0:?}")]
+    PutError(JsValue),
+
+    /// An error occurred while awaiting an `IndexedDB` operation.
+    #[error("error awaiting IndexedDB operation: {0:?}")]
+    AwaitIdbError(#[from] AwaitIdbError),
+}
+
+impl From<WasmSaveSedimentreeIdError> for JsValue {
+    fn from(err: WasmSaveSedimentreeIdError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WasmSaveSedimentreeIdError");
+        err.into()
+    }
+}
+
+/// Error types for `loadAllSedimentreeIds`.
+#[derive(Debug, Error)]
+pub enum WasmLoadAllSedimentreeIdsError {
+    /// An error indicating that there was an issue during the transaction.
+    #[error("loadSedimentreeIds IndexedDB transaction error: {0:?}")]
+    TransactionError(JsValue),
+
+    /// An error indicating that there was an issue accessing the object store.
+    #[error("loadSedimentreeIds IndexedDB object store error: {0:?}")]
+    ObjectStoreError(JsValue),
+
+    /// An error indicating that the sedimentree IDs could not be made into a valid request.
+    #[error("unable to get sedimentree IDs from IndexedDB: {0:?}")]
+    GetAllKeysError(JsValue),
+
+    /// An error indicating that the loaded value is not an array.
+    #[error("value loaded via loadSedimentreeIds is not an array: {0:?}")]
+    NotAnArray(JsValue),
+
+    /// An error indicating that a stored sedimentree ID is not a string.
+    #[error("value loaded via loadSedimentreeIds is not a string: {0:?}")]
+    StoredElementNotAString(JsValue),
+
+    /// An error indicating that a stored sedimentree ID is invalid.
+    #[error(transparent)]
+    BadSedimentreeId(#[from] BadSedimentreeId),
+
+    /// An error occurred while awaiting an `IndexedDB` operation.
+    #[error("error awaiting IndexedDB operation: {0:?}")]
+    AwaitIdbError(#[from] AwaitIdbError),
+}
+
+impl From<WasmLoadAllSedimentreeIdsError> for JsValue {
+    fn from(err: WasmLoadAllSedimentreeIdsError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WasmLoadAllSedimentreeIdsError");
         err.into()
     }
 }
