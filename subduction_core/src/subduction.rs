@@ -14,11 +14,11 @@ use crate::{
     peer::id::PeerId,
 };
 use async_channel::{bounded, Sender};
-use dashmap::{DashMap, DashSet};
 use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
+    lock::Mutex,
+    stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
 };
 use nonempty::NonEmpty;
 use request::FragmentRequested;
@@ -53,9 +53,9 @@ pub struct Subduction<
     M: DepthMetric = CountLeadingZeroBytes,
 > {
     depth_metric: M,
-    sedimentrees: Arc<DashMap<SedimentreeId, Sedimentree>>,
+    sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
     next_connection_id: Arc<AtomicUsize>,
-    conns: Arc<DashMap<ConnectionId, C>>,
+    conns: Arc<Mutex<HashMap<ConnectionId, C>>>,
     storage: S,
 
     actor_channel: Sender<(ConnectionId, C)>,
@@ -96,9 +96,9 @@ impl<
 
         let sd = Arc::new(Self {
             depth_metric,
-            sedimentrees: Arc::new(DashMap::new()),
+            sedimentrees: Arc::new(Mutex::new(HashMap::new())),
             next_connection_id: Arc::new(AtomicUsize::new(0)),
-            conns: Arc::new(DashMap::new()),
+            conns: Arc::new(Mutex::new(HashMap::new())),
             storage,
             actor_channel: actor_sender,
             msg_queue: queue_receiver,
@@ -128,8 +128,10 @@ impl<
             let fragments = subduction.storage.load_fragments(id).await.map_err(HydrationError::LoadFragmentsError)?;
             let sedimentree = Sedimentree::new(fragments, loose_commits);
 
-            let existing = &mut subduction.sedimentrees.entry(id).or_default();
-            existing.merge(sedimentree);
+            {
+                let mut locked = subduction.sedimentrees.lock().await;
+                locked.entry(id).or_default().merge(sedimentree);
+            }
         }
         Ok((subduction, fut_listener, conn_actor))
     }
@@ -158,7 +160,7 @@ impl<
                     e
                 );
                 // Connection is broken - unregister it but keep draining messages
-                self.unregister(&conn_id);
+                self.unregister(&conn_id).await;
                 tracing::info!("Unregistered failed connection {:?}", conn_id);
 
                 // Re-register temporarily to drain remaining messages from the channel
@@ -221,7 +223,8 @@ impl<
                 self.recv_batch_sync_response(&from, id, &diff).await?;
             }
             Message::BlobsRequest(digests) => {
-                if self.conns.contains_key(&conn_id) {
+                let is_contained = { self.conns.lock().await.contains_key(&conn_id) };
+                if is_contained {
                     match self.recv_blob_request(conn, &digests).await {
                         Ok(()) => {
                             tracing::info!(
@@ -276,35 +279,8 @@ impl<
                 .await?;
         }
 
-        let existing = &mut self.sedimentrees.entry(id).or_default();
-        existing.merge(sedimentree);
-
-        Ok(())
-    }
-
-    /// Load all sedimentrees from storage into memory.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn load_sedimentrees_from_storage(&self) -> Result<(), S::Error> {
-        for tree_id in self
-            .sedimentrees
-            .iter()
-            .map(|e| *e.key())
-            .collect::<Vec<_>>()
         {
-            if let Some(mut sedimentree) = self.sedimentrees.get_mut(&tree_id) {
-                for commit in self.storage.load_loose_commits(tree_id).await? {
-                    tracing::trace!("Loaded commit {:?}", commit.digest());
-                    sedimentree.add_commit(commit);
-                }
-
-                for fragment in self.storage.load_fragments(tree_id).await? {
-                    tracing::trace!("Loaded fragment {:?}", fragment.digest());
-                    sedimentree.add_fragment(fragment);
-                }
-            }
+            self.sedimentrees.lock().await.entry(id).or_default().merge(sedimentree);
         }
 
         Ok(())
@@ -325,12 +301,16 @@ impl<
 
         let (fresh, conn_id) = self.register(conn).await?;
 
-        for tree_id in self
-            .sedimentrees
-            .iter()
-            .map(|e| *e.key())
-            .collect::<Vec<_>>()
-        {
+        let ids = {
+          self.sedimentrees
+              .lock()
+              .await
+              .keys()
+              .copied()
+              .collect::<Vec<_>>()
+        };
+
+        for tree_id in ids {
             self.request_peer_batch_sync(&peer_id, tree_id, None)
                 .await?;
         }
@@ -345,7 +325,8 @@ impl<
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
     pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
         tracing::info!("Disconnecting connection {:?}", conn_id);
-        if let Some((_conn_id, conn)) = self.conns.remove(conn_id) {
+        let removed = { self.conns.lock().await.remove(conn_id) };
+        if let Some(conn) = removed {
             conn.disconnect().await.map(|()| true)
         } else {
             Ok(false)
@@ -369,14 +350,17 @@ impl<
         let mut touched = false;
 
         let mut conn_meta = Vec::new();
-        for item in self.conns.iter() {
-            conn_meta.push((*item.key(), item.value().peer_id()));
+        {
+            for (key, value) in self.conns.lock().await.iter() {
+                conn_meta.push((*key, value.peer_id()));
+            }
         }
 
         for (id, conn_peer_id) in &conn_meta {
             if *conn_peer_id == *peer_id {
                 touched = true;
-                if let Some((_conn_id, conn)) = self.conns.remove(id) {
+                let removed = { self.conns.lock().await.remove(id) };
+                if let Some(conn) = removed {
                     conn.disconnect().await?;
                 }
             }
@@ -405,13 +389,15 @@ impl<
         tracing::info!("registering connection from peer {:?}", conn.peer_id());
         self.allowed_to_connect(&conn.peer_id()).await?;
 
-        if let Some(hit) = self.conns.iter().find(|r| *r.value() == conn) {
-            Ok((false, *hit.key()))
+        let conns = { self.conns.lock().await.clone() };
+
+        if let Some((hit, _)) = conns.iter().find(|(_, value)| **value == conn) {
+            Ok((false, *hit))
         } else {
             let counter = self.next_connection_id.fetch_add(1, Ordering::Relaxed);
             let conn_id: ConnectionId = ConnectionId::new(counter);
 
-            self.conns.insert(conn_id, conn.clone());
+            { self.conns.lock().await.insert(conn_id, conn.clone()) };
             self.actor_channel
                 .send((conn_id, conn))
                 .await
@@ -422,8 +408,8 @@ impl<
     }
 
     /// Low-level unregistration of a connection.
-    pub fn unregister(&self, conn_id: &ConnectionId) -> bool {
-        self.conns.remove(conn_id).is_some()
+    pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
+        self.conns.lock().await.remove(conn_id).is_some()
     }
 
     /*********
@@ -464,7 +450,8 @@ impl<
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
         tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
-        if let Some(sedimentree) = self.sedimentrees.get(&id) {
+        let tree = { self.sedimentrees.lock().await.get(&id).cloned() };
+        if let Some(sedimentree) = tree {
             tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
 
@@ -511,10 +498,11 @@ impl<
         if let Some(maybe_blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
-            if let Some(tree) = self.sedimentrees.get(&id) {
+            let tree = { self.sedimentrees.lock().await.get(&id).cloned() };
+            if let Some(tree) = tree {
                 let summary = tree.summarize();
-                for entry in self.conns.iter() {
-                    let conn = entry.value();
+                let conns: Vec<_> = { self.conns.lock().await.values().cloned().collect() };
+                for conn in conns {
                     let req_id = conn.next_request_id().await;
                     let BatchSyncResponse {
                         id,
@@ -613,15 +601,15 @@ impl<
             .map_err(IoError::Storage)?;
 
         {
-            for entry in self.conns.iter() {
+            let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
+            for conn in conns {
                 tracing::debug!(
                     "Propagating commit {:?} for sedimentree {:?} to peer {:?}",
                     commit.digest(),
                     id,
-                    entry.value().peer_id()
+                    conn.peer_id()
                 );
 
-                let conn = entry.value();
                 conn.send(Message::LooseCommit {
                     id,
                     commit: commit.clone(),
@@ -662,22 +650,23 @@ impl<
             id
         );
 
-        let mut tree = self.sedimentrees.entry(id).or_default();
-        tree.add_fragment(fragment.clone());
+        {
+            self.sedimentrees.lock().await.entry(id).or_default().add_fragment(fragment.clone());
+        }
 
         self.storage
             .save_blob(blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
-        for entry in self.conns.iter() {
+        let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
+        for conn in conns {
             tracing::debug!(
                 "Propagating fragment {:?} for sedimentree {:?} to peer {:?}",
                 fragment.digest(),
                 id,
-                entry.value().peer_id()
+                conn.peer_id()
             );
-            let conn = entry.value();
             conn.send(Message::Fragment {
                 id,
                 fragment: fragment.clone(),
@@ -714,8 +703,8 @@ impl<
             .map_err(IoError::Storage)?;
 
         if was_new {
-            for entry in self.conns.iter() {
-                let conn = entry.value();
+            let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
+            for conn in conns {
                 if conn.peer_id() != *from {
                     conn.send(Message::LooseCommit {
                         id,
@@ -751,8 +740,8 @@ impl<
             .map_err(IoError::Storage)?;
 
         if was_new {
-            for entry in self.conns.iter() {
-                let conn = entry.value();
+            let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
+            for conn in conns {
                 if conn.peer_id() != *from {
                     conn.send(Message::Fragment {
                         id,
@@ -790,26 +779,23 @@ impl<
         let mut their_missing_fragments = Vec::new();
         let mut our_missing_blobs = Vec::new();
 
-        {
-            let mut sedimentree = self.sedimentrees.entry(id).or_default();
+        let sync_diff = {
+            let mut locked = self.sedimentrees.lock().await;
+            let sedimentree = locked.entry(id).or_default();
+            let local_sedimentree = sedimentree.clone();
             tracing::info!(
                 "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commits and {} fragments",
                 their_summary.loose_commits().len(),
                 their_summary.fragment_summaries().len()
             );
 
-            let local_sedimentree = sedimentree.clone();
-            tracing::debug!(
-                "local sedimentree summary {:?} / {:?}",
-                id,
-                local_sedimentree
-            ); // FIXME temp
             let diff: RemoteDiff<'_> =
                 local_sedimentree.diff_remote(their_summary, &self.depth_metric);
 
             for commit in diff.remote_commits {
                 sedimentree.add_commit(commit.clone());
             }
+
 
             for commit in diff.local_commits {
                 if let Some(blob) = self
@@ -838,26 +824,29 @@ impl<
                     our_missing_blobs.push(fragment.summary().blob_meta().digest());
                 }
             }
-        }
 
-        tracing::info!(
-            "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments",
-            their_missing_commits.len(),
-            their_missing_fragments.len()
-        );
+            tracing::info!(
+                "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments",
+                their_missing_commits.len(),
+                their_missing_fragments.len()
+            );
+
+            SyncDiff {
+                missing_commits: their_missing_commits,
+                missing_fragments: their_missing_fragments,
+            }
+        };
+
         conn.send(
             BatchSyncResponse {
                 id,
                 req_id,
-                diff: SyncDiff {
-                    missing_commits: their_missing_commits,
-                    missing_fragments: their_missing_fragments,
-                },
+                diff: sync_diff
             }
             .into(),
         )
-        .await
-        .map_err(IoError::ConnSend)?;
+            .await
+            .map_err(IoError::ConnSend)?;
 
         if our_missing_blobs.is_empty() {
             Ok(())
@@ -902,8 +891,8 @@ impl<
 
     /// Find blobs from connected peers.
     pub async fn request_blobs(&self, digests: Vec<Digest>) {
-        for entry in self.conns.iter() {
-            let conn = entry.value();
+        let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
+        for conn in conns {
             if let Err(e) = conn.send(Message::BlobsRequest(digests.clone())).await {
                 tracing::error!(
                     "Error requesting blobs {:?} from peer {:?}: {:?}",
@@ -940,9 +929,11 @@ impl<
         let mut blobs = Vec::new();
         let mut had_success = false;
         let mut peer_conns = Vec::new();
-        for entry in self.conns.iter() {
-            if entry.value().peer_id() == *to_ask {
-                peer_conns.push((*entry.key(), entry.value().clone()));
+
+        let conns = { self.conns.lock().await.clone() };
+        for (conn_id, conn) in conns {
+            if conn.peer_id() == *to_ask {
+                peer_conns.push((conn_id, conn));
             }
         }
 
@@ -950,11 +941,15 @@ impl<
 
         for (conn_id, conn) in peer_conns {
             tracing::info!("Using connection {:?} to peer {:?}", conn_id, to_ask);
-            let summary = self
-                .sedimentrees
-                .get(&id)
-                .map(|e| Sedimentree::summarize(e.value()))
-                .unwrap_or_default();
+            let summary = {
+                self
+                    .sedimentrees
+                    .lock()
+                    .await
+                    .get(&id)
+                    .map(|tree| Sedimentree::summarize(tree))
+                    .unwrap_or_default()
+            };
 
             let req_id = conn.next_request_id().await;
 
@@ -1026,16 +1021,16 @@ impl<
         );
         let mut peers: HashMap<PeerId, Vec<(ConnectionId, C)>> = HashMap::new();
         {
-            for entry in self.conns.iter() {
+            for (conn_id, conn) in self.conns.lock().await.iter() {
                 peers
-                    .entry(entry.value().peer_id())
+                    .entry(conn.peer_id())
                     .or_default()
-                    .push((*entry.key(), entry.value().clone()));
+                    .push((*conn_id, conn.clone()));
             }
         }
 
         tracing::debug!("Found {} peer(s)", peers.len());
-        let blobs = Arc::new(DashSet::<Blob>::new());
+        let blobs = Arc::new(Mutex::new(HashSet::<Blob>::new()));
         let mut set: FuturesUnordered<_> = peers
             .iter()
             .map(|(peer_id, peer_conns)| {
@@ -1056,11 +1051,15 @@ impl<
                             conn_id,
                             conn.peer_id()
                         );
-                        let summary = self
-                            .sedimentrees
-                            .get(&id)
-                            .map(|e| Sedimentree::summarize(e.value()))
-                            .unwrap_or_default();
+                        let summary = {
+                            self
+                                .sedimentrees
+                                .lock()
+                                .await
+                                .get(&id)
+                                .map(|conn| Sedimentree::summarize(conn))
+                                .unwrap_or_default()
+                        };
 
                         let req_id = conn.next_request_id().await;
 
@@ -1089,7 +1088,7 @@ impl<
                                     self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                                         .await
                                         .map_err(IoError::<F, S, C>::Storage)?;
-                                    inner_blobs.insert(blob);
+                                    inner_blobs.lock().await.insert(blob);
                                 }
 
                                 for (fragment, blob) in missing_fragments {
@@ -1100,7 +1099,7 @@ impl<
                                     )
                                     .await
                                     .map_err(IoError::<F, S, C>::Storage)?;
-                                    inner_blobs.insert(blob);
+                                    inner_blobs.lock().await.insert(blob);
                                 }
 
                                 had_success = true;
@@ -1121,7 +1120,7 @@ impl<
         let mut out = HashMap::new();
         while let Some(result) = set.next().await {
             let (peer_id, success, errs) = result?;
-            let blob_vec = blobs.iter().map(|b| b.clone()).collect::<Vec<Blob>>();
+            let blob_vec = { blobs.lock().await.iter().cloned().collect::<Vec<Blob>>() };
             out.insert(peer_id, (success, blob_vec, errs));
         }
         Ok(out)
@@ -1143,11 +1142,15 @@ impl<
     ) -> Result<(bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>), IoError<F, S, C>>
     {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
-        let tree_ids = self
-            .sedimentrees
-            .iter()
-            .map(|e| *e.key())
-            .collect::<Vec<_>>();
+        let tree_ids = {
+            self
+                .sedimentrees
+                .lock()
+                .await
+                .keys()
+                .copied()
+                .collect::<Vec<_>>()
+        };
 
         let mut had_success = false;
         let mut blobs: Vec<Blob> = Vec::new();
@@ -1175,30 +1178,36 @@ impl<
      ********************/
 
     /// Get an iterator over all known sedimentree IDs.
-    pub fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
+    pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
         self.sedimentrees
-            .iter()
-            .map(|e| *e.key())
+            .lock()
+            .await
+            .keys()
+            .copied()
             .collect::<Vec<_>>()
     }
 
     /// Get all commits for a given sedimentree ID.
-    pub fn get_commits(&self, id: SedimentreeId) -> Option<Vec<LooseCommit>> {
+    pub async fn get_commits(&self, id: SedimentreeId) -> Option<Vec<LooseCommit>> {
         self.sedimentrees
+            .lock()
+            .await
             .get(&id)
             .map(|tree| tree.loose_commits().cloned().collect())
     }
 
     /// Get all fragments for a given sedimentree ID.
-    pub fn get_fragments(&self, id: SedimentreeId) -> Option<Vec<Fragment>> {
+    pub async fn get_fragments(&self, id: SedimentreeId) -> Option<Vec<Fragment>> {
         self.sedimentrees
+            .lock()
+            .await
             .get(&id)
             .map(|tree| tree.fragments().cloned().collect())
     }
 
     /// Get the set of all connected peer IDs.
-    pub fn peer_ids(&self) -> HashSet<PeerId> {
-        self.conns.iter().map(|r| r.value().peer_id()).collect()
+    pub async fn peer_ids(&self) -> HashSet<PeerId> {
+        self.conns.lock().await.values().map(|conn| conn.peer_id()).collect()
     }
 
     /*******************
@@ -1213,8 +1222,8 @@ impl<
     ) -> Result<bool, S::Error> {
         tracing::debug!("inserting commit {:?} locally", commit.digest());
         {
-            let mut tree = self.sedimentrees.entry(id).or_default();
-            if !tree.add_commit(commit.clone()) {
+            let mut locked = self.sedimentrees.lock().await;
+            if !locked.entry(id).or_default().add_commit(commit.clone()) {
                 return Ok(false);
             }
         }
@@ -1234,8 +1243,8 @@ impl<
         blob: Blob,
     ) -> Result<bool, S::Error> {
         {
-            let mut tree = self.sedimentrees.entry(id).or_default();
-            if !tree.add_fragment(fragment.clone()) {
+            let mut locked = self.sedimentrees.lock().await;
+            if !locked.entry(id).or_default().add_fragment(fragment.clone()) {
                 return Ok(false);
             }
         }

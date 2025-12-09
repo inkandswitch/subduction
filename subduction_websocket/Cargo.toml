@@ -18,7 +18,6 @@ async-channel = { workspace = true }
 async-tungstenite = { workspace = true }
 bincode = { version = "2.0", features = ["serde"] }
 blake3 = { workspace = true }
-dashmap = { workspace = true }
 futures = { workspace = true }
 futures-timer = { workspace = true }
 futures-util = { workspace = true }

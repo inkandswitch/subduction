@@ -1,12 +1,11 @@
 //! Storage abstraction for `Sedimentree` data.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 
-use dashmap::mapref::entry::Entry;
-
-use dashmap::{DashMap, DashSet};
 use futures::{
     future::{BoxFuture, LocalBoxFuture},
+    lock::Mutex,
     FutureExt,
 };
 
@@ -82,10 +81,10 @@ pub enum LoadTreeData {
 /// An in-memory storage backend.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStorage {
-    ids: DashSet<SedimentreeId>,
-    fragments: DashMap<SedimentreeId, DashSet<Fragment>>,
-    commits: DashMap<SedimentreeId, DashSet<LooseCommit>>,
-    blobs: DashMap<Digest, Blob>,
+    ids: Arc<Mutex<HashSet<SedimentreeId>>>,
+    fragments: Arc<Mutex<HashMap<SedimentreeId, HashSet<Fragment>>>>,
+    commits: Arc<Mutex<HashMap<SedimentreeId, HashSet<LooseCommit>>>>,
+    blobs: Arc<Mutex<HashMap<Digest, Blob>>>,
 }
 
 impl Storage<Local> for MemoryStorage {
@@ -100,7 +99,9 @@ impl Storage<Local> for MemoryStorage {
                 "MemoryStorage: inserting sedimentree_id {:?}",
                 sedimentree_id
             );
-            self.ids.insert(sedimentree_id);
+            {
+                self.ids.lock().await.insert(sedimentree_id);
+            }
             Ok(())
         }
         .boxed_local()
@@ -111,7 +112,7 @@ impl Storage<Local> for MemoryStorage {
     ) -> LocalBoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
         async move {
             tracing::debug!("MemoryStorage: getting sedimentree_ids");
-            let ids = self.ids.iter().map(|id| *id.key()).collect();
+            let ids = self.ids.lock().await.iter().copied().collect();
             Ok(ids)
         }
         .boxed_local()
@@ -129,16 +130,12 @@ impl Storage<Local> for MemoryStorage {
                 loose_commit,
                 sedimentree_id
             );
-            match self.commits.entry(sedimentree_id) {
-                Entry::Occupied(e) => {
-                    e.get().insert(loose_commit);
-                }
-                Entry::Vacant(e) => {
-                    let set = DashSet::new();
-                    set.insert(loose_commit);
-                    e.insert(set);
-                }
-            }
+            self.commits
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .insert(loose_commit);
             Ok(())
         }
         .boxed_local()
@@ -153,13 +150,12 @@ impl Storage<Local> for MemoryStorage {
                 "MemoryStorage: loading loose commits for sedimentree_id {:?}",
                 sedimentree_id
             );
-            if let Some(commit_entry) = self.commits.get(&sedimentree_id) {
-                let set = commit_entry.value();
-                let mut commits = Vec::with_capacity(set.len());
-                for commit in set.iter() {
-                    commits.push(commit.clone());
-                }
-                Ok(commits)
+            let stored = {
+                let locked = self.commits.lock().await;
+                locked.get(&sedimentree_id).cloned()
+            };
+            if let Some(set) = stored {
+                Ok(set.into_iter().collect())
             } else {
                 Ok(Vec::new())
             }
@@ -179,16 +175,12 @@ impl Storage<Local> for MemoryStorage {
                 fragment,
                 sedimentree_id
             );
-            match self.fragments.entry(sedimentree_id) {
-                Entry::Occupied(e) => {
-                    e.get().insert(fragment);
-                }
-                Entry::Vacant(e) => {
-                    let set = DashSet::new();
-                    set.insert(fragment);
-                    e.insert(set);
-                }
-            }
+            self.fragments
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .insert(fragment);
             Ok(())
         }
         .boxed_local()
@@ -203,13 +195,12 @@ impl Storage<Local> for MemoryStorage {
                 "MemoryStorage: loading fragments for sedimentree_id {:?}",
                 sedimentree_id
             );
-            if let Some(fragment_entry) = self.fragments.get(&sedimentree_id) {
-                let set = fragment_entry.value();
-                let mut fragments = Vec::with_capacity(set.len());
-                for commit in set.iter() {
-                    fragments.push(commit.clone());
-                }
-                Ok(fragments)
+            let stored = {
+                let locked = self.fragments.lock().await;
+                locked.get(&sedimentree_id).cloned()
+            };
+            if let Some(set) = stored {
+                Ok(set.into_iter().collect())
             } else {
                 Ok(Vec::new())
             }
@@ -224,7 +215,7 @@ impl Storage<Local> for MemoryStorage {
                 blob.contents()
             );
             let digest = Digest::hash(blob.contents());
-            self.blobs.entry(digest).or_insert(blob);
+            self.blobs.lock().await.entry(digest).or_insert(blob);
             Ok(digest)
         }
         .boxed_local()
@@ -236,8 +227,7 @@ impl Storage<Local> for MemoryStorage {
     ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
         async move {
             tracing::debug!("MemoryStorage: loading blob with digest {:?}", blob_digest);
-            let maybe_entry = self.blobs.get(&blob_digest);
-            Ok(maybe_entry.map(|e| e.value().clone()))
+            Ok(self.blobs.lock().await.get(&blob_digest).cloned())
         }
         .boxed_local()
     }
@@ -255,7 +245,7 @@ impl Storage<Sendable> for MemoryStorage {
                 "MemoryStorage: inserting sedimentree_id {:?}",
                 sedimentree_id
             );
-            self.ids.insert(sedimentree_id);
+            self.ids.lock().await.insert(sedimentree_id);
             Ok(())
         }
         .boxed()
@@ -266,7 +256,7 @@ impl Storage<Sendable> for MemoryStorage {
     ) -> BoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
         async move {
             tracing::debug!("MemoryStorage: getting sedimentree_ids");
-            let ids = self.ids.iter().map(|id| *id.key()).collect();
+            let ids = self.ids.lock().await.iter().copied().collect();
             Ok(ids)
         }
         .boxed()
@@ -284,16 +274,12 @@ impl Storage<Sendable> for MemoryStorage {
                 loose_commit,
                 sedimentree_id
             );
-            match self.commits.entry(sedimentree_id) {
-                Entry::Occupied(e) => {
-                    e.get().insert(loose_commit);
-                }
-                Entry::Vacant(e) => {
-                    let set = DashSet::new();
-                    set.insert(loose_commit);
-                    e.insert(set);
-                }
-            }
+            self.commits
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .insert(loose_commit);
             Ok(())
         }
         .boxed()
@@ -304,17 +290,12 @@ impl Storage<Sendable> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
         async move {
-            if let Some(commit_entry) = self.commits.get(&sedimentree_id) {
-                tracing::debug!(
-                    "MemoryStorage: loading loose commits for sedimentree_id {:?}",
-                    sedimentree_id
-                );
-                let set = commit_entry.value();
-                let mut commits = Vec::with_capacity(set.len());
-                for commit in set.iter() {
-                    commits.push(commit.clone());
-                }
-                Ok(commits)
+            let stored = {
+                let locked = self.commits.lock().await;
+                locked.get(&sedimentree_id).cloned()
+            };
+            if let Some(set) = stored {
+                Ok(set.into_iter().collect())
             } else {
                 Ok(Vec::new())
             }
@@ -334,16 +315,12 @@ impl Storage<Sendable> for MemoryStorage {
                 fragment,
                 sedimentree_id
             );
-            match self.fragments.entry(sedimentree_id) {
-                Entry::Occupied(e) => {
-                    e.get().insert(fragment);
-                }
-                Entry::Vacant(e) => {
-                    let set = DashSet::new();
-                    set.insert(fragment);
-                    e.insert(set);
-                }
-            }
+            self.fragments
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .insert(fragment);
             Ok(())
         }
         .boxed()
@@ -358,13 +335,12 @@ impl Storage<Sendable> for MemoryStorage {
             sedimentree_id
         );
         async move {
-            if let Some(fragment_entry) = self.fragments.get(&sedimentree_id) {
-                let set = fragment_entry.value();
-                let mut fragments = Vec::with_capacity(set.len());
-                for commit in set.iter() {
-                    fragments.push(commit.clone());
-                }
-                Ok(fragments)
+            let stored = {
+                let locked = self.fragments.lock().await;
+                locked.get(&sedimentree_id).cloned()
+            };
+            if let Some(set) = stored {
+                Ok(set.into_iter().collect())
             } else {
                 Ok(Vec::new())
             }
@@ -379,7 +355,7 @@ impl Storage<Sendable> for MemoryStorage {
                 blob.contents()
             );
             let digest = Digest::hash(blob.contents());
-            self.blobs.entry(digest).or_insert(blob);
+            self.blobs.lock().await.entry(digest).or_insert(blob);
             Ok(digest)
         }
         .boxed()
@@ -388,8 +364,7 @@ impl Storage<Sendable> for MemoryStorage {
     fn load_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<Option<Blob>, Self::Error>> {
         async move {
             tracing::debug!("MemoryStorage: loading blob with digest {:?}", blob_digest);
-            let maybe_entry = self.blobs.get(&blob_digest);
-            Ok(maybe_entry.map(|e| e.value().clone()))
+            Ok(self.blobs.lock().await.get(&blob_digest).cloned())
         }
         .boxed()
     }

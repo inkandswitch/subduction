@@ -1,9 +1,10 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use std::{ cell::RefCell, convert::Infallible, rc::Rc, sync::{atomic::{AtomicU64, Ordering}, Arc}, time::Duration};
+use std::{ cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
 
 use futures::{
     channel::oneshot::{self, Canceled},
+    lock::Mutex,
     future::LocalBoxFuture,
     FutureExt,
 };
@@ -21,7 +22,6 @@ use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     js_sys::{self, Promise}, BinaryType, Event, MessageEvent, Url, WebSocket
 };
-use dashmap::DashMap;
 
 use super::peer_id::WasmPeerId;
 
@@ -35,7 +35,7 @@ pub struct WasmWebSocket {
     request_id_counter: Arc<AtomicU64>,
     socket: WebSocket,
 
-    pending: Arc<DashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>,
+    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
     inbound_reader: async_channel::Receiver<Message>,
 }
 
@@ -51,10 +51,10 @@ impl WasmWebSocket {
     pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(1024);
 
-        let pending = Arc::new(DashMap::<
+        let pending = Arc::new(Mutex::new(HashMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
-        >::new());
+        >::new()));
         let closure_pending = pending.clone();
 
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
@@ -73,9 +73,8 @@ impl WasmWebSocket {
                         match msg {
                             Message::BatchSyncResponse(resp) => {
                                 let req_id = resp.req_id;
-                                if let Some((_req_id, waiting)) =
-                                    inner_pending.remove(&req_id)
-                                {
+                                let removed = { inner_pending.lock().await.remove(&req_id) };
+                                if let Some(waiting) = removed {
                                     tracing::info!("dispatching to waiter {:?}", req_id);
                                     let result = waiting.send(resp);
                                     debug_assert!(result.is_ok());
@@ -276,7 +275,7 @@ impl Connection<Local> for WasmWebSocket {
 
             // Pre-register channel
             let (tx, rx) = oneshot::channel();
-            self.pending.insert(req_id, tx);
+            { self.pending.lock().await.insert(req_id, tx); }
 
             let msg_bytes = bincode::serde::encode_to_vec(
                 Message::BatchSyncRequest(req),

@@ -224,8 +224,8 @@ impl WasmSubduction {
     ///
     /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
     #[must_use]
-    pub fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core.unregister(&conn_id.clone().into())
+    pub async fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
+        self.core.unregister(&conn_id.clone().into()).await
     }
 
     /// Add a callback for commit events.
@@ -501,9 +501,10 @@ impl WasmSubduction {
 
     /// Get all known Sedimentree IDs
     #[wasm_bindgen(js_name = sedimentreeIds)]
-    pub fn sedimentree_ids(&self) -> Vec<WasmSedimentreeId> {
+    pub async fn sedimentree_ids(&self) -> Vec<WasmSedimentreeId> {
         self.core
             .sedimentree_ids()
+            .await
             .into_iter()
             .map(WasmSedimentreeId::from)
             .collect()
@@ -512,26 +513,29 @@ impl WasmSubduction {
     /// Get all commits for a given Sedimentree ID
     #[must_use]
     #[wasm_bindgen(js_name = getCommits)]
-    pub fn get_commits(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmLooseCommit>> {
+    pub async fn get_commits(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmLooseCommit>> {
         self.core
             .get_commits(id.clone().into())
+            .await
             .map(|commits| commits.into_iter().map(WasmLooseCommit::from).collect())
     }
 
     /// Get all fragments for a given Sedimentree ID
     #[must_use]
     #[wasm_bindgen(js_name = getFragments)]
-    pub fn get_fragments(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmFragment>> {
+    pub async fn get_fragments(&self, id: &WasmSedimentreeId) -> Option<Vec<WasmFragment>> {
         self.core
             .get_fragments(id.clone().into())
+            .await
             .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
     }
 
     /// Get the peer IDs of all connected peers
     #[wasm_bindgen(js_name = getPeerIds)]
-    pub fn peer_ids(&self) -> Vec<WasmPeerId> {
+    pub async fn peer_ids(&self) -> Vec<WasmPeerId> {
         self.core
             .peer_ids()
+            .await
             .into_iter()
             .map(WasmPeerId::from)
             .collect()
