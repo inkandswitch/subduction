@@ -3,7 +3,7 @@
 use sedimentree_core::future::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
-    subduction::error::{IoError, ListenError, RegistrationError},
+    subduction::error::{HydrationError, IoError, ListenError, RegistrationError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -13,6 +13,19 @@ use super::{
     storage::JsStorage,
     websocket::{CallError, WasmWebSocket},
 };
+
+/// A Wasm wrapper around the [`HydrationError`] type.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmHydrationError(#[from] HydrationError<Local, JsStorage>);
+
+impl From<WasmHydrationError> for JsValue {
+    fn from(err: WasmHydrationError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("HydrationError");
+        js_err.into()
+    }
+}
 
 /// A Wasm wrapper around the [`IoError`] type.
 ///

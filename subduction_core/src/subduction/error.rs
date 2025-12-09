@@ -5,6 +5,22 @@ use thiserror::Error;
 
 use crate::connection::{Connection, ConnectionDisallowed};
 
+/// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
+#[derive(Debug, Clone, Copy, Error)]
+pub enum HydrationError<F: FutureKind, S: Storage<F>> {
+    /// An error occurred while loading all sedimentree IDs.
+    #[error("hydration error when loading all sedimentree IDs: {0}")]
+    LoadAllIdsError(#[source] S::Error),
+
+    /// An error occurred while loading loose commits.
+    #[error("hydration error when loading loose commits: {0}")]
+    LoadLooseCommitsError(#[source] S::Error),
+
+    /// An error occurred while loading fragments.
+    #[error("hydration error when loading fragments: {0}")]
+    LoadFragmentsError(#[source] S::Error),
+}
+
 /// An error that can occur during I/O operations.
 ///
 /// This covers storage and network connection errors.

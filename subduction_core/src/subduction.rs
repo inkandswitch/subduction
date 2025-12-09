@@ -15,7 +15,7 @@ use crate::{
 };
 use async_channel::{bounded, Sender};
 use dashmap::{DashMap, DashSet};
-use error::{BlobRequestErr, IoError, ListenError, RegistrationError};
+use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
@@ -26,7 +26,7 @@ use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    future::{FutureKind, Local, Sendable},
+    future::{Local, Sendable},
     storage::Storage,
     Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
@@ -42,7 +42,6 @@ use std::{
     task::{Context, Poll},
     time::Duration,
 };
-use thiserror::Error;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -121,12 +120,12 @@ impl<
         Arc<Self>,
         ListenerFuture<'a, F, S, C, M>,
         ConnectionActorFuture<'a, F, C>,
-    ), HydrateError<F, S>> {
-        let ids = storage.load_all_sedimentree_ids().await.map_err(HydrateError::LoadAllIdsError)?;
+    ), HydrationError<F, S>> {
+        let ids = storage.load_all_sedimentree_ids().await.map_err(HydrationError::LoadAllIdsError)?;
         let (subduction, fut_listener, conn_actor) = Self::new(storage, depth_metric);
         for id in ids {
-            let loose_commits = subduction.storage.load_loose_commits(id).await.map_err(HydrateError::LoadLooseCommitsError)?;
-            let fragments = subduction.storage.load_fragments(id).await.map_err(HydrateError::LoadFragmentsError)?;
+            let loose_commits = subduction.storage.load_loose_commits(id).await.map_err(HydrationError::LoadLooseCommitsError)?;
+            let fragments = subduction.storage.load_fragments(id).await.map_err(HydrationError::LoadFragmentsError)?;
             subduction.add_sedimentree(
                 id,
                 Sedimentree::new(fragments.into_iter().collect(), loose_commits.into_iter().collect()),
@@ -1426,17 +1425,4 @@ impl<
         M: DepthMetric,
     > Unpin for ListenerFuture<'a, F, S, C, M>
 {
-}
-
-/// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
-#[derive(Debug, Clone, Copy, Error)]
-pub enum HydrateError<F: FutureKind, S: Storage<F>> {
-    /// An error occurred while loading all sedimentree IDs.
-    LoadAllIdsError(#[source] S::Error),
-
-    /// An error occurred while loading loose commits.
-    LoadLooseCommitsError(#[source] S::Error),
-
-    /// An error occurred while loading fragments.
-    LoadFragmentsError(#[source] S::Error),
 }

@@ -21,7 +21,10 @@ use crate::{
     connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::{JsDigest, WasmDigest},
-    error::{WasmCallError, WasmDisconnectionError, WasmIoError, WasmRegistrationError},
+    error::{
+        WasmCallError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
+        WasmRegistrationError,
+    },
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
@@ -89,6 +92,48 @@ impl WasmSubduction {
             fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
             blob_callbacks: Rc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    /// Hydrate a [`Subduction`] instance from external storage.
+    #[must_use]
+    #[wasm_bindgen]
+    pub async fn hydrate(
+        storage: JsStorage,
+        hash_metric_override: Option<JsToDepth>,
+    ) -> Result<Self, WasmHydrationError> {
+        tracing::debug!("new hydrated Subduction node");
+        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        let (core, listener_fut, actor_fut) =
+            Subduction::hydrate(storage, WasmHashMetric(raw_fn)).await?;
+
+        wasm_bindgen_futures::spawn_local(async move {
+            let mut actor = actor_fut.fuse();
+            let mut listener = listener_fut.fuse();
+
+            futures::select! {
+                actor_result = actor => {
+                    if let Err(Aborted) = actor_result {
+                        tracing::error!("Subduction actor aborted");
+                    }
+                }
+                listener_result = listener => {
+                    if let Err(Aborted) = listener_result {
+                        tracing::error!("Subduction listener aborted");
+                    }
+                }
+            }
+
+            if actor.is_terminated() && listener.is_terminated() {
+                tracing::debug!("Subduction task exited normally");
+            }
+        });
+
+        Ok(Self {
+            core,
+            commit_callbacks: Rc::new(Mutex::new(Vec::new())),
+            fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
+            blob_callbacks: Rc::new(Mutex::new(Vec::new())),
+        })
     }
 
     /// Add a Sedimentree.
