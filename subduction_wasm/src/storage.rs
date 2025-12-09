@@ -2,7 +2,7 @@
 
 pub mod idb;
 
-use std::{collections::HashSet, str::FromStr};
+use std::collections::HashSet;
 
 use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::{Promise, Uint8Array};
@@ -13,7 +13,7 @@ use sedimentree_core::{
     BadSedimentreeId, Fragment, LooseCommit, SedimentreeId,
 };
 use thiserror::Error;
-use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
@@ -22,7 +22,10 @@ use crate::{
         JsFragment, WasmConvertJsValueToFragmentArrayError, WasmFragment, WasmFragmentsArray,
     },
     loose_commit::{JsLooseCommit, WasmLooseCommit, WasmLooseCommitsArray},
-    sedimentree_id::{JsSedimentreeId, WasmSedimentreeId, WasmSedimentreeIdsArray},
+    sedimentree_id::{
+        JsSedimentreeId, WasmConvertJsValueToSedimentreeIdArrayError, WasmSedimentreeId,
+        WasmSedimentreeIdsArray,
+    },
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -120,27 +123,18 @@ impl Storage<Local> for JsStorage {
         &self,
     ) -> LocalBoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
         async move {
-            let span = tracing::debug_span!("JsStorage::get_sedimentree_ids");
+            let span = tracing::debug_span!("JsStorage::load_all_sedimentree_ids");
             let _enter = span.enter();
 
             let js_promise = self.js_load_all_sedimentree_ids();
             let js_value = JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::LoadLooseCommitsError)?;
-            // let js_ids_array = js_sys::Array::try_from_js_value_ref(&js_value)
-            //     .ok_or_else(|| JsStorageError::NotSedimentreeIdArray(js_value.clone()))?;
-            tracing::error!("DIRECTLY BEFORE");
-            // let foo = WasmSedimentreeIdsArray::try_from(&js_value).expect("FIXME");
-            // let xs: Vec<WasmSedimentreeId> = foo.0;
+            let xs: Vec<WasmSedimentreeId> = WasmSedimentreeIdsArray::try_from(&js_value)?.0;
             let mut sedimentree_ids_set = HashSet::new();
-            // for wasm_id in xs.into_iter() {
-            //     // for js_id in js_ids_array.iter() {
-            //     // let string_id = js_id
-            //     //     .as_string()
-            //     //     .ok_or_else(|| JsStorageError::SedimentreeIdNotAString(js_id.clone()))?;
-            //     // let id = SedimentreeId::from_str(&string_id)?;
-            //     sedimentree_ids_set.insert(wasm_id.into());
-            // }
+            for wasm_id in xs.into_iter() {
+                sedimentree_ids_set.insert(wasm_id.into());
+            }
             Ok(sedimentree_ids_set)
         }
         .boxed_local()
@@ -284,10 +278,6 @@ impl Storage<Local> for JsStorage {
 /// Errors that can occur when using `JsStorage`.
 #[derive(Error, Debug)]
 pub enum JsStorageError {
-    /// The `JsValue` could not be converted into an array of `SedimentreeId`s.
-    #[error("Value was not an array of SedimentreeIds: {0:?}")]
-    NotSedimentreeIdArray(JsValue),
-
     /// A sedimentree ID was not a string.
     #[error("SedimentreeId was not a string: {0:?}")]
     SedimentreeIdNotAString(JsValue),
@@ -330,7 +320,11 @@ pub enum JsStorageError {
 
     /// The `JsValue` could not be converted into an array of `WasmFragment`.
     #[error("Value was not an array of Fragments: {0:?}")]
-    NotFragmentsArray(WasmConvertJsValueToFragmentArrayError),
+    NotFragmentsArray(#[from] WasmConvertJsValueToFragmentArrayError),
+
+    /// The `JsValue` could not be converted into an array of `SedimentreeId`s.
+    #[error("Value was not an array of SedimentreeIds: {0:?}")]
+    NotSedimentreeIdArray(#[from] WasmConvertJsValueToSedimentreeIdArrayError),
 
     /// The `JsValue` could not be converted into a `WasmDigest`.
     #[error("Value was not a Digest: {0:?}")]
