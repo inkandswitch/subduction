@@ -58,21 +58,32 @@ impl SedimentreeId {
 }
 
 /// An error indicating that a [`SedimentreeId`] could not be parsed from a string.
-#[derive(Debug, Clone, Copy, Error)]
-#[error("Invalid SedimentreeId")]
-pub struct BadSedimentreeId;
+#[derive(Debug, Clone, Error)]
+pub enum BadSedimentreeId {
+    /// The provided string has an odd length.
+    #[error("SedimentreeId length is not even: {0}")]
+    LengthNotEven(String),
+
+    /// The provided string contains invalid hex characters.
+    #[error("SedimentreeId contains invalid hex characters: {0}")]
+    InvalidHex(String),
+
+    /// The provided string has an invalid length.
+    #[error("SedimentreeId must be 32 bytes (64 hex characters): {0}")]
+    InvalidLength(String),
+}
 
 impl FromStr for SedimentreeId {
     type Err = BadSedimentreeId;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if !s.len().is_multiple_of(2) {
-            return Err(BadSedimentreeId);
+            return Err(BadSedimentreeId::LengthNotEven(s.to_string()));
         }
 
         let bytes = (0..s.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| BadSedimentreeId))
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| BadSedimentreeId::InvalidHex(s.to_string())))
             .collect::<Result<Vec<u8>, BadSedimentreeId>>()?;
 
         if bytes.len() == 32 {
@@ -80,7 +91,7 @@ impl FromStr for SedimentreeId {
             arr.copy_from_slice(&bytes);
             Ok(SedimentreeId(arr))
         } else {
-            Err(BadSedimentreeId)
+            Err(BadSedimentreeId::InvalidLength(s.to_string()))
         }
     }
 }

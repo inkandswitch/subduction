@@ -101,7 +101,7 @@ impl WasmSubduction {
         storage: JsStorage,
         hash_metric_override: Option<JsToDepth>,
     ) -> Result<Self, WasmHydrationError> {
-        tracing::debug!("new hydrated Subduction node");
+        tracing::debug!("hydrating new Subduction node");
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let (core, listener_fut, actor_fut) =
             Subduction::hydrate(storage, WasmHashMetric(raw_fn)).await?;

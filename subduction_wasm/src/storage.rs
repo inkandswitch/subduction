@@ -22,7 +22,7 @@ use crate::{
         JsFragment, WasmConvertJsValueToFragmentArrayError, WasmFragment, WasmFragmentsArray,
     },
     loose_commit::{JsLooseCommit, WasmLooseCommit, WasmLooseCommitsArray},
-    sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
+    sedimentree_id::{JsSedimentreeId, WasmSedimentreeId, WasmSedimentreeIdsArray},
 };
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -127,16 +127,20 @@ impl Storage<Local> for JsStorage {
             let js_value = JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::LoadLooseCommitsError)?;
-            let js_ids_array = js_sys::Array::try_from_js_value_ref(&js_value)
-                .ok_or_else(|| JsStorageError::NotSedimentreeIdArray(js_value.clone()))?;
+            // let js_ids_array = js_sys::Array::try_from_js_value_ref(&js_value)
+            //     .ok_or_else(|| JsStorageError::NotSedimentreeIdArray(js_value.clone()))?;
+            tracing::error!("DIRECTLY BEFORE");
+            // let foo = WasmSedimentreeIdsArray::try_from(&js_value).expect("FIXME");
+            // let xs: Vec<WasmSedimentreeId> = foo.0;
             let mut sedimentree_ids_set = HashSet::new();
-            for js_id in js_ids_array.iter() {
-                let string_id = js_id
-                    .as_string()
-                    .ok_or_else(|| JsStorageError::SedimentreeIdNotAString(js_id.clone()))?;
-                let id = SedimentreeId::from_str(&string_id)?;
-                sedimentree_ids_set.insert(id);
-            }
+            // for wasm_id in xs.into_iter() {
+            //     // for js_id in js_ids_array.iter() {
+            //     // let string_id = js_id
+            //     //     .as_string()
+            //     //     .ok_or_else(|| JsStorageError::SedimentreeIdNotAString(js_id.clone()))?;
+            //     // let id = SedimentreeId::from_str(&string_id)?;
+            //     sedimentree_ids_set.insert(wasm_id.into());
+            // }
             Ok(sedimentree_ids_set)
         }
         .boxed_local()
