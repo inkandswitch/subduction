@@ -183,7 +183,7 @@ impl WasmIndexedDbStorage {
         let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmSaveSedimentreeIdError::ObjectStoreError)?;
         let req = store
             .put_with_key(
-                &JsValue::NULL,
+                &JsValue::from(1u8), // Recommended as smallest unambiguous dummy value for key-as-set-like semantcis
                 &JsValue::from_str(&sedimentree_id.to_string()),
             ).map_err(WasmSaveSedimentreeIdError::PutError)?;
 
