@@ -138,16 +138,15 @@ impl WasmSubduction {
 
     /// Add a Sedimentree.
     #[wasm_bindgen(js_name = addSedimentree)]
-    pub fn add_sedimentree(&self, id: &WasmSedimentreeId, sedimentree: &WasmSedimentree) {
+    pub async fn add_sedimentree(
+        &self,
+        id: &WasmSedimentreeId,
+        sedimentree: &WasmSedimentree,
+    ) -> Result<(), JsStorageError> {
         self.core
-            .add_sedimentree(id.clone().into(), sedimentree.clone().into());
-    }
-
-    /// Remove a Sedimentree by its ID.
-    #[must_use]
-    #[wasm_bindgen(js_name = removeSedimentree)]
-    pub fn remove_sedimentree(&self, id: &WasmSedimentreeId) -> bool {
-        self.core.remove_sedimentree(id.clone().into())
+            .add_sedimentree(id.clone().into(), sedimentree.clone().into())
+            .await?;
+        Ok(())
     }
 
     /// Attach a connection.

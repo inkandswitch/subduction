@@ -126,10 +126,10 @@ impl<
         for id in ids {
             let loose_commits = subduction.storage.load_loose_commits(id).await.map_err(HydrationError::LoadLooseCommitsError)?;
             let fragments = subduction.storage.load_fragments(id).await.map_err(HydrationError::LoadFragmentsError)?;
-            subduction.add_sedimentree(
-                id,
-                Sedimentree::new(fragments.into_iter().collect(), loose_commits.into_iter().collect()),
-            );
+            let sedimentree = Sedimentree::new(fragments, loose_commits);
+
+            let existing = &mut subduction.sedimentrees.entry(id).or_default();
+            existing.merge(sedimentree);
         }
         Ok((subduction, fut_listener, conn_actor))
     }
@@ -259,16 +259,27 @@ impl<
     }
 
     /// Add a [`Sedimentree`] to sync.
-    pub fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) {
+    pub async fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) -> Result<(), S::Error> {
         tracing::debug!("Adding sedimentree with id {:?}", id);
+
+        self.storage.save_sedimentree_id(id).await?;
+
+        for commit in sedimentree.loose_commits() {
+            self.storage
+                .save_loose_commit(id, commit.clone())
+                .await?;
+        }
+
+        for fragment in sedimentree.fragments() {
+            self.storage
+                .save_fragment(id, fragment.clone())
+                .await?;
+        }
+
         let existing = &mut self.sedimentrees.entry(id).or_default();
         existing.merge(sedimentree);
-    }
 
-    /// Remove a [`Sedimentree`].
-    pub fn remove_sedimentree(&self, id: SedimentreeId) -> bool {
-        tracing::debug!("Removing sedimentree with id {:?}", id);
-        self.sedimentrees.remove(&id).is_some()
+        Ok(())
     }
 
     /// Load all sedimentrees from storage into memory.
@@ -1208,6 +1219,7 @@ impl<
             }
         }
 
+        self.storage.save_sedimentree_id(id).await?;
         self.storage.save_loose_commit(id, commit).await?;
         self.storage.save_blob(blob).await?;
 
@@ -1228,6 +1240,7 @@ impl<
             }
         }
 
+        self.storage.save_sedimentree_id(id).await?;
         self.storage.save_fragment(id, fragment).await?;
         self.storage.save_blob(blob).await?;
         Ok(true)
