@@ -35,6 +35,7 @@ impl<'a, C: 'a + Connection<Sendable> + Send> RecvOnce<'a, C> for Sendable {
             if let Err(e) = sender.send((conn_id, conn, msg)).await {
                 tracing::error!("unable to send msg about {conn_id} to Subduction: {e:?}");
             }
+            tracing::info!("recv_once (Sendable): AFTER sending msg for {conn_id}");
         }
         .boxed()
     }

@@ -176,7 +176,7 @@ where
         let cancel_token = CancellationToken::new();
         let child_cancel_token = cancel_token.child_token();
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd>(1024);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd>(256);
         let subduction_actor_join_handle = tokio::spawn({
             let task_child_cancel_token = child_cancel_token.clone();
             async move {

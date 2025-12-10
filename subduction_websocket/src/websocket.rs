@@ -168,7 +168,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
-        let (inbound_writer, inbound_reader) = async_channel::bounded(1024);
+        let (inbound_writer, inbound_reader) = async_channel::bounded(128);
         let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
 

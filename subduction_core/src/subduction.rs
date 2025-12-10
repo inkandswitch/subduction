@@ -87,8 +87,8 @@ impl<
     ) {
         tracing::info!("initializing Subduction instance");
 
-        let (actor_sender, actor_receiver) = bounded(1024);
-        let (queue_sender, queue_receiver) = async_channel::bounded(1024);
+        let (actor_sender, actor_receiver) = bounded(256);
+        let (queue_sender, queue_receiver) = async_channel::bounded(256);
         let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
 
         let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();

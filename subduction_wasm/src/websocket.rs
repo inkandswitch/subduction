@@ -49,7 +49,7 @@ impl WasmWebSocket {
     #[allow(clippy::too_many_lines)]
     #[wasm_bindgen]
     pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
-        let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(1024);
+        let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(64);
 
         let pending = Arc::new(Mutex::new(HashMap::<
             RequestId,
