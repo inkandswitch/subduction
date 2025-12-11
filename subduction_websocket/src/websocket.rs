@@ -67,6 +67,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Local> for WebSocket<T
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        tracing::info!("[local] disconnect called for peer {}", self.peer_id);
         async { Ok(()) }.boxed_local()
     }
 
@@ -299,6 +300,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                     tracing::warn!("unexpected frame: {:x?}", f);
                 }
                 Ok(tungstenite::Message::Close(_)) => {
+                    // FIXME cancel with cancellation token
                     tracing::info!("received close message, shutting down listener");
                     break;
                 }
@@ -336,6 +338,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        tracing::info!("[sendable] disconnect called for peer {}", self.peer_id);
         async { Ok(()) }.boxed()
     }
 

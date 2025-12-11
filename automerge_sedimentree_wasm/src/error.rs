@@ -1,6 +1,7 @@
 //! Errors
 
 use base58::FromBase58Error;
+use hex::FromHexError;
 use sedimentree_core::commit::FragmentError;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -65,6 +66,10 @@ pub enum WasmLookupError {
     /// The expected hash was not a byte array.
     #[error("expected hash to be a byte array: got {0:?}")]
     ExpectedHashNotByteArray(JsValue),
+
+    /// An invalid hex string was encountered.
+    #[error("invalid hex string: {0:?}")]
+    InvalidHexString(FromHexError),
 
     /// A non-numeric value was encountered where a numeric value was expected.
     #[error("expected numeric value: got {0:?}")]

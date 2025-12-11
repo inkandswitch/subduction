@@ -142,9 +142,17 @@ impl WasmSubduction {
         &self,
         id: &WasmSedimentreeId,
         sedimentree: &WasmSedimentree,
-    ) -> Result<(), JsStorageError> {
+        blobs: Vec<Uint8Array>,
+    ) -> Result<(), WasmIoError> {
         self.core
-            .add_sedimentree(id.clone().into(), sedimentree.clone().into())
+            .add_sedimentree(
+                id.clone().into(),
+                sedimentree.clone().into(),
+                blobs
+                    .into_iter()
+                    .map(|bytes| bytes.to_vec().into())
+                    .collect(),
+            )
             .await?;
         Ok(())
     }

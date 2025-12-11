@@ -20,7 +20,7 @@ use super::{id::ConnectionId, message::Message, recv_once::RecvOnce, Connection}
 pub struct ConnectionActor<'a, F: FutureKind, C: Connection<F>> {
     inbox: async_channel::Receiver<(ConnectionId, C)>,
     outbox: async_channel::Sender<(ConnectionId, C, Message)>,
-    queue: FuturesUnordered<F::Future<'a, ()>>,
+    queue: FuturesUnordered<F::Future<'a, ()>>, // TODO cancel on disconnection
 }
 
 impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {

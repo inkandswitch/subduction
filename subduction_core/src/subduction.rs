@@ -155,15 +155,15 @@ impl<
 
             let should_reregister = if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
                 tracing::error!(
-                    "Error dispatching message from connection {:?}: {}",
+                    "error dispatching message from connection {:?}: {}",
                     conn_id,
                     e
                 );
                 // Connection is broken - unregister it but keep draining messages
-                self.unregister(&conn_id).await;
-                tracing::info!("Unregistered failed connection {:?}", conn_id);
+                let _ = self.unregister(&conn_id).await;
+                tracing::info!("unregistered failed connection {:?}", conn_id);
 
-                // Re-register temporarily to drain remaining messages from the channel
+                // NOTE Re-register temporarily to drain remaining messages from the channel
                 // This prevents messages from piling up in inbound_writer
                 true
             } else {
@@ -173,7 +173,7 @@ impl<
             if should_reregister
                 && let Err(e) = self.actor_channel.send((conn_id, conn)).await {
                     tracing::error!(
-                        "Error re-sending connection {:?} to actor channel: {:?}",
+                        "error re-sending connection {:?} to actor channel: {:?}",
                         conn_id,
                         e
                     );
@@ -258,31 +258,6 @@ impl<
                 );
             }
         }
-        Ok(())
-    }
-
-    /// Add a [`Sedimentree`] to sync.
-    pub async fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree) -> Result<(), S::Error> {
-        tracing::debug!("Adding sedimentree with id {:?}", id);
-
-        self.storage.save_sedimentree_id(id).await?;
-
-        for commit in sedimentree.loose_commits() {
-            self.storage
-                .save_loose_commit(id, commit.clone())
-                .await?;
-        }
-
-        for fragment in sedimentree.fragments() {
-            self.storage
-                .save_fragment(id, fragment.clone())
-                .await?;
-        }
-
-        {
-            self.sedimentrees.lock().await.entry(id).or_default().merge(sedimentree);
-        }
-
         Ok(())
     }
 
@@ -569,6 +544,14 @@ impl<
         }
     }
 
+    pub async fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree, blobs: Vec<Blob>) -> Result<(), IoError<F, S, C>> {
+        self.insert_sedimentree_locally(id, sedimentree, blobs)
+            .await
+            .map_err(IoError::Storage)?;
+        self.request_all_batch_sync(id, None).await?;
+        Ok(())
+    }
+
     /***********************
      * INCREMENTAL CHANGES *
      ***********************/
@@ -610,13 +593,13 @@ impl<
                     conn.peer_id()
                 );
 
-                conn.send(Message::LooseCommit {
+                if let Err(e) = conn.send(Message::LooseCommit {
                     id,
                     commit: commit.clone(),
                     blob: blob.clone(),
-                })
-                .await
-                .map_err(IoError::ConnSend)?;
+                }).await {
+                    tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
+                }
             }
         }
 
@@ -667,13 +650,13 @@ impl<
                 id,
                 conn.peer_id()
             );
-            conn.send(Message::Fragment {
+            if let Err(e) = conn.send(Message::Fragment {
                 id,
                 fragment: fragment.clone(),
                 blob: blob.clone(),
-            })
-            .await
-            .map_err(IoError::ConnSend)?;
+            }).await {
+                tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
+            }
         }
 
         Ok(())
@@ -711,8 +694,8 @@ impl<
                         commit: commit.clone(),
                         blob: blob.clone(),
                     })
-                    .await
-                    .map_err(IoError::ConnSend)?;
+                    .await;
+                    // .map_err(IoError::ConnSend)?;
                 }
             }
         }
@@ -1213,6 +1196,35 @@ impl<
     /*******************
      * PRIVATE METHODS *
      *******************/
+
+    async fn insert_sedimentree_locally(&self, id: SedimentreeId, sedimentree: Sedimentree, blobs: Vec<Blob>) -> Result<(), S::Error> {
+        tracing::debug!("Adding sedimentree with id {:?}", id);
+
+        self.storage.save_sedimentree_id(id).await?;
+
+        for commit in sedimentree.loose_commits() {
+            self.storage
+                .save_loose_commit(id, commit.clone())
+                .await?;
+        }
+
+        for fragment in sedimentree.fragments() {
+            self.storage
+                .save_fragment(id, fragment.clone())
+                .await?;
+        }
+
+        for blob in blobs {
+            self.storage.save_blob(blob).await?;
+        }
+
+        {
+            self.sedimentrees.lock().await.entry(id).or_default().merge(sedimentree);
+        }
+
+        Ok(())
+    }
+
 
     async fn insert_commit_locally(
         &self,

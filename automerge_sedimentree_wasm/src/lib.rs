@@ -134,6 +134,9 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
                     v.push(b as u8);
                 }
                 v
+            } else if item.is_string() {
+                let s = item.as_string().expect("just checked is_string");
+                hex::decode(s).map_err(WasmLookupError::InvalidHexString)?
             } else {
                 return Err(WasmLookupError::ExpectedHashNotByteArray(item));
             };
