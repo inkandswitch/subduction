@@ -210,7 +210,7 @@ impl<
                     .await
                 {
                     tracing::warn!(
-                        "Missing blobs for batch sync request from peer {:?}: {:?}",
+                        "missing blobs for batch sync request from peer {:?}: {:?}",
                         from,
                         missing
                     );
@@ -228,21 +228,21 @@ impl<
                     match self.recv_blob_request(conn, &digests).await {
                         Ok(()) => {
                             tracing::info!(
-                                "Successfully handled blob request from peer {:?}",
+                                "successfully handled blob request from peer {:?}",
                                 from
                             );
                         }
                         Err(BlobRequestErr::IoError(e)) => Err(e)?,
                         Err(BlobRequestErr::MissingBlobs(missing)) => {
                             tracing::warn!(
-                                "Missing blobs for request from peer {:?}: {:?}",
+                                "missing blobs for request from peer {:?}: {:?}",
                                 from,
                                 missing
                             );
                         }
                     }
                 } else {
-                    tracing::warn!("No open connection for request ({:?})", conn_id);
+                    tracing::warn!("no open connection for request ({:?})", conn_id);
                 }
             }
             Message::BlobsResponse(blobs) => {
@@ -254,7 +254,7 @@ impl<
                         .map_err(IoError::Storage)?;
                 }
                 tracing::info!(
-                    "Saved {len} blobs from blob response from peer {from}, no reply needed",
+                    "saved {len} blobs from blob response from peer {from}, no reply needed",
                 );
             }
         }
@@ -336,7 +336,10 @@ impl<
                 touched = true;
                 let removed = { self.conns.lock().await.remove(id) };
                 if let Some(conn) = removed {
-                    conn.disconnect().await?;
+                    if let Err(e) = conn.disconnect().await {
+                        tracing::error!("{e}");
+                        return Err(e);
+                    }
                 }
             }
         }
@@ -497,8 +500,13 @@ impl<
 
                     debug_assert_eq!(req_id, resp_batch_id);
 
-                    self.recv_batch_sync_response(&conn.peer_id(), id, &diff)
-                        .await?;
+                    if let Err(e) = self.recv_batch_sync_response(&conn.peer_id(), id, &diff).await {
+                        tracing::error!(
+                            "error handling batch sync response from peer {:?}: {}",
+                            conn.peer_id(),
+                            e
+                        );
+                    }
                 }
             }
 
@@ -689,13 +697,14 @@ impl<
             let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
             for conn in conns {
                 if conn.peer_id() != *from {
-                    conn.send(Message::LooseCommit {
+                    if let Err(e) =conn.send(Message::LooseCommit {
                         id,
                         commit: commit.clone(),
                         blob: blob.clone(),
                     })
-                    .await;
-                    // .map_err(IoError::ConnSend)?;
+                    .await {
+                        tracing::error!("{e}")
+                    }
                 }
             }
         }
@@ -726,13 +735,14 @@ impl<
             let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
             for conn in conns {
                 if conn.peer_id() != *from {
-                    conn.send(Message::Fragment {
+                    if let Err(e) = conn.send(Message::Fragment {
                         id,
                         fragment: fragment.clone(),
                         blob: blob.clone(),
                     })
-                    .await
-                    .map_err(IoError::ConnSend)?;
+                    .await {
+                        tracing::error!("{e}")
+                    }
                 }
             }
         }
@@ -820,16 +830,16 @@ impl<
             }
         };
 
-        conn.send(
+        if let Err(e) = conn.send(
             BatchSyncResponse {
                 id,
                 req_id,
                 diff: sync_diff
             }
             .into(),
-        )
-            .await
-            .map_err(IoError::ConnSend)?;
+        ).await {
+            tracing::error!("{e}");
+        }
 
         if our_missing_blobs.is_empty() {
             Ok(())
@@ -1102,9 +1112,15 @@ impl<
 
         let mut out = HashMap::new();
         while let Some(result) = set.next().await {
-            let (peer_id, success, errs) = result?;
-            let blob_vec = { blobs.lock().await.iter().cloned().collect::<Vec<Blob>>() };
-            out.insert(peer_id, (success, blob_vec, errs));
+            match result {
+                Err(e) =>  {
+                    tracing::error!("{e}");
+                }
+                Ok((peer_id, success, errs)) => {
+                    let blob_vec = { blobs.lock().await.iter().cloned().collect::<Vec<Blob>>() };
+                    out.insert(peer_id, (success, blob_vec, errs));
+                }
+            }
         }
         Ok(out)
     }
