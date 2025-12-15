@@ -97,31 +97,46 @@
           "release:host" = cmd "Build release for ${system}"
             "${cargo} build --release";
 
-         "release:wasm:web" = cmd "Build release for wasm32-unknown-unknown with web bindings"
-           "${wasm-pack} build ./subduction_wasm --release --target=web && ${gzip} -f ./subduction_wasm/pkg/sedimentree_wasm_bg.wasm";
+          "release:wasm" = cmd "Build all JS-wrapped wasm libraries for release"
+            ''
+            export INITIAL_DIR="$(pwd)"
+            ${cargo} build --release
 
-         "release:wasm:bundler" = cmd "Build release for wasm32-unknown-unknown with bundler bindings"
-            "${wasm-pack} build ./subduction_wasm --release --target=bundler && ${gzip} -f ./subduction_wasm/pkg/sedimentree_wasm_bg.wasm";
+            cd "$WORKSPACE_ROOT/subduction_wasm"
+            ${pnpm} build
 
-          "release:wasm:nodejs" = cmd "Build release for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./subduction_wasm --release --target=nodejs && ${gzip} -f ./subduction_wasm/pkg/sedimentree_wasm_bg.wasm";
+            cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
+            ${pnpm} build
+
+            cd "$WORKSPACE_ROOT/automerge_sdubcution_wasm"
+            ${pnpm} build
+
+            cd $INITIAL_DIR
+            unset INITIAL_DIR
+            '';
         };
 
         build = {
           "build:host" = cmd "Build for ${system}"
             "${cargo} build";
 
-          "build:wasm:web" = cmd "Build for wasm32-unknown-unknown with web bindings"
-            "${wasm-pack} build ./subduction_wasm --dev --target=web";
- 
-          "build:wasm:nodejs" = cmd "Build for wasm32-unknown-unknown with Node.js bindgings"
-            "${wasm-pack} build ./subduction_wasm --dev --target=nodejs";
+          "build:wasm" = cmd "Build all JS-wrapped Wasm libraries"
+            ''
+            export INITIAL_DIR="$(pwd)"
+            ${cargo} build
 
-          "build:node" = cmd "Build JS-wrapped Wasm library"
-            "${pnpm}/bin/pnpm install && ${node} run build";
+            cd "$WORKSPACE_ROOT/subduction_wasm"
+            ${pnpm} build
 
-          "build:wasi" = cmd "Build for Wasm32-WASI"
-            "${cargo} build ./subduction_wasm --target wasm32-wasi";
+            cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
+            ${pnpm} build
+
+            cd "$WORKSPACE_ROOT/automerge_sdubcution_wasm"
+            ${pnpm} build
+
+            cd $INITIAL_DIR
+            unset INITIAL_DIR
+            '';
         };
 
         bench = {
@@ -146,27 +161,6 @@
         watch = {
           "watch:build:host" = cmd "Rebuild host target on save"
             "${cargo} watch --clear";
-
-          "watch:build:wasm" = cmd "Rebuild Wasm target on save"
-            "${cargo} watch --clear --features=serde -- cargo build --target=wasm32-unknown-unknown";
-
-          "watch:lint" = cmd "Lint on save"
-            "${cargo} watch --clear --exec clippy";
-
-          "watch:lint:pedantic" = cmd "Pedantic lint on save"
-            "${cargo} watch --clear --exec 'clippy -- -W clippy::pedantic'";
-
-          "watch:test:host" = cmd "Run all host tests on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test && test --doc'";
-
-          "watch:doctest:host" = cmd "Run all host doctests on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'test --doc'";
-
-          "watch:docs:build:host" = cmd "Refresh the docs for the host target on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'doc --features=mermaid_docs'";
-
-          "watch:docs:build:wasm" = cmd "Refresh the docs with the wasm32-unknown-unknown target on save"
-            "${cargo} watch --clear --features='mermaid_docs,test_utils' --exec 'doc --features=mermaid_docs --target=wasm32-unknown-unknown'";
         };
 
         test = {
@@ -261,6 +255,7 @@
 
          shellHook = ''
             unset SOURCE_DATE_EPOCH
+            export WORKSPACE_ROOT="$(pwd)"
             menu
           '';
         };

@@ -76,7 +76,7 @@ async fn main() -> anyhow::Result<()> {
                 addr,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
-                MemoryStorage::default(),
+                MemoryStorage::new(),
                 CountLeadingZeroBytes,
             )
             .await?;

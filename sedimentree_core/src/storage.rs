@@ -87,6 +87,20 @@ pub struct MemoryStorage {
     blobs: Arc<Mutex<HashMap<Digest, Blob>>>,
 }
 
+impl MemoryStorage {
+    /// Create a new in-memory storage backend.
+    #[must_use]
+    pub fn new() -> Self {
+        tracing::debug!("creating new in-memory storage");
+        Self {
+            ids: Arc::new(Mutex::new(HashSet::new())),
+            fragments: Arc::new(Mutex::new(HashMap::new())),
+            commits: Arc::new(Mutex::new(HashMap::new())),
+            blobs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+}
+
 impl Storage<Local> for MemoryStorage {
     type Error = std::convert::Infallible;
 
@@ -94,14 +108,12 @@ impl Storage<Local> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        tracing::debug!(
+            "[local] MemoryStorage: inserting sedimentree_id {:?}",
+            sedimentree_id
+        );
         async move {
-            tracing::debug!(
-                "MemoryStorage: inserting sedimentree_id {:?}",
-                sedimentree_id
-            );
-            {
-                self.ids.lock().await.insert(sedimentree_id);
-            }
+            self.ids.lock().await.insert(sedimentree_id);
             Ok(())
         }
         .boxed_local()
@@ -110,8 +122,8 @@ impl Storage<Local> for MemoryStorage {
     fn load_all_sedimentree_ids(
         &self,
     ) -> LocalBoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
+        tracing::debug!("[local] MemoryStorage: getting sedimentree_ids");
         async move {
-            tracing::debug!("MemoryStorage: getting sedimentree_ids");
             let ids = self.ids.lock().await.iter().copied().collect();
             Ok(ids)
         }
@@ -123,13 +135,12 @@ impl Storage<Local> for MemoryStorage {
         sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        tracing::debug!(
+            "[local] MemoryStorage: saving loose commit {:?} for sedimentree_id {:?}",
+            loose_commit,
+            sedimentree_id
+        );
         async move {
-            // NOTE match to avoid cloning when using `.or_insert_with`
-            tracing::debug!(
-                "MemoryStorage: saving loose commit {:?} for sedimentree_id {:?}",
-                loose_commit,
-                sedimentree_id
-            );
             self.commits
                 .lock()
                 .await
@@ -145,11 +156,11 @@ impl Storage<Local> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        tracing::debug!(
+            "[local] MemoryStorage: loading loose commits for sedimentree_id {:?}",
+            sedimentree_id
+        );
         async move {
-            tracing::debug!(
-                "MemoryStorage: loading loose commits for sedimentree_id {:?}",
-                sedimentree_id
-            );
             let stored = {
                 let locked = self.commits.lock().await;
                 locked.get(&sedimentree_id).cloned()
@@ -168,13 +179,12 @@ impl Storage<Local> for MemoryStorage {
         sedimentree_id: SedimentreeId,
         fragment: Fragment,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        tracing::debug!(
+            "[local] MemoryStorage: saving fragment {:?} for sedimentree_id {:?}",
+            fragment,
+            sedimentree_id
+        );
         async move {
-            // NOTE match to avoid cloning when using `.or_insert_with`
-            tracing::debug!(
-                "MemoryStorage: saving fragment {:?} for sedimentree_id {:?}",
-                fragment,
-                sedimentree_id
-            );
             self.fragments
                 .lock()
                 .await
@@ -190,11 +200,11 @@ impl Storage<Local> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
+        tracing::debug!(
+            "[local] MemoryStorage: loading fragments for sedimentree_id {:?}",
+            sedimentree_id
+        );
         async move {
-            tracing::debug!(
-                "MemoryStorage: loading fragments for sedimentree_id {:?}",
-                sedimentree_id
-            );
             let stored = {
                 let locked = self.fragments.lock().await;
                 locked.get(&sedimentree_id).cloned()
@@ -209,11 +219,11 @@ impl Storage<Local> for MemoryStorage {
     }
 
     fn save_blob(&self, blob: Blob) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
+        tracing::debug!(
+            "[local] MemoryStorage: saving blob with contents {:?}",
+            blob.contents()
+        );
         async move {
-            tracing::debug!(
-                "MemoryStorage: saving blob with contents {:?}",
-                blob.contents()
-            );
             let digest = Digest::hash(blob.contents());
             self.blobs.lock().await.entry(digest).or_insert(blob);
             Ok(digest)
@@ -226,7 +236,10 @@ impl Storage<Local> for MemoryStorage {
         blob_digest: Digest,
     ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
         async move {
-            tracing::debug!("MemoryStorage: loading blob with digest {:?}", blob_digest);
+            tracing::debug!(
+                "[local] MemoryStorage: loading blob with digest {:?}",
+                blob_digest
+            );
             Ok(self.blobs.lock().await.get(&blob_digest).cloned())
         }
         .boxed_local()
@@ -240,11 +253,11 @@ impl Storage<Sendable> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        tracing::debug!(
+            "[sendable] MemoryStorage: inserting sedimentree_id {:?}",
+            sedimentree_id
+        );
         async move {
-            tracing::debug!(
-                "MemoryStorage: inserting sedimentree_id {:?}",
-                sedimentree_id
-            );
             self.ids.lock().await.insert(sedimentree_id);
             Ok(())
         }
@@ -254,12 +267,8 @@ impl Storage<Sendable> for MemoryStorage {
     fn load_all_sedimentree_ids(
         &self,
     ) -> BoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
-        async move {
-            tracing::debug!("MemoryStorage: getting sedimentree_ids");
-            let ids = self.ids.lock().await.iter().copied().collect();
-            Ok(ids)
-        }
-        .boxed()
+        tracing::debug!("[sendable] MemoryStorage: getting sedimentree_ids");
+        async move { Ok(self.ids.lock().await.iter().copied().collect()) }.boxed()
     }
 
     fn save_loose_commit(
@@ -267,13 +276,12 @@ impl Storage<Sendable> for MemoryStorage {
         sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        tracing::debug!(
+            "[sendable] MemoryStorage: saving loose commit {:?} for sedimentree_id {:?}",
+            loose_commit,
+            sedimentree_id
+        );
         async move {
-            // NOTE match to avoid cloning when using `.or_insert_with`
-            tracing::debug!(
-                "MemoryStorage: saving loose commit {:?} for sedimentree_id {:?}",
-                loose_commit,
-                sedimentree_id
-            );
             self.commits
                 .lock()
                 .await
@@ -289,6 +297,10 @@ impl Storage<Sendable> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        tracing::debug!(
+            "[sendable] MemoryStorage: loading loose commits for sedimentree_id {:?}",
+            sedimentree_id
+        );
         async move {
             let stored = {
                 let locked = self.commits.lock().await;
@@ -308,13 +320,12 @@ impl Storage<Sendable> for MemoryStorage {
         sedimentree_id: SedimentreeId,
         fragment: Fragment,
     ) -> BoxFuture<'_, Result<(), Self::Error>> {
+        tracing::debug!(
+            "[sendable] MemoryStorage: saving fragment {:?} for sedimentree_id {:?}",
+            fragment,
+            sedimentree_id
+        );
         async move {
-            // NOTE match to avoid cloning when using `.or_insert_with`
-            tracing::debug!(
-                "MemoryStorage: saving fragment {:?} for sedimentree_id {:?}",
-                fragment,
-                sedimentree_id
-            );
             self.fragments
                 .lock()
                 .await
@@ -331,7 +342,7 @@ impl Storage<Sendable> for MemoryStorage {
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
         tracing::debug!(
-            "MemoryStorage: loading fragments for sedimentree_id {:?}",
+            "[sendable] MemoryStorage: loading fragments for sedimentree_id {:?}",
             sedimentree_id
         );
         async move {
@@ -349,11 +360,11 @@ impl Storage<Sendable> for MemoryStorage {
     }
 
     fn save_blob(&self, blob: Blob) -> BoxFuture<'_, Result<Digest, Self::Error>> {
+        tracing::debug!(
+            "[sendable] MemoryStorage: saving blob with contents {:?}",
+            blob.contents()
+        );
         async move {
-            tracing::debug!(
-                "MemoryStorage: saving blob with contents {:?}",
-                blob.contents()
-            );
             let digest = Digest::hash(blob.contents());
             self.blobs.lock().await.entry(digest).or_insert(blob);
             Ok(digest)
@@ -362,10 +373,10 @@ impl Storage<Sendable> for MemoryStorage {
     }
 
     fn load_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<Option<Blob>, Self::Error>> {
-        async move {
-            tracing::debug!("MemoryStorage: loading blob with digest {:?}", blob_digest);
-            Ok(self.blobs.lock().await.get(&blob_digest).cloned())
-        }
-        .boxed()
+        tracing::debug!(
+            "[sendable] MemoryStorage: loading blob with digest {:?}",
+            blob_digest
+        );
+        async move { Ok(self.blobs.lock().await.get(&blob_digest).cloned()) }.boxed()
     }
 }

@@ -582,7 +582,7 @@ impl<
         blob: Blob,
     ) -> Result<Option<FragmentRequested>, IoError<F, S, C>> {
         tracing::debug!(
-            "Adding commit {:?} to sedimentree {:?}",
+            "adding commit {:?} to sedimentree {:?}",
             commit.digest(),
             id
         );
@@ -688,6 +688,13 @@ impl<
         commit: &LooseCommit,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
+        tracing::debug!(
+            "receiving commit {:?} for sedimentree {:?} from peer {:?}",
+            commit.digest(),
+            id,
+            from
+        );
+
         let was_new = self
             .insert_commit_locally(id, commit.clone(), blob.clone())
             .await
@@ -697,7 +704,7 @@ impl<
             let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
             for conn in conns {
                 if conn.peer_id() != *from {
-                    if let Err(e) =conn.send(Message::LooseCommit {
+                    if let Err(e) = conn.send(Message::LooseCommit {
                         id,
                         commit: commit.clone(),
                         blob: blob.clone(),
@@ -726,6 +733,13 @@ impl<
         fragment: &Fragment,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
+        tracing::debug!(
+            "receiving fragment {:?} for sedimentree {:?} from peer {:?}",
+            fragment.digest(),
+            id,
+            from
+        );
+
         let was_new = self
             .insert_fragment_locally(id, fragment.clone(), blob.clone()) // TODO lots of cloning
             .await
@@ -776,7 +790,7 @@ impl<
             let mut locked = self.sedimentrees.lock().await;
             let sedimentree = locked.entry(id).or_default();
             let local_sedimentree = sedimentree.clone();
-            tracing::info!(
+            tracing::debug!(
                 "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commits and {} fragments",
                 their_summary.loose_commits().len(),
                 their_summary.fragment_summaries().len()
@@ -788,7 +802,6 @@ impl<
             for commit in diff.remote_commits {
                 sedimentree.add_commit(commit.clone());
             }
-
 
             for commit in diff.local_commits {
                 if let Some(blob) = self
@@ -1214,7 +1227,7 @@ impl<
      *******************/
 
     async fn insert_sedimentree_locally(&self, id: SedimentreeId, sedimentree: Sedimentree, blobs: Vec<Blob>) -> Result<(), S::Error> {
-        tracing::debug!("Adding sedimentree with id {:?}", id);
+        tracing::debug!("adding sedimentree with id {:?}", id);
 
         self.storage.save_sedimentree_id(id).await?;
 
