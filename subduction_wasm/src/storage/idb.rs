@@ -7,7 +7,7 @@ use std::{cell::RefCell, rc::Rc, str::FromStr};
 use thiserror::Error;
 use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use web_sys::{
-    Event, IdbDatabase, IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
+    Event, IdbDatabase,IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
     IdbVersionChangeEvent, IdbObjectStoreParameters, 
 };
 
@@ -211,6 +211,19 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
+    /// Delete a Sedimentree ID from storage.
+    #[wasm_bindgen(js_name = deleteSedimentreeId)]
+    pub async fn wasm_delete_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Result<(), WasmDeleteSedimentreeIdError> {
+        let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteSedimentreeIdError::TransactionError)?;
+        let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmDeleteSedimentreeIdError::ObjectStoreError)?;
+        let req = store
+            .delete(&JsValue::from_str(&sedimentree_id.to_string()))
+            .map_err(WasmDeleteSedimentreeIdError::DeleteError)?;
+
+        drop(await_idb(&req).await?);
+        Ok(())
+    }
+
     /// Load all Sedimentree IDs from storage.
     #[wasm_bindgen(js_name = loadAllSedimentreeIds)]
     pub async fn wasm_load_all_sedimentree_ids(&self) -> Result<Vec<WasmSedimentreeId>, WasmLoadAllSedimentreeIdsError> {
@@ -295,13 +308,62 @@ impl WasmIndexedDbStorage {
         Ok(out)
     }
 
+    /// Delete all loose commits for a given Sedimentree ID from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmDeleteLooseCommitsError`] if loose commits could not be deleted.
+    #[wasm_bindgen( js_name = deleteLooseCommits)]
+    pub async fn wasm_delete_loose_commits(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+    ) -> Result<(), WasmDeleteLooseCommitsError> {
+        let tx = self.0
+                     .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteLooseCommitsError::TransactionError)?;
+        let store = tx.object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmDeleteLooseCommitsError::ObjectStoreError)?;
+        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmDeleteLooseCommitsError::ObjectStoreError)?;
+
+        let key = JsValue::from_str(&sedimentree_id.to_string());
+        let range = web_sys::IdbKeyRange::only(&key).map_err(WasmDeleteLooseCommitsError::KeyRangeError)?;
+
+        let req = idx.open_key_cursor_with_range(&range)
+                     .map_err(WasmDeleteLooseCommitsError::UnableToOpenCursor)?;
+
+        let mut cursor_val = await_idb(&req).await?;
+        if cursor_val.is_undefined() || cursor_val.is_null() {
+            return Ok(());
+        }
+
+        loop {
+            let cursor = cursor_val
+                .dyn_into::<web_sys::IdbCursor>()
+                .map_err(WasmDeleteLooseCommitsError::CursorError)?;
+
+            let delete_req = cursor
+                .delete()
+                .map_err(WasmDeleteLooseCommitsError::UnableToDeleteLooseCommit)?;
+            drop(await_idb(&delete_req).await?);
+
+            cursor
+                .continue_()
+                .map_err(WasmDeleteLooseCommitsError::UnableToAdvanceCursor)?;
+
+            cursor_val = await_idb(&req).await?;
+            if cursor_val.is_undefined() || cursor_val.is_null() {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Save a fragment to storage.
     ///
     /// # Errors
     ///
     /// Returns a [`WasmSaveFragmentError`] if the fragment could not be saved.
     #[wasm_bindgen(js_name = saveFragment)]
-   pub  async fn wasm_save_fragment(&self, sedimentree_id: &WasmSedimentreeId, fragment: &WasmFragment) -> Result<(), WasmSaveFragmentError> {
+   pub async fn wasm_save_fragment(&self, sedimentree_id: &WasmSedimentreeId, fragment: &WasmFragment) -> Result<(), WasmSaveFragmentError> {
         let core_fragment = Fragment::from(fragment.clone());
         let digest = core_fragment.digest();
         let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_fragment, bincode::config::standard())?;
@@ -355,6 +417,55 @@ impl WasmIndexedDbStorage {
         Ok(out)
     }
 
+    /// Delete all fragments for a given Sedimentree ID from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmDeleteFragmentsError`] if loose commits could not be deleted.
+    #[wasm_bindgen( js_name = deleteFragments)]
+    pub async fn wasm_delete_fragments(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+    ) -> Result<(), WasmDeleteFragmentsError> {
+        let tx = self.0
+                     .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteFragmentsError::TransactionError)?;
+        let store = tx.object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmDeleteFragmentsError::ObjectStoreError)?;
+        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmDeleteFragmentsError::ObjectStoreError)?;
+
+        let key = JsValue::from_str(&sedimentree_id.to_string());
+        let range = web_sys::IdbKeyRange::only(&key).map_err(WasmDeleteFragmentsError::KeyRangeError)?;
+
+        let req = idx.open_key_cursor_with_range(&range)
+                     .map_err(WasmDeleteFragmentsError::UnableToOpenCursor)?;
+
+        let mut cursor_val = await_idb(&req).await?;
+        if cursor_val.is_undefined() || cursor_val.is_null() {
+            return Ok(());
+        }
+
+        loop {
+            let cursor = cursor_val
+                .dyn_into::<web_sys::IdbCursor>()
+                .map_err(WasmDeleteFragmentsError::CursorError)?;
+
+            let delete_req = cursor
+                .delete()
+                .map_err(WasmDeleteFragmentsError::UnableToDeleteLooseCommit)?;
+            drop(await_idb(&delete_req).await?);
+
+            cursor
+                .continue_()
+                .map_err(WasmDeleteFragmentsError::UnableToAdvanceCursor)?;
+
+            cursor_val = await_idb(&req).await?;
+            if cursor_val.is_undefined() || cursor_val.is_null() {
+                break;
+            }
+        }
+
+        Ok(())
+    }
+
     /// Save a blob to the database, returning its digest.
     ///
     /// # Errors
@@ -402,6 +513,23 @@ impl WasmIndexedDbStorage {
         };
 
         Ok(Some(u8s.to_vec()))
+    }
+
+    /// Delete a blob from the database by its digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmDeleteBlobError`] if the blob could not be deleted.
+    #[wasm_bindgen(js_name = deleteBlob)]
+    pub async fn wasm_delete_blob(&self, wasm_digest: WasmDigest) -> Result<(), WasmDeleteBlobError> {
+        let req = self
+            .0
+            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteBlobError::TransactionError)?
+            .object_store(BLOB_STORE_NAME).map_err(WasmDeleteBlobError::ObjectStoreError)?
+            .delete(&JsValue::from_str(&wasm_digest.to_hex_string())).map_err(WasmDeleteBlobError::UnableToDeleteBlob)?;
+
+        drop(await_idb(&req).await?);
+        Ok(())
     }
 }
 
@@ -555,6 +683,35 @@ impl From<WasmLoadBlobError> for JsValue {
     }
 }
 
+/// Error types for `deleteBlob`.
+#[derive(Debug, Error)]
+pub enum WasmDeleteBlobError {
+    /// An error indicating that there was an issue during the transaction.
+    #[error("deleteBlob IndexedDB transaction error: {0:?}")]
+    TransactionError(JsValue),
+
+    /// An error indicating that there was an issue accessing the object store.
+    #[error("deleteBlob IndexedDB object store error: {0:?}")]
+    ObjectStoreError(JsValue),
+
+    /// An error indicating that the blob could not be deleted from `IndexedDB`.
+    #[error("unable to delete blob from IndexedDB: {0:?}")]
+    UnableToDeleteBlob(JsValue),
+
+    /// An error occurred while awaiting an `IndexedDB` operation.
+    #[error("error awaiting IndexedDB operation: {0:?}")]
+    AwaitIdbError(#[from] AwaitIdbError),
+}
+
+impl From<WasmDeleteBlobError> for JsValue {
+    fn from(err: WasmDeleteBlobError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WasmDeleteBlobError");
+        err.into()
+    }
+}
+
+
 /// Error types for `saveSedimentreeId`.
 #[derive(Debug, Error)]
 pub enum WasmSaveSedimentreeIdError {
@@ -579,6 +736,34 @@ impl From<WasmSaveSedimentreeIdError> for JsValue {
     fn from(err: WasmSaveSedimentreeIdError) -> Self {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("WasmSaveSedimentreeIdError");
+        err.into()
+    }
+}
+
+/// Error types for `saveSedimentreeId`.
+#[derive(Debug, Error)]
+pub enum WasmDeleteSedimentreeIdError {
+    /// An error indicating that there was an issue during the transaction.
+    #[error("deleteSedimentreeId IndexedDB transaction error: {0:?}")]
+    TransactionError(JsValue),
+
+    /// An error indicating that there was an issue accessing the object store.
+    #[error("deleteSedimentreeId IndexedDB object store error: {0:?}")]
+    ObjectStoreError(JsValue),
+
+    /// An error indicating that the sedimentree ID could not be deleted from `IndexedDB`.
+    #[error("unable to `delete` sedimentree ID into IndexedDB: {0:?}")]
+    DeleteError(JsValue),
+
+    /// An error occurred while awaiting an `IndexedDB` operation.
+    #[error("error awaiting IndexedDB operation: {0:?}")]
+    AwaitIdbError(#[from] AwaitIdbError),
+}
+
+impl From<WasmDeleteSedimentreeIdError> for JsValue {
+    fn from(err: WasmDeleteSedimentreeIdError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WasmDeleteSedimentreeIdError");
         err.into()
     }
 }
@@ -695,6 +880,49 @@ impl From<WasmLoadFragmentsError> for JsValue {
     }
 }
 
+/// Error types for `deleteFragments`.
+#[derive(Debug, Error)]
+pub enum WasmDeleteFragmentsError {
+    /// An error indicating that there was an issue during the transaction.
+    #[error("deletelooseCommits IndexedDB transaction error: {0:?}")]
+    TransactionError(JsValue),
+
+    /// An error indicating that there was an issue accessing the object store.
+    #[error("deletelooseCommits IndexedDB object store error: {0:?}")]
+    ObjectStoreError(JsValue),
+
+    /// An error indicating that the cursor could not be opened.
+    #[error("deletelooseCommits IndexedDB cursor error: {0:?}")]
+    UnableToOpenCursor(JsValue),
+
+    /// An error indicating that there was an issue creating the key range.
+    #[error("deletelooseCommits IndexedDB key range error: {0:?}")]
+    KeyRangeError(JsValue),
+
+    /// A cursor error occurred when deleting loose commits.
+    #[error("cursor problem when deleting loose commit(s) from IndexedDB: {0:?}")]
+    CursorError(JsValue),
+
+    /// Unable to delete a loose commit via the cursor.
+    #[error("unable to advance cursor when deleting loose commit(s) from IndexedDB: {0:?}")]
+    UnableToAdvanceCursor(JsValue),
+
+    /// Unable to delete a loose commit.
+    #[error("unable to delete loose commit(s) from IndexedDB: {0:?}")]
+    UnableToDeleteLooseCommit(JsValue),
+
+    /// An error occurred while awaiting an `IndexedDB` operation.
+    #[error("error awaiting IndexedDB operation: {0:?}")]
+    AwaitIdbError(#[from] AwaitIdbError),
+}
+
+impl From<WasmDeleteFragmentsError> for JsValue {
+    fn from(err: WasmDeleteFragmentsError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WasmDeleteFragmentsError");
+        err.into()
+    }
+}
 
 /// Error types for `saveLooseCommit`.
 #[derive(Debug, Error)]
@@ -764,6 +992,50 @@ impl From<WasmLoadLooseCommitsError> for JsValue {
     fn from(err: WasmLoadLooseCommitsError) -> Self {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("WasmLoadLooseCommitError");
+        err.into()
+    }
+}
+
+/// Error types for `deleteLooseCommits`.
+#[derive(Debug, Error)]
+pub enum WasmDeleteLooseCommitsError {
+    /// An error indicating that there was an issue during the transaction.
+    #[error("deletelooseCommits IndexedDB transaction error: {0:?}")]
+    TransactionError(JsValue),
+
+    /// An error indicating that there was an issue accessing the object store.
+    #[error("deletelooseCommits IndexedDB object store error: {0:?}")]
+    ObjectStoreError(JsValue),
+
+    /// An error indicating that the cursor could not be opened.
+    #[error("deletelooseCommits IndexedDB cursor error: {0:?}")]
+    UnableToOpenCursor(JsValue),
+
+    /// An error indicating that there was an issue creating the key range.
+    #[error("deletelooseCommits IndexedDB key range error: {0:?}")]
+    KeyRangeError(JsValue),
+
+    /// A cursor error occurred when deleting loose commits.
+    #[error("cursor problem when deleting loose commit(s) from IndexedDB: {0:?}")]
+    CursorError(JsValue),
+
+    /// Unable to delete a loose commit via the cursor.
+    #[error("unable to advance cursor when deleting loose commit(s) from IndexedDB: {0:?}")]
+    UnableToAdvanceCursor(JsValue),
+
+    /// Unable to delete a loose commit.
+    #[error("unable to delete loose commit(s) from IndexedDB: {0:?}")]
+    UnableToDeleteLooseCommit(JsValue),
+
+    /// An error occurred while awaiting an `IndexedDB` operation.
+    #[error("error awaiting IndexedDB operation: {0:?}")]
+    AwaitIdbError(#[from] AwaitIdbError),
+}
+
+impl From<WasmDeleteLooseCommitsError> for JsValue {
+    fn from(err: WasmDeleteLooseCommitsError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("WasmDeleteLooseCommitsError");
         err.into()
     }
 }

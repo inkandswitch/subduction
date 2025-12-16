@@ -157,6 +157,13 @@ impl WasmSubduction {
         Ok(())
     }
 
+    /// Remove a Sedimentree and all associated data.
+    #[wasm_bindgen(js_name = removeSedimentree)]
+    pub async fn remove_sedimentree(&self, id: &WasmSedimentreeId) -> Result<(), WasmIoError> {
+        self.core.remove_sedimentree(id.clone().into()).await?;
+        Ok(())
+    }
+
     /// Attach a connection.
     ///
     /// # Errors
@@ -188,6 +195,12 @@ impl WasmSubduction {
             .disconnect(&conn_id.clone().into())
             .await
             .unwrap_or_else(|e: Infallible| match e {})
+    }
+
+    /// Disconnect from all peers.
+    #[wasm_bindgen(js_name = disconnectAll)]
+    pub async fn disconnect_all(&self) -> Result<(), WasmDisconnectionError> {
+        Ok(self.core.disconnect_all().await?)
     }
 
     /// Disconnect from a peer by its ID.

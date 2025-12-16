@@ -16,9 +16,7 @@ use crate::{
 use async_channel::{bounded, Sender};
 use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    FutureExt, StreamExt,
-    lock::Mutex,
-    stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
+    FutureExt, StreamExt, future::try_join_all, lock::Mutex, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
 };
 use nonempty::NonEmpty;
 use request::FragmentRequested;
@@ -308,6 +306,20 @@ impl<
         }
     }
 
+    /// Gracefully disconnect from all connections.
+    pub async fn disconnect_all(&self) -> Result<(), C::DisconnectionError> {
+        let conns: Vec<_> = {
+            let mut guard = self.conns.lock().await;
+            guard.drain().map(|(_id, conn)| conn).collect()
+        };
+
+        try_join_all(conns.into_iter().map(|conn| async move {
+            conn.disconnect().await
+        })).await?;
+
+        Ok(())
+    }
+
     /// Gracefully disconnect from all connections to a given peer ID.
     ///
     /// # Returns
@@ -552,11 +564,36 @@ impl<
         }
     }
 
+    /// Add a new sedimentree locally and propagate it to all connected peers.
     pub async fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree, blobs: Vec<Blob>) -> Result<(), IoError<F, S, C>> {
         self.insert_sedimentree_locally(id, sedimentree, blobs)
             .await
             .map_err(IoError::Storage)?;
         self.request_all_batch_sync(id, None).await?;
+        Ok(())
+    }
+
+    /// Remove a sedimentree locally and delete all associated data from storage.
+    pub async fn remove_sedimentree(&self, id: SedimentreeId) -> Result<(), IoError<F, S, C>> {
+        let maybe_sedimentree = {
+            self.sedimentrees
+                .lock()
+                .await
+                .remove(&id)
+        };
+
+        if let Some(sedimentree) = maybe_sedimentree {
+            for commit in sedimentree.loose_commits() {
+                self.storage.delete_blob(commit.blob_meta().digest()).await.map_err(IoError::Storage)?;
+            }
+            self.storage.delete_loose_commits(id).await.map_err(IoError::Storage)?;
+
+            for fragment in sedimentree.fragments() {
+                self.storage.delete_blob(fragment.summary().blob_meta().digest()).await.map_err(IoError::Storage)?;
+            }
+            self.storage.delete_fragments(id).await.map_err(IoError::Storage)?;
+        }
+
         Ok(())
     }
 
@@ -1253,6 +1290,56 @@ impl<
 
         Ok(())
     }
+
+    // /// Remove a sedimentree locally.
+    // pub async fn remove_sedimentree_locally(&self, id: SedimentreeId) -> Result<bool, IoError<F, S, C>> {
+    //     tracing::debug!("removing sedimentree with id {:?}", id);
+
+    //     let maybe_removed = {
+    //         let mut locked = self.sedimentrees.lock().await;
+    //         locked.remove(&id)
+    //     };
+
+    //     if let Some(removed) = maybe_removed {
+    //         tracing::debug!(
+    //             "removed sedimentree with id {:?}, which had {} commits and {} fragments",
+    //             id,
+    //             removed.loose_commits().count(),
+    //             removed.fragments().count()
+    //         );
+
+    //         for commit in removed.loose_commits() {
+    //             tracing::debug!("removed commit {:?}", commit.digest());
+    //             self.storage
+    //                 .delete_blob(commit.blob_meta().digest())
+    //                 .await
+    //                 .map_err(IoError::Storage)?;
+    //         }
+    //         for fragment in removed.fragments() {
+    //             tracing::debug!("removed fragment {:?}", fragment.digest());
+    //         }
+    //     } else {
+    //         tracing::debug!("no sedimentree with id {:?} found to remove", id);
+    //         return Ok(false);
+    //     }
+
+    //     self.storage
+    //         .delete_sedimentree_id(id)
+    //         .await
+    //         .map_err(IoError::Storage)?;
+
+    //     self.storage
+    //         .delete_loose_commits(id)
+    //         .await
+    //         .map_err(IoError::Storage)?;
+
+    //     self.storage
+    //         .delete_fragments(id)
+    //         .await
+    //         .map_err(IoError::Storage)?;
+
+    //     Ok(())
+    // }
 
 
     async fn insert_commit_locally(

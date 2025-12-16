@@ -108,7 +108,7 @@
             cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
             ${pnpm} build
 
-            cd "$WORKSPACE_ROOT/automerge_sdubcution_wasm"
+            cd "$WORKSPACE_ROOT/automerge_subduction_wasm"
             ${pnpm} build
 
             cd $INITIAL_DIR
@@ -131,7 +131,7 @@
             cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
             ${pnpm} build
 
-            cd "$WORKSPACE_ROOT/automerge_sdubcution_wasm"
+            cd "$WORKSPACE_ROOT/automerge_subduction_wasm"
             ${pnpm} build
 
             cd $INITIAL_DIR

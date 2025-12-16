@@ -61,6 +61,16 @@ impl WasmDigest {
         self.0.as_bytes().to_vec()
     }
 
+    /// Creates a new digest from its hexadecimal string representation.
+    #[must_use]
+    #[wasm_bindgen(js_name = fromHexString)]
+    pub fn from_hex_string(s: &str) -> Result<WasmDigest, WasmInvalidDigest> {
+        let digest = s
+            .parse::<Digest>()
+            .map_err(InternalWasmInvalidDigest::InvalidDigest)?;
+        Ok(WasmDigest(digest))
+    }
+
     /// Returns the hexadecimal string representation of the digest.
     #[must_use]
     #[wasm_bindgen(js_name = toHexString)]
