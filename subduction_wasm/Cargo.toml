@@ -19,13 +19,13 @@ crate-type = ["cdylib", "rlib"]
 [dependencies]
 async-channel = { workspace = true }
 base58 = { workspace = true }
-bincode = { version = "2.0", features = ["serde"] }
+bincode = { version = "2.0", default-features = false, features = ["serde"] }
 build_info = { path = "../build_info" }
 console_error_panic_hook = { version = "0.1.7", optional = true }
-from_js_ref = "0.1.2"
+from_js_ref = "0.1.2" # FIXME make no_std
 futures = { workspace = true }
 futures-util = { workspace = true }
-getrandom = { version = "0.3.3", features = ["wasm_js"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
 js-sys = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
@@ -62,9 +62,22 @@ features = [
 ]
 
 [features]
-default = ["std", "console_error_panic_hook"]
+default = ["console_error_panic_hook"]
+# default = ["std", "console_error_panic_hook"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
-std = []
+std = [
+  "async-channel/std",
+  "futures/std",
+  "futures-util/std",
+  "js-sys/std",
+  "rand/std",
+  "sedimentree_core/std",
+  "subduction_core/std",
+  "serde/std",
+  "thiserror/std",
+  "wasm-bindgen/std",
+  "wasm-bindgen-futures/std"
+]
 
 [lints]
 workspace = true

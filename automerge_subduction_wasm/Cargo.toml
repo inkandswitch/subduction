@@ -28,9 +28,15 @@ wasm-tracing = { workspace = true }
 wasm_refgen = { workspace = true }
 
 [features]
-default = ["std", "console_error_panic_hook"]
+default = ["console_error_panic_hook"]
+# default = ["std", "console_error_panic_hook"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
-std = []
+std = [
+  "automerge_sedimentree_wasm/std",
+  "subduction_wasm/std",
+  "tracing/std",
+  "wasm-bindgen/std",
+]
 
 [lints]
 workspace = true

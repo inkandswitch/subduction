@@ -58,7 +58,7 @@ pub struct DisconnectionError;
 pub enum RunError {
     /// Internal MPSC channel error.
     #[error("Channel send error: {0}")]
-    ChanSend(#[from] async_channel::SendError<Message>),
+    ChanSend(async_channel::SendError<Message>),
 
     /// WebSocket error.
     #[error("WebSocket error: {0}")]

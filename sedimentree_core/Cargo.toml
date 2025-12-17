@@ -16,7 +16,7 @@ rust-version.workspace = true
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 blake3 = { workspace = true }
 futures = { workspace = true }
-hex = { workspace = true }
+futures-util = { workspace = true, features = ["alloc"] }
 num = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
 thiserror = { workspace = true }
@@ -32,7 +32,15 @@ tracing-subscriber = { workspace = true }
 default = ["std"]
 arbitrary = ["dep:arbitrary"]
 serde = ["dep:serde"]
-std = []
+std = [
+  "blake3/std",
+  "futures/std",
+  "futures-util/std",
+  "num/std",
+  "serde/std",
+  "thiserror/std",
+  "tracing/std"
+]
 
 [lints]
 workspace = true

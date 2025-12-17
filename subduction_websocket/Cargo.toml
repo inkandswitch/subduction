@@ -16,20 +16,20 @@ rust-version.workspace = true
 [dependencies]
 async-channel = { workspace = true }
 async-tungstenite = { workspace = true }
-bincode = { version = "2.0", features = ["serde"] }
+bincode = { version = "2.0", default-features = false, features = ["serde"] }
 blake3 = { workspace = true }
 futures = { workspace = true }
 futures-timer = { workspace = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
-subduction_core = { path = "../subduction_core", features = ["serde"] }
+sedimentree_core = { path = "../sedimentree_core", default-features = false, features = ["serde"] }
+subduction_core = { path = "../subduction_core", default-features = false, features = ["serde"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
-tungstenite = "0.27"
+tungstenite = { workspace = true }
 
 [dev-dependencies]
 anyhow = "1.0"
@@ -39,11 +39,23 @@ tokio-test = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [features]
-default = ["std"]
-std = []
+default = []
 tokio_client = ["tokio"]
 tokio_server = ["tokio"]
 tokio = ["std", "dep:tokio", "dep:tokio-util", "async-tungstenite/tokio-native-tls"]
+std = [
+  "async-channel/std",
+  "bincode/std",
+  "blake3/std",
+  "futures/std",
+  "futures-util/std",
+  "rand/std",
+  "sedimentree_core/std",
+  "subduction_core/std",
+  "serde/std",
+  "thiserror/std",
+  "tracing/std",
+]
 
 [lints]
 workspace = true

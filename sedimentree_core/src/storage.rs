@@ -9,9 +9,9 @@ use alloc::{
 
 use futures::{
     future::{BoxFuture, LocalBoxFuture},
-    lock::Mutex,
     FutureExt,
 };
+use futures_util::lock::Mutex;
 
 use crate::{
     blob::Blob,

@@ -15,11 +15,11 @@ rust-version.workspace = true
 
 [dependencies]
 automerge = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core" }
+sedimentree_core = { path = "../sedimentree_core", default-features = false }
 
 [features]
 default = ["std"]
-std = []
+std = ["sedimentree_core/std"]
 
 [lints]
 workspace = true

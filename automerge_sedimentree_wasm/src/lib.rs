@@ -17,7 +17,7 @@ use base58::FromBase58;
 use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
 use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
-use sedimentree_core::{blob::Digest, commit::CommitStore};
+use sedimentree_core::{blob::Digest, commit::CommitStore, hex::decode_hex};
 use subduction_wasm::{
     digest::{JsDigest, WasmDigest},
     subduction::WasmHashMetric,
@@ -97,7 +97,11 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
     type LookupError = WasmLookupError;
 
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {
-        let hash_hex = hex::encode(digest.as_bytes());
+        let mut hexes = Vec::with_capacity(32);
+        for byte in digest.as_bytes() {
+            hexes.push(alloc::format!("{:02x}", byte));
+        }
+        let hash_hex = hexes.join("");
 
         let js_value_should_be_change_meta = self
             .0
@@ -142,7 +146,7 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
                 v
             } else if item.is_string() {
                 let s = item.as_string().expect("just checked is_string");
-                hex::decode(s).map_err(WasmLookupError::InvalidHexString)?
+                decode_hex(&s).ok_or(WasmLookupError::InvalidHexString)?
             } else {
                 return Err(WasmLookupError::ExpectedHashNotByteArray(item));
             };

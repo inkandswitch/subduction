@@ -37,6 +37,7 @@ pub mod commit;
 mod commit_dag;
 pub mod depth;
 pub mod future;
+pub mod hex;
 pub mod storage;
 
 /// A unique identifier for some data managed by Sedimentree.

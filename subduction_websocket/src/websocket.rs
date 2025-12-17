@@ -253,7 +253,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                                             self.chan_id,
                                             e
                                         );
-                                        e
+                                        RunError::ChanSend(e)
                                     })?;
                             }
                         }
@@ -268,7 +268,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
                                     self.chan_id,
                                     e
                                 );
-                                e
+                                RunError::ChanSend(e)
                             })?;
 
                             tracing::debug!(
