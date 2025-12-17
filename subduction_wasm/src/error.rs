@@ -123,7 +123,6 @@ pub enum WasmCallErrorInner {
 impl From<CallError> for WasmCallErrorInner {
     fn from(err: CallError) -> Self {
         match err {
-            CallError::Encoding(e) => Self::Encoding(e.to_string()),
             CallError::SocketSend(e) => Self::SocketSend(e),
             CallError::ChannelCanceled => Self::ChannelCanceled,
             CallError::TimedOut => Self::TimedOut,
@@ -134,7 +133,6 @@ impl From<CallError> for WasmCallErrorInner {
 impl From<&CallError> for WasmCallErrorInner {
     fn from(err: &CallError) -> Self {
         match err {
-            CallError::Encoding(e) => Self::Encoding(e.to_string()),
             CallError::SocketSend(e) => Self::SocketSend(e.clone()),
             CallError::ChannelCanceled => Self::ChannelCanceled,
             CallError::TimedOut => Self::TimedOut,

@@ -77,12 +77,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Local> for WebSocket<T
                 message.request_id(),
                 self.peer_id
             );
+
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&message, &mut msg_bytes)
+                .expect("serialization to vec should be infallible");
+
             self.outbound
                 .lock()
                 .await
-                .send(tungstenite::Message::Binary(
-                    bincode::serde::encode_to_vec(&message, bincode::config::standard())?.into(),
-                ))
+                .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await?;
 
             Ok(())
@@ -119,20 +123,18 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Local> for WebSocket<T
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&Message::BatchSyncRequest(req), &mut msg_bytes)
+                .expect("serialization to vec should be infallible");
+
             self.outbound
                 .lock()
                 .await
-                .send(tungstenite::Message::Binary(
-                    bincode::serde::encode_to_vec(
-                        Message::BatchSyncRequest(req),
-                        bincode::config::standard(),
-                    )
-                    .map_err(CallError::Serialization)?
-                    .into(),
-                ))
+                .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await?;
 
-            tracing::info!(
+            tracing::debug!(
                 chan_id = self.chan_id,
                 "sent WebSocket request {:?}",
                 req_id
@@ -217,8 +219,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
 
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
-                    let (msg, _size): (Message, usize) =
-                        bincode::serde::decode_from_slice(&bytes, bincode::config::standard())?;
+                    let msg: Message = ciborium::de::from_reader::<Message, &[u8]>(&bytes)
+                        .map_err(|_| RunError::Deserialize)?;
 
                     tracing::debug!(
                         "decoded inbound message id {:?} from peer {:?}, message: {:?}",
@@ -347,12 +349,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
                 "sending outbound message id {:?} / {message:?}",
                 message.request_id()
             );
+
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&message, &mut msg_bytes)
+                .expect("serialization to vec should be infallible");
+
             self.outbound
                 .lock()
                 .await
-                .send(tungstenite::Message::Binary(
-                    bincode::serde::encode_to_vec(&message, bincode::config::standard())?.into(),
-                ))
+                .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await?;
 
             Ok(())
@@ -389,17 +395,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&Message::BatchSyncRequest(req), &mut msg_bytes)
+                .expect("serialization to vec should be infallible");
+
             self.outbound
                 .lock()
                 .await
-                .send(tungstenite::Message::Binary(
-                    bincode::serde::encode_to_vec(
-                        Message::BatchSyncRequest(req),
-                        bincode::config::standard(),
-                    )
-                    .map_err(CallError::Serialization)?
-                    .into(),
-                ))
+                .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await?;
 
             tracing::info!(

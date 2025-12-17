@@ -22,7 +22,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [features]
-default = ["std"]
+default = []
 arbitrary = ["dep:arbitrary"]
 serde = ["dep:serde"]
 serde-std = ["serde/std"]

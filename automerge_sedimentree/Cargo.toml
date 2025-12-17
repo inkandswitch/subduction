@@ -18,7 +18,7 @@ automerge = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
 
 [features]
-default = ["std"]
+default = []
 std = ["sedimentree_core/std"]
 
 [lints]
