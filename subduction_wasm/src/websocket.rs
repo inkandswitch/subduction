@@ -247,8 +247,12 @@ impl Connection<Local> for WasmWebSocket {
         async move {
             tracing::debug!("sending outbound message id {:?}", message.request_id());
             
-            let msg_bytes = bincode::serde::encode_to_vec(&message, bincode::config::standard())
-                .map_err(SendError::Encoding)?;
+            // let msg_bytes = bincode::serde::encode_to_vec(&message, bincode::config::standard())
+            //     .map_err(SendError::Encoding)?;
+
+            let mut msg_bytes = Vec::new();
+            ciborium::ser::into_writer(&message)
+                .map_err(CallError::Encoding)?;
 
             tracing::debug!(
                 "sending outbound message id {:?} that's {} bytes long",

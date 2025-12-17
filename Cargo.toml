@@ -32,7 +32,6 @@ blake3 = { version = "1.8", default-features = false }
 ciborium = { version = "0.2.2", default-deatures = false }
 bolero = "0.13.4"
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
-futures-intrusive = { version = "0.5.0", default-features = false }
 futures-timer = "3.0" # has std
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc"] }
 getrandom = "0.3.3"
@@ -53,7 +52,7 @@ url = { version = "2.5", default-features = false }
 wasm-bindgen = { version = "0.2.105", default-features = false }
 wasm-bindgen-futures = { version = "0.4.53", default-features = false }
 wasm_refgen = "0.1.4" # FIXME add no_std
-wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" } # uses std
+wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
 windows-sys = "0.61.2"
 
 [workspace.lints.rust]
