@@ -581,7 +581,7 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, AwaitIdbError> {
     req.set_onerror(Some(error.as_ref().unchecked_ref()));
     error.forget();
 
-    rx.await?.map_err(AwaitIdbError::JsPromiseRejected)
+    rx.await.map_err(AwaitIdbError::Canceled)?.map_err(AwaitIdbError::JsPromiseRejected)
 }
 
 /// Error indicating that a `JsValue` was expected to be a `Uint8Array` but was not.
@@ -611,7 +611,7 @@ impl From<InvalidIndexedDbValue> for JsValue {
 pub enum AwaitIdbError {
     /// The channel was canceled.
     #[error("Channel dropped")]
-    Canceled(#[from] oneshot::Canceled),
+    Canceled(oneshot::Canceled),
 
     /// The JS Promise was rejected.
     #[error("JS Promise rejected: {0:?}")]
