@@ -1,10 +1,8 @@
 use alloc::{rc::Rc, vec::Vec};
 use core::time::Duration;
 
-use futures::{
-    future::{FutureExt, LocalBoxFuture},
-    lock::Mutex,
-};
+use async_lock::Mutex;
+use futures::future::{FutureExt, LocalBoxFuture};
 use js_sys::Uint8Array;
 use sedimentree_core::future::Local;
 use subduction_core::{

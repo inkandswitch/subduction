@@ -22,13 +22,13 @@ futures = { workspace = true }
 futures-util = { workspace = true }
 rand = "0.9.2"
 serde = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
-subduction_core = { path = "../subduction_core", features = ["serde"] }
+sedimentree_core = { path = "../sedimentree_core", features = ["std"] }
+subduction_core = { path = "../subduction_core", features = ["std", "serde-std"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
-tracing = { workspace = true }
-tracing-subscriber = { workspace = true }
+tracing = { workspace = true, default-features = true }
+tracing-subscriber = { workspace = true, default-features = true }
 tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
 

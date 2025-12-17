@@ -7,11 +7,11 @@ use alloc::{
     vec::Vec,
 };
 
+use async_lock::Mutex;
 use futures::{
     future::{BoxFuture, LocalBoxFuture},
     FutureExt,
 };
-use futures_util::lock::Mutex;
 
 use crate::{
     blob::Blob,

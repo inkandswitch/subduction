@@ -14,6 +14,7 @@ repository.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true }
+async-lock = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
@@ -28,6 +29,7 @@ serde = ["dep:serde"]
 serde-std = ["serde/std"]
 std = [
   "async-channel/std",
+  "async-lock/std",
   "futures/std",
   "nonempty/std",
   "sedimentree_core/std",

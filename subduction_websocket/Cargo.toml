@@ -15,6 +15,7 @@ rust-version.workspace = true
 
 [dependencies]
 async-channel = { workspace = true }
+async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 blake3 = { workspace = true }
 ciborium = { workspace = true }
@@ -45,6 +46,7 @@ tokio_server = ["tokio"]
 tokio = ["std", "dep:tokio", "dep:tokio-util", "async-tungstenite/tokio-native-tls"]
 std = [
   "async-channel/std",
+  "async-lock/std",
   "blake3/std",
   "ciborium/std",
   "futures/std",

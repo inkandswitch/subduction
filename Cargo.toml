@@ -25,7 +25,8 @@ authors = [
 [workspace.dependencies]
 automerge = "0.7.0"
 arbitrary = "1.4"
-async-channel = { version = "2.5.0", default-features = false }
+async-channel = { version = "2.5", default-features = false }
+async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
 base58 = "0.2.0"
 blake3 = { version = "1.8", default-features = false }
@@ -33,7 +34,7 @@ ciborium = { version = "0.2.2", default-features = false }
 bolero = "0.13.4"
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 futures-timer = "3.0" # has std
-futures-util = { version = "0.3.31", default-features = false, features = ["alloc"] }
+futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 getrandom = "0.3.3"
 js-sys = { version = "0.3.81", default-features = false }
 nonempty = { version = "0.12.0", default-features = false }

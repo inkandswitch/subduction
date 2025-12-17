@@ -14,9 +14,10 @@ use crate::{
     peer::id::PeerId,
 };
 use async_channel::{bounded, Sender};
+use async_lock::Mutex;
 use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    FutureExt, StreamExt, future::try_join_all, lock::Mutex, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
+    FutureExt, StreamExt, future::try_join_all, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
 };
 use nonempty::NonEmpty;
 use request::FragmentRequested;

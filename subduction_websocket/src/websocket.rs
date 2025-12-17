@@ -6,11 +6,11 @@ use core::{
     time::Duration,
 };
 
+use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use futures::{
     channel::oneshot,
     future::{self, BoxFuture, LocalBoxFuture},
-    lock::Mutex,
     FutureExt,
 };
 use futures_timer::Delay;
@@ -220,7 +220,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
                     let msg: Message = ciborium::de::from_reader::<Message, &[u8]>(&bytes)
-                        .map_err(|_| RunError::Deserialize)?;
+                        .map_err(|e| {
+                            tracing::error!(
+                                "failed to deserialize inbound message from peer {:?}: {}",
+                                self.peer_id,
+                                e
+                            );
+                            RunError::Deserialize
+                        })?;
 
                     tracing::debug!(
                         "decoded inbound message id {:?} from peer {:?}, message: {:?}",

@@ -3,8 +3,9 @@
 use alloc::{collections::BTreeMap, rc::Rc, sync::Arc, vec::Vec};
 use core::{convert::Infallible, fmt::Debug, time::Duration};
 
+use async_lock::Mutex;
 use from_js_ref::FromJsRef;
-use futures::{future::FusedFuture, lock::Mutex, stream::Aborted, FutureExt};
+use futures::{future::FusedFuture, stream::Aborted, FutureExt};
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::{Blob, Digest},

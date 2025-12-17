@@ -15,9 +15,10 @@ use core::{
     time::Duration
 };
 
+
+use async_lock::Mutex;
 use futures::{
     channel::oneshot::{self, Canceled},
-    lock::Mutex,
     future::LocalBoxFuture,
     FutureExt,
 };
