@@ -1,11 +1,14 @@
 //! Wasm bindings for `automerge_sedimentree`
 
+#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod error;
 pub mod fragment;
 
-use std::collections::HashSet;
+extern crate alloc;
+
+use alloc::{collections::BTreeSet, string::String, vec::Vec};
 
 use base58::FromBase58;
 use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
@@ -80,14 +83,14 @@ impl WasmSedimentreeAutomerge {
     }
 }
 
-impl std::fmt::Debug for WasmSedimentreeAutomerge {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for WasmSedimentreeAutomerge {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("WasmSedimentreeAutomerge").finish()
     }
 }
 
 impl CommitStore<'static> for WasmSedimentreeAutomerge {
-    type Node = HashSet<Digest>;
+    type Node = BTreeSet<Digest>;
     type LookupError = WasmLookupError;
 
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {

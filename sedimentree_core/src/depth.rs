@@ -1,5 +1,7 @@
 //! Stratum depth.
 
+use alloc::boxed::Box;
+
 use crate::blob::Digest;
 
 /// The maximum depth of strata that a [`Sedimentree`] can go to.
@@ -33,8 +35,8 @@ pub const MAX_STRATA_DEPTH: Depth = Depth(2);
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Depth(pub u32);
 
-impl std::fmt::Display for Depth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Depth {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Depth({})", self.0)
     }
 }

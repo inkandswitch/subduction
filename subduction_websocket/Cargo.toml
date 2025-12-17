@@ -40,9 +40,10 @@ tracing-subscriber = { workspace = true }
 
 [features]
 default = []
+std = []
 tokio_client = ["tokio"]
 tokio_server = ["tokio"]
-tokio = ["dep:tokio", "dep:tokio-util", "async-tungstenite/tokio-native-tls"]
+tokio = ["std", "dep:tokio", "dep:tokio-util", "async-tungstenite/tokio-native-tls"]
 
 [lints]
 workspace = true

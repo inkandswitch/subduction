@@ -1,5 +1,9 @@
 //! Errors
 
+extern crate alloc;
+
+use alloc::{string::ToString, vec::Vec};
+
 use base58::FromBase58Error;
 use hex::FromHexError;
 use sedimentree_core::commit::FragmentError;

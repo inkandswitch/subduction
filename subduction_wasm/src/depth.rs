@@ -1,5 +1,8 @@
 //! Wasm wrapper for `Depth`.
 
+extern crate alloc;
+
+use alloc::string::ToString;
 use sedimentree_core::depth::Depth;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -86,8 +89,8 @@ extern "C" {
     pub type JsToDepth;
 }
 
-impl std::fmt::Debug for JsToDepth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for JsToDepth {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("JsToDepth").finish()
     }
 }

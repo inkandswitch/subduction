@@ -1,6 +1,9 @@
 //! Actor for handling connections and messages.
 
-use std::{
+extern crate alloc;
+
+use alloc::boxed::Box;
+use core::{
     marker::PhantomData,
     ops::Deref,
     pin::Pin,

@@ -1,12 +1,16 @@
 //! # Subduction WebSocket server for Tokio
 
+extern crate alloc;
+
 use crate::websocket::WebSocket;
+
+use alloc::{string::ToString, sync::Arc};
 use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
+use core::{marker::PhantomData, net::SocketAddr, time::Duration};
 use futures::future::Aborted;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, future::Sendable, storage::Storage,
 };
-use std::{marker::PhantomData, net::SocketAddr, sync::Arc, time::Duration};
 use subduction_core::{peer::id::PeerId, Subduction};
 use tokio::{
     net::{TcpListener, TcpStream},

@@ -1,6 +1,6 @@
 //! Binary objects.
 
-use std::str::FromStr;
+use alloc::{str::FromStr, vec::Vec};
 
 /// A binary object.
 ///
@@ -106,8 +106,8 @@ impl BlobMeta {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Digest([u8; 32]);
 
-impl std::fmt::Debug for Digest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Digest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "Digest({})", hex::encode(self.0))
     }
 }
@@ -152,8 +152,8 @@ impl From<[u8; 32]> for Digest {
     }
 }
 
-impl std::fmt::Display for Digest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for Digest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         hex::encode(self.0).fmt(f)
     }
 }
@@ -192,9 +192,9 @@ pub mod error {
         InvalidLength,
     }
 
-    impl std::fmt::Debug for InvalidDigest {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
+    impl core::fmt::Debug for InvalidDigest {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            core::fmt::Display::fmt(self, f)
         }
     }
 }

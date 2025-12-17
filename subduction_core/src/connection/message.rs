@@ -1,5 +1,9 @@
 //! The API contact messages to be sent over a [`Connection`].
 
+extern crate alloc;
+
+use alloc::vec::Vec;
+
 use sedimentree_core::{
     blob::{Blob, Digest},
     Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
@@ -107,7 +111,7 @@ impl From<BatchSyncResponse> for Message {
 }
 
 /// A unique identifier for a particular request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestId {

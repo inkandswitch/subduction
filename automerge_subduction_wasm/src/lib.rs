@@ -1,5 +1,6 @@
 //! # Wasm Bindings for the Subduction/Automerge integration.
 
+#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use wasm_bindgen::prelude::*;

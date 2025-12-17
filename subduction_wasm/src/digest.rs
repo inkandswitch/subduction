@@ -1,5 +1,11 @@
 //! Hash digests.
 
+extern crate alloc;
+
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use base58::FromBase58;
 use sedimentree_core::blob::{error::InvalidDigest, Digest};
 use thiserror::Error;
@@ -7,7 +13,7 @@ use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 /// A wrapper around [`sedimentree_core::Digest`] for use in JavaScript via wasm-bindgen.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[allow(missing_copy_implementations)]
 #[wasm_bindgen(js_name = Digest)]
 pub struct WasmDigest(Digest);

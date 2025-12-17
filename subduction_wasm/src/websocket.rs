@@ -1,6 +1,21 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use std::{ cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
+extern crate alloc;
+
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    rc::Rc,
+    string::ToString,
+    sync::Arc,
+    vec::Vec
+};
+use core::{
+    cell::RefCell,
+    convert::Infallible,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration
+};
 
 use futures::{
     channel::oneshot::{self, Canceled},
@@ -35,7 +50,7 @@ pub struct WasmWebSocket {
     request_id_counter: Arc<AtomicU64>,
     socket: WebSocket,
 
-    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
+    pending: Arc<Mutex<BTreeMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
     inbound_reader: async_channel::Receiver<Message>,
 }
 
@@ -51,7 +66,7 @@ impl WasmWebSocket {
     pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(64);
 
-        let pending = Arc::new(Mutex::new(HashMap::<
+        let pending = Arc::new(Mutex::new(BTreeMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));

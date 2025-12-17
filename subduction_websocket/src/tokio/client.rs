@@ -5,9 +5,9 @@ use crate::{
     websocket::WebSocket,
 };
 use async_tungstenite::tokio::{connect_async, ConnectStream};
+use core::time::Duration;
 use futures::{future::BoxFuture, FutureExt};
 use sedimentree_core::future::Sendable;
-use std::time::Duration;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},

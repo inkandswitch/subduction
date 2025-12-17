@@ -1,5 +1,8 @@
 //! Error types.
 
+extern crate alloc;
+
+use alloc::string::{String, ToString};
 use sedimentree_core::future::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},

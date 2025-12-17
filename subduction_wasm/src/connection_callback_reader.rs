@@ -1,4 +1,7 @@
-use std::{rc::Rc, time::Duration};
+extern crate alloc;
+
+use alloc::{rc::Rc, vec::Vec};
+use core::time::Duration;
 
 use futures::{
     future::{FutureExt, LocalBoxFuture},
@@ -177,8 +180,8 @@ pub(crate) enum RecvOrCallbackErr<T: Connection<Local>> {
     FragmentCallback(JsValue),
 }
 
-impl<T: Connection<Local>> std::fmt::Debug for RecvOrCallbackErr<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+impl<T: Connection<Local>> core::fmt::Debug for RecvOrCallbackErr<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
     }
 }

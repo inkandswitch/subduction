@@ -1,8 +1,9 @@
 //! Subduction node.
 
-use std::{
-    collections::HashMap, convert::Infallible, fmt::Debug, rc::Rc, sync::Arc, time::Duration,
-};
+extern crate alloc;
+
+use alloc::{collections::BTreeMap, rc::Rc, sync::Arc, vec::Vec};
+use core::{convert::Infallible, fmt::Debug, time::Duration};
 
 use from_js_ref::FromJsRef;
 use futures::{future::FusedFuture, lock::Mutex, stream::Aborted, FutureExt};
@@ -325,7 +326,7 @@ impl WasmSubduction {
                 .map(|blob| Uint8Array::from(blob.as_slice()))
                 .collect())
         } else {
-            Ok(vec![])
+            Ok(Vec::new())
         }
     }
 
@@ -654,7 +655,7 @@ impl ConnErrPair {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    HashMap<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
+    BTreeMap<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]

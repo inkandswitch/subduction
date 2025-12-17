@@ -1,5 +1,6 @@
 //! # Wasm Bindings for the Subduction sync protocol.
 
+#![no_std]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod connection_id;

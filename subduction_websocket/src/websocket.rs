@@ -1,6 +1,13 @@
 //! # Generic WebSocket connection for Subduction
 
-use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
+extern crate alloc;
+
+use alloc::{collections::BTreeMap, sync::Arc};
+use core::{
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration,
+};
+
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use futures::{
     channel::oneshot,
@@ -11,14 +18,6 @@ use futures::{
 use futures_timer::Delay;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::future::{Local, Sendable};
-use std::{
-    collections::HashMap,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        Arc,
-    },
-    time::Duration,
-};
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -26,6 +25,8 @@ use subduction_core::{
     },
     peer::id::PeerId,
 };
+
+use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
 
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]
@@ -38,7 +39,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin> {
     ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
     outbound: Arc<Mutex<WebSocketSender<T>>>,
 
-    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
+    pending: Arc<Mutex<BTreeMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
     inbound_writer: async_channel::Sender<Message>,
     inbound_reader: async_channel::Receiver<Message>,
@@ -165,7 +166,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     pub fn new(ws: WebSocketStream<T>, timeout: Duration, peer_id: PeerId) -> Self {
         tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
-        let pending = Arc::new(Mutex::new(HashMap::<
+        let pending = Arc::new(Mutex::new(BTreeMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
