@@ -9,6 +9,7 @@ extern crate std;
 extern crate alloc;
 
 pub mod error;
+pub mod timeout;
 pub mod websocket;
 
 #[cfg(feature = "tokio")]

@@ -2,6 +2,7 @@
 
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::{
+    marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -10,12 +11,11 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use futures::{
     channel::oneshot,
-    future::{self, BoxFuture, LocalBoxFuture},
+    future::{BoxFuture, LocalBoxFuture},
     FutureExt,
 };
-use futures_timer::Delay;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
-use sedimentree_core::future::{Local, Sendable};
+use sedimentree_core::future::{FutureKind, Local, Sendable};
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -24,15 +24,20 @@ use subduction_core::{
     peer::id::PeerId,
 };
 
-use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
+use crate::{
+    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    timeout::{TimedOut, Timeout},
+};
 
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]
-pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin> {
+pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> {
     chan_id: u64,
     peer_id: PeerId,
     req_id_counter: Arc<AtomicU64>,
-    timeout: Duration,
+
+    timeout_strategy: O,
+    default_time_limit: Duration,
 
     ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
     outbound: Arc<Mutex<WebSocketSender<T>>>,
@@ -41,9 +46,13 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin> {
 
     inbound_writer: async_channel::Sender<Message>,
     inbound_reader: async_channel::Receiver<Message>,
+
+    _phantom: PhantomData<K>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Local> for WebSocket<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connection<Local>
+    for WebSocket<T, Local, O>
+{
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -140,9 +149,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Local> for WebSocket<T
                 req_id
             );
 
-            let req_timeout = override_timeout.unwrap_or(self.timeout);
+            let req_timeout = override_timeout.unwrap_or(self.default_time_limit);
 
-            match timeout(req_timeout, rx).await {
+            match self
+                .timeout_strategy
+                .timeout(req_timeout, Box::pin(rx))
+                .await
+            {
                 Ok(Ok(resp)) => {
                     tracing::info!("request {:?} completed", req_id);
                     Ok(resp)
@@ -161,9 +174,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Local> for WebSocket<T
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> WebSocket<T, K, O> {
     /// Create a new WebSocket connection.
-    pub fn new(ws: WebSocketStream<T>, timeout: Duration, peer_id: PeerId) -> Self {
+    pub fn new(
+        ws: WebSocketStream<T>,
+        timeout_strategy: O,
+        default_time_limit: Duration,
+        peer_id: PeerId,
+    ) -> Self {
         tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
         let pending = Arc::new(Mutex::new(BTreeMap::<
@@ -179,20 +197,29 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
             chan_id,
 
             req_id_counter: Arc::new(starting_counter.into()),
-            timeout,
+            timeout_strategy,
+            default_time_limit,
 
             ws_reader: Arc::new(Mutex::new(ws_reader)),
             outbound: Arc::new(Mutex::new(ws_writer)),
             pending,
             inbound_writer,
             inbound_reader,
+
+            _phantom: PhantomData,
         }
+    }
+
+    /// The timeout strategy used for requests.
+    #[must_use]
+    pub const fn timeout_strategy(&self) -> &O {
+        &self.timeout_strategy
     }
 
     /// The timeout for requests.
     #[must_use]
-    pub const fn timeout(&self) -> Duration {
-        self.timeout
+    pub const fn default_time_limit(&self) -> Duration {
+        self.default_time_limit
     }
 
     /// Get the [`PeerId`] associated with this connection.
@@ -323,7 +350,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin> WebSocket<T> {
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocket<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sync>
+    Connection<Sendable> for WebSocket<T, Sendable, O>
+{
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -419,9 +448,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
                 req_id
             );
 
-            let req_timeout = override_timeout.unwrap_or(self.timeout);
+            let req_timeout = override_timeout.unwrap_or(self.default_time_limit);
 
-            match timeout(req_timeout, rx).await {
+            match self
+                .timeout_strategy
+                .timeout(req_timeout, Box::pin(rx))
+                .await
+            {
                 Ok(Ok(resp)) => {
                     tracing::info!("request {:?} completed", req_id);
                     Ok(resp)
@@ -440,23 +473,29 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send> Connection<Sendable> for WebSocke
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> Clone for WebSocket<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K> + Clone> Clone
+    for WebSocket<T, K, O>
+{
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,
             peer_id: self.peer_id,
             req_id_counter: self.req_id_counter.clone(),
-            timeout: self.timeout,
+            timeout_strategy: self.timeout_strategy.clone(),
+            default_time_limit: self.default_time_limit,
             ws_reader: self.ws_reader.clone(),
             outbound: self.outbound.clone(),
             pending: self.pending.clone(),
             inbound_writer: self.inbound_writer.clone(),
             inbound_reader: self.inbound_reader.clone(),
+            _phantom: PhantomData,
         }
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin> PartialEq for WebSocket<T> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> PartialEq
+    for WebSocket<T, K, O>
+{
     fn eq(&self, other: &Self) -> bool {
         self.peer_id == other.peer_id
             && Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
@@ -464,15 +503,5 @@ impl<T: AsyncRead + AsyncWrite + Unpin> PartialEq for WebSocket<T> {
             && Arc::ptr_eq(&self.pending, &other.pending)
             && self.inbound_writer.same_channel(&other.inbound_writer)
             && self.inbound_reader.same_channel(&other.inbound_reader)
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TimedOut;
-
-async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Result<T, TimedOut> {
-    match future::select(fut, Delay::new(dur)).await {
-        future::Either::Left((val, _delay)) => Ok(val),
-        future::Either::Right(_) => Err(TimedOut),
     }
 }

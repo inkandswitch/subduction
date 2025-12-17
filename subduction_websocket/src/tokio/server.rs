@@ -1,6 +1,9 @@
 //! # Subduction WebSocket server for Tokio
 
-use crate::websocket::WebSocket;
+use crate::{
+    timeout::{FuturesTimerTimeout, Timeout},
+    websocket::WebSocket,
+};
 
 use alloc::{string::ToString, sync::Arc};
 use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
@@ -22,18 +25,22 @@ use tungstenite::handshake::server::NoCallback;
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
+    O: Timeout<Sendable> = FuturesTimerTimeout,
 > where
     S::Error: 'static + Send + Sync,
 {
     server_peer_id: PeerId,
     address: SocketAddr,
-    subduction_actor_handle: SubductionActorHandle<S, M>,
+    subduction_actor_handle: SubductionActorHandle<S, M, O>,
     accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
 
-impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric>
-    TokioWebSocketServer<S, M>
+impl<
+        S: 'static + Send + Sync + Storage<Sendable>,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+    > TokioWebSocketServer<S, M, O>
 where
     S::Error: 'static + Send + Sync,
 {
@@ -45,7 +52,8 @@ where
     /// or if the connection could not be established.
     pub async fn setup(
         address: SocketAddr,
-        timeout: Duration,
+        timeout: O,
+        default_time_limit: Duration,
         server_peer_id: PeerId,
         storage: S,
         depth_metric: M,
@@ -83,12 +91,14 @@ where
 
                                 conns.spawn({
                                     let sd = task_subduction_actor_handle.clone();
+                                    let tout = timeout.clone();
                                     async move {
                                         match accept_hdr_async(tcp, NoCallback).await {
                                             Ok(hs) => {
-                                                let ws_conn = WebSocket::<TokioAdapter<TcpStream>>::new(
+                                                let ws_conn = WebSocket::<TokioAdapter<TcpStream>, Sendable, O>::new(
                                                     hs,
-                                                    timeout,
+                                                    tout,
+                                                    default_time_limit,
                                                     client_id,
                                                 );
 
@@ -130,8 +140,8 @@ where
     /// Returns an error if the registration message send fails over the internal channel.
     pub async fn register(
         &self,
-        ws: WebSocket<TokioAdapter<TcpStream>>,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd>> {
+        ws: WebSocket<TokioAdapter<TcpStream>, Sendable, O>,
+    ) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd<O>>> {
         self.subduction_actor_handle
             .tx
             .send(Cmd::Register { ws })
@@ -145,8 +155,11 @@ where
     }
 }
 
-impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric> Clone
-    for TokioWebSocketServer<S, M>
+impl<
+        S: 'static + Send + Sync + Storage<Sendable>,
+        M: 'static + Send + Sync + DepthMetric,
+        O: Timeout<Sendable>,
+    > Clone for TokioWebSocketServer<S, M, O>
 where
     S::Error: 'static + Send + Sync,
 {
@@ -162,15 +175,18 @@ where
 }
 
 #[derive(Debug)]
-struct SubductionActorHandle<S, M> {
-    tx: tokio::sync::mpsc::Sender<Cmd>,
+struct SubductionActorHandle<S, M, O: Timeout<Sendable>> {
+    tx: tokio::sync::mpsc::Sender<Cmd<O>>,
     cancel_token: CancellationToken,
     subduction_actor_join_handle: Arc<JoinHandle<()>>,
     _phantom: PhantomData<(S, M)>,
 }
 
-impl<S: 'static + Send + Sync + Storage<Sendable>, M: 'static + Send + Sync + DepthMetric>
-    SubductionActorHandle<S, M>
+impl<
+        S: 'static + Send + Sync + Storage<Sendable>,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+    > SubductionActorHandle<S, M, O>
 where
     S::Error: 'static + Send + Sync,
 {
@@ -178,7 +194,7 @@ where
         let cancel_token = CancellationToken::new();
         let child_cancel_token = cancel_token.child_token();
 
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd>(256);
+        let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd<O>>(256);
         let subduction_actor_join_handle = tokio::spawn({
             let task_child_cancel_token = child_cancel_token.clone();
             async move {
@@ -238,7 +254,7 @@ where
     }
 }
 
-impl<S, M> Drop for SubductionActorHandle<S, M> {
+impl<S, M, O: Timeout<Sendable>> Drop for SubductionActorHandle<S, M, O> {
     fn drop(&mut self) {
         if Arc::strong_count(&self.subduction_actor_join_handle) == 1 {
             self.cancel_token.cancel();
@@ -247,7 +263,7 @@ impl<S, M> Drop for SubductionActorHandle<S, M> {
     }
 }
 
-impl<S, M> Clone for SubductionActorHandle<S, M> {
+impl<S, M, O: Timeout<Sendable>> Clone for SubductionActorHandle<S, M, O> {
     fn clone(&self) -> Self {
         Self {
             tx: self.tx.clone(),
@@ -260,10 +276,10 @@ impl<S, M> Clone for SubductionActorHandle<S, M> {
 
 /// Commands for the Subduction actor.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Cmd {
+pub enum Cmd<O: Timeout<Sendable>> {
     /// Register a new peer.
     Register {
         /// The WebSocket connection to register.
-        ws: WebSocket<TokioAdapter<TcpStream>>,
+        ws: WebSocket<TokioAdapter<TcpStream>, Sendable, O>,
     },
 }

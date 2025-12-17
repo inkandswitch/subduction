@@ -20,7 +20,7 @@ async-tungstenite = { workspace = true }
 blake3 = { workspace = true }
 ciborium = { workspace = true }
 futures = { workspace = true }
-futures-timer = { workspace = true }
+futures-timer = { workspace = true, optional = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false, features = ["serde"] }
@@ -41,16 +41,13 @@ tracing-subscriber = { workspace = true }
 
 [features]
 default = []
-tokio_client = ["tokio"]
-tokio_server = ["tokio"]
-tokio = ["std", "dep:tokio", "dep:tokio-util", "async-tungstenite/tokio-native-tls"]
+futures-timer = ["std", "dep:futures-timer"]
 std = [
   "async-channel/std",
   "async-lock/std",
   "blake3/std",
   "ciborium/std",
   "futures/std",
-  "futures-util/std",
   "rand/std",
   "sedimentree_core/std",
   "subduction_core/std",
@@ -58,6 +55,15 @@ std = [
   "thiserror/std",
   "tracing/std",
 ]
+tokio = [
+  "async-tungstenite/tokio-native-tls",
+  "dep:tokio",
+  "dep:tokio-util",
+  "futures-timer",
+  "std"
+]
+tokio_client = ["tokio"]
+tokio_server = ["tokio"]
 
 [lints]
 workspace = true

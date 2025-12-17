@@ -33,9 +33,9 @@ blake3 = { version = "1.8", default-features = false }
 ciborium = { version = "0.2.2", default-features = false }
 bolero = "0.13.4"
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
-futures-timer = "3.0" # has std
+futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
-getrandom = "0.3.3"
+getrandom = "0.3.3" # no_std by default
 js-sys = { version = "0.3.81", default-features = false }
 nonempty = { version = "0.12.0", default-features = false }
 num = { version = "0.4.3", default-features = false, features = ["alloc"] }
