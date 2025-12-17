@@ -1,7 +1,5 @@
 //! The API contact messages to be sent over a [`Connection`].
 
-extern crate alloc;
-
 use alloc::vec::Vec;
 
 use sedimentree_core::{

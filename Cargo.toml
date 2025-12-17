@@ -87,16 +87,7 @@ cargo = { level = "deny", priority = -1 }
 pedantic = { level = "deny", priority = -1 }
 
 [profile.release]
+codegen-units = 1
 lto = "fat"
-
-[profile.release.package.automerge_sedimentree_wasm]
 opt-level = "z"
-codegen-units = 1
-
-[profile.release.package.automerge_subduction_wasm]
-opt-level = "z"
-codegen-units = 1
-
-[profile.release.package.subduction_wasm]
-opt-level = "z"
-codegen-units = 1
+panic = "abort"

@@ -1,7 +1,5 @@
 //! Fragment-related wrappers.
 
-extern crate alloc;
-
 use alloc::{
     collections::{BTreeMap, BTreeSet},
     vec::Vec,

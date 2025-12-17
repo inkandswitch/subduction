@@ -1,7 +1,5 @@
 //! Storage identifiers.
 
-extern crate alloc;
-
 use alloc::string::String;
 
 /// A simple newtype for storage identifiers.

@@ -1,7 +1,10 @@
 //! # Wasm Bindings for the Subduction/Automerge integration.
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+
+#[cfg(feature = "std")]
+extern crate std;
 
 use wasm_bindgen::prelude::*;
 use wasm_tracing::WasmLayerConfig;

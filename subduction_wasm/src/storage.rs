@@ -2,8 +2,6 @@
 
 pub mod idb;
 
-extern crate alloc;
-
 use alloc::{collections::BTreeSet, string::ToString, vec::Vec};
 
 use futures::{future::LocalBoxFuture, FutureExt};

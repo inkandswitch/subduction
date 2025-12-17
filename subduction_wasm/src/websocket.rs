@@ -1,7 +1,5 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-extern crate alloc;
-
 use alloc::{
     boxed::Box,
     collections::BTreeMap,

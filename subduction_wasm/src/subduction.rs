@@ -1,7 +1,5 @@
 //! Subduction node.
 
-extern crate alloc;
-
 use alloc::{collections::BTreeMap, rc::Rc, sync::Arc, vec::Vec};
 use core::{convert::Infallible, fmt::Debug, time::Duration};
 

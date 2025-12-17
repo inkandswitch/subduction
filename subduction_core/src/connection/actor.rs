@@ -1,7 +1,5 @@
 //! Actor for handling connections and messages.
 
-extern crate alloc;
-
 use alloc::boxed::Box;
 use core::{
     marker::PhantomData,

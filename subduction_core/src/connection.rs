@@ -6,8 +6,6 @@ pub mod message;
 
 pub(crate) mod recv_once;
 
-extern crate alloc;
-
 use alloc::sync::Arc;
 use core::time::Duration;
 

@@ -1,7 +1,5 @@
 //! # Subduction WebSocket server for Tokio
 
-extern crate alloc;
-
 use crate::websocket::WebSocket;
 
 use alloc::{string::ToString, sync::Arc};

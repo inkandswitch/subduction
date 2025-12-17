@@ -1,7 +1,5 @@
 //! IDs for individual [`Sedimentree`]s.
 
-extern crate alloc;
-
 use alloc::{
     string::{String, ToString},
     vec::Vec,

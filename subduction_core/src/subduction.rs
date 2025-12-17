@@ -3,8 +3,6 @@
 pub mod error;
 pub mod request;
 
-extern crate alloc;
-
 use crate::{
     connection::{
         actor::{ConnectionActor, ConnectionActorFuture, StartConnectionActor},

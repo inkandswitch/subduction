@@ -1,7 +1,5 @@
 //! Type safe Peer ID.
 
-extern crate alloc;
-
 use alloc::string::ToString;
 use subduction_core::peer::id::PeerId;
 use thiserror::Error;

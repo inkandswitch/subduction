@@ -1,7 +1,5 @@
 //! Storage key.
 
-extern crate alloc;
-
 use alloc::{string::String, vec::Vec};
 
 /// A storage key, represented as a vector of strings.

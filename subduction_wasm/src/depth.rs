@@ -1,7 +1,5 @@
 //! Wasm wrapper for `Depth`.
 
-extern crate alloc;
-
 use alloc::string::ToString;
 use sedimentree_core::depth::Depth;
 use thiserror::Error;

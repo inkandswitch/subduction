@@ -1,7 +1,5 @@
 //! A simple wrapper around a String to represent a Peer ID.
 
-extern crate alloc;
-
 use alloc::string::String;
 use core::fmt::Write;
 

@@ -1,7 +1,5 @@
 //! [`IndexedDB`] storage backend for Sedimentree.
 
-extern crate alloc;
-
 use alloc::{boxed::Box, rc::Rc, str::FromStr, string::{String, ToString}, vec::Vec};
 use core::{cell::RefCell};
 use futures::{channel::oneshot};

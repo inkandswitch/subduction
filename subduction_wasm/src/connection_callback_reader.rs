@@ -1,5 +1,3 @@
-extern crate alloc;
-
 use alloc::{rc::Rc, vec::Vec};
 use core::time::Duration;
 

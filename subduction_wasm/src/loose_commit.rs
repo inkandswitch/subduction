@@ -1,7 +1,5 @@
 //! Individual/"loose" commits.
 
-extern crate alloc;
-
 use alloc::{borrow::ToOwned, vec::Vec};
 use sedimentree_core::{
     blob::{BlobMeta, Digest},

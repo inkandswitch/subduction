@@ -1,7 +1,5 @@
 //! # Generic WebSocket connection for Subduction
 
-extern crate alloc;
-
 use alloc::{collections::BTreeMap, sync::Arc};
 use core::{
     sync::atomic::{AtomicU64, Ordering},
