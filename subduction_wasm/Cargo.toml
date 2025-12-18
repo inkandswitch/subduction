@@ -22,8 +22,8 @@ async-lock = { workspace = true }
 base58 = { workspace = true }
 ciborium = { workspace = true }
 build_info = { path = "../build_info" }
-console_error_panic_hook = { version = "0.1.7", optional = true }
-from_js_ref = "0.1.2" # FIXME make no_std
+console_error_panic_hook = { workspace = true, optional = true }
+from_js_ref = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["wasm_js"] }
@@ -40,6 +40,7 @@ wasm_refgen = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3.81"
+default-features = false
 features = [
   "BinaryType",
   "DomException",
@@ -63,7 +64,7 @@ features = [
 ]
 
 [features]
-default = ["console_error_panic_hook"]
+default = []
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 std = [
   "async-channel/std",
