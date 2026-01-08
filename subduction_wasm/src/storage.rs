@@ -1,6 +1,7 @@
 //! Persistent storage.
 
 pub mod idb;
+pub mod memory;
 
 use std::collections::HashSet;
 

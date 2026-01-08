@@ -6,17 +6,17 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1709702368,
-        "narHash": "sha256-1YOPubkJ5M6HigdfN0gn0AZ3kx6MHboG9UbWpYpk3gM=",
-        "owner": "expede",
-        "repo": "nix-command-utils",
-        "rev": "8f7179876383495b1f98311e53ebb41649ca270a",
-        "type": "github"
+        "lastModified": 1767211906,
+        "narHash": "sha256-K8hD0H7mRlvkiHpMi/l5hI69hTTAs3BKIOS+D+GUc5E=",
+        "ref": "refs/heads/main",
+        "rev": "2eb3baf9531d32ef7d0c0ca830e2db53c77af067",
+        "revCount": 4,
+        "type": "git",
+        "url": "https://codeberg.org/expede/nix-command-utils"
       },
       "original": {
-        "owner": "expede",
-        "repo": "nix-command-utils",
-        "type": "github"
+        "type": "git",
+        "url": "https://codeberg.org/expede/nix-command-utils"
       }
     },
     "flake-utils": {

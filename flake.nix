@@ -5,7 +5,7 @@
     nixpkgs.url = "nixpkgs/nixos-25.11";
     nixos-unstable.url = "nixpkgs/nixos-unstable-small";
 
-    command-utils.url = "github:expede/nix-command-utils";
+    command-utils.url = "git+https://codeberg.org/expede/nix-command-utils";
     flake-utils.url = "github:numtide/flake-utils";
 
     rust-overlay = {
@@ -231,12 +231,12 @@
         devShells.default = pkgs.mkShell {
           name = "subduction shell";
 
-          nativeBuildInputs = with pkgs;
+          nativeBuildInputs =
             [
               command_menu
               rust-toolchain
 
-              http-server
+              pkgs.http-server
               pkgs.binaryen
               pkgs.chromedriver
               pkgs.nodePackages.pnpm
@@ -251,12 +251,21 @@
               pkgs.websocat
             ]
             ++ format-pkgs
-            ++ cargo-installs;
+            ++ cargo-installs
+            ++ pkgs.lib.optionalString pkgs.stdenv.isLinux [
+              pkgs.clang
+              pkgs.llvmPackages.libclang
+              pkgs.openssl.dev
+              pkgs.pkg-config
+            ];
 
          shellHook = ''
             unset SOURCE_DATE_EPOCH
             export WORKSPACE_ROOT="$(pwd)"
             menu
+          '' + pkgs.lib.optionals pkgs.stdenv.isLinux ''
+            unset PKG_CONFIG_PATH
+            export PKG_CONFIG_PATH=${pkgs.openssl.dev}/lib/pkgconfig
           '';
         };
 
