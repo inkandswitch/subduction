@@ -1,10 +1,24 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use std::{ cell::RefCell, collections::HashMap, convert::Infallible, rc::Rc, sync::{Arc, atomic::{AtomicU64, Ordering}}, time::Duration};
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    rc::Rc,
+    string::ToString,
+    sync::Arc,
+    vec::Vec
+};
+use core::{
+    cell::RefCell,
+    convert::Infallible,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration
+};
 
+
+use async_lock::Mutex;
 use futures::{
     channel::oneshot::{self, Canceled},
-    lock::Mutex,
     future::LocalBoxFuture,
     FutureExt,
 };
@@ -35,7 +49,7 @@ pub struct WasmWebSocket {
     request_id_counter: Arc<AtomicU64>,
     socket: WebSocket,
 
-    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
+    pending: Arc<Mutex<BTreeMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
     inbound_reader: async_channel::Receiver<Message>,
 }
 
@@ -51,7 +65,7 @@ impl WasmWebSocket {
     pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(64);
 
-        let pending = Arc::new(Mutex::new(HashMap::<
+        let pending = Arc::new(Mutex::new(BTreeMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
@@ -61,10 +75,7 @@ impl WasmWebSocket {
             tracing::debug!("WS message event received");
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
-                if let Ok((msg, _size)) = bincode::serde::decode_from_slice::<Message, _>(
-                    &bytes,
-                    bincode::config::standard(),
-                ) {
+                if let Ok(msg) = ciborium::de::from_reader::<Message, &[u8]>(&bytes) {
                     tracing::info!("WS message received that's {} bytes long", bytes.len());
                     let inner_pending = closure_pending.clone();
                     let inner_inbound_writer = inbound_writer.clone();
@@ -234,8 +245,9 @@ impl Connection<Local> for WasmWebSocket {
         async move {
             tracing::debug!("sending outbound message id {:?}", message.request_id());
             
-            let msg_bytes = bincode::serde::encode_to_vec(&message, bincode::config::standard())
-                .map_err(SendError::Encoding)?;
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&message, &mut msg_bytes).expect("should be Infallible");
 
             tracing::debug!(
                 "sending outbound message id {:?} that's {} bytes long",
@@ -277,11 +289,9 @@ impl Connection<Local> for WasmWebSocket {
             let (tx, rx) = oneshot::channel();
             { self.pending.lock().await.insert(req_id, tx); }
 
-            let msg_bytes = bincode::serde::encode_to_vec(
-                Message::BatchSyncRequest(req),
-                bincode::config::standard(),
-            )
-            .map_err(CallError::Encoding)?;
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&Message::BatchSyncRequest(req), &mut msg_bytes).expect("should be Infallible");
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
@@ -426,10 +436,6 @@ async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Res
 /// Problem while sending a message.
 #[derive(Debug, Error)]
 pub enum SendError {
-    /// Problem encoding message.
-    #[error("Problem encoding message: {0}")]
-    Encoding(bincode::error::EncodeError),
-
     /// WebSocket error while sending.
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
@@ -443,10 +449,6 @@ pub struct ReadFromClosedChannel;
 /// Problem while attempting to make a roundtrip call.
 #[derive(Debug, Error)]
 pub enum CallError {
-    /// Problem encoding message.
-    #[error("Problem encoding message: {0}")]
-    Encoding(bincode::error::EncodeError),
-
     /// WebSocket error while sending.
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),

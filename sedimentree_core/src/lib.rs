@@ -12,12 +12,20 @@
 //!
 //! [Sedimentree]: https://github.com/inkandswitch/keyhive/blob/main/design/sedimentree.md
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+#[cfg(feature = "std")]
+extern crate std;
+
+extern crate alloc;
+
+use alloc::{
     fmt::Formatter,
     str::FromStr,
+    string::{String, ToString},
+    collections::{BTreeMap, BTreeSet},
+    vec, vec::Vec,
 };
 
 use blob::{BlobMeta, Digest};
@@ -29,6 +37,7 @@ pub mod commit;
 mod commit_dag;
 pub mod depth;
 pub mod future;
+pub mod hex;
 pub mod storage;
 
 /// A unique identifier for some data managed by Sedimentree.
@@ -96,8 +105,8 @@ impl FromStr for SedimentreeId {
     }
 }
 
-impl std::fmt::Debug for SedimentreeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SedimentreeId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         for byte in self.0 {
             write!(f, "{byte:02x}")?;
         }
@@ -105,8 +114,8 @@ impl std::fmt::Debug for SedimentreeId {
     }
 }
 
-impl std::fmt::Display for SedimentreeId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SedimentreeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         for byte in self.0 {
             write!(f, "{byte:02x}")?;
         }
@@ -227,8 +236,8 @@ impl Fragment {
             && self
                 .checkpoints
                 .iter()
-                .collect::<HashSet<_>>()
-                .is_superset(&other.boundary.iter().collect::<HashSet<_>>())
+                .collect::<BTreeSet<_>>()
+                .is_superset(&other.boundary.iter().collect::<BTreeSet<_>>())
         {
             return true;
         }
@@ -247,8 +256,8 @@ impl Fragment {
                 .summary
                 .boundary
                 .iter()
-                .collect::<HashSet<_>>()
-                .is_superset(&other.boundary.iter().collect::<HashSet<_>>())
+                .collect::<BTreeSet<_>>()
+                .is_superset(&other.boundary.iter().collect::<BTreeSet<_>>())
         {
             return true;
         }
@@ -450,7 +459,7 @@ impl Sedimentree {
         let mut hashes = minimal
             .fragments()
             .flat_map(|s| {
-                std::iter::once(s.head())
+                core::iter::once(s.head())
                     .chain(s.boundary().iter().copied())
                     .chain(s.checkpoints().iter().copied())
             })
@@ -482,12 +491,12 @@ impl Sedimentree {
     /// Compute the difference between two local [`Sedimentree`]s.
     #[must_use]
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
-        let our_fragments = self.fragments.iter().collect::<HashSet<_>>();
+        let our_fragments = self.fragments.iter().collect::<BTreeSet<_>>();
         let their_fragments = other.fragments.iter().collect();
         let left_missing_fragments = our_fragments.difference(&their_fragments);
         let right_missing_fragments = their_fragments.difference(&our_fragments);
 
-        let our_commits = self.commits.iter().collect::<HashSet<_>>();
+        let our_commits = self.commits.iter().collect::<BTreeSet<_>>();
         let their_commits = other.commits.iter().collect();
         let left_missing_commits = our_commits.difference(&their_commits);
         let right_missing_commits = their_commits.difference(&our_commits);
@@ -511,8 +520,8 @@ impl Sedimentree {
             .fragments
             .iter()
             .map(|s| &s.summary)
-            .collect::<HashSet<&FragmentSummary>>();
-        let their_fragments = remote.fragment_summaries.iter().collect::<HashSet<_>>();
+            .collect::<BTreeSet<&FragmentSummary>>();
+        let their_fragments = remote.fragment_summaries.iter().collect::<BTreeSet<_>>();
         let mut local_fragments = Vec::new();
         for m in our_fragments_meta.difference(&their_fragments) {
             for s in &self.fragments {
@@ -527,7 +536,7 @@ impl Sedimentree {
         }
         let remote_fragments = their_fragments.difference(&our_fragments_meta);
 
-        let our_commits = self.commits.iter().collect::<HashSet<&LooseCommit>>();
+        let our_commits = self.commits.iter().collect::<BTreeSet<&LooseCommit>>();
         let their_commits = remote.commits.iter().collect();
         let local_commits = our_commits.difference(&their_commits);
         let remote_commits = their_commits.difference(&our_commits);
@@ -744,8 +753,8 @@ pub enum CommitOrFragment {
     Fragment(Fragment),
 }
 
-impl std::fmt::Debug for Sedimentree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Sedimentree {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Sedimentree")
             .field("fragments", &self.fragments.len())
             .field("commits", &self.commits.len())

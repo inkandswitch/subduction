@@ -58,6 +58,7 @@
             "aarch64-unknown-linux-musl"
 
             "wasm32-unknown-unknown"
+            "thumbv6m-none-eabi"
           ];
         };
 

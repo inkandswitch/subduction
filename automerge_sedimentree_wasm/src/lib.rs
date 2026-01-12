@@ -1,17 +1,23 @@
 //! Wasm bindings for `automerge_sedimentree`
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+
+#[cfg(feature = "std")]
+extern crate std;
+
+extern crate alloc;
 
 pub mod error;
 pub mod fragment;
 
-use std::collections::HashSet;
+use alloc::{collections::BTreeSet, string::String, vec::Vec};
 
 use base58::FromBase58;
 use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
 use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
-use sedimentree_core::{blob::Digest, commit::CommitStore};
+use sedimentree_core::{blob::Digest, commit::CommitStore, hex::decode_hex};
 use subduction_wasm::{
     digest::{JsDigest, WasmDigest},
     subduction::WasmHashMetric,
@@ -80,18 +86,22 @@ impl WasmSedimentreeAutomerge {
     }
 }
 
-impl std::fmt::Debug for WasmSedimentreeAutomerge {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for WasmSedimentreeAutomerge {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("WasmSedimentreeAutomerge").finish()
     }
 }
 
 impl CommitStore<'static> for WasmSedimentreeAutomerge {
-    type Node = HashSet<Digest>;
+    type Node = BTreeSet<Digest>;
     type LookupError = WasmLookupError;
 
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {
-        let hash_hex = hex::encode(digest.as_bytes());
+        let mut hexes = Vec::with_capacity(32);
+        for byte in digest.as_bytes() {
+            hexes.push(alloc::format!("{:02x}", byte));
+        }
+        let hash_hex = hexes.join("");
 
         let js_value_should_be_change_meta = self
             .0
@@ -136,7 +146,7 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
                 v
             } else if item.is_string() {
                 let s = item.as_string().expect("just checked is_string");
-                hex::decode(s).map_err(WasmLookupError::InvalidHexString)?
+                decode_hex(&s).ok_or(WasmLookupError::InvalidHexString)?
             } else {
                 return Err(WasmLookupError::ExpectedHashNotByteArray(item));
             };

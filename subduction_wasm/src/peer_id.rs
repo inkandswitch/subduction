@@ -1,5 +1,6 @@
 //! Type safe Peer ID.
 
+use alloc::string::ToString;
 use subduction_core::peer::id::PeerId;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;

@@ -1,12 +1,10 @@
 //! Abstractions for working with commits.
 
-use std::{
-    collections::{HashMap, HashSet},
-    error::Error,
-    hash::BuildHasher,
-    mem::take,
-    num::NonZero,
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
 };
+use core::{error::Error, mem::take, num::NonZero};
 
 use thiserror::Error;
 
@@ -19,17 +17,12 @@ pub struct MissingCommitError(Digest);
 
 /// A trait for types that have parent hashes.
 pub trait Parents {
-    /// The hasher used for the parent set.
-    type Hasher: BuildHasher + Default;
-
     /// The parent digests of this node.
-    fn parents(&self) -> HashSet<Digest, Self::Hasher>;
+    fn parents(&self) -> BTreeSet<Digest>;
 }
 
-impl<S: BuildHasher + Default + Clone> Parents for HashSet<Digest, S> {
-    type Hasher = S;
-
-    fn parents(&self) -> HashSet<Digest, Self::Hasher> {
+impl Parents for BTreeSet<Digest> {
+    fn parents(&self) -> BTreeSet<Digest> {
         self.clone()
     }
 }
@@ -69,22 +62,22 @@ pub trait CommitStore<'a> {
     fn fragment<D: DepthMetric>(
         &self,
         head_digest: Digest,
-        known_fragment_states: &HashMap<Digest, FragmentState<Self::Node>>,
+        known_fragment_states: &BTreeMap<Digest, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
         let min_depth = strategy.to_depth(head_digest);
 
-        let mut visited: HashSet<Digest> = HashSet::from([head_digest]);
-        let mut members: HashSet<Digest> = HashSet::from([head_digest]);
+        let mut visited: BTreeSet<Digest> = BTreeSet::from([head_digest]);
+        let mut members: BTreeSet<Digest> = BTreeSet::from([head_digest]);
 
-        let mut boundary: HashMap<Digest, Self::Node> = HashMap::new();
-        let mut checkpoints: HashSet<Digest> = HashSet::new();
+        let mut boundary: BTreeMap<Digest, Self::Node> = BTreeMap::new();
+        let mut checkpoints: BTreeSet<Digest> = BTreeSet::new();
 
         let head_change = self
             .lookup(head_digest)
             .map_err(|e| FragmentError::LookupError(e))?
             .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
-        let mut horizon: HashSet<Digest, _> = head_change.parents();
+        let mut horizon: BTreeSet<Digest> = head_change.parents();
 
         while !horizon.is_empty() {
             let local_horizon = take(&mut horizon);
@@ -169,7 +162,7 @@ pub trait CommitStore<'a> {
     fn build_fragment_store<'b, D: DepthMetric>(
         &self,
         head_digests: &[Digest],
-        known_fragment_states: &'b mut HashMap<Digest, FragmentState<Self::Node>>,
+        known_fragment_states: &'b mut BTreeMap<Digest, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<Vec<&'b FragmentState<Self::Node>>, FragmentError<'a, Self>> {
         let mut fresh_heads = Vec::new();
@@ -279,9 +272,9 @@ impl DepthMetric for CountTrailingZerosInBase {
 #[derive(Debug, Clone)]
 pub struct FragmentState<T> {
     head_digest: Digest,
-    members: HashSet<Digest>,
-    checkpoints: HashSet<Digest>,
-    boundary: HashMap<Digest, T>,
+    members: BTreeSet<Digest>,
+    checkpoints: BTreeSet<Digest>,
+    boundary: BTreeMap<Digest, T>,
 }
 
 impl<T> FragmentState<T> {
@@ -289,9 +282,9 @@ impl<T> FragmentState<T> {
     #[must_use]
     pub const fn new(
         head_digest: Digest,
-        members: HashSet<Digest>,
-        checkpoints: HashSet<Digest>,
-        boundary: HashMap<Digest, T>,
+        members: BTreeSet<Digest>,
+        checkpoints: BTreeSet<Digest>,
+        boundary: BTreeMap<Digest, T>,
     ) -> Self {
         Self {
             head_digest,
@@ -315,7 +308,7 @@ impl<T> FragmentState<T> {
     /// This includes all history between the `head_digest`
     /// and the `boundary` (not including the boundary elements).
     #[must_use]
-    pub const fn members(&self) -> &HashSet<Digest> {
+    pub const fn members(&self) -> &BTreeSet<Digest> {
         &self.members
     }
 
@@ -325,13 +318,13 @@ impl<T> FragmentState<T> {
     /// below the target, so that it is possible to know which other fragments
     /// this one covers.
     #[must_use]
-    pub const fn checkpoints(&self) -> &HashSet<Digest> {
+    pub const fn checkpoints(&self) -> &BTreeSet<Digest> {
         &self.checkpoints
     }
 
     /// The boundary from which the next set of fragments would be built.
     #[must_use]
-    pub const fn boundary(&self) -> &HashMap<Digest, T> {
+    pub const fn boundary(&self) -> &BTreeMap<Digest, T> {
         &self.boundary
     }
 

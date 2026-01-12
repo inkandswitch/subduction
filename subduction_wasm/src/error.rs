@@ -1,5 +1,6 @@
 //! Error types.
 
+use alloc::string::{String, ToString};
 use sedimentree_core::future::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
@@ -79,11 +80,11 @@ impl From<WasmListenError> for JsValue {
 #[error(transparent)]
 pub struct WasmCallError(#[from] WasmCallErrorInner);
 
-impl From<WasmCallError> for JsValue {
+impl From<WasmCallError> for js_sys::Error {
     fn from(err: WasmCallError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("CallError");
-        js_err.into()
+        js_err
     }
 }
 
@@ -122,7 +123,6 @@ pub enum WasmCallErrorInner {
 impl From<CallError> for WasmCallErrorInner {
     fn from(err: CallError) -> Self {
         match err {
-            CallError::Encoding(e) => Self::Encoding(e.to_string()),
             CallError::SocketSend(e) => Self::SocketSend(e),
             CallError::ChannelCanceled => Self::ChannelCanceled,
             CallError::TimedOut => Self::TimedOut,
@@ -133,7 +133,6 @@ impl From<CallError> for WasmCallErrorInner {
 impl From<&CallError> for WasmCallErrorInner {
     fn from(err: &CallError) -> Self {
         match err {
-            CallError::Encoding(e) => Self::Encoding(e.to_string()),
             CallError::SocketSend(e) => Self::SocketSend(e.clone()),
             CallError::ChannelCanceled => Self::ChannelCanceled,
             CallError::TimedOut => Self::TimedOut,

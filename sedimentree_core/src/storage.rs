@@ -1,11 +1,15 @@
 //! Storage abstraction for `Sedimentree` data.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    string::String,
+    sync::Arc,
+    vec::Vec,
+};
 
+use async_lock::Mutex;
 use futures::{
     future::{BoxFuture, LocalBoxFuture},
-    lock::Mutex,
     FutureExt,
 };
 
@@ -37,7 +41,7 @@ pub trait Storage<K: FutureKind + ?Sized> {
     /// Get all sedimentree IDs that have loose commits stored.
     fn load_all_sedimentree_ids(
         &self,
-    ) -> K::Future<'_, Result<HashSet<SedimentreeId>, Self::Error>>;
+    ) -> K::Future<'_, Result<BTreeSet<SedimentreeId>, Self::Error>>;
 
     /// Save a loose commit to storage.
     fn save_loose_commit(
@@ -102,10 +106,10 @@ pub enum LoadTreeData {
 /// An in-memory storage backend.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStorage {
-    ids: Arc<Mutex<HashSet<SedimentreeId>>>,
-    fragments: Arc<Mutex<HashMap<SedimentreeId, HashSet<Fragment>>>>,
-    commits: Arc<Mutex<HashMap<SedimentreeId, HashSet<LooseCommit>>>>,
-    blobs: Arc<Mutex<HashMap<Digest, Blob>>>,
+    ids: Arc<Mutex<BTreeSet<SedimentreeId>>>,
+    fragments: Arc<Mutex<BTreeMap<SedimentreeId, BTreeSet<Fragment>>>>,
+    commits: Arc<Mutex<BTreeMap<SedimentreeId, BTreeSet<LooseCommit>>>>,
+    blobs: Arc<Mutex<BTreeMap<Digest, Blob>>>,
 }
 
 impl MemoryStorage {
@@ -114,16 +118,16 @@ impl MemoryStorage {
     pub fn new() -> Self {
         tracing::debug!("creating new in-memory storage");
         Self {
-            ids: Arc::new(Mutex::new(HashSet::new())),
-            fragments: Arc::new(Mutex::new(HashMap::new())),
-            commits: Arc::new(Mutex::new(HashMap::new())),
-            blobs: Arc::new(Mutex::new(HashMap::new())),
+            ids: Arc::new(Mutex::new(BTreeSet::new())),
+            fragments: Arc::new(Mutex::new(BTreeMap::new())),
+            commits: Arc::new(Mutex::new(BTreeMap::new())),
+            blobs: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 }
 
 impl Storage<Local> for MemoryStorage {
-    type Error = std::convert::Infallible;
+    type Error = core::convert::Infallible;
 
     fn save_sedimentree_id(
         &self,
@@ -157,7 +161,7 @@ impl Storage<Local> for MemoryStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> LocalBoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
         tracing::debug!("[local] MemoryStorage: getting sedimentree_ids");
         async move {
             let ids = self.ids.lock().await.iter().copied().collect();
@@ -325,7 +329,7 @@ impl Storage<Local> for MemoryStorage {
 }
 
 impl Storage<Sendable> for MemoryStorage {
-    type Error = std::convert::Infallible;
+    type Error = core::convert::Infallible;
 
     fn save_sedimentree_id(
         &self,
@@ -359,7 +363,7 @@ impl Storage<Sendable> for MemoryStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> BoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
+    ) -> BoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
         tracing::debug!("[sendable] MemoryStorage: getting sedimentree_ids");
         async move { Ok(self.ids.lock().await.iter().copied().collect()) }.boxed()
     }

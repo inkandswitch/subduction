@@ -14,9 +14,10 @@ repository.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true }
+async-lock = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core" }
+sedimentree_core = { path = "../sedimentree_core", default-features = false }
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -25,6 +26,15 @@ tracing = { workspace = true }
 default = []
 arbitrary = ["dep:arbitrary"]
 serde = ["dep:serde"]
+serde-std = ["serde/std"]
+std = [
+  "async-channel/std",
+  "async-lock/std",
+  "futures/std",
+  "nonempty/std",
+  "sedimentree_core/std",
+  "thiserror/std"
+]
 
 [lints]
 workspace = true

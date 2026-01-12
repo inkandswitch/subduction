@@ -10,10 +10,6 @@ pub enum SendError {
     /// WebSocket error.
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tungstenite::Error),
-
-    /// Serialization error.
-    #[error("Bincode error: {0}")]
-    Serialization(#[from] bincode::error::EncodeError),
 }
 
 /// Problem while attempting to make a roundtrip call.
@@ -22,10 +18,6 @@ pub enum CallError {
     /// WebSocket error.
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tungstenite::Error),
-
-    /// Serialization error.
-    #[error("Serialization error: {0}")]
-    Serialization(bincode::error::EncodeError),
 
     /// Problem receiving on the internal channel.
     #[error("Channel canceled: {0}")]
@@ -58,13 +50,13 @@ pub struct DisconnectionError;
 pub enum RunError {
     /// Internal MPSC channel error.
     #[error("Channel send error: {0}")]
-    ChanSend(#[from] async_channel::SendError<Message>),
+    ChanSend(async_channel::SendError<Message>),
 
     /// WebSocket error.
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tungstenite::Error),
 
     /// Deserialization error.
-    #[error("Bincode deserialize error: {0}")]
-    Deserialize(#[from] bincode::error::DecodeError),
+    #[error("Deserialize error")]
+    Deserialize,
 }

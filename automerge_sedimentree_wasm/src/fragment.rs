@@ -1,6 +1,9 @@
 //! Fragment-related wrappers.
 
-use std::collections::{HashMap, HashSet};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec::Vec,
+};
 
 use sedimentree_core::{blob::Digest, commit::FragmentState};
 use subduction_wasm::{digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmBlobMeta};
@@ -9,7 +12,7 @@ use wasm_bindgen::prelude::*;
 /// The state of a fragment while being built.
 #[derive(Debug, Clone)]
 #[wasm_bindgen(js_name = FragmentState)]
-pub struct WasmFragmentState(pub(crate) FragmentState<HashSet<Digest>>);
+pub struct WasmFragmentState(pub(crate) FragmentState<BTreeSet<Digest>>);
 
 #[wasm_bindgen(js_class = FragmentState)]
 impl WasmFragmentState {
@@ -56,10 +59,10 @@ impl WasmFragmentState {
     pub fn boundary(&self) -> WasmBoundary {
         let boundary = self.0.boundary();
 
-        let mut map = HashMap::with_capacity(boundary.len());
+        let mut map = BTreeMap::new();
         for (key, value) in boundary {
             let wasm_key: WasmDigest = (*key).into();
-            let wasm_value: HashSet<WasmDigest> =
+            let wasm_value: BTreeSet<WasmDigest> =
                 value.iter().copied().map(WasmDigest::from).collect();
             map.insert(wasm_key, wasm_value);
         }
@@ -74,8 +77,8 @@ impl WasmFragmentState {
     }
 }
 
-impl From<FragmentState<HashSet<Digest>>> for WasmFragmentState {
-    fn from(state: FragmentState<HashSet<Digest>>) -> Self {
+impl From<FragmentState<BTreeSet<Digest>>> for WasmFragmentState {
+    fn from(state: FragmentState<BTreeSet<Digest>>) -> Self {
         WasmFragmentState(state)
     }
 }
@@ -83,7 +86,7 @@ impl From<FragmentState<HashSet<Digest>>> for WasmFragmentState {
 /// The boundary of a fragment.
 #[derive(Debug, Clone)]
 #[wasm_bindgen(js_name = Boundary)]
-pub struct WasmBoundary(HashMap<WasmDigest, HashSet<WasmDigest>>);
+pub struct WasmBoundary(BTreeMap<WasmDigest, BTreeSet<WasmDigest>>);
 
 #[wasm_bindgen(js_class = Boundary)]
 impl WasmBoundary {
@@ -100,8 +103,8 @@ impl WasmBoundary {
     }
 }
 
-impl From<HashMap<WasmDigest, HashSet<WasmDigest>>> for WasmBoundary {
-    fn from(boundary: HashMap<WasmDigest, HashSet<WasmDigest>>) -> Self {
+impl From<BTreeMap<WasmDigest, BTreeSet<WasmDigest>>> for WasmBoundary {
+    fn from(boundary: BTreeMap<WasmDigest, BTreeSet<WasmDigest>>) -> Self {
         WasmBoundary(boundary)
     }
 }
@@ -109,7 +112,7 @@ impl From<HashMap<WasmDigest, HashSet<WasmDigest>>> for WasmBoundary {
 /// A store for fragment states.
 #[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
-pub struct WasmFragmentStateStore(pub(crate) HashMap<Digest, FragmentState<HashSet<Digest>>>);
+pub struct WasmFragmentStateStore(pub(crate) BTreeMap<Digest, FragmentState<BTreeSet<Digest>>>);
 
 #[wasm_bindgen(js_class = FragmentStateStore)]
 impl WasmFragmentStateStore {
@@ -117,7 +120,7 @@ impl WasmFragmentStateStore {
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new() -> Self {
-        Self(HashMap::new())
+        Self(BTreeMap::new())
     }
 
     /// Insert a fragment state into the store.
@@ -135,7 +138,7 @@ impl WasmFragmentStateStore {
 }
 
 #[allow(clippy::implicit_hasher)]
-impl From<WasmFragmentStateStore> for HashMap<Digest, FragmentState<HashSet<Digest>>> {
+impl From<WasmFragmentStateStore> for BTreeMap<Digest, FragmentState<BTreeSet<Digest>>> {
     fn from(store: WasmFragmentStateStore) -> Self {
         store.0
     }

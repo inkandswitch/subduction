@@ -11,7 +11,7 @@ use std::{
     time::Duration,
 };
 use subduction_core::peer::id::PeerId;
-use subduction_websocket::tokio::server::TokioWebSocketServer;
+use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{prelude::*, util::SubscriberInitExt, EnvFilter};
 
@@ -74,6 +74,7 @@ async fn main() -> anyhow::Result<()> {
             let addr: SocketAddr = args.socket.parse()?;
             let _server: TokioWebSocketServer<MemoryStorage> = TokioWebSocketServer::setup(
                 addr,
+                FuturesTimerTimeout,
                 Duration::from_secs(5),
                 PeerId::new([0; 32]),
                 MemoryStorage::new(),

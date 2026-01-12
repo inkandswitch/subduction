@@ -1,5 +1,9 @@
 //! IDs for individual [`Sedimentree`]s.
 
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use sedimentree_core::SedimentreeId;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -33,8 +37,8 @@ impl WasmSedimentreeId {
     }
 }
 
-impl std::fmt::Display for WasmSedimentreeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for WasmSedimentreeId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
     }
 }

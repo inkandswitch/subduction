@@ -1,5 +1,6 @@
 //! Wasm wrapper for `Depth`.
 
+use alloc::string::ToString;
 use sedimentree_core::depth::Depth;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -36,7 +37,11 @@ impl WasmDepth {
         let value = js_value
             .as_f64()
             .and_then(|f| {
-                if f.is_finite() && f.fract() == 0.0 && 0.0 <= f && f <= (f64::from(u32::MAX)) {
+                if f.is_finite()
+                    && f == ((f as i128) as f64)
+                    && 0.0 <= f
+                    && f <= (f64::from(u32::MAX))
+                {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     Some(f as u32)
                 } else {
@@ -86,8 +91,8 @@ extern "C" {
     pub type JsToDepth;
 }
 
-impl std::fmt::Debug for JsToDepth {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for JsToDepth {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("JsToDepth").finish()
     }
 }

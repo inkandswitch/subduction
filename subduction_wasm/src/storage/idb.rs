@@ -1,9 +1,10 @@
 //! [`IndexedDB`] storage backend for Sedimentree.
 
+use alloc::{boxed::Box, rc::Rc, str::FromStr, string::{String, ToString}, vec::Vec};
+use core::{cell::RefCell};
 use futures::{channel::oneshot};
 use js_sys::Uint8Array;
 use sedimentree_core::{BadSedimentreeId, Fragment, LooseCommit, SedimentreeId, blob::Digest};
-use std::{cell::RefCell, rc::Rc, str::FromStr};
 use thiserror::Error;
 use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use web_sys::{
@@ -257,7 +258,10 @@ impl WasmIndexedDbStorage {
     ) -> Result<(), WasmSaveLooseCommitError> {
         let core_commit = LooseCommit::from(loose_commit.clone());
         let digest = core_commit.digest();
-        let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_commit, bincode::config::standard())?;
+
+        let mut bytes = Vec::new();
+        #[allow(clippy::expect_used)]
+        ciborium::ser::into_writer(&core_commit, &mut bytes).expect("should be Infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -298,10 +302,8 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadLooseCommitsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let (commit, _) = bincode::serde::decode_from_slice::<LooseCommit, _>(
-                &bytes,
-                bincode::config::standard(),
-            )?;
+            let commit: LooseCommit = ciborium::de::from_reader::<LooseCommit, &[u8]>(&bytes)
+                .map_err(|_| WasmLoadLooseCommitsError::DecodeError)?;
             out.push(commit.into());
         }
 
@@ -366,7 +368,10 @@ impl WasmIndexedDbStorage {
    pub async fn wasm_save_fragment(&self, sedimentree_id: &WasmSedimentreeId, fragment: &WasmFragment) -> Result<(), WasmSaveFragmentError> {
         let core_fragment = Fragment::from(fragment.clone());
         let digest = core_fragment.digest();
-        let bytes: Vec<u8> = bincode::serde::encode_to_vec(core_fragment, bincode::config::standard())?;
+
+       let mut bytes = Vec::new();
+       #[allow(clippy::expect_used)]
+       ciborium::ser::into_writer(&core_fragment, &mut bytes).expect("should be Infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -407,10 +412,8 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadFragmentsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let (commit, _) = bincode::serde::decode_from_slice::<Fragment, _>(
-                &bytes,
-                bincode::config::standard(),
-            )?;
+            let commit: Fragment = ciborium::de::from_reader::<Fragment, &[u8]>(&bytes)
+                .map_err(|_| WasmLoadFragmentsError::DecodeError)?;
             out.push(commit.into());
         }
 
@@ -578,7 +581,7 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, AwaitIdbError> {
     req.set_onerror(Some(error.as_ref().unchecked_ref()));
     error.forget();
 
-    rx.await?.map_err(AwaitIdbError::JsPromiseRejected)
+    rx.await.map_err(AwaitIdbError::Canceled)?.map_err(AwaitIdbError::JsPromiseRejected)
 }
 
 /// Error indicating that a `JsValue` was expected to be a `Uint8Array` but was not.
@@ -608,7 +611,7 @@ impl From<InvalidIndexedDbValue> for JsValue {
 pub enum AwaitIdbError {
     /// The channel was canceled.
     #[error("Channel dropped")]
-    Canceled(#[from] oneshot::Canceled),
+    Canceled(oneshot::Canceled),
 
     /// The JS Promise was rejected.
     #[error("JS Promise rejected: {0:?}")]
@@ -823,10 +826,6 @@ pub enum WasmSaveFragmentError {
     #[error("unable to store fragment(s) from IndexedDB: {0:?}")]
     UnableToStoreFragment(JsValue),
 
-    /// An error occurred while encoding a blob to be stored in `IndexedDB`.
-    #[error("error encoding blob from IndexedDB: {0:?}")]
-    EncodeError(#[from] bincode::error::EncodeError),
-
     /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
@@ -864,8 +863,8 @@ pub enum WasmLoadFragmentsError {
     IndexError(JsValue),
 
     /// An error occurred while decoding a fragment from `IndexedDB`.
-    #[error("error decoding blob to fragment from IndexedDB: {0:?}")]
-    DecodeError(#[from] bincode::error::DecodeError),
+    #[error("error decoding blob to fragment from IndexedDB")]
+    DecodeError,
 
     /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
@@ -939,10 +938,6 @@ pub enum WasmSaveLooseCommitError {
     #[error("unable to store looseCommit(s) from IndexedDB: {0:?}")]
     UnableToStoreLooseCommit(JsValue),
 
-    /// An error occurred while encoding a blob to be stored in `IndexedDB`.
-    #[error("error encoding blob from IndexedDB: {0:?}")]
-    EncodeError(#[from] bincode::error::EncodeError),
-
     /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
@@ -980,8 +975,8 @@ pub enum WasmLoadLooseCommitsError {
     IndexError(JsValue),
 
     /// An error occurred while decoding a loose commit from `IndexedDB`.
-    #[error("error decoding blob to loose commit from IndexedDB: {0:?}")]
-    DecodeError(#[from] bincode::error::DecodeError),
+    #[error("error decoding blob to loose commit from IndexedDB")]
+    DecodeError,
 
     /// An error occurred while awaiting an `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]

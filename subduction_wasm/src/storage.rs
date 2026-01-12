@@ -3,7 +3,7 @@
 pub mod idb;
 pub mod memory;
 
-use std::collections::HashSet;
+use alloc::{collections::BTreeSet, string::ToString, vec::Vec};
 
 use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::{Promise, Uint8Array};
@@ -113,8 +113,8 @@ extern "C" {
     fn js_delete_blob(this: &JsStorage, blob_digest: &JsDigest) -> Promise;
 }
 
-impl std::fmt::Debug for JsStorage {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for JsStorage {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_tuple("JsStorage").finish()
     }
 }
@@ -162,7 +162,7 @@ impl Storage<Local> for JsStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> LocalBoxFuture<'_, Result<HashSet<SedimentreeId>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
         async move {
             let span = tracing::debug_span!("JsStorage::load_all_sedimentree_ids");
             let _enter = span.enter();
@@ -172,7 +172,7 @@ impl Storage<Local> for JsStorage {
                 .await
                 .map_err(JsStorageError::LoadLooseCommitsError)?;
             let xs: Vec<WasmSedimentreeId> = WasmSedimentreeIdsArray::try_from(&js_value)?.0;
-            let mut sedimentree_ids_set = HashSet::new();
+            let mut sedimentree_ids_set = BTreeSet::new();
             for wasm_id in xs.into_iter() {
                 sedimentree_ids_set.insert(wasm_id.into());
             }

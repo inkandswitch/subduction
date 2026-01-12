@@ -1,5 +1,7 @@
 //! Error types for the top-level `Subduction`.
 
+use alloc::vec::Vec;
+
 use sedimentree_core::{blob::Digest, future::FutureKind, storage::Storage};
 use thiserror::Error;
 

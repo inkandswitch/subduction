@@ -14,9 +14,10 @@ use crate::{
     peer::id::PeerId,
 };
 use async_channel::{bounded, Sender};
+use async_lock::Mutex;
 use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationError};
 use futures::{
-    FutureExt, StreamExt, future::try_join_all, lock::Mutex, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
+    FutureExt, StreamExt, future::try_join_all, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
 };
 use nonempty::NonEmpty;
 use request::FragmentRequested;
@@ -28,16 +29,19 @@ use sedimentree_core::{
     storage::Storage,
     Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
-use std::{
-    collections::{HashMap, HashSet},
+use alloc::{
+    boxed::Box,
+    collections::{BTreeMap, BTreeSet},
+    string::ToString,
+    sync::Arc,
+    vec::Vec,
+};
+use core::{
+    sync::atomic::{AtomicUsize, Ordering},
+    task::{Context, Poll},
     marker::PhantomData,
     ops::Deref,
     pin::Pin,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    task::{Context, Poll},
     time::Duration,
 };
 
@@ -51,9 +55,9 @@ pub struct Subduction<
     M: DepthMetric = CountLeadingZeroBytes,
 > {
     depth_metric: M,
-    sedimentrees: Arc<Mutex<HashMap<SedimentreeId, Sedimentree>>>,
+    sedimentrees: Arc<Mutex<BTreeMap<SedimentreeId, Sedimentree>>>,
     next_connection_id: Arc<AtomicUsize>,
-    conns: Arc<Mutex<HashMap<ConnectionId, C>>>,
+    conns: Arc<Mutex<BTreeMap<ConnectionId, C>>>,
     storage: S,
 
     actor_channel: Sender<(ConnectionId, C)>,
@@ -62,7 +66,7 @@ pub struct Subduction<
     abort_actor_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
 
-    _phantom: std::marker::PhantomData<&'a F>,
+    _phantom: core::marker::PhantomData<&'a F>,
 }
 
 impl<
@@ -94,9 +98,9 @@ impl<
 
         let sd = Arc::new(Self {
             depth_metric,
-            sedimentrees: Arc::new(Mutex::new(HashMap::new())),
+            sedimentrees: Arc::new(Mutex::new(BTreeMap::new())),
             next_connection_id: Arc::new(AtomicUsize::new(0)),
-            conns: Arc::new(Mutex::new(HashMap::new())),
+            conns: Arc::new(Mutex::new(BTreeMap::new())),
             storage,
             actor_channel: actor_sender,
             msg_queue: queue_receiver,
@@ -310,7 +314,7 @@ impl<
     pub async fn disconnect_all(&self) -> Result<(), C::DisconnectionError> {
         let conns: Vec<_> = {
             let mut guard = self.conns.lock().await;
-            guard.drain().map(|(_id, conn)| conn).collect()
+            core::mem::take(&mut *guard).values().cloned().collect()
         };
 
         try_join_all(conns.into_iter().map(|conn| async move {
@@ -1055,14 +1059,14 @@ impl<
         id: SedimentreeId,
         timeout: Option<Duration>,
     ) -> Result<
-        HashMap<PeerId, (bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>)>,
+        BTreeMap<PeerId, (bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>)>,
         IoError<F, S, C>,
     > {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
         );
-        let mut peers: HashMap<PeerId, Vec<(ConnectionId, C)>> = HashMap::new();
+        let mut peers: BTreeMap<PeerId, Vec<(ConnectionId, C)>> = BTreeMap::new();
         {
             for (conn_id, conn) in self.conns.lock().await.iter() {
                 peers
@@ -1073,7 +1077,7 @@ impl<
         }
 
         tracing::debug!("Found {} peer(s)", peers.len());
-        let blobs = Arc::new(Mutex::new(HashSet::<Blob>::new()));
+        let blobs = Arc::new(Mutex::new(BTreeSet::<Blob>::new()));
         let mut set: FuturesUnordered<_> = peers
             .iter()
             .map(|(peer_id, peer_conns)| {
@@ -1160,7 +1164,7 @@ impl<
             })
             .collect();
 
-        let mut out = HashMap::new();
+        let mut out = BTreeMap::new();
         while let Some(result) = set.next().await {
             match result {
                 Err(e) =>  {
@@ -1255,7 +1259,7 @@ impl<
     }
 
     /// Get the set of all connected peer IDs.
-    pub async fn peer_ids(&self) -> HashSet<PeerId> {
+    pub async fn peer_ids(&self) -> BTreeSet<PeerId> {
         self.conns.lock().await.values().map(|conn| conn.peer_id()).collect()
     }
 

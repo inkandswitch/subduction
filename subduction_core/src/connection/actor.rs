@@ -1,13 +1,15 @@
 //! Actor for handling connections and messages.
 
-use std::{
+use alloc::boxed::Box;
+use core::{
     marker::PhantomData,
     ops::Deref,
-    pin::Pin,
+    pin::{pin, Pin},
     task::{Context, Poll},
 };
 
 use futures::{
+    future::{select, Either},
     stream::{AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
@@ -61,25 +63,26 @@ impl<'a, F: RecvOnce<'a, C>, C: Connection<F>> ConnectionActor<'a, F, C> {
                 continue;
             }
 
-            futures::select! {
-                maybe = self.inbox.recv().fuse() => {
-                    match maybe {
-                        Ok((conn_id, conn)) => {
-                            tracing::debug!("ConnectionActor: new connection {:?}", conn_id);
-                            self.queue.push(F::recv_once(conn_id, conn, self.outbox.clone()));
-                        }
-                        Err(e) => {
-                            tracing::warn!("ConnectionActor: inbox closed: {e:?}; draining tasks");
-                            while let Some(()) = self.queue.next().await {}
-                            break;
-                        }
+            // NOTE extra ceremony to avoid depending on `std`
+            let inbox_fut = pin!(self.inbox.recv().fuse());
+            let queue_fut = pin!(self.queue.next().fuse());
+            match select(inbox_fut, queue_fut).await {
+                Either::Left((maybe, _queue_next)) => match maybe {
+                    Ok((conn_id, conn)) => {
+                        tracing::debug!("ConnectionActor: new connection {:?}", conn_id);
+                        self.queue
+                            .push(F::recv_once(conn_id, conn, self.outbox.clone()));
                     }
-                }
-                done = self.queue.next() => {
+                    Err(e) => {
+                        tracing::warn!("ConnectionActor: inbox closed: {e:?}; draining tasks");
+                        while let Some(()) = self.queue.next().await {}
+                        break;
+                    }
+                },
+                Either::Right((done, _inbox_recv)) => {
                     if let Some(()) = done {
                         tracing::debug!("ConnectionActor: queued request processed");
                     }
-                    // else: nothing in the queue -- totally normal, start the next loop
                 }
             }
         }

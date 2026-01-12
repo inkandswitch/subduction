@@ -18,18 +18,19 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 async-channel = { workspace = true }
+async-lock = { workspace = true }
 base58 = { workspace = true }
-bincode = { version = "2.0", features = ["serde"] }
+ciborium = { workspace = true }
 build_info = { path = "../build_info" }
-console_error_panic_hook = { version = "0.1.7", optional = true }
-from_js_ref = "0.1.2"
+console_error_panic_hook = { workspace = true, optional = true }
+from_js_ref = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
-getrandom = { version = "0.3.3", features = ["wasm_js"] }
+getrandom = { workspace = true, features = ["wasm_js"] }
 js-sys = { workspace = true }
 rand = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", features = ["serde"] }
-subduction_core = { path = "../subduction_core", features = ["serde"] }
+sedimentree_core = { path = "../sedimentree_core", default-features = false, features = ["serde"] }
+subduction_core = { path = "../subduction_core", default-features = false, features = ["serde"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -39,6 +40,7 @@ wasm_refgen = { workspace = true }
 
 [dependencies.web-sys]
 version = "0.3.81"
+default-features = false
 features = [
   "BinaryType",
   "DomException",
@@ -64,6 +66,20 @@ features = [
 [features]
 default = ["console_error_panic_hook"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
+std = [
+  "async-channel/std",
+  "async-lock/std",
+  "futures/std",
+  "futures-util/std",
+  "js-sys/std",
+  "rand/std",
+  "sedimentree_core/std",
+  "subduction_core/std",
+  "serde/std",
+  "thiserror/std",
+  "wasm-bindgen/std",
+  "wasm-bindgen-futures/std"
+]
 
 [lints]
 workspace = true

@@ -1,8 +1,15 @@
 //! # Automerge integration for Sedimentree
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
-use std::{cell::RefCell, collections::HashSet, convert::Infallible, hash::RandomState, rc::Rc};
+#[cfg(feature = "std")]
+extern crate std;
+
+extern crate alloc;
+
+use alloc::{collections::BTreeSet, rc::Rc};
+use core::{cell::RefCell, convert::Infallible};
 
 use automerge::{AutoCommit, Automerge, ChangeHash, ChangeMetadata};
 use sedimentree_core::{
@@ -82,9 +89,7 @@ impl<'a> From<SedimentreeChangeMetadata<'a>> for ChangeMetadata<'a> {
 }
 
 impl Parents for SedimentreeChangeMetadata<'_> {
-    type Hasher = RandomState;
-
-    fn parents(&self) -> HashSet<Digest> {
+    fn parents(&self) -> BTreeSet<Digest> {
         self.0
             .deps
             .iter()

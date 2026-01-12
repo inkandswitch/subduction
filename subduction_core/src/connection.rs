@@ -6,7 +6,8 @@ pub mod message;
 
 pub(crate) mod recv_once;
 
-use std::{sync::Arc, time::Duration};
+use alloc::sync::Arc;
+use core::time::Duration;
 
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use crate::peer::id::PeerId;

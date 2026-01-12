@@ -1,11 +1,15 @@
 //! Subduction node.
 
-use std::{
-    collections::HashMap, convert::Infallible, fmt::Debug, rc::Rc, sync::Arc, time::Duration,
-};
+use alloc::{collections::BTreeMap, rc::Rc, sync::Arc, vec::Vec};
+use core::{convert::Infallible, fmt::Debug, time::Duration};
 
+use async_lock::Mutex;
 use from_js_ref::FromJsRef;
-use futures::{future::FusedFuture, lock::Mutex, stream::Aborted, FutureExt};
+use futures::{
+    future::{select, Either},
+    stream::Aborted,
+    FutureExt,
+};
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::{Blob, Digest},
@@ -65,24 +69,20 @@ impl WasmSubduction {
         let (core, listener_fut, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
 
         wasm_bindgen_futures::spawn_local(async move {
-            let mut actor = actor_fut.fuse();
-            let mut listener = listener_fut.fuse();
+            let actor = actor_fut.fuse();
+            let listener = listener_fut.fuse();
 
-            futures::select! {
-                actor_result = actor => {
+            match select(actor, listener).await {
+                Either::Left((actor_result, _pin)) => {
                     if let Err(Aborted) = actor_result {
                         tracing::error!("Subduction actor aborted");
                     }
                 }
-                listener_result = listener => {
+                Either::Right((listener_result, _pin)) => {
                     if let Err(Aborted) = listener_result {
                         tracing::error!("Subduction listener aborted");
                     }
                 }
-            }
-
-            if actor.is_terminated() && listener.is_terminated() {
-                tracing::debug!("Subduction task exited normally");
             }
         });
 
@@ -107,24 +107,20 @@ impl WasmSubduction {
             Subduction::hydrate(storage, WasmHashMetric(raw_fn)).await?;
 
         wasm_bindgen_futures::spawn_local(async move {
-            let mut actor = actor_fut.fuse();
-            let mut listener = listener_fut.fuse();
+            let actor = actor_fut.fuse();
+            let listener = listener_fut.fuse();
 
-            futures::select! {
-                actor_result = actor => {
+            match select(actor, listener).await {
+                Either::Left((actor_result, _pin)) => {
                     if let Err(Aborted) = actor_result {
                         tracing::error!("Subduction actor aborted");
                     }
                 }
-                listener_result = listener => {
+                Either::Right((listener_result, _pin)) => {
                     if let Err(Aborted) = listener_result {
                         tracing::error!("Subduction listener aborted");
                     }
                 }
-            }
-
-            if actor.is_terminated() && listener.is_terminated() {
-                tracing::debug!("Subduction task exited normally");
             }
         });
 
@@ -325,7 +321,7 @@ impl WasmSubduction {
                 .map(|blob| Uint8Array::from(blob.as_slice()))
                 .collect())
         } else {
-            Ok(vec![])
+            Ok(Vec::new())
         }
     }
 
@@ -644,7 +640,7 @@ impl ConnErrPair {
     /// The error that occurred during the call.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn err(&self) -> JsError {
+    pub fn err(&self) -> js_sys::Error {
         self.err.clone().into()
     }
 }
@@ -654,7 +650,7 @@ impl ConnErrPair {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    HashMap<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
+    BTreeMap<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]

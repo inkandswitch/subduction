@@ -1,9 +1,8 @@
-use std::{rc::Rc, time::Duration};
+use alloc::{rc::Rc, vec::Vec};
+use core::time::Duration;
 
-use futures::{
-    future::{FutureExt, LocalBoxFuture},
-    lock::Mutex,
-};
+use async_lock::Mutex;
+use futures::future::{FutureExt, LocalBoxFuture};
 use js_sys::Uint8Array;
 use sedimentree_core::future::Local;
 use subduction_core::{
@@ -177,8 +176,8 @@ pub(crate) enum RecvOrCallbackErr<T: Connection<Local>> {
     FragmentCallback(JsValue),
 }
 
-impl<T: Connection<Local>> std::fmt::Debug for RecvOrCallbackErr<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+impl<T: Connection<Local>> core::fmt::Debug for RecvOrCallbackErr<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
     }
 }

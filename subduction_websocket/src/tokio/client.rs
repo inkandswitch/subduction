@@ -2,12 +2,13 @@
 
 use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    timeout::Timeout,
     websocket::WebSocket,
 };
 use async_tungstenite::tokio::{connect_async, ConnectStream};
+use core::time::Duration;
 use futures::{future::BoxFuture, FutureExt};
 use sedimentree_core::future::Sendable;
-use std::time::Duration;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -19,12 +20,12 @@ use tungstenite::http::Uri;
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug, Clone)]
-pub struct TokioWebSocketClient {
+pub struct TokioWebSocketClient<O: Timeout<Sendable> + Clone + Send + Sync> {
     address: Uri,
-    socket: WebSocket<ConnectStream>,
+    socket: WebSocket<ConnectStream, Sendable, O>,
 }
 
-impl TokioWebSocketClient {
+impl<O: Timeout<Sendable> + Clone + Send + Sync> TokioWebSocketClient<O> {
     /// Create a new [`WebSocketClient`] connection.
     ///
     /// # Errors
@@ -32,13 +33,17 @@ impl TokioWebSocketClient {
     /// Returns an error if the connection could not be established.
     pub async fn new<'a>(
         address: Uri,
-        timeout: Duration,
+        timeout: O,
+        default_time_limit: Duration,
         peer_id: PeerId,
-    ) -> Result<(Self, BoxFuture<'a, Result<(), RunError>>), tungstenite::Error> {
+    ) -> Result<(Self, BoxFuture<'a, Result<(), RunError>>), tungstenite::Error>
+    where
+        O: 'a,
+    {
         tracing::info!("Connecting to WebSocket server at {address}");
         let (ws_stream, _resp) = connect_async(address.clone()).await?;
 
-        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id);
+        let socket = WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, peer_id);
         let fut_socket = socket.clone();
 
         let socket_listener = async move { fut_socket.listen().await }.boxed();
@@ -59,7 +64,7 @@ impl TokioWebSocketClient {
     }
 }
 
-impl Connection<Sendable> for TokioWebSocketClient {
+impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for TokioWebSocketClient<O> {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -106,14 +111,17 @@ impl Connection<Sendable> for TokioWebSocketClient {
     }
 }
 
-impl Reconnect<Sendable> for TokioWebSocketClient {
+impl<O: 'static + Timeout<Sendable> + Clone + Send + Sync> Reconnect<Sendable>
+    for TokioWebSocketClient<O>
+{
     type ConnectError = tungstenite::Error;
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ConnectError>> {
         async move {
             let (new_instance, new_fut) = TokioWebSocketClient::new(
                 self.address.clone(),
-                self.socket.timeout(),
+                self.socket.timeout_strategy().clone(),
+                self.socket.default_time_limit(),
                 self.socket.peer_id(),
             )
             .await?;
@@ -131,7 +139,7 @@ impl Reconnect<Sendable> for TokioWebSocketClient {
     }
 }
 
-impl PartialEq for TokioWebSocketClient {
+impl<O: Timeout<Sendable> + Clone + Send + Sync> PartialEq for TokioWebSocketClient<O> {
     fn eq(&self, other: &Self) -> bool {
         self.address == other.address && self.socket.peer_id() == other.socket.peer_id()
     }

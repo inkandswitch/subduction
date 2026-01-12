@@ -1,5 +1,6 @@
 //! Sedimentree [`Fragment`](sedimentree_core::Fragment).
 
+use alloc::{string::ToString, vec::Vec};
 use sedimentree_core::Fragment;
 use subduction_core::subduction::request::FragmentRequested;
 use thiserror::Error;
