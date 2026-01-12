@@ -640,7 +640,7 @@ impl ConnErrPair {
     /// The error that occurred during the call.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn err(&self) -> JsError {
+    pub fn err(&self) -> js_sys::Error {
         self.err.clone().into()
     }
 }

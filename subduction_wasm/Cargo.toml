@@ -64,7 +64,7 @@ features = [
 ]
 
 [features]
-default = []
+default = ["console_error_panic_hook"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 std = [
   "async-channel/std",

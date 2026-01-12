@@ -80,11 +80,11 @@ impl From<WasmListenError> for JsValue {
 #[error(transparent)]
 pub struct WasmCallError(#[from] WasmCallErrorInner);
 
-impl From<WasmCallError> for JsValue {
+impl From<WasmCallError> for js_sys::Error {
     fn from(err: WasmCallError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("CallError");
-        js_err.into()
+        js_err
     }
 }
 
