@@ -10,12 +10,38 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-lint-test-audit:
+  test-matrix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            runner: ubuntu
+          - os: macos-latest
+            runner: macos
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Test Default
+    - name: Test Default (Native Cargo)
       run: cargo test --features arbitrary
+
+  test-nix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Test via Nix
+      run: nix develop --command test:host

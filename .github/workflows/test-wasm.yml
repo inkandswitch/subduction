@@ -1,6 +1,21 @@
+name: Test Wasm
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  build-lint-test-audit:
-    runs-on: ubuntu-latest
+  test-wasm-native:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v4
@@ -17,7 +32,26 @@ jobs:
       - name: Install Playwright Browsers
         run: cd ./subduction_wasm && pnpm i && pnpm exec playwright install --with-deps
 
-      - name: Test on Wasm
+      - name: Test on Wasm (Node)
         run: wasm-pack test --node subduction_wasm
+
       - name: Test in browsers
         run: wasm-pack build ./subduction_wasm --release --target=web && cd ./subduction_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
+
+  test-wasm-nix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v26
+        with:
+          github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Test Wasm via Nix
+        run: nix develop --command test:wasm:node
