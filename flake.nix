@@ -142,7 +142,7 @@
 
         bench = {
           "bench:host" = cmd "Run benchmarks, including test utils"
-            "${cargo} bench --features=test_utils";
+            "${cargo} bench";
 
           "bench:host:open" = cmd "Open host Criterion benchmarks in browser"
             "${pkgs.xdg-utils}/bin/xdg-open ./target/criterion/report/index.html";
@@ -169,7 +169,7 @@
             "test:host && test:docs && test:wasm";
 
           "test:host" = cmd "Run Cargo tests for host target"
-            "${cargo} test --features='test_utils' && ${cargo} test --features='mermaid_docs,test_utils' --doc";
+            "${cargo} test && ${cargo} test --features='mermaid_docs' --doc";
 
           "test:no_std" = cmd "Test no_std compatibility (core crates only)" ''
             set -e  # Exit on first error
@@ -280,7 +280,7 @@
             "${wasm-pack} test --safari subduction_wasm --features='browser_test'";
 
           "test:docs" = cmd "Run Cargo doctests"
-            "${cargo} test --doc --features='mermaid_docs,test_utils'";
+            "${cargo} test --doc --features='mermaid_docs'";
         };
 
         docs = {
