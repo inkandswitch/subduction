@@ -3,24 +3,25 @@
 use alloc::vec::Vec;
 
 /// Decode a hexadecimal string into a vector of bytes.
+#[must_use]
 pub fn decode_hex(s: &str) -> Option<Vec<u8>> {
     let bytes = s.as_bytes();
-    if bytes.len() % 2 != 0 {
+    if bytes.len() == 0 || !bytes.len().is_multiple_of(2) {
         return None;
     }
 
     bytes
         .chunks_exact(2)
         .map(|c| {
-            let hi = decode_hex_nibble(c[0])?;
-            let lo = decode_hex_nibble(c[1])?;
+            let hi = decode_hex_nibble(*c.get(0)?)?;
+            let lo = decode_hex_nibble(*c.get(1)?)?;
             Some((hi << 4) | lo)
         })
         .collect()
 }
 
 #[inline]
-fn decode_hex_nibble(b: u8) -> Option<u8> {
+const fn decode_hex_nibble(b: u8) -> Option<u8> {
     match b {
         b'0'..=b'9' => Some(b - b'0'),
         b'a'..=b'f' => Some(b - b'a' + 10),
