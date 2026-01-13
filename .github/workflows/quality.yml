@@ -31,24 +31,3 @@ jobs:
 
     - name: Clippy
       run: cargo clippy --all-targets --all-features -- -D warnings
-
-  quality-nix:
-    strategy:
-      matrix:
-        os: [ubuntu-latest]
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-    - uses: actions/checkout@v4
-
-    - name: Install Nix
-      uses: cachix/install-nix-action@v26
-      with:
-        github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Lint via Nix
-      run: nix develop --command lint
-
-    - name: Build via Nix
-      run: nix develop --command build:host

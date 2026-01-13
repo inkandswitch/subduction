@@ -169,7 +169,7 @@
             "test:host && test:docs && test:wasm";
 
           "test:host" = cmd "Run Cargo tests for host target"
-            "${cargo} test && ${cargo} test --features='mermaid_docs' --doc";
+            "${cargo} test && ${cargo} test --doc";
 
           "test:no_std" = cmd "Test no_std compatibility (core crates only)" ''
             set -e  # Exit on first error
@@ -280,21 +280,21 @@
             "${wasm-pack} test --safari subduction_wasm --features='browser_test'";
 
           "test:docs" = cmd "Run Cargo doctests"
-            "${cargo} test --doc --features='mermaid_docs'";
+            "${cargo} test --doc";
         };
 
         docs = {
           "docs:build:host" = cmd "Refresh the docs"
-            "${cargo} doc --features=mermaid_docs";
+            "${cargo} doc";
 
           "docs:build:wasm" = cmd "Refresh the docs with the wasm32-unknown-unknown target"
-            "${cargo} doc --features=mermaid_docs --target=wasm32-unknown-unknown";
+            "${cargo} doc --target=wasm32-unknown-unknown";
 
           "docs:open:host" = cmd "Open refreshed docs"
-            "${cargo} doc --features=mermaid_docs --open";
+            "${cargo} doc --open";
 
           "docs:open:wasm" = cmd "Open refreshed docs"
-            "${cargo} doc --features=mermaid_docs --open --target=wasm32-unknown-unknown";
+            "${cargo} doc --open --target=wasm32-unknown-unknown";
         };
 
         command_menu = command-utils.commands.${system}
