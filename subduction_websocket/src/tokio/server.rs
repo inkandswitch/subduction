@@ -47,6 +47,7 @@ impl<
 where
     S::Error: 'static + Send + Sync,
 {
+    /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
     pub async fn new(
         address: SocketAddr,
         timeout: O,
