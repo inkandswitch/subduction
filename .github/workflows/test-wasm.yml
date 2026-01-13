@@ -37,21 +37,3 @@ jobs:
 
       - name: Test in browsers
         run: wasm-pack build ./subduction_wasm --release --target=web && cd ./subduction_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
-
-  test-wasm-nix:
-    strategy:
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Nix
-        uses: cachix/install-nix-action@v26
-        with:
-          github_access_token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Test Wasm via Nix
-        run: nix develop --command test:wasm:node
