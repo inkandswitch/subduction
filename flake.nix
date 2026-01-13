@@ -171,6 +171,78 @@
           "test:host" = cmd "Run Cargo tests for host target"
             "${cargo} test --features='test_utils' && ${cargo} test --features='mermaid_docs,test_utils' --doc";
 
+          "test:no_std" = cmd "Test no_std compatibility (core crates only)" ''
+            set -e  # Exit on first error
+
+            echo "===> Testing sedimentree_core with no_std (base)..."
+            ${cargo} check --package sedimentree_core --no-default-features -v
+
+            echo ""
+            echo "===> Testing subduction_core with no_std (base)..."
+            ${cargo} check --package subduction_core --no-default-features -v
+
+            echo ""
+            echo "Note: serde feature requires Vec/collection support which needs:"
+            echo "  - alloc feature in no_std environments, OR"
+            echo "  - std feature in std environments"
+            echo "Core libraries are no_std compatible, but serde serialization requires alloc or std."
+            echo ""
+
+            echo "===> Testing subduction_wasm (no_std with alloc by default)..."
+            ${cargo} check --package subduction_wasm --target wasm32-unknown-unknown -v
+
+            echo ""
+            echo "===> Testing automerge_subduction_wasm (no_std with alloc by default)..."
+            ${cargo} check --package automerge_subduction_wasm --target wasm32-unknown-unknown -v
+
+            echo ""
+            echo "✓ All no_std checks passed"
+          '';
+
+          "test:std" = cmd "Test std feature enablement explicitly" ''
+            set -e  # Exit on first error
+
+            echo "===> Testing sedimentree_core with std..."
+            ${cargo} test --package sedimentree_core --features std,arbitrary -- --nocapture
+
+            echo ""
+            echo "===> Testing subduction_core with std..."
+            ${cargo} test --package subduction_core --features std -- --nocapture
+
+            echo ""
+            echo "===> Testing subduction_websocket with std (default)..."
+            ${cargo} test --package subduction_websocket --lib -- --nocapture
+
+            echo ""
+            echo "===> Testing subduction_websocket with tokio features..."
+            ${cargo} test --package subduction_websocket --features tokio_client,tokio_server -- --nocapture
+
+            echo ""
+            echo "✓ All std tests passed"
+          '';
+
+          "test:websocket:no_std" = cmd "Verify subduction_websocket builds without std (should fail gracefully)" ''
+            echo "===> Checking if subduction_websocket requires std (expected to fail)..."
+            if ${cargo} check --package subduction_websocket --no-default-features 2>&1 | tail -20; then
+              echo ""
+              echo "⚠ Warning: subduction_websocket unexpectedly builds without std"
+              exit 1
+            else
+              echo ""
+              echo "✓ Confirmed: subduction_websocket requires std (as expected for networking)"
+            fi
+          '';
+
+          "test:websocket:tokio" = cmd "Run all WebSocket tokio tests" ''
+            set -e  # Exit on first error
+
+            echo "===> Running tokio WebSocket tests..."
+            ${cargo} test --package subduction_websocket --features tokio_client,tokio_server -- --nocapture --test-threads=1
+
+            echo ""
+            echo "✓ All tokio WebSocket tests passed"
+          '';
+
           "test:wasm" = cmd "Run wasm-pack tests on all targets"
             "test:wasm:node && test:ts:web";
 
