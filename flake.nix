@@ -230,7 +230,7 @@
 
       in rec {
         devShells.default = pkgs.mkShell {
-          name = "subduction shell";
+          name = "subduction_shell";
 
           nativeBuildInputs =
             [
@@ -253,7 +253,7 @@
             ]
             ++ format-pkgs
             ++ cargo-installs
-            ++ pkgs.lib.optionalString pkgs.stdenv.isLinux [
+            ++ pkgs.lib.optionals pkgs.stdenv.isLinux [
               pkgs.clang
               pkgs.llvmPackages.libclang
               pkgs.openssl.dev
@@ -264,7 +264,7 @@
             unset SOURCE_DATE_EPOCH
             export WORKSPACE_ROOT="$(pwd)"
             menu
-          '' + pkgs.lib.optionals pkgs.stdenv.isLinux ''
+          '' + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
             unset PKG_CONFIG_PATH
             export PKG_CONFIG_PATH=${pkgs.openssl.dev}/lib/pkgconfig
 

@@ -7,31 +7,34 @@ use crate::{
 
 use alloc::{string::ToString, sync::Arc};
 use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
-use core::{marker::PhantomData, net::SocketAddr, time::Duration};
-use futures::future::Aborted;
+use core::{net::SocketAddr, time::Duration};
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, future::Sendable, storage::Storage,
 };
-use subduction_core::{peer::id::PeerId, Subduction};
+use subduction_core::{
+    connection::id::ConnectionId, peer::id::PeerId, subduction::error::RegistrationError,
+    Subduction,
+};
 use tokio::{
     net::{TcpListener, TcpStream},
-    task::{coop, JoinHandle, JoinSet},
+    task::{JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
 use tungstenite::handshake::server::NoCallback;
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
-    O: Timeout<Sendable> = FuturesTimerTimeout,
+    O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
 > where
     S::Error: 'static + Send + Sync,
 {
     server_peer_id: PeerId,
     address: SocketAddr,
-    subduction_actor_handle: SubductionActorHandle<S, M, O>,
+    subduction:
+        Arc<Subduction<'static, Sendable, S, WebSocket<TokioAdapter<TcpStream>, Sendable, O>, M>>,
     accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
@@ -44,29 +47,23 @@ impl<
 where
     S::Error: 'static + Send + Sync,
 {
-    /// Create a new [`WebSocketServer`] connection.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the socket could not be bound,
-    /// or if the connection could not be established.
-    pub async fn setup(
+    pub async fn new(
         address: SocketAddr,
         timeout: O,
         default_time_limit: Duration,
         server_peer_id: PeerId,
-        storage: S,
-        depth_metric: M,
+        subduction: Arc<
+            Subduction<'static, Sendable, S, WebSocket<TokioAdapter<TcpStream>, Sendable, O>, M>,
+        >,
     ) -> Result<Self, tungstenite::Error> {
         tracing::info!("Starting WebSocket server on {}", address);
         let tcp_listener = TcpListener::bind(address).await?;
-
-        let subduction_actor_handle = SubductionActorHandle::new(storage, depth_metric);
-        let task_subduction_actor_handle = subduction_actor_handle.clone();
+        let assigned_address = tcp_listener.local_addr()?;
 
         let cancellation_token = CancellationToken::new();
         let child_cancellation_token = cancellation_token.child_token();
 
+        let inner_subduction = subduction.clone();
         let accept_task: JoinHandle<()> = tokio::spawn(async move {
             let mut conns = JoinSet::new();
             loop {
@@ -89,8 +86,8 @@ where
                                 };
                                 let client_id = PeerId::new(client_digest);
 
+                                let task_subduction = inner_subduction.clone();
                                 conns.spawn({
-                                    let sd = task_subduction_actor_handle.clone();
                                     let tout = timeout.clone();
                                     async move {
                                         match accept_hdr_async(tcp, NoCallback).await {
@@ -104,7 +101,14 @@ where
 
                                                 tracing::info!("WebSocket handshake upgraded {addr}");
 
-                                                if let Err(e) = sd.tx.send(Cmd::Register { ws: ws_conn }).await {
+                                                let listen_ws = ws_conn.clone();
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = listen_ws.listen().await {
+                                                        tracing::error!("WebSocket listen error: {}", e);
+                                                    }
+                                                });
+
+                                                if let Err(e) = task_subduction.register(ws_conn).await {
                                                     tracing::error!("failed to register new connection: {}", e);
                                                 }
                                             },
@@ -126,11 +130,66 @@ where
 
         Ok(Self {
             server_peer_id,
-            address,
-            subduction_actor_handle,
+            address: assigned_address,
+            subduction,
             accept_task: Arc::new(accept_task),
             cancellation_token,
         })
+    }
+
+    /// Create a new [`WebSocketServer`] connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the socket could not be bound,
+    /// or if the connection could not be established.
+    pub async fn setup(
+        address: SocketAddr,
+        timeout: O,
+        default_time_limit: Duration,
+        server_peer_id: PeerId,
+        storage: S,
+        depth_metric: M,
+    ) -> Result<Self, tungstenite::Error> {
+        let (subduction, listener_fut, actor_fut) = Subduction::new(storage, depth_metric);
+
+        let server = Self::new(
+            address,
+            timeout,
+            default_time_limit,
+            server_peer_id,
+            subduction,
+        )
+        .await?;
+
+        let actor_cancel = server.cancellation_token.clone();
+        let listener_cancel = server.cancellation_token.clone();
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = actor_fut => {},
+                _ = actor_cancel.cancelled() => {}
+            }
+        });
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = listener_fut => {},
+                _ = listener_cancel.cancelled() => {}
+            }
+        });
+
+        Ok(server)
+    }
+
+    /// Get the server's peer ID.
+    pub fn peer_id(&self) -> PeerId {
+        self.server_peer_id
+    }
+
+    /// Get the server's socket address.
+    pub fn address(&self) -> SocketAddr {
+        self.address
     }
 
     /// Register a new WebSocket connection with the server.
@@ -141,11 +200,8 @@ where
     pub async fn register(
         &self,
         ws: WebSocket<TokioAdapter<TcpStream>, Sendable, O>,
-    ) -> Result<(), tokio::sync::mpsc::error::SendError<Cmd<O>>> {
-        self.subduction_actor_handle
-            .tx
-            .send(Cmd::Register { ws })
-            .await
+    ) -> Result<(bool, ConnectionId), RegistrationError> {
+        self.subduction.register(ws).await
     }
 
     /// Graceful shutdown: cancel and await tasks.
@@ -153,133 +209,4 @@ where
         self.cancellation_token.cancel();
         self.accept_task.abort();
     }
-}
-
-impl<
-        S: 'static + Send + Sync + Storage<Sendable>,
-        M: 'static + Send + Sync + DepthMetric,
-        O: Timeout<Sendable>,
-    > Clone for TokioWebSocketServer<S, M, O>
-where
-    S::Error: 'static + Send + Sync,
-{
-    fn clone(&self) -> Self {
-        Self {
-            server_peer_id: self.server_peer_id,
-            address: self.address,
-            subduction_actor_handle: self.subduction_actor_handle.clone(),
-            accept_task: self.accept_task.clone(),
-            cancellation_token: self.cancellation_token.clone(),
-        }
-    }
-}
-
-#[derive(Debug)]
-struct SubductionActorHandle<S, M, O: Timeout<Sendable>> {
-    tx: tokio::sync::mpsc::Sender<Cmd<O>>,
-    cancel_token: CancellationToken,
-    subduction_actor_join_handle: Arc<JoinHandle<()>>,
-    _phantom: PhantomData<(S, M)>,
-}
-
-impl<
-        S: 'static + Send + Sync + Storage<Sendable>,
-        M: 'static + Send + Sync + DepthMetric,
-        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-    > SubductionActorHandle<S, M, O>
-where
-    S::Error: 'static + Send + Sync,
-{
-    fn new(storage: S, depth_metric: M) -> Self {
-        let cancel_token = CancellationToken::new();
-        let child_cancel_token = cancel_token.child_token();
-
-        let (tx, mut rx) = tokio::sync::mpsc::channel::<Cmd<O>>(256);
-        let subduction_actor_join_handle = tokio::spawn({
-            let task_child_cancel_token = child_cancel_token.clone();
-            async move {
-                let (subduction, listener_fut, actor_fut) = Subduction::new(storage, depth_metric);
-
-                let t1 = task_child_cancel_token.clone();
-                tokio::spawn(async move {
-                    tokio::select! {
-                        result = coop::cooperative(actor_fut) => {
-                            if let Err(Aborted) = result {
-                                tracing::debug!("Subduction actor aborted");
-                            }
-                        }
-                        () = t1.cancelled() => {}
-                    }
-                });
-
-                let t2 = task_child_cancel_token.clone();
-                tokio::spawn(async move {
-                    tokio::select! {
-                        result = coop::cooperative(listener_fut) => {
-                            if let Err(Aborted) = result {
-                                tracing::error!("Subduction listener aborted");
-                            }
-                        }
-                        () = t2.cancelled() => {}
-                    }
-                });
-
-                while let Some(cmd) = rx.recv().await {
-                    match cmd {
-                        Cmd::Register { ws } => {
-                            tracing::info!("registering new WebSocket connection");
-
-                            let thread_ws = ws.clone();
-                            tokio::spawn(async move {
-                                if let Err(e) = coop::cooperative(thread_ws.listen()).await {
-                                    tracing::error!("WebSocket listen error: {}", e);
-                                }
-                            });
-
-                            if let Err(e) = subduction.register(ws).await {
-                                tracing::error!("failed to register connection: {}", e);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        Self {
-            tx,
-            cancel_token,
-            subduction_actor_join_handle: Arc::new(subduction_actor_join_handle),
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<S, M, O: Timeout<Sendable>> Drop for SubductionActorHandle<S, M, O> {
-    fn drop(&mut self) {
-        if Arc::strong_count(&self.subduction_actor_join_handle) == 1 {
-            self.cancel_token.cancel();
-            self.subduction_actor_join_handle.abort();
-        }
-    }
-}
-
-impl<S, M, O: Timeout<Sendable>> Clone for SubductionActorHandle<S, M, O> {
-    fn clone(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            cancel_token: self.cancel_token.clone(),
-            subduction_actor_join_handle: self.subduction_actor_join_handle.clone(),
-            _phantom: PhantomData,
-        }
-    }
-}
-
-/// Commands for the Subduction actor.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Cmd<O: Timeout<Sendable>> {
-    /// Register a new peer.
-    Register {
-        /// The WebSocket connection to register.
-        ws: WebSocket<TokioAdapter<TcpStream>, Sendable, O>,
-    },
 }

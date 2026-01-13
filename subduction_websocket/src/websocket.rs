@@ -1,6 +1,6 @@
 //! # Generic WebSocket connection for Subduction
 
-use alloc::{collections::BTreeMap, sync::Arc};
+use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
 use core::{
     marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},

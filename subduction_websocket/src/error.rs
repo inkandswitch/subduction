@@ -20,8 +20,8 @@ pub enum CallError {
     WebSocket(#[from] tungstenite::Error),
 
     /// Problem receiving on the internal channel.
-    #[error("Channel canceled: {0}")]
-    ChanCanceled(#[from] oneshot::Canceled),
+    #[error("Channel canceled")]
+    ChanCanceled(oneshot::Canceled),
 
     /// Timed out waiting for response.
     #[error("Timed out waiting for response")]
@@ -32,8 +32,8 @@ pub enum CallError {
 #[derive(Debug, Clone, Copy, Error)]
 pub enum RecvError {
     /// Problem receiving on the internal channel.
-    #[error("Channel receive error: {0}")]
-    ChanCanceled(#[from] oneshot::Canceled),
+    #[error("Channel receive error")]
+    ChanCanceled(oneshot::Canceled),
 
     /// Attempted to read from a closed channel.
     #[error("Attempted to read from closed channel")]

@@ -34,7 +34,7 @@ const TS: &str = r#"
 export interface Storage {
     saveSedimentreeId(sedimentreeId: SedimentreeId): Promise<void>;
     deleteSedimentreeId(sedimentreeId: SedimentreeId): Promise<void>;
-    loadSedimentreeIds(): Promise<SedimentreeId[]>;
+    loadAllSedimentreeIds(): Promise<SedimentreeId[]>;
 
     saveLooseCommit(sedimentreeId: SedimentreeId, commit: LooseCommit): Promise<void>;
     saveFragment(sedimentreeId: SedimentreeId, fragment: Fragment): Promise<void>;

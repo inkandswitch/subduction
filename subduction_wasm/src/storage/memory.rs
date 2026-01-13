@@ -4,6 +4,7 @@ use crate::{
     digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit,
     sedimentree_id::WasmSedimentreeId,
 };
+use alloc::vec::Vec;
 use sedimentree_core::{
     future::Local,
     storage::{MemoryStorage, Storage},
