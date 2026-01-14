@@ -13,7 +13,7 @@ use futures::{
     stream::{AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
-use sedimentree_core::future::{FutureKind, Local, Sendable};
+use futures_kind::{FutureKind, Local, Sendable};
 
 use super::{id::ConnectionId, message::Message, recv_once::RecvOnce, Connection};
 

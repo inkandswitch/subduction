@@ -25,6 +25,7 @@ build_info = { path = "../build_info" }
 console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
+futures_kind = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["wasm_js"] }
 js-sys = { workspace = true }

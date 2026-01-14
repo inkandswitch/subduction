@@ -20,6 +20,7 @@ async-tungstenite = { workspace = true }
 blake3 = { workspace = true }
 ciborium = { workspace = true }
 futures = { workspace = true }
+futures_kind = { workspace = true }
 futures-timer = { workspace = true, optional = true }
 futures-util = { workspace = true }
 rand = { workspace = true }

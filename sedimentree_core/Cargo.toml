@@ -17,6 +17,7 @@ arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-lock = { workspace = true }
 blake3 = { workspace = true }
 futures = { workspace = true }
+futures_kind = { workspace = true }
 futures-util = { workspace = true }
 num = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"]}

@@ -2,7 +2,8 @@
 
 use alloc::vec::Vec;
 
-use sedimentree_core::{blob::Digest, future::FutureKind, storage::Storage};
+use futures_kind::FutureKind;
+use sedimentree_core::{blob::Digest, storage::Storage};
 use thiserror::Error;
 
 use crate::connection::{Connection, ConnectionDisallowed};
@@ -151,24 +152,30 @@ mod tests {
 
         #[test]
         fn prop_equality_is_reflexive() {
-            bolero::check!().with_type::<RegistrationError>().for_each(|err| {
-                assert_eq!(err, err);
-            });
+            bolero::check!()
+                .with_type::<RegistrationError>()
+                .for_each(|err| {
+                    assert_eq!(err, err);
+                });
         }
 
         #[test]
         fn prop_clone_equals_original() {
-            bolero::check!().with_type::<RegistrationError>().for_each(|err| {
-                assert_eq!(err.clone(), *err);
-            });
+            bolero::check!()
+                .with_type::<RegistrationError>()
+                .for_each(|err| {
+                    assert_eq!(err.clone(), *err);
+                });
         }
 
         #[test]
         fn prop_display_produces_non_empty_string() {
-            bolero::check!().with_type::<RegistrationError>().for_each(|err| {
-                let display = format!("{}", err);
-                assert!(!display.is_empty());
-            });
+            bolero::check!()
+                .with_type::<RegistrationError>()
+                .for_each(|err| {
+                    let display = format!("{}", err);
+                    assert!(!display.is_empty());
+                });
         }
     }
 }

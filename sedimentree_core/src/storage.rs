@@ -12,12 +12,9 @@ use futures::{
     future::{BoxFuture, LocalBoxFuture},
     FutureExt,
 };
+use futures_kind::{FutureKind, Local, Sendable};
 
-use crate::{
-    blob::Blob,
-    future::{FutureKind, Local, Sendable},
-    Digest, SedimentreeId,
-};
+use crate::{blob::Blob, Digest, SedimentreeId};
 
 use super::{Fragment, LooseCommit};
 

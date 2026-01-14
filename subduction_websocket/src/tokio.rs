@@ -3,7 +3,7 @@
 use core::time::Duration;
 
 use futures::{future::BoxFuture, FutureExt};
-use sedimentree_core::future::Sendable;
+use futures_kind::Sendable;
 
 use crate::timeout::{TimedOut, Timeout};
 

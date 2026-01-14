@@ -15,7 +15,7 @@ use core::time::Duration;
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use crate::peer::id::PeerId;
 use futures::Future;
-use sedimentree_core::future::FutureKind;
+use futures_kind::FutureKind;
 use thiserror::Error;
 
 /// A trait representing a connection to a peer in the network.

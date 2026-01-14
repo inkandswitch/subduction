@@ -8,7 +8,7 @@ use crate::{
 use async_tungstenite::tokio::{connect_async, ConnectStream};
 use core::time::Duration;
 use futures::{future::BoxFuture, FutureExt};
-use sedimentree_core::future::Sendable;
+use futures_kind::Sendable;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},

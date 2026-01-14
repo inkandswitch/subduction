@@ -2,10 +2,10 @@
 
 use core::time::Duration;
 
-use sedimentree_core::future::FutureKind;
+use futures_kind::FutureKind;
 
 #[cfg(feature = "futures-timer")]
-use sedimentree_core::future::{Local, Sendable};
+use futures_kind::{Local, Sendable};
 use thiserror::Error;
 
 #[cfg(feature = "futures-timer")]

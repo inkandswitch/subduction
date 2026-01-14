@@ -1,5 +1,5 @@
 use futures::FutureExt;
-use sedimentree_core::future::{FutureKind, Local, Sendable};
+use futures_kind::{FutureKind, Local, Sendable};
 
 use super::{id::ConnectionId, message::Message, Connection};
 

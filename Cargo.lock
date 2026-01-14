@@ -940,6 +940,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "futures_kind"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899ed6916770c69d5dabc3d8b8438f39961056ca3b870aab9179608cc01dc5a1"
+dependencies = [
+ "futures 0.3.31",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1889,6 +1898,7 @@ dependencies = [
  "bolero",
  "futures 0.3.31",
  "futures-util",
+ "futures_kind",
  "num",
  "rand",
  "serde",
@@ -2042,14 +2052,18 @@ name = "subduction_cli"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-lock",
  "async-tungstenite",
  "clap",
  "console-subscriber",
  "futures 0.3.31",
  "futures-util",
+ "futures_kind",
+ "hex",
  "rand",
  "sedimentree_core",
  "serde",
+ "serde_json",
  "subduction_core",
  "subduction_websocket",
  "thiserror",
@@ -2070,6 +2084,7 @@ dependencies = [
  "async-lock",
  "bolero",
  "futures 0.3.31",
+ "futures_kind",
  "nonempty",
  "sedimentree_core",
  "serde",
@@ -2091,6 +2106,7 @@ dependencies = [
  "from_js_ref",
  "futures 0.3.31",
  "futures-util",
+ "futures_kind",
  "getrandom",
  "js-sys",
  "rand",
@@ -2120,6 +2136,7 @@ dependencies = [
  "futures 0.3.31",
  "futures-timer",
  "futures-util",
+ "futures_kind",
  "rand",
  "sedimentree_core",
  "serde",

@@ -19,13 +19,13 @@ use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationEr
 use futures::{
     FutureExt, StreamExt, future::try_join_all, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
 };
+use futures_kind::{Local, Sendable};
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    future::{Local, Sendable},
     storage::Storage,
     Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };

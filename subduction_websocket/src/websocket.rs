@@ -14,8 +14,8 @@ use futures::{
     future::{BoxFuture, LocalBoxFuture},
     FutureExt,
 };
+use futures_kind::{FutureKind, Local, Sendable};
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
-use sedimentree_core::future::{FutureKind, Local, Sendable};
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -636,8 +636,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket1: WebSocket<_, Local, _> =
-                WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
             let websocket2 = websocket1.clone();
 
             assert_eq!(websocket1, websocket2);
@@ -671,8 +670,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket1: WebSocket<_, Local, _> =
-                WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
             let websocket2 = websocket1.clone();
 
             assert_eq!(websocket1.peer_id(), websocket2.peer_id());
@@ -685,8 +683,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket1: WebSocket<_, Local, _> =
-                WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
             let websocket2 = websocket1.clone();
 
             assert_eq!(
@@ -702,8 +699,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket1: WebSocket<_, Local, _> =
-                WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
             let websocket2 = websocket1.clone();
 
             assert_eq!(websocket1, websocket2);
