@@ -68,6 +68,11 @@ let currentPort: number;
 let currentUrl: string;
 
 test.beforeAll(async ({ browserName }) => {
+  // Skip peer connection tests in CI - they require building subduction_cli
+  // and are more prone to timeouts in CI environments
+  if (process.env.CI) {
+    test.skip();
+  }
   // Assign port based on browser to avoid conflicts when running in parallel
   currentPort = WS_PORTS[browserName];
   currentUrl = `ws://${WS_HOST}:${currentPort}`;

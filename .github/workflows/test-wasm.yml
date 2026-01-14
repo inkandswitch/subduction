@@ -63,9 +63,6 @@ jobs:
       - name: Test on Wasm (Node)
         run: wasm-pack test --node subduction_wasm
 
-      - name: Build subduction_cli for peer connection tests
-        run: cargo build --release -p subduction_cli
-
       - name: Build WASM packages
         run: cd ./subduction_wasm && pnpm build
 

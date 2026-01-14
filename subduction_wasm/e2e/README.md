@@ -74,6 +74,7 @@ npx playwright show-report
 
 ### Peer Connection Tests
 
+- **CI behavior:** Peer connection tests are skipped in CI environments (set `CI=true`) to avoid flakiness from long build times and server startup delays. They run normally in local development.
 - **Serial execution:** Peer connection tests run serially within each browser to avoid connection conflicts
 - **Multi-browser support:** Each browser runs its own WebSocket server on a different port
   - Chromium: 9892 (WebSocket) + 6669 (console_subscriber)
