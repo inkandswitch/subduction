@@ -63,6 +63,9 @@ features = [
   "Window"
 ]
 
+[dev-dependencies]
+wasm-bindgen-test = "0.2"
+
 [features]
 default = ["console_error_panic_hook"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]

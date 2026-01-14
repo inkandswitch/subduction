@@ -30,11 +30,13 @@ fn init_tracing() {
 }
 
 fn random_blob() -> Blob {
+    #[allow(clippy::expect_used)]
     Blob::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 64]>()))
         .expect("arbitrary blob")
 }
 
 fn random_digest() -> Digest {
+    #[allow(clippy::expect_used)]
     Digest::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 32]>()))
         .expect("arbitrary digest")
 }
@@ -228,14 +230,14 @@ async fn multiple_concurrent_clients() -> TestResult {
                 CountLeadingZeroBytes,
             );
 
-        tokio::spawn(async move { actor_fut.await });
-        tokio::spawn(async move { listener_fut.await });
+        tokio::spawn(actor_fut);
+        tokio::spawn(listener_fut);
 
         let (client_ws, socket_listener) = TokioWebSocketClient::new(
             uri.clone(),
             TimeoutTokio,
             Duration::from_secs(5),
-            PeerId::new([i as u8 + 1; 32]),
+            PeerId::new([u8::try_from(i)? + 1; 32]),
         )
         .await?;
 
@@ -259,7 +261,8 @@ async fn multiple_concurrent_clients() -> TestResult {
         clients.push(client);
 
         tokio::spawn({
-            let inner_client = clients[i].clone();
+            #[allow(clippy::expect_used)]
+            let inner_client = clients.get(i).expect("client should exist").clone();
             async move {
                 inner_client.listen().await?;
                 Ok::<(), anyhow::Error>(())
@@ -281,19 +284,21 @@ async fn multiple_concurrent_clients() -> TestResult {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify all clients have all commits (1 server + 3 client commits = 4 total)
+    #[allow(clippy::expect_used)]
     for client in &clients {
-        let commits = client
+        let loose_commits = client
             .get_commits(sed_id)
             .await
             .expect("sedimentree exists");
         assert_eq!(
-            commits.len(),
+            loose_commits.len(),
             num_clients + 1,
             "Client should have all commits"
         );
     }
 
     // Verify server has all commits
+    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
@@ -350,8 +355,8 @@ async fn request_with_delayed_response() -> TestResult {
         TokioWebSocketClient<TimeoutTokio>,
     >::new(client_storage, CountLeadingZeroBytes);
 
-    tokio::spawn(async move { actor_fut.await });
-    tokio::spawn(async move { listener_fut.await });
+    tokio::spawn(actor_fut);
+    tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
     let (client_ws, socket_listener) = TokioWebSocketClient::new(
@@ -384,25 +389,14 @@ async fn request_with_delayed_response() -> TestResult {
     });
 
     // Make a sync request with a very short timeout
-    let result = client
-        .request_all_batch_sync_all(Some(Duration::from_millis(1))) // 1ms timeout
+    let _result = client
+        .request_all_batch_sync_all(Some(Duration::from_millis(1)))
         .await;
 
     // This might succeed if the network is fast, or fail with timeout
     // The test is to verify the system handles short timeouts gracefully
-    match result {
-        Ok(_) => {
-            // If it succeeds, that's fine - network was fast enough
-            assert!(true, "Request completed within short timeout");
-        }
-        Err(_) => {
-            // If it times out, that's also fine - we're just testing timeout handling
-            assert!(
-                true,
-                "Request timed out as expected with very short timeout"
-            );
-        }
-    }
+    // If it succeeds, that's fine - network was fast enough
+    // If it times out, that's also fine - we're just testing timeout handling
 
     Ok(())
 }
@@ -466,8 +460,8 @@ async fn large_message_handling() -> TestResult {
         TokioWebSocketClient<TimeoutTokio>,
     >::new(client_storage, CountLeadingZeroBytes);
 
-    tokio::spawn(async move { actor_fut.await });
-    tokio::spawn(async move { listener_fut.await });
+    tokio::spawn(actor_fut);
+    tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
     let (client_ws, socket_listener) = TokioWebSocketClient::new(
@@ -516,6 +510,7 @@ async fn large_message_handling() -> TestResult {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify server received the large commit
+    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
@@ -565,8 +560,8 @@ async fn message_ordering() -> TestResult {
         TokioWebSocketClient<TimeoutTokio>,
     >::new(client_storage, CountLeadingZeroBytes);
 
-    tokio::spawn(async move { actor_fut.await });
-    tokio::spawn(async move { listener_fut.await });
+    tokio::spawn(actor_fut);
+    tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
     let (client_ws, socket_listener) = TokioWebSocketClient::new(
@@ -614,6 +609,7 @@ async fn message_ordering() -> TestResult {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify server has all commits
+    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await

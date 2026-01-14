@@ -1,4 +1,5 @@
-use async_tungstenite::tokio::{accept_async, TokioAdapter};
+//! Tests for round-trip communication between Subduction peers using `WebSocket`s.
+
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use testresult::TestResult;
 
@@ -8,8 +9,8 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
     future::Sendable,
-    storage::{MemoryStorage, Storage},
-    LooseCommit, Sedimentree, SedimentreeId,
+    storage::MemoryStorage,
+    LooseCommit, SedimentreeId,
 };
 use subduction_core::{
     connection::{message::Message, Connection},
@@ -19,7 +20,6 @@ use subduction_core::{
 use subduction_websocket::tokio::{
     client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio,
 };
-use tokio::{net::TcpListener, sync::oneshot};
 
 static TRACING: OnceLock<()> = OnceLock::new();
 
@@ -85,6 +85,7 @@ async fn rend_receive() -> TestResult {
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn batch_sync() -> TestResult {
     init_tracing();
@@ -130,6 +131,7 @@ async fn batch_sync() -> TestResult {
         .add_commit(sed_id, &commit1, blob1)
         .await?;
 
+    #[allow(clippy::expect_used)]
     let inserted = server_subduction
         .get_commits(sed_id)
         .await
@@ -151,7 +153,7 @@ async fn batch_sync() -> TestResult {
     // CLIENT SETUP //
     ///////////////////
 
-    let client_tree = Sedimentree::new(vec![], vec![commit2.clone(), commit3.clone()]);
+    // let client_tree = Sedimentree::new(vec![], vec![commit2.clone(), commit3.clone()]);
     let client_storage = MemoryStorage::default();
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
@@ -159,8 +161,8 @@ async fn batch_sync() -> TestResult {
         TokioWebSocketClient<TimeoutTokio>,
     >::new(client_storage, CountLeadingZeroBytes);
 
-    tokio::spawn(async move { actor_fut.await });
-    tokio::spawn(async move { listener_fut.await });
+    tokio::spawn(actor_fut);
+    tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
     let (client_ws, socket_listener) = TokioWebSocketClient::new(
@@ -210,6 +212,7 @@ async fn batch_sync() -> TestResult {
         .request_all_batch_sync_all(Some(Duration::from_millis(100)))
         .await?;
 
+    #[allow(clippy::expect_used)]
     let server_updated = server_subduction
         .get_commits(sed_id)
         .await
@@ -220,6 +223,7 @@ async fn batch_sync() -> TestResult {
     assert!(server_updated.contains(&commit2));
     assert!(server_updated.contains(&commit3));
 
+    #[allow(clippy::expect_used)]
     let client_updated = client
         .get_commits(sed_id)
         .await
