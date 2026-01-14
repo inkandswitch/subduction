@@ -31,7 +31,7 @@ Tests WebSocket connections and sync operations with actual peers using `subduct
 - Requesting blobs from connected peers
 - Multiple concurrent connections
 
-**Total: 6 tests on chromium only**
+**Total: 6 tests × 3 browsers = 18 tests**
 
 ## Prerequisites
 
@@ -58,11 +58,8 @@ Tests WebSocket connections and sync operations with actual peers using `subduct
 
 ### Run All Tests
 ```bash
-# Run all core tests across all browsers
-npx playwright test --grep-invert "@peer"
-
-# Run peer connection tests (chromium only)
-npx playwright test --grep "@peer" --project=chromium
+# Run all tests (core + peer connection tests across all browsers)
+npx playwright test
 ```
 
 ### Run Specific Test Files
@@ -70,8 +67,8 @@ npx playwright test --grep "@peer" --project=chromium
 # Core functionality tests only
 npx playwright test subduction.spec.ts
 
-# Peer connection tests only
-npx playwright test peer-connection.spec.ts --project=chromium
+# Peer connection tests only (all browsers)
+npx playwright test peer-connection.spec.ts
 ```
 
 ### Run with UI
@@ -99,10 +96,13 @@ npx playwright show-report
 ## Important Notes
 
 ### Peer Connection Tests
-- **Serial execution:** Peer connection tests run serially to avoid port conflicts
-- **Single browser:** Only run on chromium to prevent multiple servers on same port
+- **Serial execution:** Peer connection tests run serially within each browser to avoid connection conflicts
+- **Multi-browser support:** Each browser runs its own WebSocket server on a different port
+  - chromium: 9892 (WebSocket) + 6669 (console_subscriber)
+  - firefox: 9893 (WebSocket) + 6670 (console_subscriber)
+  - webkit: 9894 (WebSocket) + 6671 (console_subscriber)
 - **Server lifecycle:** Tests start `subduction_cli` in `beforeAll` and stop it in `afterAll`
-- **Port:** WebSocket server runs on `127.0.0.1:9892` (different from http-server on 9891)
+- **Port configuration:** Uses `TOKIO_CONSOLE_BIND` environment variable to assign different console_subscriber ports per browser, preventing port conflicts when running tests in parallel
 
 ### Cleaning Up Stale Processes
 If peer connection tests fail with "Address already in use", kill stale processes:

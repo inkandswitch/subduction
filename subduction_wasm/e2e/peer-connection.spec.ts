@@ -10,56 +10,44 @@ const __dirname = path.dirname(__filename);
 
 const sleep = promisify(setTimeout);
 
-// WebSocket server configuration
+// WebSocket server configuration - different port per browser to avoid conflicts
 const WS_HOST = "127.0.0.1";
-const WS_PORT = 9892; // Different from http-server port
-const WS_URL = `ws://${WS_HOST}:${WS_PORT}`;
+const WS_PORTS: Record<string, number> = {
+  chromium: 9892,
+  firefox: 9893,
+  webkit: 9894,
+};
+const CONSOLE_PORTS: Record<string, number> = {
+  chromium: 6669,
+  firefox: 6670,
+  webkit: 6671,
+};
 
 let subductionServer: ChildProcess | null = null;
+let currentPort: number;
+let currentUrl: string;
 
-test.beforeAll(async () => {
+test.beforeAll(async ({ browserName }) => {
+  // Assign port based on browser to avoid conflicts when running in parallel
+  currentPort = WS_PORTS[browserName];
+  currentUrl = `ws://${WS_HOST}:${currentPort}`;
+
   const cliPath = path.join(__dirname, "../../target/release/subduction_cli");
 
-  subductionServer = spawn(cliPath, ["start", "--socket", `${WS_HOST}:${WS_PORT}`], {
+  subductionServer = spawn(cliPath, ["start", "--socket", `${WS_HOST}:${currentPort}`], {
     cwd: path.join(__dirname, "../.."),
     stdio: "pipe",
     env: {
       ...process.env,
       RUST_LOG: "info",
-      TOKIO_CONSOLE: "0",
+      TOKIO_CONSOLE_BIND: `${WS_HOST}:${CONSOLE_PORTS[browserName]}`,
     },
   });
 
-  await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => {
-      reject(new Error("Server startup timeout"));
-    }, 5000);
+  // Wait for server to start
+  await sleep(3000);
 
-    let resolved = false;
-
-    const checkOutput = (data: Buffer) => {
-      const output = data.toString();
-      console.log("[subduction_cli]", output);
-      if ((output.includes("Starting WebSocket server") || output.includes("WebSocket server started")) && !resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        resolve();
-      }
-    };
-
-    subductionServer!.stdout?.on("data", checkOutput);
-    subductionServer!.stderr?.on("data", checkOutput);
-
-    subductionServer!.on("error", (err) => {
-      if (!resolved) {
-        resolved = true;
-        clearTimeout(timeout);
-        reject(err);
-      }
-    });
-  });
-
-  console.log(`✓ Subduction WebSocket server started on ${WS_URL}`);
+  console.log(`✓ Subduction WebSocket server started on ${currentUrl} for ${browserName}`);
 });
 
 test.afterAll(async () => {
@@ -79,9 +67,11 @@ test.beforeEach(async ({ page }) => {
   await page.waitForFunction(() => window.subductionReady === true, { timeout: 10000 });
 });
 
+// Each browser gets its own WebSocket server on a different port (chromium:9892, firefox:9893, webkit:9894)
+// Tests within each browser run serially to avoid connection conflicts
 test.describe.configure({ mode: 'serial' });
 
-test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
+test.describe("Peer Connection Tests", () => {
   test("should connect to WebSocket server", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
       const { SubductionWebSocket, PeerId } = window.subduction;
@@ -91,7 +81,9 @@ test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
 
         await new Promise((resolve, reject) => {
           ws.onopen = resolve;
-          ws.onerror = reject;
+          ws.onerror = (event) => {
+            reject(new Error(`WebSocket error - readyState: ${ws.readyState}, url: ${ws.url}`));
+          };
           setTimeout(() => reject(new Error("Connection timeout")), 5000);
         });
 
@@ -114,10 +106,10 @@ test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
         return {
           connected: false,
           hasWebSocket: false,
-          error: error.message || String(error),
+          error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, WS_URL);
+    }, currentUrl);
 
     expect(result.connected).toBe(true);
     expect(result.hasWebSocket).toBe(true);
@@ -163,7 +155,7 @@ test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
           error: error.message || String(error),
         };
       }
-    }, WS_URL);
+    }, currentUrl);
 
     expect(result.registered).toBe(true);
     expect(result.peerCount).toBeGreaterThan(0);
@@ -202,7 +194,7 @@ test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
           error: error.message || String(error),
         };
       }
-    }, WS_URL);
+    }, currentUrl);
 
     expect(result.connected).toBe(true);
     expect(result.registered).toBe(true);
@@ -244,7 +236,7 @@ test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
           error: error.message || String(error),
         };
       }
-    }, WS_URL);
+    }, currentUrl);
 
     expect(result.beforeCount).toBeGreaterThan(0);
     expect(result.afterCount).toBe(0);
@@ -283,7 +275,7 @@ test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
           error: error.message || String(error),
         };
       }
-    }, WS_URL);
+    }, currentUrl);
 
     expect(result.requested).toBe(true);
     expect(result.error).toBeNull();
@@ -328,7 +320,7 @@ test.describe("Peer Connection Tests", { tag: "@peer" }, () => {
           error: error.message || String(error),
         };
       }
-    }, WS_URL);
+    }, currentUrl);
 
     expect(result.syncer1Connected).toBe(true);
     expect(result.syncer2Connected).toBe(true);
