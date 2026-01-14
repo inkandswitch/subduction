@@ -6,13 +6,14 @@ use alloc::vec::Vec;
 #[must_use]
 pub fn decode_hex(s: &str) -> Option<Vec<u8>> {
     let bytes = s.as_bytes();
-    if bytes.len() == 0 || !bytes.len().is_multiple_of(2) {
+    if bytes.is_empty() || !bytes.len().is_multiple_of(2) {
         return None;
     }
 
     bytes
         .chunks_exact(2)
         .map(|c| {
+            #[allow(clippy::get_first)] // Clearer together
             let hi = decode_hex_nibble(*c.get(0)?)?;
             let lo = decode_hex_nibble(*c.get(1)?)?;
             Some((hi << 4) | lo)

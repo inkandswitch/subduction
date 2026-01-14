@@ -62,7 +62,7 @@ impl WasmMemoryStorage {
 
         match result {
             Err(e) => match e {},
-            Ok(hashmap) => hashmap.into_iter().map(|id| id.into()).collect(),
+            Ok(hashmap) => hashmap.into_iter().map(Into::into).collect(),
         }
     }
 
@@ -108,7 +108,7 @@ impl WasmMemoryStorage {
 
         match result {
             Err(e) => match e {},
-            Ok(commits) => commits.into_iter().map(|commit| commit.into()).collect(),
+            Ok(commits) => commits.into_iter().map(Into::into).collect(),
         }
     }
 
@@ -173,7 +173,7 @@ impl WasmMemoryStorage {
 
         match result {
             Err(e) => match e {},
-            Ok(frags) => frags.into_iter().map(|frag| frag.into()).collect(),
+            Ok(frags) => frags.into_iter().map(Into::into).collect(),
         }
     }
 

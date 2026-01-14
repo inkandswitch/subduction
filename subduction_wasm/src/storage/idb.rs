@@ -198,6 +198,10 @@ impl WasmIndexedDbStorage {
     }
 
     /// Insert a Sedimentree ID into storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmSaveSedimentreeIdError`] if saving a [`SedimentreeId`] fails.
     #[wasm_bindgen(js_name = saveSedimentreeId)]
     pub async fn wasm_save_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Result<(), WasmSaveSedimentreeIdError> {
         let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveSedimentreeIdError::TransactionError)?;
@@ -213,6 +217,10 @@ impl WasmIndexedDbStorage {
     }
 
     /// Delete a Sedimentree ID from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmDeleteSedimentreeIdError`] if deletion failed.
     #[wasm_bindgen(js_name = deleteSedimentreeId)]
     pub async fn wasm_delete_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Result<(), WasmDeleteSedimentreeIdError> {
         let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteSedimentreeIdError::TransactionError)?;
@@ -226,6 +234,10 @@ impl WasmIndexedDbStorage {
     }
 
     /// Load all Sedimentree IDs from storage.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmLoadAllSedimentreeIdsError`] if there was a problem loading.
     #[wasm_bindgen(js_name = loadAllSedimentreeIds)]
     pub async fn wasm_load_all_sedimentree_ids(&self) -> Result<Vec<WasmSedimentreeId>, WasmLoadAllSedimentreeIdsError> {
         let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadAllSedimentreeIdsError::TransactionError)?;
@@ -250,6 +262,10 @@ impl WasmIndexedDbStorage {
     /// # Errors
     ///
     /// Returns a [`WasmSaveLooseCommitError`] if the loose commit could not be saved.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fragment is not serializable to CBOR.
     #[wasm_bindgen( js_name = saveLooseCommit)]
     pub async fn wasm_save_loose_commit(
         &self,
@@ -261,7 +277,7 @@ impl WasmIndexedDbStorage {
 
         let mut bytes = Vec::new();
         #[allow(clippy::expect_used)]
-        ciborium::ser::into_writer(&core_commit, &mut bytes).expect("should be Infallible");
+        ciborium::ser::into_writer(&core_commit, &mut bytes).expect("CBOR serialization should be Infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -364,6 +380,10 @@ impl WasmIndexedDbStorage {
     /// # Errors
     ///
     /// Returns a [`WasmSaveFragmentError`] if the fragment could not be saved.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the fragment is not serializable to CBOR.
     #[wasm_bindgen(js_name = saveFragment)]
    pub async fn wasm_save_fragment(&self, sedimentree_id: &WasmSedimentreeId, fragment: &WasmFragment) -> Result<(), WasmSaveFragmentError> {
         let core_fragment = Fragment::from(fragment.clone());
@@ -371,7 +391,7 @@ impl WasmIndexedDbStorage {
 
        let mut bytes = Vec::new();
        #[allow(clippy::expect_used)]
-       ciborium::ser::into_writer(&core_fragment, &mut bytes).expect("should be Infallible");
+       ciborium::ser::into_writer(&core_fragment, &mut bytes).expect("CBOR serialization should be Infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),

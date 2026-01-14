@@ -31,10 +31,9 @@ pub struct TokioWebSocketServer<
 > where
     S::Error: 'static + Send + Sync,
 {
+    subduction: TokioWebSocketSubduction<S, O, M>,
     server_peer_id: PeerId,
     address: SocketAddr,
-    subduction:
-        Arc<Subduction<'static, Sendable, S, WebSocket<TokioAdapter<TcpStream>, Sendable, O>, M>>,
     accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
@@ -48,14 +47,16 @@ where
     S::Error: 'static + Send + Sync,
 {
     /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tungstenite::Error`] if there is a problem directly with the WebSocket system.
     pub async fn new(
         address: SocketAddr,
         timeout: O,
         default_time_limit: Duration,
         server_peer_id: PeerId,
-        subduction: Arc<
-            Subduction<'static, Sendable, S, WebSocket<TokioAdapter<TcpStream>, Sendable, O>, M>,
-        >,
+        subduction: TokioWebSocketSubduction<S, O, M>,
     ) -> Result<Self, tungstenite::Error> {
         tracing::info!("Starting WebSocket server on {}", address);
         let tcp_listener = TcpListener::bind(address).await?;
@@ -169,14 +170,14 @@ where
         tokio::spawn(async move {
             tokio::select! {
                 _ = actor_fut => {},
-                _ = actor_cancel.cancelled() => {}
+                () = actor_cancel.cancelled() => {}
             }
         });
 
         tokio::spawn(async move {
             tokio::select! {
                 _ = listener_fut => {},
-                _ = listener_cancel.cancelled() => {}
+                () = listener_cancel.cancelled() => {}
             }
         });
 
@@ -184,12 +185,14 @@ where
     }
 
     /// Get the server's peer ID.
-    pub fn peer_id(&self) -> PeerId {
+    #[must_use]
+    pub const fn peer_id(&self) -> PeerId {
         self.server_peer_id
     }
 
     /// Get the server's socket address.
-    pub fn address(&self) -> SocketAddr {
+    #[must_use]
+    pub const fn address(&self) -> SocketAddr {
         self.address
     }
 
@@ -211,3 +214,6 @@ where
         self.accept_task.abort();
     }
 }
+
+type TokioWebSocketSubduction<S, O, M> =
+    Arc<Subduction<'static, Sendable, S, WebSocket<TokioAdapter<TcpStream>, Sendable, O>, M>>;

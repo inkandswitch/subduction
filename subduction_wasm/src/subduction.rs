@@ -95,7 +95,10 @@ impl WasmSubduction {
     }
 
     /// Hydrate a [`Subduction`] instance from external storage.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmHydrationError`] if hydration fails.
     #[wasm_bindgen]
     pub async fn hydrate(
         storage: JsStorage,
@@ -133,6 +136,10 @@ impl WasmSubduction {
     }
 
     /// Add a Sedimentree.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmIoError`] if there is a problem with storage or networking.
     #[wasm_bindgen(js_name = addSedimentree)]
     pub async fn add_sedimentree(
         &self,
@@ -154,6 +161,10 @@ impl WasmSubduction {
     }
 
     /// Remove a Sedimentree and all associated data.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = removeSedimentree)]
     pub async fn remove_sedimentree(&self, id: &WasmSedimentreeId) -> Result<(), WasmIoError> {
         self.core.remove_sedimentree(id.clone().into()).await?;
@@ -194,6 +205,10 @@ impl WasmSubduction {
     }
 
     /// Disconnect from all peers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmDisconnectionError`] if disconnection was not graceful.
     #[wasm_bindgen(js_name = disconnectAll)]
     pub async fn disconnect_all(&self) -> Result<(), WasmDisconnectionError> {
         Ok(self.core.disconnect_all().await?)

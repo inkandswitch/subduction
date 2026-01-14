@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(clippy::missing_const_for_fn)] // wasm_bindgen doens't like const
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -99,7 +100,7 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {
         let mut hexes = Vec::with_capacity(32);
         for byte in digest.as_bytes() {
-            hexes.push(alloc::format!("{:02x}", byte));
+            hexes.push(alloc::format!("{byte:02x}"));
         }
         let hash_hex = hexes.join("");
 
@@ -145,6 +146,7 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
                 }
                 v
             } else if item.is_string() {
+                #[allow(clippy::expect_used)]
                 let s = item.as_string().expect("just checked is_string");
                 decode_hex(&s).ok_or(WasmLookupError::InvalidHexString)?
             } else {

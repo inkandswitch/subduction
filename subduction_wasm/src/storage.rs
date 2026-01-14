@@ -173,7 +173,7 @@ impl Storage<Local> for JsStorage {
                 .map_err(JsStorageError::LoadLooseCommitsError)?;
             let xs: Vec<WasmSedimentreeId> = WasmSedimentreeIdsArray::try_from(&js_value)?.0;
             let mut sedimentree_ids_set = BTreeSet::new();
-            for wasm_id in xs.into_iter() {
+            for wasm_id in xs {
                 sedimentree_ids_set.insert(wasm_id.into());
             }
             Ok(sedimentree_ids_set)

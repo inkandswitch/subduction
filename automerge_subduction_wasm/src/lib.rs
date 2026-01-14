@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(clippy::missing_const_for_fn)] // wasm_bindgen doens't like const
 
 #[cfg(feature = "std")]
 extern crate std;
@@ -16,6 +17,10 @@ pub use automerge_sedimentree_wasm;
 pub use subduction_wasm;
 
 /// Set a panic hook to get better error messages if the code panics.
+///
+/// # Panics
+///
+/// Will (ironically) panic if unable to set the global panic handler.
 #[wasm_bindgen]
 pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
@@ -26,6 +31,7 @@ pub fn set_panic_hook() {
         let mut config = WasmLayerConfig::new().with_max_level(tracing::Level::WARN);
         config.use_console_methods = true;
 
+        #[allow(clippy::expect_used)]
         wasm_tracing::set_as_global_default_with_config(config)
             .expect("unable to set global default");
     }

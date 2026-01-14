@@ -66,7 +66,10 @@ impl WasmDigest {
     }
 
     /// Creates a new digest from its hexadecimal string representation.
-    #[must_use]
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmInvalidDigest`] if the string is not a valid [`Digest`].
     #[wasm_bindgen(js_name = fromHexString)]
     pub fn from_hex_string(s: &str) -> Result<WasmDigest, WasmInvalidDigest> {
         let digest = s

@@ -34,23 +34,16 @@ impl WasmDepth {
     /// Returns a `NotU32Error` if the JS value is not safely coercible to `u32`.
     #[wasm_bindgen(constructor)]
     pub fn new(js_value: &JsValue) -> Result<Self, NotU32Error> {
-        let value = js_value
-            .as_f64()
-            .and_then(|f| {
-                if f.is_finite()
-                    && f == ((f as i128) as f64)
-                    && 0.0 <= f
-                    && f <= (f64::from(u32::MAX))
-                {
-                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    Some(f as u32)
-                } else {
-                    None
-                }
-            })
-            .ok_or(NotU32Error)?;
+        let f = js_value.as_f64().ok_or(NotU32Error)?;
 
-        Ok(WasmDepth(Depth(value)))
+        if js_sys::Number::is_safe_integer(&JsValue::from_f64(f))
+            && (0.0..=f64::from(u32::MAX)).contains(&f)
+        {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // checked above
+            Ok(WasmDepth(Depth(f as u32)))
+        } else {
+            Err(NotU32Error)
+        }
     }
 
     /// The depth value as an integer.

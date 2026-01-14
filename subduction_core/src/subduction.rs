@@ -117,6 +117,10 @@ impl<
     }
 
     /// Hydrate a `Subduction` instance from existing sedimentrees in external storage.
+    ///
+    /// # Errors
+    ///
+    /// * Returns [`HydrationError`] if loading from storage fails.
     pub async fn hydrate(storage: S, depth_metric: M
     ) -> Result<(
         Arc<Self>,
@@ -311,6 +315,10 @@ impl<
     }
 
     /// Gracefully disconnect from all connections.
+    ///
+    /// # Errors
+    ///
+    /// * Returns [`C::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), C::DisconnectionError> {
         let conns: Vec<_> = {
             let mut guard = self.conns.lock().await;
@@ -351,12 +359,11 @@ impl<
             if *conn_peer_id == *peer_id {
                 touched = true;
                 let removed = { self.conns.lock().await.remove(id) };
-                if let Some(conn) = removed {
-                    if let Err(e) = conn.disconnect().await {
+                if let Some(conn) = removed
+                    && let Err(e) = conn.disconnect().await {
                         tracing::error!("{e}");
                         return Err(e);
                     }
-                }
             }
         }
 
@@ -391,7 +398,7 @@ impl<
             let counter = self.next_connection_id.fetch_add(1, Ordering::Relaxed);
             let conn_id: ConnectionId = ConnectionId::new(counter);
 
-            { self.conns.lock().await.insert(conn_id, conn.clone()) };
+            self.conns.lock().await.insert(conn_id, conn.clone());
             self.actor_channel
                 .send((conn_id, conn))
                 .await
@@ -569,6 +576,10 @@ impl<
     }
 
     /// Add a new sedimentree locally and propagate it to all connected peers.
+    ///
+    /// # Errors
+    ///
+    /// * [`IoError`] if a storage or network error occurs.
     pub async fn add_sedimentree(&self, id: SedimentreeId, sedimentree: Sedimentree, blobs: Vec<Blob>) -> Result<(), IoError<F, S, C>> {
         self.insert_sedimentree_locally(id, sedimentree, blobs)
             .await
@@ -578,6 +589,10 @@ impl<
     }
 
     /// Remove a sedimentree locally and delete all associated data from storage.
+    ///
+    /// # Errors
+    ///
+    /// * [`IoError`] if a storage or network error occurs.
     pub async fn remove_sedimentree(&self, id: SedimentreeId) -> Result<(), IoError<F, S, C>> {
         let maybe_sedimentree = {
             self.sedimentrees
@@ -744,16 +759,15 @@ impl<
         if was_new {
             let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
             for conn in conns {
-                if conn.peer_id() != *from {
-                    if let Err(e) = conn.send(Message::LooseCommit {
+                if conn.peer_id() != *from
+                    && let Err(e) = conn.send(Message::LooseCommit {
                         id,
                         commit: commit.clone(),
                         blob: blob.clone(),
                     })
                     .await {
-                        tracing::error!("{e}")
+                        tracing::error!("{e}");
                     }
-                }
             }
         }
 
@@ -789,16 +803,15 @@ impl<
         if was_new {
             let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
             for conn in conns {
-                if conn.peer_id() != *from {
-                    if let Err(e) = conn.send(Message::Fragment {
+                if conn.peer_id() != *from
+                    && let Err(e) = conn.send(Message::Fragment {
                         id,
                         fragment: fragment.clone(),
                         blob: blob.clone(),
                     })
                     .await {
-                        tracing::error!("{e}")
+                        tracing::error!("{e}");
                     }
-                }
             }
         }
 
@@ -994,7 +1007,7 @@ impl<
                     .lock()
                     .await
                     .get(&id)
-                    .map(|tree| Sedimentree::summarize(tree))
+                    .map(Sedimentree::summarize)
                     .unwrap_or_default()
             };
 
@@ -1054,6 +1067,7 @@ impl<
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
+    #[allow(clippy::too_many_lines)]
     pub async fn request_all_batch_sync(
         &self,
         id: SedimentreeId,
@@ -1104,7 +1118,7 @@ impl<
                                 .lock()
                                 .await
                                 .get(&id)
-                                .map(|conn| Sedimentree::summarize(conn))
+                                .map(Sedimentree::summarize)
                                 .unwrap_or_default()
                         };
 
@@ -1260,7 +1274,7 @@ impl<
 
     /// Get the set of all connected peer IDs.
     pub async fn peer_ids(&self) -> BTreeSet<PeerId> {
-        self.conns.lock().await.values().map(|conn| conn.peer_id()).collect()
+        self.conns.lock().await.values().map(Connection::peer_id).collect()
     }
 
     /*******************
