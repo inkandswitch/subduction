@@ -6,6 +6,9 @@ pub mod message;
 
 pub(crate) mod recv_once;
 
+#[cfg(feature = "test_utils")]
+pub mod test_utils;
+
 use alloc::sync::Arc;
 use core::time::Duration;
 
