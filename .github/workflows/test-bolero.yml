@@ -1,0 +1,67 @@
+name: Bolero Tests
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  property-tests:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        iterations: [100, 1000]
+        include:
+          - os: ubuntu-latest
+            iterations: 100
+            label: "Quick"
+          - os: ubuntu-latest
+            iterations: 1000
+            label: "Thorough"
+          - os: macos-latest
+            iterations: 100
+            label: "Quick"
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache Cargo Registry
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/registry
+        key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache Cargo Index
+      uses: actions/cache@v3
+      with:
+        path: ~/.cargo/git
+        key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Cache Build Artifacts
+      uses: actions/cache@v3
+      with:
+        path: target
+        key: ${{ runner.os }}-cargo-build-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Run Property Tests (${{ matrix.label }})
+      run: |
+        # Run all tests with bolero feature enabled
+        BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --lib
+      env:
+        RUST_BACKTRACE: 1
+
+    - name: Run Property Tests on subduction_core
+      working-directory: subduction_core
+      run: |
+        BOLERO_TEST_TIME=${{ matrix.iterations }} cargo test --features std,bolero --lib
+      env:
+        RUST_BACKTRACE: 1

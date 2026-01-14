@@ -2074,6 +2074,7 @@ dependencies = [
  "sedimentree_core",
  "serde",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 

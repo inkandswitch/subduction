@@ -25,6 +25,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 bolero = { workspace = true, features = ["arbitrary"] }
+tokio = { workspace = true, features = ["rt", "macros"] }
 
 [features]
 default = []
