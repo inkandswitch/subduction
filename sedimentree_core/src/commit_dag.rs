@@ -522,7 +522,7 @@ mod tests {
             let mut commits = BTreeMap::new();
             for (commit_name, commit_hash) in commit_hashes {
                 commits.insert(commit_hash, random_blob(rng));
-                nodes.insert(commit_name.to_string(), commit_hash);
+                nodes.insert(commit_name, commit_hash);
             }
             let mut parents = BTreeMap::new();
             #[allow(clippy::panic)]
