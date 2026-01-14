@@ -140,7 +140,7 @@ mod tests {
         fn test_ordering_later_byte() {
             let bytes1 = [0u8; 32];
             let mut bytes2 = [0u8; 32];
-            bytes2[31] = 1; // Only last byte differs
+            bytes2[31] = 1;
 
             let peer_id1 = PeerId::new(bytes1);
             let peer_id2 = PeerId::new(bytes2);
@@ -173,41 +173,33 @@ mod tests {
 
         #[test]
         fn prop_hex_format_always_64_chars() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    let hex = format!("{}", peer_id);
-                    assert_eq!(hex.len(), 64);
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                let hex = format!("{}", peer_id);
+                assert_eq!(hex.len(), 64);
+            });
         }
 
         #[test]
         fn prop_hex_format_is_valid_lowercase_hex() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    let hex = format!("{}", peer_id);
-                    assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
-                    assert!(hex.chars().all(|c| !c.is_ascii_uppercase()));
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                let hex = format!("{}", peer_id);
+                assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+                assert!(hex.chars().all(|c| !c.is_ascii_uppercase()));
+            });
         }
 
         #[test]
         fn prop_equality_is_reflexive() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    assert_eq!(peer_id, peer_id);
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                assert_eq!(peer_id, peer_id);
+            });
         }
 
         #[test]
         fn prop_equality_is_symmetric() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    assert_eq!(peer_id, peer_id);
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                assert_eq!(peer_id, peer_id);
+            });
         }
 
         #[test]
@@ -232,44 +224,36 @@ mod tests {
 
         #[test]
         fn prop_debug_and_display_are_equal() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    let display = format!("{}", peer_id);
-                    let debug = format!("{:?}", peer_id);
-                    assert_eq!(display, debug);
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                let display = format!("{}", peer_id);
+                let debug = format!("{:?}", peer_id);
+                assert_eq!(display, debug);
+            });
         }
 
         #[test]
         fn prop_as_bytes_roundtrip() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    let bytes = peer_id.as_bytes();
-                    let reconstructed = PeerId::new(*bytes);
-                    assert_eq!(peer_id, &reconstructed);
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                let bytes = peer_id.as_bytes();
+                let reconstructed = PeerId::new(*bytes);
+                assert_eq!(peer_id, &reconstructed);
+            });
         }
 
         #[test]
         fn prop_as_slice_matches_as_bytes() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    assert_eq!(peer_id.as_slice(), peer_id.as_bytes() as &[u8]);
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                assert_eq!(peer_id.as_slice(), peer_id.as_bytes() as &[u8]);
+            });
         }
 
         #[test]
         fn prop_equal_ids_are_not_less_or_greater() {
-            bolero::check!()
-                .with_type::<PeerId>()
-                .for_each(|peer_id| {
-                    assert!(!(peer_id < peer_id));
-                    assert!(!(peer_id > peer_id));
-                    assert!(peer_id == peer_id);
-                });
+            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
+                assert!(!(peer_id < peer_id));
+                assert!(!(peer_id > peer_id));
+                assert!(peer_id == peer_id);
+            });
         }
     }
 }

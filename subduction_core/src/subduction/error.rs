@@ -83,6 +83,8 @@ pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur during registration of a new connection.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 pub enum RegistrationError {
     /// The connection was disallowed by the [`ConnectionPolicy`].
     #[error(transparent)]
@@ -91,4 +93,82 @@ pub enum RegistrationError {
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
     SendToClosedChannel,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+
+    mod registration_error {
+        use super::*;
+
+        #[test]
+        fn test_send_to_closed_channel_display() {
+            let err = RegistrationError::SendToClosedChannel;
+            let display = format!("{}", err);
+            assert_eq!(display, "tried to send to closed channel");
+        }
+
+        #[test]
+        fn test_connection_disallowed_display() {
+            let err = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
+            let display = format!("{}", err);
+            assert_eq!(display, "Connection disallowed");
+        }
+
+        #[test]
+        fn test_from_connection_disallowed() {
+            let conn_disallowed = ConnectionDisallowed;
+            let reg_err: RegistrationError = conn_disallowed.into();
+            assert_eq!(
+                reg_err,
+                RegistrationError::ConnectionDisallowed(ConnectionDisallowed)
+            );
+        }
+
+        #[test]
+        fn test_equality() {
+            let err1 = RegistrationError::SendToClosedChannel;
+            let err2 = RegistrationError::SendToClosedChannel;
+            let err3 = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
+
+            assert_eq!(err1, err2);
+            assert_ne!(err1, err3);
+        }
+
+        #[test]
+        fn test_clone() {
+            let err1 = RegistrationError::SendToClosedChannel;
+            let err2 = err1;
+            assert_eq!(err1, err2);
+        }
+    }
+
+    #[cfg(all(test, feature = "std", feature = "bolero"))]
+    mod proptests {
+        use super::*;
+
+        #[test]
+        fn prop_equality_is_reflexive() {
+            bolero::check!().with_type::<RegistrationError>().for_each(|err| {
+                assert_eq!(err, err);
+            });
+        }
+
+        #[test]
+        fn prop_clone_equals_original() {
+            bolero::check!().with_type::<RegistrationError>().for_each(|err| {
+                assert_eq!(err.clone(), *err);
+            });
+        }
+
+        #[test]
+        fn prop_display_produces_non_empty_string() {
+            bolero::check!().with_type::<RegistrationError>().for_each(|err| {
+                let display = format!("{}", err);
+                assert!(!display.is_empty());
+            });
+        }
+    }
 }

@@ -114,5 +114,7 @@ pub trait ConnectionPolicy {
 
 /// An error indicating that a connection is disallowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[error("Connection disallowed")]
 pub struct ConnectionDisallowed;
