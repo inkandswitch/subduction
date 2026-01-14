@@ -25,9 +25,13 @@ pub(crate) enum FsStorageError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// Serialization error.
-    #[error("Serialization error: {0}")]
-    Serialization(#[from] serde_json::Error),
+    /// CBOR serialization error.
+    #[error("CBOR serialization error: {0}")]
+    CborSerialization(String),
+
+    /// CBOR deserialization error.
+    #[error("CBOR deserialization error: {0}")]
+    CborDeserialization(String),
 }
 
 /// Filesystem-based storage backend.
@@ -94,11 +98,11 @@ impl FsStorage {
     }
 
     fn commits_file(&self, id: SedimentreeId) -> PathBuf {
-        self.tree_path(id).join("commits.json")
+        self.tree_path(id).join("commits.cbor")
     }
 
     fn fragments_file(&self, id: SedimentreeId) -> PathBuf {
-        self.tree_path(id).join("fragments.json")
+        self.tree_path(id).join("fragments.cbor")
     }
 }
 
@@ -175,7 +179,8 @@ impl Storage<Sendable> for FsStorage {
             let commits_file = self.commits_file(sedimentree_id);
             let mut commits: Vec<LooseCommit> = if commits_file.exists() {
                 let data = tokio::fs::read(&commits_file).await?;
-                serde_json::from_slice(&data)?
+                ciborium::from_reader(&data[..])
+                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?
             } else {
                 Vec::new()
             };
@@ -183,7 +188,9 @@ impl Storage<Sendable> for FsStorage {
             // Add new commit if not already present
             if !commits.contains(&loose_commit) {
                 commits.push(loose_commit);
-                let data = serde_json::to_vec(&commits)?;
+                let mut data = Vec::new();
+                ciborium::into_writer(&commits, &mut data)
+                    .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
                 tokio::fs::write(&commits_file, data).await?;
             }
 
@@ -208,7 +215,8 @@ impl Storage<Sendable> for FsStorage {
             let commits_file = self.commits_file(sedimentree_id);
             if commits_file.exists() {
                 let data = tokio::fs::read(&commits_file).await?;
-                let commits: Vec<LooseCommit> = serde_json::from_slice(&data)?;
+                let commits: Vec<LooseCommit> = ciborium::from_reader(&data[..])
+                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
                 // Update cache
                 let commits_set: BTreeSet<_> = commits.iter().cloned().collect();
@@ -266,7 +274,8 @@ impl Storage<Sendable> for FsStorage {
             let fragments_file = self.fragments_file(sedimentree_id);
             let mut fragments: Vec<Fragment> = if fragments_file.exists() {
                 let data = tokio::fs::read(&fragments_file).await?;
-                serde_json::from_slice(&data)?
+                ciborium::from_reader(&data[..])
+                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?
             } else {
                 Vec::new()
             };
@@ -274,7 +283,9 @@ impl Storage<Sendable> for FsStorage {
             // Add new fragment if not already present
             if !fragments.contains(&fragment) {
                 fragments.push(fragment);
-                let data = serde_json::to_vec(&fragments)?;
+                let mut data = Vec::new();
+                ciborium::into_writer(&fragments, &mut data)
+                    .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
                 tokio::fs::write(&fragments_file, data).await?;
             }
 
@@ -299,7 +310,8 @@ impl Storage<Sendable> for FsStorage {
             let fragments_file = self.fragments_file(sedimentree_id);
             if fragments_file.exists() {
                 let data = tokio::fs::read(&fragments_file).await?;
-                let fragments: Vec<Fragment> = serde_json::from_slice(&data)?;
+                let fragments: Vec<Fragment> = ciborium::from_reader(&data[..])
+                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
                 // Update cache
                 let fragments_set: BTreeSet<_> = fragments.iter().cloned().collect();
