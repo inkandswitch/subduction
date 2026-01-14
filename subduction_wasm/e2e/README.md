@@ -1,68 +1,41 @@
 # Subduction WASM E2E Tests
 
-Comprehensive end-to-end Playwright tests for the subduction_wasm module.
+End-to-end Playwright tests for `subduction_wasm`.
 
-## Test Suites
-
-### 1. Core Functionality Tests (`subduction.spec.ts`)
-Tests the WASM bindings without network dependencies.
-
-**Coverage:**
-- Constructor and initialization (2 tests)
-- Storage operations (1 test)
-- Sedimentree management (4 tests)
-- Data retrieval (4 tests)
-- Event handling (4 tests)
-- Multiple instances (1 test)
-- Type system (3 tests)
-- Error handling (3 tests)
-- API smoke tests (1 test)
-
-**Total: 23 tests × 3 browsers = 69 tests**
-
-### 2. Peer Connection Tests (`peer-connection.spec.ts`)
-Tests WebSocket connections and sync operations with actual peers using `subduction_cli`.
-
-**Coverage:**
-- WebSocket server connection
-- Connection registration with Subduction
-- Using `SubductionWebSocket.connect`
-- Disconnecting from peers
-- Requesting blobs from connected peers
-- Multiple concurrent connections
-
-**Total: 6 tests × 3 browsers = 18 tests**
-
-## Prerequisites
+## Setup
 
 1. **Build the WASM package:**
-   ```bash
-   cd subduction_wasm
-   pnpm install
-   pnpm build
-   ```
+
+```bash
+cd subduction_wasm
+pnpm install
+pnpm build
+```
 
 2. **Build subduction_cli (for peer connection tests):**
-   ```bash
-   cd ..  # to subduction root
-   cargo build --release -p subduction_cli
-   ```
+
+```bash
+cd ..  # to subduction root
+cargo build --release -p subduction_cli
+```
 
 3. **Install Playwright browsers:**
-   ```bash
-   cd subduction_wasm
-   npx playwright install
-   ```
+
+```bash
+cd subduction_wasm
+npx playwright install
+```
 
 ## Running Tests
 
 ### Run All Tests
+
 ```bash
-# Run all tests (core + peer connection tests across all browsers)
 npx playwright test
 ```
 
 ### Run Specific Test Files
+
 ```bash
 # Core functionality tests only
 npx playwright test subduction.spec.ts
@@ -72,16 +45,19 @@ npx playwright test peer-connection.spec.ts
 ```
 
 ### Run with UI
+
 ```bash
 npx playwright test --ui
 ```
 
 ### Run in Headed Mode (see browser)
+
 ```bash
 npx playwright test --headed
 ```
 
 ### Run Specific Browser
+
 ```bash
 npx playwright test --project=chromium
 npx playwright test --project=firefox
@@ -89,32 +65,34 @@ npx playwright test --project=webkit
 ```
 
 ### View Test Report
+
 ```bash
 npx playwright show-report
 ```
 
-## Important Notes
+## Notes
 
 ### Peer Connection Tests
+
 - **Serial execution:** Peer connection tests run serially within each browser to avoid connection conflicts
 - **Multi-browser support:** Each browser runs its own WebSocket server on a different port
-  - chromium: 9892 (WebSocket) + 6669 (console_subscriber)
-  - firefox: 9893 (WebSocket) + 6670 (console_subscriber)
-  - webkit: 9894 (WebSocket) + 6671 (console_subscriber)
+  - Chromium: 9892 (WebSocket) + 6669 (console_subscriber)
+  - Firefox: 9893 (WebSocket) + 6670 (console_subscriber)
+  - WebKit: 9894 (WebSocket) + 6671 (console_subscriber)
 - **Server lifecycle:** Tests start `subduction_cli` in `beforeAll` and stop it in `afterAll`
 - **Port configuration:** Uses `TOKIO_CONSOLE_BIND` environment variable to assign different console_subscriber ports per browser, preventing port conflicts when running tests in parallel
 
 ### Cleaning Up Stale Processes
-If peer connection tests fail with "Address already in use", kill stale processes:
-```bash
-# Check for running subduction_cli
-ps aux | grep subduction_cli
 
-# Kill all subduction_cli processes
+If peer connection tests fail with "Address already in use", kill stale processes:
+
+```bash
+ps aux | grep subduction_cli
 pkill -9 subduction_cli
 ```
 
 ### Debugging
+
 ```bash
 # Run with debug output
 DEBUG=pw:api npx playwright test
