@@ -804,6 +804,14 @@ mod tests {
         for slot in byte_arr.iter_mut().take(zeros_count as usize) {
             *slot = 0;
         }
+        // Ensure the byte after the zeros is non-zero to prevent accidentally
+        // having more leading zeros than intended
+        if (zeros_count as usize) < 32 {
+            let next_byte = &mut byte_arr[zeros_count as usize];
+            if *next_byte == 0 {
+                *next_byte = 1; // Make it non-zero
+            }
+        }
         Digest::from(byte_arr)
     }
 
