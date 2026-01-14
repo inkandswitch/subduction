@@ -111,6 +111,7 @@ impl From<BatchSyncResponse> for Message {
 /// A unique identifier for a particular request.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestId {
     /// ID for the peer that initiated the request.
@@ -131,4 +132,282 @@ pub struct SyncDiff {
 
     /// Fragments that we are missing and need to request from the peer.
     pub missing_fragments: Vec<(Fragment, Blob)>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    mod message_request_id {
+        use super::*;
+
+        #[test]
+        fn test_loose_commit_has_no_request_id() {
+            let msg = Message::LooseCommit {
+                id: SedimentreeId::new([1u8; 32]),
+                commit: LooseCommit::new(
+                    Digest::from([2u8; 32]),
+                    Vec::new(),
+                    sedimentree_core::blob::BlobMeta::new(&[]),
+                ),
+                blob: Blob::new(Vec::from([3u8; 16])),
+            };
+            assert_eq!(msg.request_id(), None);
+        }
+
+        #[test]
+        fn test_fragment_has_no_request_id() {
+            let msg = Message::Fragment {
+                id: SedimentreeId::new([1u8; 32]),
+                fragment: Fragment::new(
+                    Digest::from([2u8; 32]),
+                    Vec::new(),
+                    Vec::new(),
+                    sedimentree_core::blob::BlobMeta::new(&[]),
+                ),
+                blob: Blob::new(Vec::from([3u8; 16])),
+            };
+            assert_eq!(msg.request_id(), None);
+        }
+
+        #[test]
+        fn test_blobs_request_has_no_request_id() {
+            let msg = Message::BlobsRequest(vec![Digest::from([1u8; 32])]);
+            assert_eq!(msg.request_id(), None);
+        }
+
+        #[test]
+        fn test_blobs_response_has_no_request_id() {
+            let msg = Message::BlobsResponse(vec![Blob::new(Vec::from([1u8; 16]))]);
+            assert_eq!(msg.request_id(), None);
+        }
+
+        #[test]
+        fn test_batch_sync_request_has_request_id() {
+            let req_id = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 42,
+            };
+            let msg = Message::BatchSyncRequest(BatchSyncRequest {
+                id: SedimentreeId::new([2u8; 32]),
+                req_id,
+                sedimentree_summary: SedimentreeSummary::default(),
+            });
+            assert_eq!(msg.request_id(), Some(req_id));
+        }
+
+        #[test]
+        fn test_batch_sync_response_has_request_id() {
+            let req_id = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 99,
+            };
+            let msg = Message::BatchSyncResponse(BatchSyncResponse {
+                id: SedimentreeId::new([2u8; 32]),
+                req_id,
+                diff: SyncDiff {
+                    missing_commits: Vec::new(),
+                    missing_fragments: Vec::new(),
+                },
+            });
+            assert_eq!(msg.request_id(), Some(req_id));
+        }
+    }
+
+    mod request_id {
+        use super::*;
+
+        #[test]
+        fn test_equality() {
+            let req_id1 = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 42,
+            };
+            let req_id2 = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 42,
+            };
+            let req_id3 = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 43,
+            };
+
+            assert_eq!(req_id1, req_id2);
+            assert_ne!(req_id1, req_id3);
+        }
+
+        #[test]
+        fn test_ordering_by_requestor_first() {
+            let req_id1 = RequestId {
+                requestor: PeerId::new([0u8; 32]),
+                nonce: 100,
+            };
+            let req_id2 = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 1,
+            };
+
+            // Ordering by requestor takes precedence
+            assert!(req_id1 < req_id2);
+        }
+
+        #[test]
+        fn test_ordering_by_nonce_when_requestor_equal() {
+            let req_id1 = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 1,
+            };
+            let req_id2 = RequestId {
+                requestor: PeerId::new([1u8; 32]),
+                nonce: 2,
+            };
+
+            assert!(req_id1 < req_id2);
+        }
+    }
+
+    mod conversions {
+        use super::*;
+
+        #[test]
+        fn test_batch_sync_request_into_message() {
+            let req = BatchSyncRequest {
+                id: SedimentreeId::new([1u8; 32]),
+                req_id: RequestId {
+                    requestor: PeerId::new([2u8; 32]),
+                    nonce: 42,
+                },
+                sedimentree_summary: SedimentreeSummary::default(),
+            };
+
+            let msg: Message = req.clone().into();
+
+            match msg {
+                Message::BatchSyncRequest(inner) => {
+                    assert_eq!(inner, req);
+                }
+                _ => panic!("Expected BatchSyncRequest"),
+            }
+        }
+
+        #[test]
+        fn test_batch_sync_response_into_message() {
+            let resp = BatchSyncResponse {
+                id: SedimentreeId::new([1u8; 32]),
+                req_id: RequestId {
+                    requestor: PeerId::new([2u8; 32]),
+                    nonce: 99,
+                },
+                diff: SyncDiff {
+                    missing_commits: Vec::new(),
+                    missing_fragments: Vec::new(),
+                },
+            };
+
+            let msg: Message = resp.clone().into();
+
+            match msg {
+                Message::BatchSyncResponse(inner) => {
+                    assert_eq!(inner, resp);
+                }
+                _ => panic!("Expected BatchSyncResponse"),
+            }
+        }
+    }
+
+    mod sync_diff {
+        use super::*;
+
+        #[test]
+        fn test_empty_sync_diff() {
+            let diff = SyncDiff {
+                missing_commits: Vec::new(),
+                missing_fragments: Vec::new(),
+            };
+
+            assert_eq!(diff.missing_commits.len(), 0);
+            assert_eq!(diff.missing_fragments.len(), 0);
+        }
+
+        #[test]
+        fn test_sync_diff_with_commits() {
+            let commit = LooseCommit::new(
+                Digest::from([1u8; 32]),
+                Vec::new(),
+                sedimentree_core::blob::BlobMeta::new(&[]),
+            );
+            let blob = Blob::new(Vec::from([2u8; 16]));
+
+            let diff = SyncDiff {
+                missing_commits: vec![(commit.clone(), blob.clone())],
+                missing_fragments: Vec::new(),
+            };
+
+            assert_eq!(diff.missing_commits.len(), 1);
+            assert_eq!(diff.missing_commits[0].0, commit);
+        }
+
+        #[test]
+        fn test_sync_diff_with_fragments() {
+            let fragment = Fragment::new(
+                Digest::from([2u8; 32]),
+                Vec::new(),
+                Vec::new(),
+                sedimentree_core::blob::BlobMeta::new(&[]),
+            );
+            let blob = Blob::new(Vec::from([3u8; 16]));
+
+            let diff = SyncDiff {
+                missing_commits: Vec::new(),
+                missing_fragments: vec![(fragment.clone(), blob.clone())],
+            };
+
+            assert_eq!(diff.missing_fragments.len(), 1);
+        }
+    }
+
+    #[cfg(all(test, feature = "std", feature = "bolero"))]
+    mod proptests {
+        use super::*;
+
+        #[test]
+        fn prop_request_id_equality_is_reflexive() {
+            bolero::check!()
+                .with_type::<RequestId>()
+                .for_each(|req_id| {
+                    assert_eq!(req_id, req_id);
+                });
+        }
+
+        #[test]
+        fn prop_request_id_ordering_is_transitive() {
+            bolero::check!()
+                .with_type::<(RequestId, RequestId, RequestId)>()
+                .for_each(|(req1, req2, req3)| {
+                    if req1 < req2 && req2 < req3 {
+                        assert!(req1 < req3);
+                    }
+                });
+        }
+
+        #[test]
+        fn prop_batch_sync_request_preserves_req_id() {
+            bolero::check!()
+                .with_arbitrary::<BatchSyncRequest>()
+                .for_each(|req| {
+                    let msg: Message = req.clone().into();
+                    assert_eq!(msg.request_id(), Some(req.req_id));
+                });
+        }
+
+        #[test]
+        fn prop_batch_sync_response_preserves_req_id() {
+            bolero::check!()
+                .with_arbitrary::<BatchSyncResponse>()
+                .for_each(|resp| {
+                    let msg: Message = resp.clone().into();
+                    assert_eq!(msg.request_id(), Some(resp.req_id));
+                });
+        }
+    }
 }
