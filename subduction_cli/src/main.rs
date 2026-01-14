@@ -42,16 +42,23 @@ async fn main() -> anyhow::Result<()> {
 
 fn setup_tracing() {
     let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
 
-    let console_layer = console_subscriber::ConsoleLayer::builder()
-        .with_default_env()
-        .spawn();
+    // Only enable tokio-console if explicitly requested
+    if std::env::var("TOKIO_CONSOLE").is_ok() {
+        let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
+        let console_layer = console_subscriber::ConsoleLayer::builder()
+            .with_default_env()
+            .spawn();
 
-    tracing_subscriber::registry()
-        .with(console_layer.with_filter(console_filter))
-        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
-        .init();
+        tracing_subscriber::registry()
+            .with(console_layer.with_filter(console_filter))
+            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+            .init();
+    }
 }
 
 fn setup_signal_handlers() -> CancellationToken {
