@@ -22,9 +22,12 @@ serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+bolero = { workspace = true, features = ["arbitrary"] }
+
 [features]
 default = []
-arbitrary = ["dep:arbitrary"]
+arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
 serde = ["dep:serde"]
 serde-std = ["serde/std"]
 std = [

@@ -2068,6 +2068,7 @@ dependencies = [
  "arbitrary",
  "async-channel",
  "async-lock",
+ "bolero",
  "futures 0.3.31",
  "nonempty",
  "sedimentree_core",
