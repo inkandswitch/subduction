@@ -1,9 +1,4 @@
 APIs
-UI
-http-server
-symlink
-wasm
-subduction
 ATProto
 Auth
 Automerge
@@ -63,8 +58,10 @@ TODO
 Traceback
 TreeKEM
 TypeScript
+UI
 Wasm
 WebCrypto
+WebKit
 WebSocket
 XChaCha
 al
@@ -80,6 +77,7 @@ bchacha-note
 blake
 ciphertext
 cleartext
+cli
 composable
 concap
 crypto
@@ -99,11 +97,13 @@ expede
 faq
 fs
 html
+http-server
 https
 img
 invariant
 invariants
 keyhive
+lifecycle
 linearizability
 lookups
 mTLS
@@ -134,11 +134,14 @@ sneakernets
 socio-economic
 stateful
 statefulness
+subduction
 subgraph
 subsumptions
 subtype
 subtyping
+symlink
 tombstoned
 tradeoffs
 unwieldly
+wasm
 www
