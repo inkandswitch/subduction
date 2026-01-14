@@ -1961,6 +1961,8 @@ mod tests {
             let result = subduction.allowed_to_connect(&peer_id).await;
             assert!(result.is_ok());
         }
+
+        // TODO also test when the policy says no
     }
 
     mod blob_operations {
