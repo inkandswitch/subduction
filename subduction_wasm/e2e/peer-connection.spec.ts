@@ -64,7 +64,9 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await page.goto(URL);
-  await page.waitForFunction(() => window.subductionReady === true, { timeout: 10000 });
+  // Increase timeout for CI environments where WASM loading can be slower
+  const wasmTimeout = process.env.CI ? 30000 : 10000;
+  await page.waitForFunction(() => window.subductionReady === true, { timeout: wasmTimeout });
 });
 
 // Each browser gets its own WebSocket server on a different port (chromium:9892, firefox:9893, webkit:9894)

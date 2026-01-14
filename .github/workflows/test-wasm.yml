@@ -19,21 +19,63 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
       - uses: pnpm/action-setup@v4
         with:
           version: 9
+
       - name: Install wasm-pack
         run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: 'pnpm'
+          cache-dependency-path: subduction_wasm/pnpm-lock.yaml
+
       - name: Install dependencies
-        run: cd ./subduction_wasm && npm i
+        run: cd ./subduction_wasm && pnpm i
+
+      - name: Get Playwright version
+        id: playwright-version
+        run: echo "version=$(cd ./subduction_wasm && pnpm list @playwright/test --json | jq -r '.[0].devDependencies["@playwright/test"].version')" >> $GITHUB_OUTPUT
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-playwright-${{ steps.playwright-version.outputs.version }}
+
       - name: Install Playwright Browsers
-        run: cd ./subduction_wasm && pnpm i && pnpm exec playwright install --with-deps
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: cd ./subduction_wasm && pnpm exec playwright install --with-deps
+
+      - name: Install Playwright system dependencies
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: cd ./subduction_wasm && pnpm exec playwright install-deps
 
       - name: Test on Wasm (Node)
         run: wasm-pack test --node subduction_wasm
 
+      - name: Build subduction_cli for peer connection tests
+        run: cargo build --release -p subduction_cli
+
+      - name: Build WASM packages
+        run: cd ./subduction_wasm && pnpm build
+
       - name: Test in browsers
-        run: wasm-pack build ./subduction_wasm --release --target=web && cd ./subduction_wasm && pnpm i && npm install --global http-server && pnpm exec playwright test
+        run: cd ./subduction_wasm && npm install --global http-server && pnpm exec playwright test
+
+      - name: Upload Playwright test results
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report-${{ matrix.os }}
+          path: subduction_wasm/playwright-report/
+          retention-days: 7

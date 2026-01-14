@@ -3,7 +3,9 @@ import { URL } from "./config";
 
 test.beforeEach(async ({ page }) => {
   await page.goto(URL);
-  await page.waitForFunction(() => window.subductionReady === true, { timeout: 10000 });
+  // Increase timeout for CI environments where WASM loading can be slower
+  const wasmTimeout = process.env.CI ? 30000 : 10000;
+  await page.waitForFunction(() => window.subductionReady === true, { timeout: wasmTimeout });
 });
 
 test.describe("Subduction", () => {
@@ -497,13 +499,12 @@ test.describe("Subduction", () => {
 
         try {
           await syncer.requestBlobs([digest1, digest2]);
-          return { success: true, error: null };
+          return { error: null };
         } catch (error) {
-          return { success: false, error: error.message };
+          return { error: error.message };
         }
       });
 
-      expect(result.success).toBe(true);
       expect(result.error).toBeNull();
     });
   });
