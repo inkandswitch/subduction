@@ -1,49 +1,142 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    timeout::{FuturesTimerTimeout, Timeout},
     websocket::WebSocket,
 };
-use async_tungstenite::{
-    tokio::{accept_async, TokioAdapter},
-    WebSocketStream,
+
+use alloc::{string::ToString, sync::Arc};
+use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
+use core::{net::SocketAddr, time::Duration};
+use sedimentree_core::{
+    commit::CountLeadingZeroBytes, depth::DepthMetric, future::Sendable, storage::Storage,
 };
-use core::net::SocketAddr;
-use futures::{future::BoxFuture, FutureExt};
-use sedimentree_core::future::Sendable;
-use std::time::Duration;
 use subduction_core::{
-    connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, Reconnect,
-    },
-    peer::id::PeerId,
+    connection::id::ConnectionId, peer::id::PeerId, subduction::error::RegistrationError,
+    Subduction,
 };
 use tokio::{
     net::{TcpListener, TcpStream},
-    task::JoinHandle,
+    task::{JoinHandle, JoinSet},
 };
-
-use super::start::{Start, Unstarted};
+use tokio_util::sync::CancellationToken;
+use tungstenite::handshake::server::NoCallback;
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug, Clone)]
-pub struct TokioWebSocketServer {
+pub struct TokioWebSocketServer<
+    S: 'static + Send + Sync + Storage<Sendable>,
+    M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
+    O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
+> where
+    S::Error: 'static + Send + Sync,
+{
+    subduction: TokioWebSocketSubduction<S, O, M>,
+    server_peer_id: PeerId,
     address: SocketAddr,
-    socket: WebSocket<TokioAdapter<TcpStream>>,
+    accept_task: Arc<JoinHandle<()>>,
+    cancellation_token: CancellationToken,
 }
 
-impl TokioWebSocketServer {
-    /// Create a new [`WebSocketServer`] connection from an accepted TCP stream.
-    pub fn new(
+impl<
+        S: 'static + Send + Sync + Storage<Sendable>,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+    > TokioWebSocketServer<S, M, O>
+where
+    S::Error: 'static + Send + Sync,
+{
+    /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`tungstenite::Error`] if there is a problem directly with the WebSocket system.
+    pub async fn new(
         address: SocketAddr,
-        timeout: Duration,
-        peer_id: PeerId,
-        ws_stream: WebSocketStream<TokioAdapter<TcpStream>>,
-    ) -> Unstarted<Self> {
-        let socket = WebSocket::<_>::new(ws_stream, timeout, peer_id);
-        tracing::info!("Accepting WebSocket connections at {address}");
-        Unstarted(TokioWebSocketServer { address, socket })
+        timeout: O,
+        default_time_limit: Duration,
+        server_peer_id: PeerId,
+        subduction: TokioWebSocketSubduction<S, O, M>,
+    ) -> Result<Self, tungstenite::Error> {
+        tracing::info!("Starting WebSocket server on {}", address);
+        let tcp_listener = TcpListener::bind(address).await?;
+        let assigned_address = tcp_listener.local_addr()?;
+
+        let cancellation_token = CancellationToken::new();
+        let child_cancellation_token = cancellation_token.child_token();
+
+        let inner_subduction = subduction.clone();
+        let accept_task: JoinHandle<()> = tokio::spawn(async move {
+            let mut conns = JoinSet::new();
+            loop {
+                tokio::select! {
+                    () = child_cancellation_token.cancelled() => {
+                            tracing::info!("accept loop canceled");
+                            break;
+                        }
+                    res = tcp_listener.accept() => {
+                        match res {
+                            Ok((tcp, addr)) => {
+                                tracing::info!("new TCP connection from {addr}");
+
+                                // FIXME HACK: this will be replaced with a pubkey
+                                let client_digest = {
+                                    let mut hasher = blake3::Hasher::new();
+                                    hasher.update(addr.ip().to_string().as_bytes());
+                                    hasher.update(addr.port().to_le_bytes().as_ref());
+                                    *hasher.finalize().as_bytes()
+                                };
+                                let client_id = PeerId::new(client_digest);
+
+                                let task_subduction = inner_subduction.clone();
+                                conns.spawn({
+                                    let tout = timeout.clone();
+                                    async move {
+                                        match accept_hdr_async(tcp, NoCallback).await {
+                                            Ok(hs) => {
+                                                let ws_conn = WebSocket::<TokioAdapter<TcpStream>, Sendable, O>::new(
+                                                    hs,
+                                                    tout,
+                                                    default_time_limit,
+                                                    client_id,
+                                                );
+
+                                                tracing::info!("WebSocket handshake upgraded {addr}");
+
+                                                let listen_ws = ws_conn.clone();
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = listen_ws.listen().await {
+                                                        tracing::error!("WebSocket listen error: {}", e);
+                                                    }
+                                                });
+
+                                                if let Err(e) = task_subduction.register(ws_conn).await {
+                                                    tracing::error!("failed to register new connection: {}", e);
+                                                }
+                                            },
+                                            Err(e) => {
+                                                tracing::error!("WebSocket handshake error from {addr}: {}", e);
+                                            },
+                                        }
+                                    }
+                                });
+                            }
+                            Err(e) => tracing::error!("Accept error: {e}"),
+                        }
+                    }
+                }
+            }
+
+            while (conns.join_next().await).is_some() {}
+        });
+
+        Ok(Self {
+            server_peer_id,
+            address: assigned_address,
+            subduction,
+            accept_task: Arc::new(accept_task),
+            cancellation_token,
+        })
     }
 
     /// Create a new [`WebSocketServer`] connection.
@@ -54,112 +147,73 @@ impl TokioWebSocketServer {
     /// or if the connection could not be established.
     pub async fn setup(
         address: SocketAddr,
-        timeout: Duration,
-        peer_id: PeerId,
-    ) -> Result<Unstarted<Self>, tungstenite::Error> {
-        tracing::info!("Starting WebSocket server on {address}");
-        let listener = TcpListener::bind(address).await?;
-        let (tcp, _peer) = listener.accept().await?;
-        let ws_stream = accept_async(tcp).await?;
-        Ok(Self::new(address, timeout, peer_id, ws_stream))
+        timeout: O,
+        default_time_limit: Duration,
+        server_peer_id: PeerId,
+        storage: S,
+        depth_metric: M,
+    ) -> Result<Self, tungstenite::Error> {
+        let (subduction, listener_fut, actor_fut) = Subduction::new(storage, depth_metric);
+
+        let server = Self::new(
+            address,
+            timeout,
+            default_time_limit,
+            server_peer_id,
+            subduction,
+        )
+        .await?;
+
+        let actor_cancel = server.cancellation_token.clone();
+        let listener_cancel = server.cancellation_token.clone();
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = actor_fut => {},
+                () = actor_cancel.cancelled() => {}
+            }
+        });
+
+        tokio::spawn(async move {
+            tokio::select! {
+                _ = listener_fut => {},
+                () = listener_cancel.cancelled() => {}
+            }
+        });
+
+        Ok(server)
     }
 
-    /// Start listening for incoming messages.
+    /// Get the server's peer ID.
+    #[must_use]
+    pub const fn peer_id(&self) -> PeerId {
+        self.server_peer_id
+    }
+
+    /// Get the server's socket address.
+    #[must_use]
+    pub const fn address(&self) -> SocketAddr {
+        self.address
+    }
+
+    /// Register a new WebSocket connection with the server.
     ///
     /// # Errors
     ///
-    /// Returns an error if:
-    /// * the connection drops unexpectedly
-    /// * a message could not be sent or received
-    /// * a message could not be parsed
-    pub async fn listen(&self) -> Result<(), RunError> {
-        self.socket.listen().await
-    }
-}
-
-impl Start for TokioWebSocketServer {
-    fn start(&self) -> JoinHandle<Result<(), RunError>> {
-        let inner = self.clone();
-        tokio::spawn(async move { inner.socket.listen().await })
-    }
-}
-
-impl Connection<Sendable> for TokioWebSocketServer {
-    type SendError = SendError;
-    type RecvError = RecvError;
-    type CallError = CallError;
-    type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        Connection::<Sendable>::peer_id(&self.socket)
-    }
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async { Connection::<Sendable>::next_request_id(&self.socket).await }.boxed()
-    }
-
-    fn disconnect(&mut self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        async { Ok(()) }.boxed()
-    }
-
-    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        async {
-            tracing::debug!("Server sending message: {:?}", message);
-            Connection::<Sendable>::send(&self.socket, message).await
-        }
-        .boxed()
-    }
-
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
-        async {
-            tracing::debug!("Server waiting to receive message");
-            Connection::<Sendable>::recv(&self.socket).await
-        }
-        .boxed()
-    }
-
-    fn call(
+    /// Returns an error if the registration message send fails over the internal channel.
+    pub async fn register(
         &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        async move {
-            tracing::debug!("Server making call with request: {:?}", req);
-            Connection::<Sendable>::call(&self.socket, req, override_timeout).await
-        }
-        .boxed()
+        ws: WebSocket<TokioAdapter<TcpStream>, Sendable, O>,
+    ) -> Result<(bool, ConnectionId), RegistrationError> {
+        self.subduction.register(ws).await
+    }
+
+    /// Graceful shutdown: cancel and await tasks.
+    pub fn stop(&mut self) {
+        self.cancellation_token.cancel();
+        self.accept_task.abort();
     }
 }
 
-impl Reconnect<Sendable> for TokioWebSocketServer {
-    type ConnectError = tungstenite::Error;
-    type RunError = RunError;
-
-    fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ConnectError>> {
-        async {
-            *self =
-                TokioWebSocketServer::setup(self.address, self.socket.timeout, self.socket.peer_id)
-                    .await?
-                    .start();
-
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn run(&mut self) -> BoxFuture<'_, Result<(), Self::RunError>> {
-        async {
-            loop {
-                self.socket.listen().await?;
-                self.reconnect().await?;
-            }
-        }
-        .boxed()
-    }
-}
-
-impl PartialEq for TokioWebSocketServer {
-    fn eq(&self, other: &Self) -> bool {
-        self.address == other.address && self.socket.peer_id == other.socket.peer_id
-    }
-}
+type TokioWebSocketSubduction<S, O, M> =
+    Arc<Subduction<'static, Sendable, S, WebSocket<TokioAdapter<TcpStream>, Sendable, O>, M>>;

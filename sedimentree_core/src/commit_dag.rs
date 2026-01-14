@@ -1,4 +1,8 @@
-use std::collections::{HashMap, HashSet};
+use alloc::{
+    collections::{BTreeMap, BTreeSet},
+    vec,
+    vec::Vec,
+};
 
 use crate::{depth::DepthMetric, Digest, LooseCommit};
 
@@ -9,7 +13,7 @@ use super::Fragment;
 #[derive(Debug, Clone)]
 pub(crate) struct CommitDag {
     nodes: Vec<Node>,
-    node_map: HashMap<crate::Digest, NodeIdx>,
+    node_map: BTreeMap<crate::Digest, NodeIdx>,
     edges: Vec<Edge>,
 }
 
@@ -28,7 +32,7 @@ struct Edge {
     next: Option<EdgeIdx>,
 }
 
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialOrd, Ord, PartialEq, Eq, Hash)]
 struct NodeIdx(usize);
 
 #[derive(Debug, Clone, Copy)]
@@ -50,7 +54,7 @@ impl CommitDag {
             .iter()
             .enumerate()
             .map(|(idx, node)| (node.hash, NodeIdx(idx)))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         let mut dag = CommitDag {
             nodes,
@@ -59,7 +63,12 @@ impl CommitDag {
         };
 
         for commit in commits {
-            let child_idx = dag.node_map[&commit.digest()];
+            #[allow(clippy::expect_used)]
+            let child_idx = *dag
+                .node_map
+                .get(&commit.digest())
+                .expect("commit digest not in node_map");
+
             for parent in commit.parents() {
                 if let Some(parent) = dag.node_map.get(parent) {
                     dag.add_edge(*parent, child_idx);
@@ -79,11 +88,25 @@ impl CommitDag {
         };
         self.edges.push(new_edge);
 
-        let target_node = &mut self.nodes[target.0];
+        #[allow(clippy::expect_used)]
+        let target_node = self
+            .nodes
+            .get_mut(target.0)
+            .expect("NodeId not in self.nodes");
+
         if let Some(edge_idx) = target_node.parents {
-            let mut edge = &mut self.edges[edge_idx.0];
+            #[allow(clippy::expect_used)]
+            let mut edge = self
+                .edges
+                .get_mut(edge_idx.0)
+                .expect("NodeId not in self.nodes");
+
+            #[allow(clippy::expect_used)]
             while let Some(next) = edge.next {
-                edge = &mut self.edges[next.0];
+                edge = self
+                    .edges
+                    .get_mut(next.0)
+                    .expect("NodeId not in self.nodes");
             }
             edge.next = Some(new_edge_idx);
         } else {
@@ -99,11 +122,24 @@ impl CommitDag {
         };
         self.edges.push(new_edge);
 
-        let source_node = &mut self.nodes[source.0];
+        #[allow(clippy::expect_used)]
+        let source_node = self
+            .nodes
+            .get_mut(source.0)
+            .expect("NodeId not in self.nodes");
         if let Some(edge_idx) = source_node.children {
-            let mut edge = &mut self.edges[edge_idx.0];
+            #[allow(clippy::expect_used)]
+            let mut edge = self
+                .edges
+                .get_mut(edge_idx.0)
+                .expect("NodeId not in self.nodes");
+
+            #[allow(clippy::expect_used)]
             while let Some(next) = edge.next {
-                edge = &mut self.edges[next.0];
+                edge = self
+                    .edges
+                    .get_mut(next.0)
+                    .expect("next NodeId not in self.nodes");
             }
             edge.next = Some(new_edge_idx);
         } else {
@@ -165,11 +201,17 @@ impl CommitDag {
         // in a block which is covered by at least one stratum in the tree.
 
         // Identify blocks by their end hash and store a mapping from commit hash to block end hash
-        let mut commits_to_blocks = HashMap::new();
-        let mut blockless_commits = HashSet::new();
+        let mut commits_to_blocks = BTreeMap::new();
+        let mut blockless_commits = BTreeSet::new();
 
         let mut tips = self.tips().collect::<Vec<_>>();
-        tips.sort_by_key(|idx| self.nodes[idx.0].hash);
+        tips.sort_by_key(|idx| {
+            #[allow(clippy::expect_used)]
+            self.nodes
+                .get(idx.0)
+                .expect("NodeId not in self.nodes")
+                .hash
+        });
 
         for tip in tips {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
@@ -241,7 +283,7 @@ impl CommitDag {
             .iter()
             .enumerate()
             .map(|(idx, node)| (node.hash, NodeIdx(idx)))
-            .collect::<HashMap<_, _>>();
+            .collect::<BTreeMap<_, _>>();
 
         let mut dag = CommitDag {
             nodes,
@@ -276,7 +318,15 @@ impl CommitDag {
     fn parents_of_hash(&self, hash: Digest) -> impl Iterator<Item = Digest> + '_ {
         self.node_map
             .get(&hash)
-            .map(|idx| self.parents(*idx).map(|i| self.nodes[i.0].hash))
+            .map(|idx| {
+                self.parents(*idx).map(|i| {
+                    #[allow(clippy::expect_used)]
+                    self.nodes
+                        .get(i.0)
+                        .expect("nodeId wasn't in self.nodes")
+                        .hash
+                })
+            })
             .into_iter()
             .flatten()
     }
@@ -329,9 +379,9 @@ impl CommitDag {
         // traversal with the commits and checkpoints from the given stratum
         heads.into_iter().flat_map(move |head| {
             let mut stack = vec![head];
-            let mut visited = HashSet::new();
+            let mut visited = BTreeSet::new();
             let fragments = fragments.clone();
-            std::iter::from_fn(move || {
+            core::iter::from_fn(move || {
                 while let Some(commit) = stack.pop() {
                     if visited.contains(&commit) {
                         continue;
@@ -340,7 +390,10 @@ impl CommitDag {
                     if let Some(idx) = self.node_map.get(&commit) {
                         let mut parents = self
                             .parents(*idx)
-                            .map(|i| self.nodes[i.0].hash)
+                            .map(|i| {
+                                #[allow(clippy::expect_used)]
+                                self.nodes.get(i.0).expect("node is not in self.nodes").hash
+                            })
                             .collect::<Vec<_>>();
                         parents.sort();
                         stack.extend(parents);
@@ -373,7 +426,7 @@ impl CommitDag {
 struct ReverseTopo<'a> {
     dag: &'a CommitDag,
     stack: Vec<NodeIdx>,
-    visited: HashSet<NodeIdx>,
+    visited: BTreeSet<NodeIdx>,
 }
 
 impl<'a> ReverseTopo<'a> {
@@ -382,7 +435,7 @@ impl<'a> ReverseTopo<'a> {
         ReverseTopo {
             dag,
             stack,
-            visited: HashSet::new(),
+            visited: BTreeSet::new(),
         }
     }
 }
@@ -397,9 +450,12 @@ impl Iterator for ReverseTopo<'_> {
             }
             self.visited.insert(node);
             let mut parents = self.dag.parents(node).collect::<Vec<_>>();
-            parents.sort_by_key(|p| self.dag.nodes[p.0].hash);
+            parents.sort_by_key(|p| {
+                #[allow(clippy::expect_used)]
+                self.dag.nodes.get(p.0).expect("node is not in DAG").hash
+            });
             self.stack.extend(parents);
-            return Some(self.dag.nodes[node.0].hash);
+            return Some(self.dag.nodes.get(node.0)?.hash);
         }
         None
     }
@@ -414,7 +470,7 @@ impl<'a> Parents<'a> {
     fn new(dag: &'a CommitDag, node: NodeIdx) -> Self {
         Parents {
             dag,
-            edge: dag.nodes[node.0].parents,
+            edge: dag.nodes.get(node.0).and_then(|x| x.parents),
         }
     }
 }
@@ -424,7 +480,7 @@ impl Iterator for Parents<'_> {
 
     fn next(&mut self) -> Option<Self::Item> {
         if let Some(edge) = self.edge {
-            let edge = &self.dag.edges[edge.0];
+            let edge: &Edge = self.dag.edges.get(edge.0)?;
             self.edge = edge.next;
             Some(edge.source)
         } else {
@@ -436,7 +492,7 @@ impl Iterator for Parents<'_> {
 #[cfg(test)]
 mod tests {
     use super::{super::LooseCommit, CommitDag};
-    use std::collections::{HashMap, HashSet};
+    use std::collections::{BTreeMap, BTreeSet};
 
     use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes, Digest};
 
@@ -450,9 +506,9 @@ mod tests {
 
     #[derive(Debug)]
     struct TestGraph {
-        nodes: HashMap<String, Digest>,
-        parents: HashMap<Digest, Vec<Digest>>,
-        commits: HashMap<Digest, BlobMeta>,
+        nodes: BTreeMap<String, Digest>,
+        parents: BTreeMap<Digest, Vec<Digest>>,
+        commits: BTreeMap<Digest, BlobMeta>,
     }
 
     impl TestGraph {
@@ -462,13 +518,13 @@ mod tests {
             edges: Vec<(&'static str, &'static str)>,
         ) -> Self {
             let commit_hashes = make_commit_hashes(rng, node_info);
-            let mut nodes = HashMap::new();
-            let mut commits = HashMap::new();
+            let mut nodes = BTreeMap::new();
+            let mut commits = BTreeMap::new();
             for (commit_name, commit_hash) in commit_hashes {
                 commits.insert(commit_hash, random_blob(rng));
-                nodes.insert(commit_name.to_string(), commit_hash);
+                nodes.insert(commit_name, commit_hash);
             }
-            let mut parents = HashMap::new();
+            let mut parents = BTreeMap::new();
             #[allow(clippy::panic)]
             for (parent, child) in edges {
                 let Some(child_hash) = nodes.get(child) else {
@@ -496,7 +552,7 @@ mod tests {
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
                 commits.push(LooseCommit {
                     #[allow(clippy::unwrap_used)]
-                    blob: *self.commits.get(hash).unwrap(),
+                    blob_meta: *self.commits.get(hash).unwrap(),
                     digest: *hash,
                     parents,
                 });
@@ -520,8 +576,8 @@ mod tests {
     fn make_commit_hashes<R: rand::Rng>(
         rng: &mut R,
         names: Vec<(&'static str, usize)>,
-    ) -> HashMap<String, Digest> {
-        let mut commits = HashMap::new();
+    ) -> BTreeMap<String, Digest> {
+        let mut commits = BTreeMap::new();
         let mut last_commit = None;
         for (name, level) in names {
             loop {
@@ -572,12 +628,12 @@ mod tests {
                 random_blob($rng),
             ),)*];
             let dag = graph.as_dag();
-            let mut commit_name_map = HashMap::<Digest, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
+            let mut commit_name_map = BTreeMap::<Digest, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
             $(
                 commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
             )*
-            let expected_commits = HashSet::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
-            let actual_commits = dag.simplify(&fragments, &CountLeadingZeroBytes).commit_hashes().collect::<HashSet<_>>();
+            let expected_commits = BTreeSet::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
+            let actual_commits = dag.simplify(&fragments, &CountLeadingZeroBytes).commit_hashes().collect::<BTreeSet<_>>();
             let expected_message = pretty_hashes(&commit_name_map, &expected_commits);
             let actual_message = pretty_hashes(&commit_name_map, &actual_commits);
             assert_eq!(expected_commits, actual_commits, "\nexpected: {:?}, \nactual: {:?}", expected_message, actual_message);
@@ -585,9 +641,9 @@ mod tests {
     }
 
     fn pretty_hashes(
-        name_map: &HashMap<Digest, &'_ str>,
-        hashes: &HashSet<Digest>,
-    ) -> HashSet<String> {
+        name_map: &BTreeMap<Digest, &'_ str>,
+        hashes: &BTreeSet<Digest>,
+    ) -> BTreeSet<String> {
         hashes
             .iter()
             .map(|h| {
@@ -689,10 +745,10 @@ mod tests {
         );
         let graph = CommitDag::from_commits(vec![&a, &b, &c, &d].into_iter());
         assert_eq!(
-            graph.parents_of_hash(c.digest()).collect::<HashSet<_>>(),
+            graph.parents_of_hash(c.digest()).collect::<BTreeSet<_>>(),
             vec![a.digest(), b.digest()]
                 .into_iter()
-                .collect::<HashSet<_>>()
+                .collect::<BTreeSet<_>>()
         );
     }
 }

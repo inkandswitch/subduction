@@ -12,46 +12,32 @@
 //!
 //! [Sedimentree]: https://github.com/inkandswitch/keyhive/blob/main/design/sedimentree.md
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![warn(
-    clippy::dbg_macro,
-    clippy::expect_used,
-    clippy::missing_const_for_fn,
-    clippy::panic,
-    clippy::todo,
-    clippy::unwrap_used,
-    future_incompatible,
-    let_underscore,
-    missing_copy_implementations,
-    missing_debug_implementations,
-    missing_docs,
-    nonstandard_style,
-    rust_2021_compatibility
-)]
-#![deny(
-    clippy::all,
-    clippy::cargo,
-    clippy::pedantic,
-    rust_2018_idioms,
-    unreachable_pub,
-    unused_extern_crates
-)]
-#![forbid(unsafe_code)]
 
-use std::{
-    collections::{BTreeMap, BTreeSet, HashSet},
+#[cfg(feature = "std")]
+extern crate std;
+
+extern crate alloc;
+
+use alloc::{
     fmt::Formatter,
     str::FromStr,
+    string::{String, ToString},
+    collections::{BTreeMap, BTreeSet},
+    vec, vec::Vec,
 };
 
 use blob::{BlobMeta, Digest};
 use depth::{Depth, DepthMetric, MAX_STRATA_DEPTH};
+use thiserror::Error;
 
 pub mod blob;
 pub mod commit;
 mod commit_dag;
 pub mod depth;
 pub mod future;
+pub mod hex;
 pub mod storage;
 
 /// A unique identifier for some data managed by Sedimentree.
@@ -72,23 +58,41 @@ impl SedimentreeId {
     pub const fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }
+
+    /// The bytes of this [`SedimentreeId`].
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
 }
 
 /// An error indicating that a [`SedimentreeId`] could not be parsed from a string.
-#[derive(Debug, Clone, Copy)]
-pub struct BadSedimentreeId;
+#[derive(Debug, Clone, Error)]
+pub enum BadSedimentreeId {
+    /// The provided string has an odd length.
+    #[error("SedimentreeId length is not even: {0}")]
+    LengthNotEven(String),
+
+    /// The provided string contains invalid hex characters.
+    #[error("SedimentreeId contains invalid hex characters: {0}")]
+    InvalidHex(String),
+
+    /// The provided string has an invalid length.
+    #[error("SedimentreeId must be 32 bytes (64 hex characters): {0}")]
+    InvalidLength(String),
+}
 
 impl FromStr for SedimentreeId {
     type Err = BadSedimentreeId;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if !s.len().is_multiple_of(2) {
-            return Err(BadSedimentreeId);
+            return Err(BadSedimentreeId::LengthNotEven(s.to_string()));
         }
 
         let bytes = (0..s.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| BadSedimentreeId))
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| BadSedimentreeId::InvalidHex(s.to_string())))
             .collect::<Result<Vec<u8>, BadSedimentreeId>>()?;
 
         if bytes.len() == 32 {
@@ -96,13 +100,13 @@ impl FromStr for SedimentreeId {
             arr.copy_from_slice(&bytes);
             Ok(SedimentreeId(arr))
         } else {
-            Err(BadSedimentreeId)
+            Err(BadSedimentreeId::InvalidLength(s.to_string()))
         }
     }
 }
 
-impl std::fmt::Debug for SedimentreeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for SedimentreeId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         for byte in self.0 {
             write!(f, "{byte:02x}")?;
         }
@@ -110,8 +114,8 @@ impl std::fmt::Debug for SedimentreeId {
     }
 }
 
-impl std::fmt::Display for SedimentreeId {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SedimentreeId {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
         for byte in self.0 {
             write!(f, "{byte:02x}")?;
         }
@@ -232,8 +236,8 @@ impl Fragment {
             && self
                 .checkpoints
                 .iter()
-                .collect::<HashSet<_>>()
-                .is_superset(&other.boundary.iter().collect::<HashSet<_>>())
+                .collect::<BTreeSet<_>>()
+                .is_superset(&other.boundary.iter().collect::<BTreeSet<_>>())
         {
             return true;
         }
@@ -252,8 +256,8 @@ impl Fragment {
                 .summary
                 .boundary
                 .iter()
-                .collect::<HashSet<_>>()
-                .is_superset(&other.boundary.iter().collect::<HashSet<_>>())
+                .collect::<BTreeSet<_>>()
+                .is_superset(&other.boundary.iter().collect::<BTreeSet<_>>())
         {
             return true;
         }
@@ -359,17 +363,17 @@ impl FragmentSummary {
 pub struct LooseCommit {
     digest: Digest,
     parents: Vec<Digest>,
-    blob: BlobMeta,
+    blob_meta: BlobMeta,
 }
 
 impl LooseCommit {
     /// Constructor for a [`LooseCommit`].
     #[must_use]
-    pub const fn new(digest: Digest, parents: Vec<Digest>, blob: BlobMeta) -> Self {
+    pub const fn new(digest: Digest, parents: Vec<Digest>, blob_meta: BlobMeta) -> Self {
         Self {
             digest,
             parents,
-            blob,
+            blob_meta,
         }
     }
 
@@ -387,8 +391,8 @@ impl LooseCommit {
 
     /// Metadata about the payload blob.
     #[must_use]
-    pub const fn blob(&self) -> &BlobMeta {
-        &self.blob
+    pub const fn blob_meta(&self) -> &BlobMeta {
+        &self.blob_meta
     }
 }
 
@@ -442,6 +446,12 @@ impl Sedimentree {
         }
     }
 
+    /// Merge another [`Sedimentree`] into this one.
+    pub fn merge(&mut self, other: Sedimentree) {
+        self.fragments.extend(other.fragments);
+        self.commits.extend(other.commits);
+    }
+
     /// The minimal ordered hash of this [`Sedimentree`].
     #[must_use]
     pub fn minimal_hash<M: DepthMetric>(&self, depth_metric: &M) -> MinimalTreeHash {
@@ -449,7 +459,7 @@ impl Sedimentree {
         let mut hashes = minimal
             .fragments()
             .flat_map(|s| {
-                std::iter::once(s.head())
+                core::iter::once(s.head())
                     .chain(s.boundary().iter().copied())
                     .chain(s.checkpoints().iter().copied())
             })
@@ -464,13 +474,6 @@ impl Sedimentree {
         MinimalTreeHash(*h.finalize().as_bytes())
     }
 
-    /// Add a fragment to the [`Sedimentree`].
-    ///
-    /// Returns `true` if the stratum was not already present
-    pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        self.fragments.insert(fragment)
-    }
-
     /// Add a loose commit to the [`Sedimentree`].
     ///
     /// Returns `true` if the commit was not already present
@@ -478,15 +481,22 @@ impl Sedimentree {
         self.commits.insert(commit)
     }
 
+    /// Add a fragment to the [`Sedimentree`].
+    ///
+    /// Returns `true` if the stratum was not already present
+    pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
+        self.fragments.insert(fragment)
+    }
+
     /// Compute the difference between two local [`Sedimentree`]s.
     #[must_use]
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
-        let our_fragments = self.fragments.iter().collect::<HashSet<_>>();
+        let our_fragments = self.fragments.iter().collect::<BTreeSet<_>>();
         let their_fragments = other.fragments.iter().collect();
         let left_missing_fragments = our_fragments.difference(&their_fragments);
         let right_missing_fragments = their_fragments.difference(&our_fragments);
 
-        let our_commits = self.commits.iter().collect::<HashSet<_>>();
+        let our_commits = self.commits.iter().collect::<BTreeSet<_>>();
         let their_commits = other.commits.iter().collect();
         let left_missing_commits = our_commits.difference(&their_commits);
         let right_missing_commits = their_commits.difference(&our_commits);
@@ -510,8 +520,8 @@ impl Sedimentree {
             .fragments
             .iter()
             .map(|s| &s.summary)
-            .collect::<HashSet<&FragmentSummary>>();
-        let their_fragments = remote.fragment_summaries.iter().collect::<HashSet<_>>();
+            .collect::<BTreeSet<&FragmentSummary>>();
+        let their_fragments = remote.fragment_summaries.iter().collect::<BTreeSet<_>>();
         let mut local_fragments = Vec::new();
         for m in our_fragments_meta.difference(&their_fragments) {
             for s in &self.fragments {
@@ -526,7 +536,7 @@ impl Sedimentree {
         }
         let remote_fragments = their_fragments.difference(&our_fragments_meta);
 
-        let our_commits = self.commits.iter().collect::<HashSet<&LooseCommit>>();
+        let our_commits = self.commits.iter().collect::<BTreeSet<&LooseCommit>>();
         let their_commits = remote.commits.iter().collect();
         let local_commits = our_commits.difference(&their_commits);
         let remote_commits = their_commits.difference(&our_commits);
@@ -743,8 +753,8 @@ pub enum CommitOrFragment {
     Fragment(Fragment),
 }
 
-impl std::fmt::Debug for Sedimentree {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Debug for Sedimentree {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Sedimentree")
             .field("fragments", &self.fragments.len())
             .field("commits", &self.commits.len())
@@ -793,6 +803,15 @@ mod tests {
         let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
         for slot in byte_arr.iter_mut().take(zeros_count as usize) {
             *slot = 0;
+        }
+        // Ensure the byte after the zeros is non-zero to prevent accidentally
+        // having more leading zeros than intended
+        if (zeros_count as usize) < 32 {
+            let idx = zeros_count as usize;
+            #[allow(clippy::indexing_slicing)]
+            if byte_arr[idx] == 0 {
+                byte_arr[idx] = 1; // Make it non-zero
+            }
         }
         Digest::from(byte_arr)
     }
@@ -875,7 +894,7 @@ mod tests {
                 let mut result = Vec::with_capacity(num_commits as usize);
                 for _ in 0..num_commits {
                     let contents = Vec::<u8>::arbitrary(u)?;
-                    let blob = BlobMeta::new(&contents);
+                    let blob_meta = BlobMeta::new(&contents);
                     let hash = crate::Digest::arbitrary(u)?;
                     let mut parents = Vec::new();
                     let mut num_parents = u.int_in_range(0..=frontier.len())?;
@@ -893,7 +912,7 @@ mod tests {
                     result.push(super::LooseCommit {
                         digest: hash,
                         parents,
-                        blob,
+                        blob_meta,
                     });
                 }
                 Ok(Scenario { commits: result })

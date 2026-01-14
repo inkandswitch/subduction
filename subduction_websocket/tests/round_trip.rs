@@ -1,5 +1,6 @@
-use async_tungstenite::tokio::accept_async;
-use std::{collections::HashMap, net::SocketAddr, sync::Arc, sync::OnceLock, time::Duration};
+//! Tests for round-trip communication between Subduction peers using `WebSocket`s.
+
+use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use testresult::TestResult;
 
 use arbitrary::{Arbitrary, Unstructured};
@@ -8,16 +9,17 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
     future::Sendable,
-    storage::{MemoryStorage, Storage},
-    LooseCommit, Sedimentree,
+    storage::MemoryStorage,
+    LooseCommit, SedimentreeId,
 };
 use subduction_core::{
     connection::{message::Message, Connection},
     peer::id::PeerId,
     Subduction,
 };
-use subduction_websocket::tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer};
-use tokio::{net::TcpListener, sync::oneshot};
+use subduction_websocket::tokio::{
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio,
+};
 
 static TRACING: OnceLock<()> = OnceLock::new();
 
@@ -32,50 +34,63 @@ async fn rend_receive() -> TestResult {
     init_tracing();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let listener = TcpListener::bind(addr).await?;
-    let bound: SocketAddr = listener.local_addr()?;
-    let (tx, rx) = oneshot::channel();
+    let memory_storage = MemoryStorage::default();
+    let (suduction, listener_fut, conn_actor_fut) =
+        Subduction::new(memory_storage.clone(), CountLeadingZeroBytes);
 
-    tokio::spawn({
-        async move {
-            let (tcp, _peer) = listener.accept().await?;
-            let ws_stream = accept_async(tcp).await?;
-
-            let server_ws = TokioWebSocketServer::new(
-                bound,
-                Duration::from_secs(5),
-                PeerId::new([0; 32]),
-                ws_stream,
-            )
-            .start();
-
-            let msg = server_ws.recv().await?;
-            tracing::info!("Server received: {msg:?}");
-            tx.send(msg).unwrap();
-
-            Ok::<(), anyhow::Error>(())
-        }
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), anyhow::Error>(())
     });
 
+    tokio::spawn(async move {
+        conn_actor_fut.await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let task_subduction = suduction.clone();
+    let server_ws = TokioWebSocketServer::new(
+        addr,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        PeerId::new([0; 32]),
+        task_subduction,
+    )
+    .await?;
+
+    let bound = server_ws.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let client_ws = TokioWebSocketClient::new(uri, Duration::from_secs(5), PeerId::new([1; 32]))
-        .await?
-        .start();
+    let (client_ws, actor) = TokioWebSocketClient::new(
+        uri,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        PeerId::new([1; 32]),
+    )
+    .await?;
+
+    tokio::spawn(async move {
+        actor.await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let ws = client_ws.clone();
+    tokio::spawn(async move {
+        ws.listen().await?;
+        Ok::<(), anyhow::Error>(())
+    });
 
     let expected = Message::BlobsRequest(Vec::new());
     client_ws.send(expected).await?;
-    assert!(rx.await.is_ok());
 
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 #[tokio::test]
 async fn batch_sync() -> TestResult {
     init_tracing();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let listener = TcpListener::bind(addr).await?;
-    let bound: SocketAddr = listener.local_addr()?;
 
     let blob1 = Blob::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 64]>()))?;
     let blob2 = Blob::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 64]>()))?;
@@ -93,85 +108,112 @@ async fn batch_sync() -> TestResult {
         Digest::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 32]>()))?;
     let commit3 = LooseCommit::new(commit_digest3, vec![], BlobMeta::new(blob3.as_slice()));
 
+    ///////////////////
+    // SERVER SETUP //
+    ///////////////////
+
     let server_storage = MemoryStorage::default();
-    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&server_storage, commit1.clone())
-        .await?;
-    <MemoryStorage as Storage<Sendable>>::save_blob(&server_storage, blob1.clone()).await?;
+    let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let server_tree = Sedimentree::new(vec![], vec![commit1.clone()]);
-    let sed_id = sedimentree_core::SedimentreeId::new([0u8; 32]);
-
-    let server = Arc::new(
-        Subduction::<Sendable, MemoryStorage, TokioWebSocketServer>::new(
-            HashMap::from_iter([(sed_id, server_tree)]),
-            server_storage,
-            HashMap::new(),
-            CountLeadingZeroBytes,
-        ),
-    );
-
-    let (tx, rx) = oneshot::channel();
-    tokio::spawn({
-        let inner_server = server.clone();
-        async move {
-            let (tcp, _peer) = listener.accept().await?;
-            let ws_stream = accept_async(tcp).await?;
-
-            let server_ws = TokioWebSocketServer::new(
-                bound,
-                Duration::from_secs(5),
-                PeerId::new([0; 32]),
-                ws_stream,
-            )
-            .start();
-
-            inner_server.register(server_ws).await?;
-            tx.send(()).unwrap();
-            inner_server.run().await?;
-            Ok::<(), anyhow::Error>(())
-        }
+    let (server_subduction, listener_fut, conn_actor_fut) =
+        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), anyhow::Error>(())
     });
 
-    let client_tree = Sedimentree::new(vec![], vec![commit2.clone(), commit3.clone()]);
-    let client_sed_id = sedimentree_core::SedimentreeId::new([0u8; 32]);
+    tokio::spawn(async move {
+        conn_actor_fut.await?;
+        Ok::<(), anyhow::Error>(())
+    });
 
+    server_subduction
+        .add_commit(sed_id, &commit1, blob1)
+        .await?;
+
+    #[allow(clippy::expect_used)]
+    let inserted = server_subduction
+        .get_commits(sed_id)
+        .await
+        .expect("sedimentree exists");
+    assert_eq!(inserted.len(), 1);
+
+    let server = TokioWebSocketServer::new(
+        addr,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        PeerId::new([0; 32]),
+        server_subduction.clone(),
+    )
+    .await?;
+
+    let bound = server.address();
+
+    ///////////////////
+    // CLIENT SETUP //
+    ///////////////////
+
+    // let client_tree = Sedimentree::new(vec![], vec![commit2.clone(), commit3.clone()]);
     let client_storage = MemoryStorage::default();
-    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&client_storage, commit2.clone())
-        .await?;
-    <MemoryStorage as Storage<Sendable>>::save_blob(&client_storage, blob2.clone()).await?;
-    <MemoryStorage as Storage<Sendable>>::save_loose_commit(&client_storage, commit3.clone())
-        .await?;
-    <MemoryStorage as Storage<Sendable>>::save_blob(&client_storage, blob3.clone()).await?;
+    let (client, listener_fut, actor_fut) = Subduction::<
+        Sendable,
+        MemoryStorage,
+        TokioWebSocketClient<TimeoutTokio>,
+    >::new(client_storage, CountLeadingZeroBytes);
 
-    let client = Arc::new(Subduction::new(
-        HashMap::from_iter([(client_sed_id, client_tree)]),
-        client_storage,
-        HashMap::new(),
-        CountLeadingZeroBytes,
-    ));
+    tokio::spawn(actor_fut);
+    tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let client_ws = TokioWebSocketClient::new(uri, Duration::from_secs(5), PeerId::new([1; 32]))
-        .await?
-        .start();
+    let (client_ws, socket_listener) = TokioWebSocketClient::new(
+        uri,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        PeerId::new([1; 32]),
+    )
+    .await?;
 
+    tokio::spawn(async {
+        socket_listener.await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    let task_client_ws = client_ws.clone();
+    tokio::spawn(async move {
+        task_client_ws.listen().await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    assert_eq!(client.peer_ids().await.len(), 0);
     client.register(client_ws).await?;
-    rx.await.unwrap();
+    assert_eq!(client.peer_ids().await.len(), 1);
+
+    client.add_commit(sed_id, &commit2, blob2).await?;
+    client.add_commit(sed_id, &commit3, blob3).await?;
+
+    assert_eq!(server_subduction.peer_ids().await.len(), 1);
 
     tokio::spawn({
         let inner_client = client.clone();
         async move {
-            inner_client.run().await?;
+            inner_client.listen().await?;
             Ok::<(), anyhow::Error>(())
         }
     });
 
+    ///////////
+    // SYNC //
+    //////////
+
     assert_eq!(client.peer_ids().await.len(), 1);
-    assert_eq!(server.peer_ids().await.len(), 1);
+    assert_eq!(server_subduction.peer_ids().await.len(), 1);
 
-    client.request_all_batch_sync_all(None).await?;
+    client
+        .request_all_batch_sync_all(Some(Duration::from_millis(100)))
+        .await?;
 
-    let server_updated = server
+    #[allow(clippy::expect_used)]
+    let server_updated = server_subduction
         .get_commits(sed_id)
         .await
         .expect("sedimentree exists");
@@ -181,8 +223,9 @@ async fn batch_sync() -> TestResult {
     assert!(server_updated.contains(&commit2));
     assert!(server_updated.contains(&commit3));
 
+    #[allow(clippy::expect_used)]
     let client_updated = client
-        .get_commits(client_sed_id)
+        .get_commits(sed_id)
         .await
         .expect("sedimentree exists");
 

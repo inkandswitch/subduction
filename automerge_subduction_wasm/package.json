@@ -1,0 +1,76 @@
+{
+  "name": "@automerge/sediment_automerge_wasm",
+  "version": "0.0.0-alpha.0",
+  "description": "",
+  "private": true,
+  "main": "pkg/automerge_subduction_wasm.js",
+  "scripts": {
+    "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
+    "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
+    "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
+    "build-slim": "node build_slim.js"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "Apache-2.0",
+  "type": "module",
+  "module": "pkg/automerge_subduction_wasm.js",
+  "types": "pkg/automerge_subduction_wasm.d.ts",
+  "files": [
+    "pkg/*",
+    "pkg-node/*",
+    "pkg-slim/*"
+  ],
+  "exports": {
+    ".": {
+      "node": {
+        "import": "./pkg-node/automerge_subduction_wasm.js",
+        "require": "./pkg-node/automerge_subduction_wasm.js",
+        "types": "./pkg-node/automerge_subduction_wasm.d.ts"
+      },
+      "import": "./pkg/automerge_subduction_wasm.js",
+      "require": "./pkg/automerge_subduction_wasm.js",
+      "types": "./pkg/automerge_subduction_wasm.d.ts"
+    },
+    "./slim": {
+      "types": "./pkg-slim/index.d.ts",
+      "import": "./pkg-slim/index.js"
+    },
+    "./automerge_subduction_wasm.wasm": "./pkg-slim/automerge_subduction_wasm_bg.wasm",
+    "./automerge_subduction_wasm.base64.js": {
+      "import": "./pkg-slim/automerge_subduction_wasm_bg.wasm.base64.js",
+      "types": "./pkg-slim/automerge_subduction_wasm_bg.wasm.base64.d.ts"
+    }
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@types/node": "^22.17.2",
+    "html-webpack-plugin": "^5.6.4",
+    "ts-loader": "^9.5.2",
+    "typescript": "^5.9.2",
+    "vite": "^5.4.19",
+    "vite-plugin-top-level-await": "^1.6.0",
+    "vite-plugin-wasm": "^3.5.0",
+    "webpack": "^5.101.3",
+    "webpack-cli": "^5.1.4",
+    "webpack-dev-server": "^5.2.2"
+  },
+  "pnpm": {
+    "overrides": {
+      "esbuild@<=0.24.2": ">=0.25.0"
+    }
+  }
+}
+
+
+
+
+
+
+
+
+
+
+
+
+

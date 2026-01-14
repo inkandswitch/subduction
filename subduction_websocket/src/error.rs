@@ -1,6 +1,7 @@
 //! Error types.
 
 use futures::channel::oneshot;
+use subduction_core::connection::message::Message;
 use thiserror::Error;
 
 /// Problem while attempting to send a message.
@@ -9,10 +10,6 @@ pub enum SendError {
     /// WebSocket error.
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tungstenite::Error),
-
-    /// Serialization error.
-    #[error("Bincode error: {0}")]
-    Serialization(#[from] bincode::error::EncodeError),
 }
 
 /// Problem while attempting to make a roundtrip call.
@@ -22,13 +19,9 @@ pub enum CallError {
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tungstenite::Error),
 
-    /// Serialization error.
-    #[error("Serialization error: {0}")]
-    Serialization(bincode::error::EncodeError),
-
     /// Problem receiving on the internal channel.
-    #[error("Channel canceled: {0}")]
-    ChanCanceled(#[from] oneshot::Canceled),
+    #[error("Channel canceled")]
+    ChanCanceled(oneshot::Canceled),
 
     /// Timed out waiting for response.
     #[error("Timed out waiting for response")]
@@ -39,8 +32,8 @@ pub enum CallError {
 #[derive(Debug, Clone, Copy, Error)]
 pub enum RecvError {
     /// Problem receiving on the internal channel.
-    #[error("Channel receive error: {0}")]
-    ChanCanceled(#[from] oneshot::Canceled),
+    #[error("Channel receive error")]
+    ChanCanceled(oneshot::Canceled),
 
     /// Attempted to read from a closed channel.
     #[error("Attempted to read from closed channel")]
@@ -57,13 +50,13 @@ pub struct DisconnectionError;
 pub enum RunError {
     /// Internal MPSC channel error.
     #[error("Channel send error: {0}")]
-    ChanSend(#[from] futures::channel::mpsc::SendError),
+    ChanSend(async_channel::SendError<Message>),
 
     /// WebSocket error.
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tungstenite::Error),
 
     /// Deserialization error.
-    #[error("Bincode deserialize error: {0}")]
-    Deserialize(#[from] bincode::error::DecodeError),
+    #[error("Deserialize error")]
+    Deserialize,
 }

@@ -1,8 +1,13 @@
 //! IDs for individual [`Sedimentree`]s.
 
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use sedimentree_core::SedimentreeId;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 /// A Wasm wrapper around the [`SedimentreeId`] type.
 #[wasm_bindgen(js_name = SedimentreeId)]
@@ -10,6 +15,7 @@ use wasm_bindgen::prelude::*;
 #[allow(missing_copy_implementations)]
 pub struct WasmSedimentreeId(SedimentreeId);
 
+#[wasm_refgen(js_ref = JsSedimentreeId)]
 #[wasm_bindgen(js_class = SedimentreeId)]
 impl WasmSedimentreeId {
     /// Create an ID from a byte array.
@@ -31,8 +37,8 @@ impl WasmSedimentreeId {
     }
 }
 
-impl std::fmt::Display for WasmSedimentreeId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for WasmSedimentreeId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         self.0.fmt(f)
     }
 }
@@ -50,8 +56,59 @@ impl From<WasmSedimentreeId> for SedimentreeId {
 }
 
 /// Error indicating that the provided byte array is not exactly 32 bytes long.
-#[wasm_bindgen]
 #[derive(Debug, Error)]
 #[error("ID must be exactly 32 bytes")]
 #[allow(missing_copy_implementations)]
 pub struct Not32Bytes;
+
+impl From<Not32Bytes> for JsValue {
+    fn from(err: Not32Bytes) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("Not32Bytes");
+        js_err.into()
+    }
+}
+
+#[wasm_bindgen(js_name = SedimentreeIdsArray)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WasmSedimentreeIdsArray(pub(crate) Vec<WasmSedimentreeId>);
+
+#[wasm_refgen(js_ref = JsSedimentreeIdsArray)]
+#[wasm_bindgen(js_class = SedimentreeIdsArray)]
+impl WasmSedimentreeIdsArray {}
+
+impl TryFrom<&JsValue> for WasmSedimentreeIdsArray {
+    type Error = WasmConvertJsValueToSedimentreeIdArrayError;
+
+    fn try_from(js_value: &JsValue) -> Result<Self, Self::Error> {
+        Ok(WasmSedimentreeIdsArray(
+            try_into_js_sedimentree_ids_array(js_value)
+                .map_err(WasmConvertJsValueToSedimentreeIdArrayError)?,
+        ))
+    }
+}
+
+/// An error indicating that a `JsValue` could not be converted into a `SedimentreeId` array.
+#[derive(Debug, Error)]
+#[error("unable to convert JsValue into SedimentreeId array")]
+pub struct WasmConvertJsValueToSedimentreeIdArrayError(JsValue);
+
+impl From<WasmConvertJsValueToSedimentreeIdArrayError> for JsValue {
+    fn from(err: WasmConvertJsValueToSedimentreeIdArrayError) -> Self {
+        let err = js_sys::Error::new(&err.to_string());
+        err.set_name("UnableToConvertSedimentreeIdArrayError");
+        err.into()
+    }
+}
+
+#[wasm_bindgen(inline_js = r#"
+    export function tryIntoJsSedimentreeIdsArray(xs) { return xs; }
+"#)]
+
+extern "C" {
+    /// Try to convert a `JsValue` into an array of `WasmSedimentreeId`.
+    #[wasm_bindgen(js_name = tryIntoJsSedimentreeIdsArray, catch)]
+    pub fn try_into_js_sedimentree_ids_array(
+        v: &JsValue,
+    ) -> Result<Vec<WasmSedimentreeId>, JsValue>;
+}

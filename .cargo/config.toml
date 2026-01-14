@@ -1,2 +1,7 @@
+[build]
+
+[target.'cfg(not(target_arch = "wasm32"))']
+rustflags = ["--cfg", "tokio_unstable"]
+
 [target.wasm32-unknown-unknown]
-rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+rustflags = ["--cfg", 'getrandom_backend="wasm_js"']

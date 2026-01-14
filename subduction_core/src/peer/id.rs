@@ -1,6 +1,7 @@
 //! A simple wrapper around a String to represent a Peer ID.
 
-use std::fmt::Write;
+use alloc::string::String;
+use core::fmt::Write;
 
 /// A Peer ID.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -29,15 +30,15 @@ impl PeerId {
     }
 }
 
-impl std::fmt::Display for PeerId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for PeerId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         to_hex(self.as_slice()).fmt(f)
     }
 }
 
-impl std::fmt::Debug for PeerId {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+impl core::fmt::Debug for PeerId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
     }
 }
 fn to_hex(bytes: &[u8]) -> String {

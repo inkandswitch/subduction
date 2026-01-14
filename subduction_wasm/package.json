@@ -19,10 +19,14 @@
   "files": [
     "pkg/*",
     "pkg-node/*",
-    "pkg-slim/*"
+    "pkg-slim/*",
+    "package.json",
+    "README.md"
   ],
+  "sideEffects": ["./pkg/subduction_wasm.js", "./pkg/subduction_wasm_bg.js"],
   "exports": {
     ".": {
+      "browser": "./pkg/subduction_wasm.js",
       "node": {
         "import": "./pkg-node/subduction_wasm.js",
         "require": "./pkg-node/subduction_wasm.js",
@@ -36,8 +40,9 @@
       "types": "./pkg-slim/index.d.ts",
       "import": "./pkg-slim/index.js"
     },
-    "./subduction_wasm.wasm": "./pkg-slim/subduction_wasm_bg.wasm",
-    "./subduction_wasm.base64.js": {
+    "./subduction_wasm-slim.wasm": "./pkg-slim/subduction_wasm_bg.wasm",
+    "./subduction_wasm_bg.wasm": "./pkg/subduction_wasm_bg.wasm",
+    "./subduction_wasm-slim.base64.js": {
       "import": "./pkg-slim/subduction_wasm_bg.wasm.base64.js",
       "types": "./pkg-slim/subduction_wasm_bg.wasm.base64.d.ts"
     }

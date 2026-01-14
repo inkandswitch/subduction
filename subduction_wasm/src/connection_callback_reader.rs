@@ -1,9 +1,8 @@
-use std::{rc::Rc, time::Duration};
+use alloc::{rc::Rc, vec::Vec};
+use core::time::Duration;
 
-use futures::{
-    future::{FutureExt, LocalBoxFuture},
-    lock::Mutex,
-};
+use async_lock::Mutex;
+use futures::future::{FutureExt, LocalBoxFuture};
 use js_sys::Uint8Array;
 use sedimentree_core::future::Local;
 use subduction_core::{
@@ -44,7 +43,7 @@ impl<T: Connection<Local>> Connection<Local> for WasmConnectionCallbackReader<T>
         self.conn.peer_id()
     }
 
-    fn disconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         self.conn.disconnect()
     }
 
@@ -137,7 +136,7 @@ impl<T: Connection<Local>> Connection<Local> for WasmConnectionCallbackReader<T>
                         }
                     }
                 }
-                _otherwise => { /* Noop */ }
+                Message::BlobsRequest(_) | Message::BatchSyncRequest(_) => { /* Noop */ }
             }
 
             Ok(msg)
@@ -177,8 +176,8 @@ pub(crate) enum RecvOrCallbackErr<T: Connection<Local>> {
     FragmentCallback(JsValue),
 }
 
-impl<T: Connection<Local>> std::fmt::Debug for RecvOrCallbackErr<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        std::fmt::Display::fmt(self, f)
+impl<T: Connection<Local>> core::fmt::Debug for RecvOrCallbackErr<T> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(self, f)
     }
 }

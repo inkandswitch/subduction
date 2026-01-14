@@ -1,33 +1,16 @@
 //! # Suduction WebSocket
 
+#![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
-#![warn(
-    clippy::dbg_macro,
-    clippy::expect_used,
-    clippy::missing_const_for_fn,
-    clippy::panic,
-    clippy::todo,
-    clippy::unwrap_used,
-    future_incompatible,
-    let_underscore,
-    missing_copy_implementations,
-    missing_debug_implementations,
-    missing_docs,
-    nonstandard_style,
-    rust_2021_compatibility
-)]
-#![deny(
-    clippy::all,
-    clippy::cargo,
-    clippy::pedantic,
-    rust_2018_idioms,
-    unreachable_pub,
-    unused_extern_crates
-)]
-#![forbid(unsafe_code)]
-#![allow(clippy::multiple_crate_versions)]
+#![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
+
+#[cfg(feature = "std")]
+extern crate std;
+
+extern crate alloc;
 
 pub mod error;
+pub mod timeout;
 pub mod websocket;
 
 #[cfg(feature = "tokio")]

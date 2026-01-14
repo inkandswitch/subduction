@@ -1,0 +1,45 @@
+[package]
+name = "automerge_sedimentree_wasm"
+version = "0.1.0"
+description = "Wasm bindings for automerge_sedimentree"
+
+categories = ["web-programming"]
+keywords = ["automerge", "sedimentree", "wasm"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+automerge = { workspace = true }
+base58 = { workspace = true }
+blake3 = { workspace = true }
+build_info = { path = "../build_info" }
+getrandom = { workspace = true, features = ["wasm_js"] }
+js-sys = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core", default-features = false }
+subduction_wasm = { path = "../subduction_wasm", default-features = false }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm_refgen = { workspace = true }
+
+[features]
+default = []
+std = [
+  "blake3/std",
+  "js-sys/std",
+  "sedimentree_core/std",
+  "thiserror/std",
+  "tracing/std",
+  "wasm-bindgen/std"
+]
+
+[lints]
+workspace = true

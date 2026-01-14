@@ -10,12 +10,39 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-lint-test-audit:
+  test-matrix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Test All Features
+    - name: Test All Features (Native Cargo)
       run: cargo test --all-features
+
+  test-nix:
+    strategy:
+      matrix:
+        os: [ubuntu-latest]
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Nix
+      uses: cachix/install-nix-action@v26
+      with:
+        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Test std features via Nix
+      run: nix develop --command test:std
+
+    - name: Test no_std compatibility via Nix
+      run: nix develop --command test:no_std
+
+    - name: Test WebSocket tokio via Nix
+      run: nix develop --command test:websocket:tokio

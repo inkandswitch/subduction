@@ -1,15 +1,33 @@
 //! Error types for the top-level `Subduction`.
 
+use alloc::vec::Vec;
+
 use sedimentree_core::{blob::Digest, future::FutureKind, storage::Storage};
 use thiserror::Error;
 
 use crate::connection::{Connection, ConnectionDisallowed};
 
+/// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
+#[derive(Debug, Clone, Copy, Error)]
+pub enum HydrationError<F: FutureKind, S: Storage<F>> {
+    /// An error occurred while loading all sedimentree IDs.
+    #[error("hydration error when loading all sedimentree IDs: {0}")]
+    LoadAllIdsError(#[source] S::Error),
+
+    /// An error occurred while loading loose commits.
+    #[error("hydration error when loading loose commits: {0}")]
+    LoadLooseCommitsError(#[source] S::Error),
+
+    /// An error occurred while loading fragments.
+    #[error("hydration error when loading fragments: {0}")]
+    LoadFragmentsError(#[source] S::Error),
+}
+
 /// An error that can occur during I/O operations.
 ///
 /// This covers storage and network connection errors.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
-pub enum IoError<F: FutureKind, S: Storage<F>, C: Connection<F>> {
+pub enum IoError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// An error occurred while using storage.
     #[error(transparent)]
     Storage(S::Error),
@@ -29,6 +47,10 @@ pub enum IoError<F: FutureKind, S: Storage<F>, C: Connection<F>> {
     /// The connection was disallowed by the [`ConnectionPolicy`] policy.
     #[error(transparent)]
     ConnPolicy(#[from] ConnectionDisallowed),
+
+    /// An error occurred during registration of a new connection.
+    #[error(transparent)]
+    RegistrationError(#[from] RegistrationError),
 }
 
 /// An error that can occur while handling a blob request.
@@ -45,7 +67,7 @@ pub enum BlobRequestErr<F: FutureKind, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<F: FutureKind, S: Storage<F>, C: Connection<F>> {
+pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
@@ -53,4 +75,20 @@ pub enum ListenError<F: FutureKind, S: Storage<F>, C: Connection<F>> {
     /// Missing blobs associated with local fragments or commits.
     #[error("Missing blobs associated to local fragments & commits: {0:?}")]
     MissingBlobs(Vec<Digest>),
+
+    /// Tried to send a message to a closed channel.
+    #[error("tried to send to closed channel")]
+    TrySendError,
+}
+
+/// An error that can occur during registration of a new connection.
+#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
+pub enum RegistrationError {
+    /// The connection was disallowed by the [`ConnectionPolicy`].
+    #[error(transparent)]
+    ConnectionDisallowed(#[from] ConnectionDisallowed),
+
+    /// Tried to send a message to a closed channel.
+    #[error("tried to send to closed channel")]
+    SendToClosedChannel,
 }

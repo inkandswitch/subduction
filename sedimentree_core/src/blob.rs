@@ -1,6 +1,8 @@
 //! Binary objects.
 
-use std::str::FromStr;
+use alloc::{format, str::FromStr, vec::Vec};
+
+use crate::hex::decode_hex;
 
 /// A binary object.
 ///
@@ -106,9 +108,13 @@ impl BlobMeta {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Digest([u8; 32]);
 
-impl std::fmt::Debug for Digest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "Digest({})", hex::encode(self.0))
+impl core::fmt::Debug for Digest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let mut hexed = Vec::new();
+        for byte in self.0 {
+            hexed.push(format!("{byte:02x}"));
+        }
+        write!(f, "Digest({})", hexed.join(""))
     }
 }
 
@@ -141,7 +147,7 @@ impl Digest {
             return Err(error::InvalidDigest::InvalidLength);
         }
         let mut hash = [0; 32];
-        hash.copy_from_slice(&bytes[..32]);
+        hash.copy_from_slice(bytes.get(..32).ok_or(error::InvalidDigest::InvalidLength)?);
         Ok(Digest(hash))
     }
 }
@@ -152,9 +158,12 @@ impl From<[u8; 32]> for Digest {
     }
 }
 
-impl std::fmt::Display for Digest {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        hex::encode(self.0).fmt(f)
+impl core::fmt::Display for Digest {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for byte in self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
     }
 }
 
@@ -162,13 +171,14 @@ impl FromStr for Digest {
     type Err = error::InvalidDigest;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = hex::decode(s).map_err(error::InvalidDigest::InvalidHex)?;
+        let bytes = decode_hex(s).ok_or(error::InvalidDigest::InvalidHex)?;
         if bytes.len() != 32 {
             return Err(error::InvalidDigest::InvalidLength);
         }
-        let mut hash = [0; 32];
-        hash.copy_from_slice(&bytes);
-        Ok(Digest(hash))
+        bytes
+            .try_into()
+            .map(Digest)
+            .map_err(|_| error::InvalidDigest::InvalidLength)
     }
 }
 
@@ -184,17 +194,17 @@ pub mod error {
         NotEnoughInput,
 
         /// Invalid hex encoding.
-        #[error("Invalid hex: {0}")]
-        InvalidHex(hex::FromHexError),
+        #[error("Invalid hex")]
+        InvalidHex,
 
         /// Invalid length.
         #[error("Invalid length")]
         InvalidLength,
     }
 
-    impl std::fmt::Debug for InvalidDigest {
-        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            std::fmt::Display::fmt(self, f)
+    impl core::fmt::Debug for InvalidDigest {
+        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+            core::fmt::Display::fmt(self, f)
         }
     }
 }

@@ -1,5 +1,7 @@
 //! The API contact messages to be sent over a [`Connection`].
 
+use alloc::vec::Vec;
+
 use sedimentree_core::{
     blob::{Blob, Digest},
     Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
@@ -56,7 +58,10 @@ impl Message {
         match self {
             Message::BatchSyncRequest(BatchSyncRequest { req_id, .. })
             | Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
-            _ => None,
+            Message::LooseCommit { .. }
+            | Message::Fragment { .. }
+            | Message::BlobsRequest(_)
+            | Message::BlobsResponse(_) => None,
         }
     }
 }
@@ -104,7 +109,7 @@ impl From<BatchSyncResponse> for Message {
 }
 
 /// A unique identifier for a particular request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestId {
@@ -112,7 +117,7 @@ pub struct RequestId {
     pub requestor: PeerId,
 
     /// A nonce unique to this user and connection.
-    pub nonce: u128,
+    pub nonce: u64,
 }
 
 // TODO also make a version for the sender that is borrowed instead of owned.

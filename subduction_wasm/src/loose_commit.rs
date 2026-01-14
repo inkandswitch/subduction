@@ -1,17 +1,40 @@
 //! Individual/"loose" commits.
 
-use sedimentree_core::{blob::BlobMeta, LooseCommit};
+use alloc::{borrow::ToOwned, vec::Vec};
+use sedimentree_core::{
+    blob::{BlobMeta, Digest},
+    LooseCommit,
+};
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
-use super::digest::WasmDigest;
+use super::digest::{JsDigest, WasmDigest};
 
 /// A Wasm wrapper around the [`LooseCommit`] type.
 #[wasm_bindgen(js_name = LooseCommit)]
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct WasmLooseCommit(LooseCommit);
 
+#[wasm_refgen(js_ref = JsLooseCommit)]
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
+    /// Create a new `LooseCommit` from the given digest, parents, and blob metadata.
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
+    pub fn new(digest: &WasmDigest, parents: Vec<JsDigest>, blob_meta: &WasmBlobMeta) -> Self {
+        let core_parents: Vec<Digest> =
+            parents.iter().map(|d| WasmDigest::from(d).into()).collect();
+
+        let core_commit = LooseCommit::new(
+            digest.clone().into(),
+            core_parents,
+            blob_meta.clone().into(),
+        );
+
+        Self(core_commit)
+    }
+
     /// Get the digest of the commit.
     #[must_use]
     #[wasm_bindgen(getter)]
@@ -29,7 +52,7 @@ impl WasmLooseCommit {
     #[must_use]
     #[wasm_bindgen(getter, js_name = blobMeta)]
     pub fn blob_meta(&self) -> WasmBlobMeta {
-        self.0.blob().to_owned().into()
+        self.0.blob_meta().to_owned().into()
     }
 }
 
@@ -53,6 +76,13 @@ pub struct WasmBlobMeta(BlobMeta);
 
 #[wasm_bindgen(js_class = BlobMeta)]
 impl WasmBlobMeta {
+    /// Create a new `BlobMeta` from the given blob contents.
+    #[wasm_bindgen(constructor)]
+    #[must_use]
+    pub fn new(blob: &[u8]) -> Self {
+        BlobMeta::new(blob).into()
+    }
+
     /// Get the digest of the blob.
     #[must_use]
     pub fn digest(&self) -> WasmDigest {

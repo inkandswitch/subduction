@@ -1,12 +1,25 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use std::{collections::HashMap, convert::Infallible, sync::Arc, time::Duration};
+use alloc::{
+    boxed::Box,
+    collections::BTreeMap,
+    rc::Rc,
+    string::ToString,
+    sync::Arc,
+    vec::Vec
+};
+use core::{
+    cell::RefCell,
+    convert::Infallible,
+    sync::atomic::{AtomicU64, Ordering},
+    time::Duration
+};
 
+use async_lock::Mutex;
 use futures::{
-    channel::{mpsc, oneshot},
+    channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
-    lock::Mutex,
-    FutureExt, SinkExt, StreamExt,
+    FutureExt,
 };
 use sedimentree_core::future::Local;
 use subduction_core::{
@@ -20,8 +33,7 @@ use thiserror::Error;
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    js_sys::{self, Promise},
-    MessageEvent, Url, WebSocket,
+    js_sys::{self, Promise}, BinaryType, Event, MessageEvent, Url, WebSocket
 };
 
 use super::peer_id::WasmPeerId;
@@ -33,35 +45,36 @@ pub struct WasmWebSocket {
     peer_id: PeerId,
     timeout_ms: u32,
 
-    request_id_counter: Arc<Mutex<u128>>,
+    request_id_counter: Arc<AtomicU64>,
     socket: WebSocket,
 
-    pending: Arc<Mutex<HashMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
-    inbound_reader: Arc<Mutex<mpsc::UnboundedReceiver<Message>>>,
+    pending: Arc<Mutex<BTreeMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
+    inbound_reader: async_channel::Receiver<Message>,
 }
 
 #[wasm_bindgen(js_class = SubductionWebSocket)]
 impl WasmWebSocket {
     /// Create a new [`WasmWebSocket`] instance.
-    #[must_use]
-    #[wasm_bindgen(constructor)]
-    pub fn new(peer_id: WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Self {
-        let (inbound_writer, raw_inbound_reader) = mpsc::unbounded();
-        let inbound_reader = Arc::new(Mutex::new(raw_inbound_reader));
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmWebSocketSetupCanceled`] if the setup was canceled.
+    #[allow(clippy::too_many_lines)]
+    #[wasm_bindgen]
+    pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
+        let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(64);
 
-        let pending = Arc::new(Mutex::new(HashMap::<
+        let pending = Arc::new(Mutex::new(BTreeMap::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
         let closure_pending = pending.clone();
 
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
+            tracing::debug!("WS message event received");
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
-                if let Ok((msg, _size)) = bincode::serde::decode_from_slice::<Message, _>(
-                    &bytes,
-                    bincode::config::standard(),
-                ) {
+                if let Ok(msg) = ciborium::de::from_reader::<Message, &[u8]>(&bytes) {
                     tracing::info!("WS message received that's {} bytes long", bytes.len());
                     let inner_pending = closure_pending.clone();
                     let inner_inbound_writer = inbound_writer.clone();
@@ -70,9 +83,8 @@ impl WasmWebSocket {
                         match msg {
                             Message::BatchSyncResponse(resp) => {
                                 let req_id = resp.req_id;
-                                if let Some(waiting) =
-                                    inner_pending.clone().lock().await.remove(&req_id)
-                                {
+                                let removed = { inner_pending.lock().await.remove(&req_id) };
+                                if let Some(waiting) = removed {
                                     tracing::info!("dispatching to waiter {:?}", req_id);
                                     let result = waiting.send(resp);
                                     debug_assert!(result.is_ok());
@@ -87,65 +99,111 @@ impl WasmWebSocket {
                                         "dispatching to inbound channel {:?}",
                                         resp.req_id
                                     );
-                                    let _ = inner_inbound_writer
-                                        .clone()
-                                        .send(Message::BatchSyncResponse(resp))
-                                        .await
-                                        .map_err(|e| {
-                                            tracing::error!("Failed to send inbound message: {e}");
-                                            e
-                                        });
+                                    if let Err(e) = inner_inbound_writer.clone().send(Message::BatchSyncResponse(resp)).await {
+                                            tracing::error!("failed to send inbound message: {e}");
+                                        }
                                 }
                             }
-                            other => {
-                                let _ =
-                                    inner_inbound_writer.clone().send(other).await.map_err(|e| {
-                                        tracing::error!("Failed to send inbound message: {e}");
-                                        e
-                                    });
+                            other @ (Message::LooseCommit { .. } | Message::Fragment { .. } | Message::BlobsRequest(_) | Message::BlobsResponse(_) | Message::BatchSyncRequest(_)) => {
+                                    if let Err(e) = inner_inbound_writer.clone().send(other).await {
+                                        tracing::error!("failed to send inbound message: {e}");
+                                    }
+                                }
                             }
-                        }
                     });
                 } else {
-                    tracing::error!("Failed to decode message: {:?}", event.data());
+                    tracing::error!("failed to decode message: {:?}", event.data());
                 }
             } else {
-                tracing::error!("Unexpected message event: {:?}", event.data());
+                tracing::error!("unexpected message event: {:?}", event.data());
             }
         });
 
-        let socket = ws.clone();
-        socket.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
-        onmessage.forget();
+        let onclose = Closure::<dyn FnMut(_)>::new(move |event: Event| {
+            tracing::warn!("WebSocket connection closed: {:?}", event);
+        });
+        
+        let ws_clone = ws.clone();
+        let (tx, rx) = oneshot::channel();
+        let maybe_tx = Rc::new(RefCell::new(Some(tx)));
+        let maybe_tx_clone = maybe_tx.clone();
 
-        Self {
-            peer_id: peer_id.into(),
+        // HACK: keeps the `onopen` closure alive until called
+        #[allow(clippy::type_complexity)]
+        let keep_closure_alive: Rc<RefCell<Option<Closure<dyn FnMut(Event)>>>> = Rc::new(RefCell::new(None));
+        let keep_closure_alive_clone = keep_closure_alive.clone();
+        let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            tracing::info!("WebSocket connection opened");
+            if let Some(tx) = maybe_tx_clone.borrow_mut().take() {
+                let _ = tx.send(());
+            }
+            ws_clone.set_onopen(None);
+            keep_closure_alive_clone.borrow_mut().take();
+        });
+
+        ws.set_binary_type(BinaryType::Arraybuffer);
+        ws.set_onmessage(Some(onmessage.as_ref().unchecked_ref()));
+        ws.set_onclose(Some(onclose.as_ref().unchecked_ref()));
+
+        onmessage.forget();
+        onclose.forget();
+        // NOTE no onopen.forget() because we only want it to fire once,
+        // so we're doing manual handling with the `keep_alive` slots.
+
+        if ws.ready_state() == WebSocket::CONNECTING {
+            ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+            *keep_closure_alive.borrow_mut() = Some(onopen);
+
+            // Re-check to close the race where it opened between lines above
+            if ws.ready_state() == WebSocket::OPEN {
+                if let Some(tx) = maybe_tx.borrow_mut().take() {
+                    let _ = tx.send(());
+                }
+                ws.set_onopen(None);
+                keep_closure_alive.borrow_mut().take();
+            }
+        } else if ws.ready_state() == WebSocket::OPEN {
+            // already open
+            if let Some(tx) = maybe_tx.borrow_mut().take() {
+                let _ = tx.send(());
+            }
+        } else {
+            // CLOSING/CLOSED
+            if let Some(tx) = maybe_tx.borrow_mut().take() {
+                let _ = tx.send(());
+            }
+        }
+
+        rx.await?;
+
+        Ok(Self {
+            peer_id: peer_id.clone().into(),
             timeout_ms: timeout_milliseconds,
 
-            request_id_counter: Arc::new(Mutex::new(0)),
-            socket,
+            request_id_counter: Arc::new(AtomicU64::new(0)),
+            socket: ws.clone(),
 
             pending,
             inbound_reader,
-        }
+        })
     }
 
     /// Connect to a WebSocket server at the given address.
     ///
     /// # Errors
     ///
-    /// Returns [`WebsocketConnectionError`] if establishing the connection fails.
-    pub fn connect(
+    /// Returns [`WebSocketConnectionError`] if establishing the connection fails.
+    pub async fn connect(
         address: &Url,
         peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<Self, WebsocketConnectionError> {
-        Ok(Self::new(
-            peer_id.clone(),
+    ) -> Result<Self, WebSocketConnectionError> {
+        Ok(Self::setup(
+            peer_id,
             &WebSocket::new(&address.href())
-                .map_err(WebsocketConnectionError::SocketCreationFailed)?,
+                .map_err(WebSocketConnectionError::SocketCreationFailed)?,
             timeout_milliseconds,
-        ))
+        ).await?)
     }
 }
 
@@ -168,29 +226,39 @@ impl Connection<Local> for WasmWebSocket {
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         let counter = self.request_id_counter.clone();
         async move {
-            let mut counter = counter.lock().await;
-            *counter += 1;
-            tracing::debug!("generated message id {:?}", *counter);
+            let counter = counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated message id {:?}", counter);
             RequestId {
                 requestor: self.peer_id,
-                nonce: *counter,
+                nonce: counter,
             }
         }
         .boxed_local()
     }
 
-    fn disconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed_local()
     }
 
     fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         async move {
-            let msg_bytes = bincode::serde::encode_to_vec(&message, bincode::config::standard())
-                .map_err(SendError::Encoding)?;
+            tracing::debug!("sending outbound message id {:?}", message.request_id());
+            
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&message, &mut msg_bytes).expect("should be Infallible");
+
+            tracing::debug!(
+                "sending outbound message id {:?} that's {} bytes long",
+                message.request_id(),
+                msg_bytes.len()
+            );
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
                 .map_err(SendError::SocketSend)?;
+
+            tracing::debug!("sent outbound message id {:?}", message.request_id());
 
             Ok(())
         }
@@ -199,10 +267,9 @@ impl Connection<Local> for WasmWebSocket {
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
-            tracing::debug!("Waiting for inbound message");
-            let mut chan = self.inbound_reader.lock().await;
-            let msg = chan.next().await.ok_or(ReadFromClosedChannel)?;
-            tracing::info!("Received inbound message id {:?}", msg.request_id());
+            tracing::debug!("waiting for inbound message");
+            let msg = self.inbound_reader.recv().await.map_err(|_| ReadFromClosedChannel)?;
+            tracing::info!("received inbound message id {:?}", msg.request_id());
             Ok(msg)
         }
         .boxed_local()
@@ -219,13 +286,11 @@ impl Connection<Local> for WasmWebSocket {
 
             // Pre-register channel
             let (tx, rx) = oneshot::channel();
-            self.pending.lock().await.insert(req_id, tx);
+            { self.pending.lock().await.insert(req_id, tx); }
 
-            let msg_bytes = bincode::serde::encode_to_vec(
-                Message::BatchSyncRequest(req),
-                bincode::config::standard(),
-            )
-            .map_err(CallError::Encoding)?;
+            let mut msg_bytes = Vec::new();
+            #[allow(clippy::expect_used)]
+            ciborium::ser::into_writer(&Message::BatchSyncRequest(req), &mut msg_bytes).expect("should be Infallible");
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
@@ -244,7 +309,7 @@ impl Connection<Local> for WasmWebSocket {
                 }
                 Ok(Err(e)) => {
                     tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ChannelCancelled)
+                    Err(CallError::ChannelCanceled)
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {:?} timed out", req_id);
@@ -257,8 +322,7 @@ impl Connection<Local> for WasmWebSocket {
 }
 
 impl Reconnect<Local> for WasmWebSocket {
-    type ConnectError = WebsocketConnectionError;
-    type RunError = WebsocketConnectionError;
+    type ConnectError = WebSocketConnectionError;
 
     fn reconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::ConnectError>> {
         async {
@@ -266,21 +330,11 @@ impl Reconnect<Local> for WasmWebSocket {
             let peer_id = self.peer_id;
 
             *self = WasmWebSocket::connect(
-                &Url::new(&address).map_err(WebsocketConnectionError::InvalidUrl)?,
+                &Url::new(&address).map_err(WebSocketConnectionError::InvalidUrl)?,
                 &peer_id.into(),
                 self.timeout_ms,
-            )?;
+            ).await?;
             Ok(())
-        }
-        .boxed_local()
-    }
-
-    /// Run the connection send/receive loop.
-    fn run(&mut self) -> LocalBoxFuture<'_, Result<(), Self::RunError>> {
-        async move {
-            loop {
-                self.reconnect().await?;
-            }
         }
         .boxed_local()
     }
@@ -358,7 +412,7 @@ impl WasmTimeout {
         if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
             .and_then(JsCast::dyn_into::<js_sys::Function>)
             && let Err(e) = clear_timeout.call1(&global, &self.id) {
-                tracing::error!("Failed to clear timeout: {:?}", e);
+                tracing::error!("failed to clear timeout: {:?}", e);
             }
     }
 }
@@ -381,10 +435,6 @@ async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Res
 /// Problem while sending a message.
 #[derive(Debug, Error)]
 pub enum SendError {
-    /// Problem encoding message.
-    #[error("Problem encoding message: {0}")]
-    Encoding(bincode::error::EncodeError),
-
     /// WebSocket error while sending.
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
@@ -398,17 +448,13 @@ pub struct ReadFromClosedChannel;
 /// Problem while attempting to make a roundtrip call.
 #[derive(Debug, Error)]
 pub enum CallError {
-    /// Problem encoding message.
-    #[error("Problem encoding message: {0}")]
-    Encoding(bincode::error::EncodeError),
-
     /// WebSocket error while sending.
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
 
-    /// Tried to read from a cancelled channel.
-    #[error("Channel cancelled")]
-    ChannelCancelled,
+    /// Tried to read from a canceled channel.
+    #[error("Channel canceled")]
+    ChannelCanceled,
 
     /// Timed out waiting for response.
     #[error("Timed out waiting for response")]
@@ -417,7 +463,7 @@ pub enum CallError {
 
 /// Problem while attempting to connect or reconnect the WebSocket.
 #[derive(Debug, Clone, Error)]
-pub enum WebsocketConnectionError {
+pub enum WebSocketConnectionError {
     /// Problem creating the WebSocket.
     #[error("WebSocket creation failed: {0:?}")]
     SocketCreationFailed(JsValue),
@@ -425,12 +471,36 @@ pub enum WebsocketConnectionError {
     /// Problem creating the URL.
     #[error("invalid URL: {0:?}")]
     InvalidUrl(JsValue),
+
+    /// WebSocket setup was canceled.
+    #[error(transparent)]
+    WasmSetupCanceled(#[from] WasmWebSocketSetupCanceled),
 }
 
-impl From<WebsocketConnectionError> for JsValue {
-    fn from(err: WebsocketConnectionError) -> Self {
+impl From<WebSocketConnectionError> for JsValue {
+    fn from(err: WebSocketConnectionError) -> Self {
         let err = js_sys::Error::new(&err.to_string());
-        err.set_name("WebsocketConnectionError");
+        err.set_name("WebSocketConnectionError");
         err.into()
+    }
+}
+
+/// WebSocket setup was canceled.
+#[derive(Debug, Clone, Error)]
+#[error("WebSocket setup was canceled")]
+#[allow(missing_copy_implementations)]
+pub struct WasmWebSocketSetupCanceled(Canceled);
+
+impl From<Canceled> for WasmWebSocketSetupCanceled {
+    fn from(err: Canceled) -> Self {
+        Self(err)
+    }
+}
+
+impl From<WasmWebSocketSetupCanceled> for JsValue {
+    fn from(err: WasmWebSocketSetupCanceled) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("CancelWebSocketSetup");
+        js_err.into()
     }
 }
