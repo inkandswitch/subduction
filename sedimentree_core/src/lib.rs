@@ -808,6 +808,7 @@ mod tests {
         // having more leading zeros than intended
         if (zeros_count as usize) < 32 {
             let idx = zeros_count as usize;
+            #[allow(clippy::indexing_slicing)]
             if byte_arr[idx] == 0 {
                 byte_arr[idx] = 1; // Make it non-zero
             }
