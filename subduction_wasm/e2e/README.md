@@ -81,6 +81,7 @@ npx playwright show-report
   - WebKit: 9894 (WebSocket) + 6671 (console_subscriber)
 - **Server lifecycle:** Tests start `subduction_cli` in `beforeAll` and stop it in `afterAll`
 - **Port configuration:** Uses `TOKIO_CONSOLE_BIND` environment variable to assign different console_subscriber ports per browser, preventing port conflicts when running tests in parallel
+- **Health checks:** Tests actively wait for the server to be listening on the port (up to 10s locally, 15s in CI) rather than using fixed delays, making tests faster and more reliable
 
 ### Cleaning Up Stale Processes
 

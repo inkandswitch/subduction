@@ -4,11 +4,51 @@ import { spawn, ChildProcess } from "child_process";
 import { promisify } from "util";
 import path from "path";
 import { fileURLToPath } from "url";
+import net from "net";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const sleep = promisify(setTimeout);
+
+// Check if a port is listening
+async function waitForPort(host: string, port: number, timeout: number = 10000): Promise<void> {
+  const startTime = Date.now();
+
+  while (Date.now() - startTime < timeout) {
+    try {
+      await new Promise<void>((resolve, reject) => {
+        const socket = new net.Socket();
+        socket.setTimeout(1000);
+
+        socket.once('connect', () => {
+          socket.destroy();
+          resolve();
+        });
+
+        socket.once('error', (err) => {
+          socket.destroy();
+          reject(err);
+        });
+
+        socket.once('timeout', () => {
+          socket.destroy();
+          reject(new Error('Connection timeout'));
+        });
+
+        socket.connect(port, host);
+      });
+
+      // Successfully connected
+      return;
+    } catch (err) {
+      // Port not ready yet, wait and retry
+      await sleep(100);
+    }
+  }
+
+  throw new Error(`Port ${host}:${port} did not become available within ${timeout}ms`);
+}
 
 // WebSocket server configuration - different port per browser to avoid conflicts
 const WS_HOST = "127.0.0.1";
@@ -44,10 +84,25 @@ test.beforeAll(async ({ browserName }) => {
     },
   });
 
-  // Wait for server to start
-  await sleep(3000);
+  // Log server output in CI for debugging
+  if (process.env.CI) {
+    subductionServer.stdout?.on("data", (data) => {
+      console.log(`[${browserName} stdout]:`, data.toString().trim());
+    });
+    subductionServer.stderr?.on("data", (data) => {
+      console.error(`[${browserName} stderr]:`, data.toString().trim());
+    });
+  }
 
-  console.log(`✓ Subduction WebSocket server started on ${currentUrl} for ${browserName}`);
+  // Wait for server to actually be listening on the port
+  const healthCheckTimeout = process.env.CI ? 15000 : 10000;
+  try {
+    await waitForPort(WS_HOST, currentPort, healthCheckTimeout);
+    console.log(`✓ Subduction WebSocket server started on ${currentUrl} for ${browserName}`);
+  } catch (error) {
+    console.error(`Failed to start server on ${currentUrl}: ${error}`);
+    throw error;
+  }
 });
 
 test.afterAll(async () => {
@@ -112,6 +167,10 @@ test.describe("Peer Connection Tests", () => {
         };
       }
     }, currentUrl);
+
+    if (!result.connected && process.env.CI) {
+      console.error(`WebSocket connection failed. Error: ${result.error}`);
+    }
 
     expect(result.connected).toBe(true);
     expect(result.hasWebSocket).toBe(true);
