@@ -90,7 +90,6 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Digest } = window.subduction;
 
-        // Create a test digest (32 bytes)
         const testBytes = new Uint8Array(32);
         for (let i = 0; i < 32; i++) {
           testBytes[i] = i;
@@ -306,7 +305,7 @@ test.describe("Subduction", () => {
       expect(result.callbackCalled).toBe(false);
     });
 
-    test("should handle multiple callbacks for same event", async ({ page }) => {
+    test("should allow multiple callbacks to be registered for the same event", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage } = window.subduction;
         const storage = new MemoryStorage();
@@ -432,8 +431,7 @@ test.describe("Subduction", () => {
         const { Digest } = window.subduction;
 
         try {
-          // Try to create digest with wrong size (should be 32 bytes)
-          const invalidBytes = new Uint8Array(16);
+          const invalidBytes = new Uint8Array(17);
           new Digest(invalidBytes);
           return { error: null };
         } catch (error) {
@@ -452,8 +450,7 @@ test.describe("Subduction", () => {
         const { PeerId } = window.subduction;
 
         try {
-          // Try to create PeerId with wrong size (should be 32 bytes)
-          const invalidBytes = new Uint8Array(16);
+          const invalidBytes = new Uint8Array(17);
           new PeerId(invalidBytes);
           return { error: null };
         } catch (error) {
@@ -473,12 +470,10 @@ test.describe("Subduction", () => {
         const storage = new MemoryStorage();
         const syncer = new Subduction(storage);
 
-        // Create a fake peer ID
         const peerBytes = new Uint8Array(32);
         peerBytes[0] = 1;
         const peerId = new PeerId(peerBytes);
 
-        // Try to disconnect from non-existent peer
         const disconnected = await syncer.disconnectFromPeer(peerId);
 
         return {
