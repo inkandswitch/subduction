@@ -88,7 +88,7 @@ impl<T: Connection<Local>> Connection<Local> for WasmConnectionCallbackReader<T>
                         for callback in lock.iter() {
                             callback
                                 .call1(
-                                    &JsValue::NULL, // FIXME need to include the id
+                                    &JsValue::NULL,
                                     &JsValue::from(Uint8Array::from(blob.as_slice())),
                                 )
                                 .map_err(RecvOrCallbackErr::BlobCallback)?;

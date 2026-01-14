@@ -362,7 +362,7 @@ impl FragmentSummary {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
     digest: Digest,
-    parents: Vec<Digest>, // FIXME rename boundary for consistency
+    parents: Vec<Digest>,
     blob_meta: BlobMeta,
 }
 
