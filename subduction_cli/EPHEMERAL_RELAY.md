@@ -51,9 +51,10 @@ cargo run --release -- relay --socket 0.0.0.0:8081
 - For CRDTs, fragments, commits, batch sync
 
 ### Ephemeral Relay (Port 8081)
+- Implements automerge-repo NetworkSubsystem protocol handshake
+- Responds to "join" messages with "peer" messages
 - Broadcasts ephemeral messages between connected peers
 - Does NOT persist messages
-- Uses automerge-repo NetworkSubsystem protocol
 - For presence, awareness, cursors, temporary state
 
 ## Client Configuration

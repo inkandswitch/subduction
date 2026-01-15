@@ -90,7 +90,97 @@ Alias: `relay`
 Options:
 - `--socket <ADDR>` - Socket address to bind to (default: `0.0.0.0:8081`)
 
-See [EPHEMERAL_RELAY.md](./EPHEMERAL_RELAY.md) for detailed information about the ephemeral relay server.
+#### Architecture
+
+The ephemeral relay server provides a simple broadcast mechanism for ephemeral messages like presence, awareness, cursor positions, etc.
+
+```
+┌────────────────────────────────────────┐
+│      Client (e.g. automerge-repo)      │
+│  ┌──────────────┐    ┌──────────────┐  │
+│  │   WS :8080   │    │   WS :8081   │  │
+│  │ (subduction) │    │ (ephemeral)  │  │
+│  └──────┬───────┘    └──────┬───────┘  │
+└─────────┼───────────────────┼──────────┘
+          │                   │
+          ▼                   ▼
+   ┌──────────────┐    ┌──────────────┐
+   │ Subduction   │    │ Ephemeral    │
+   │ Server       │    │ Relay Server │
+   │ Port 8080    │    │ Port 8081    │
+   └──────────────┘    └──────────────┘
+    Document Sync     Presence/Awareness
+    (persistent)         (ephemeral)
+```
+
+#### How It Works
+
+**Subduction Server (default port 8080)**
+- Handles document synchronization
+- Persists changes to storage
+- Uses Subduction protocol (CBOR-encoded Messages)
+- For CRDTs, fragments, commits, batch sync
+
+**Ephemeral Relay (default port 8081)**
+- Implements automerge-repo NetworkSubsystem protocol handshake
+- Responds to "join" messages with "peer" messages
+- Broadcasts ephemeral messages between connected peers
+- Does NOT persist messages
+- For presence, awareness, cursors, temporary state
+- Uses sharded deduplication with AHash for DoS-resistant message filtering
+
+#### Client Configuration
+
+In your automerge-repo client:
+
+```typescript
+const repo = new Repo({
+  network: [
+    // Document sync via Subduction
+    new WebSocketClientAdapter("ws://127.0.0.1:8080", 5000, { subductionMode: true }),
+
+    // Ephemeral messages via relay server
+    new WebSocketClientAdapter("ws://127.0.0.1:8081"),
+  ],
+  subduction: await Subduction.hydrate(db),
+})
+```
+
+#### Message Flow
+
+**Document Changes**
+```
+Client → WebSocket:8080 → Subduction Server → Storage
+                         ↓
+                    Other Clients
+```
+
+**Presence Updates**
+```
+Client → WebSocket:8081 → Relay Server → Other Clients
+                         (broadcast)
+```
+
+#### Benefits
+
+- **Clean separation**: Document sync and ephemeral messages use different protocols
+- **No Subduction changes**: Relay server is independent
+- **Simple relay**: Just broadcasts messages, no processing
+- **Stateless**: Relay server doesn't persist anything
+- **Scalable**: Can run relay on different machine/port as needed
+- **DoS-resistant**: Sharded deduplication prevents duplicate message floods
+
+#### Production Considerations
+
+For production use, you might want to:
+
+1. **Add authentication** - Verify peer identities
+2. **Add rate limiting** - Prevent spam
+3. **Add targeted relay** - Parse targetId and relay specifically (vs broadcast)
+4. **Add metrics** - Track connections, message rates
+5. **Use single port** - Multiplex both protocols on one WebSocket (more complex)
+6. **Add message authentication** - Prevent forged ephemeral messages (see code TODOs)
+7. **Add timestamp validation** - Prevent replay attacks (see code TODOs)
 
 ## Typical Setup
 
