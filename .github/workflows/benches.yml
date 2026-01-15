@@ -1,0 +1,36 @@
+name: Benchmarks
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  benchmarks:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Run sedimentree_core benchmarks
+        run: cargo bench --package sedimentree_core --features std --bench sedimentree -- --noplot
+
+      - name: Run subduction_core benchmarks
+        run: cargo bench --package subduction_core --features std --bench subduction -- --noplot
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: target/criterion/
+          retention-days: 90
