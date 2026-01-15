@@ -4,11 +4,11 @@ use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use testresult::TestResult;
 
 use arbitrary::{Arbitrary, Unstructured};
+use futures_kind::Sendable;
 use rand::Rng;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
-    future::Sendable,
     storage::MemoryStorage,
     LooseCommit, SedimentreeId,
 };

@@ -4,7 +4,7 @@
 
 use core::time::Duration;
 
-use sedimentree_core::future::Sendable;
+use futures_kind::{FutureKind, Sendable};
 
 use super::{
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -60,35 +60,22 @@ impl Connection<Sendable> for MockConnection {
 
     fn disconnect(
         &self,
-    ) -> <Sendable as sedimentree_core::future::FutureKind>::Future<
-        '_,
-        Result<(), Self::DisconnectionError>,
-    > {
+    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
         Box::pin(async { Ok(()) })
     }
 
     fn send(
         &self,
         _message: Message,
-    ) -> <Sendable as sedimentree_core::future::FutureKind>::Future<
-        '_,
-        Result<(), Self::SendError>,
-    > {
+    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn recv(
-        &self,
-    ) -> <Sendable as sedimentree_core::future::FutureKind>::Future<
-        '_,
-        Result<Message, Self::RecvError>,
-    > {
+    fn recv(&self) -> <Sendable as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
 
-    fn next_request_id(
-        &self,
-    ) -> <Sendable as sedimentree_core::future::FutureKind>::Future<'_, RequestId> {
+    fn next_request_id(&self) -> <Sendable as FutureKind>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
         Box::pin(async move {
             RequestId {
@@ -102,10 +89,7 @@ impl Connection<Sendable> for MockConnection {
         &self,
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
-    ) -> <Sendable as sedimentree_core::future::FutureKind>::Future<
-        '_,
-        Result<BatchSyncResponse, Self::CallError>,
-    > {
+    ) -> <Sendable as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
 }
