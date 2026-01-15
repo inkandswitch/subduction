@@ -67,8 +67,17 @@ tokio = [
   "futures-timer",
   "std"
 ]
+tokio-rustls = [
+  "async-tungstenite/tokio-rustls-native-certs",
+  "dep:tokio",
+  "dep:tokio-util",
+  "futures-timer",
+  "std"
+]
 tokio_client = ["tokio"]
 tokio_server = ["tokio"]
+tokio_client_rustls = ["tokio-rustls"]
+tokio_server_rustls = ["tokio-rustls"]
 
 [lints]
 workspace = true

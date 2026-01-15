@@ -18,15 +18,19 @@ jobs:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact-name: subduction-linux-x86_64
+            cargo-flags: ""
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact-name: subduction-linux-x86_64-musl
+            cargo-flags: "--no-default-features --features rustls"
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact-name: subduction-macos-x86_64
+            cargo-flags: ""
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact-name: subduction-macos-aarch64
+            cargo-flags: ""
 
     runs-on: ${{ matrix.os }}
 
@@ -44,7 +48,7 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build CLI
-        run: cargo build --release --package subduction_cli --target ${{ matrix.target }}
+        run: cargo build --release --package subduction_cli --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
 
       - name: Rename binary
         run: |
