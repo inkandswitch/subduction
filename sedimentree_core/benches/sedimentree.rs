@@ -7,8 +7,8 @@
 use std::hint::black_box;
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use rand::{Rng, SeedableRng};
 use rand::rngs::StdRng;
+use rand::{Rng, SeedableRng};
 
 use sedimentree_core::{
     blob::{BlobMeta, Digest},
@@ -33,7 +33,12 @@ fn digest_from_seed(seed: u64) -> Digest {
 fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest {
     let mut bytes = [0u8; 32];
     let mut rng = StdRng::seed_from_u64(seed);
-    rng.fill(&mut bytes[zeros..]);
+    rng.fill(
+        #[allow(clippy::expect_used)]
+        bytes
+            .get_mut(zeros..)
+            .expect("should have slice with leading zeros"),
+    );
     // First `zeros` bytes are already 0
     Digest::from(bytes)
 }
@@ -46,7 +51,7 @@ fn synthetic_blob_meta(seed: u64, size: u64) -> BlobMeta {
 /// Generate a synthetic loose commit with the given number of parents.
 fn synthetic_commit(seed: u64, parents: Vec<Digest>) -> LooseCommit {
     let digest = digest_from_seed(seed);
-    let blob_meta = synthetic_blob_meta(seed.wrapping_add(1000000), 1024);
+    let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
     LooseCommit::new(digest, parents, blob_meta)
 }
 
@@ -83,6 +88,7 @@ fn linear_commit_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {
 }
 
 /// Generate a DAG with merge commits (some commits have multiple parents).
+#[allow(clippy::indexing_slicing)]
 fn merge_heavy_dag(count: usize, merge_frequency: usize, base_seed: u64) -> Vec<LooseCommit> {
     let mut commits = Vec::with_capacity(count);
     let mut recent_digests: Vec<Digest> = Vec::new();
@@ -125,7 +131,7 @@ fn synthetic_sedimentree(
         })
         .collect();
 
-    let commits = linear_commit_chain(commit_count, base_seed + 500000);
+    let commits = linear_commit_chain(commit_count, base_seed + 500_000);
 
     Sedimentree::new(fragments, commits)
 }
@@ -142,19 +148,19 @@ fn overlapping_sedimentrees(
     let shared_frags: Vec<Fragment> = (0..shared_fragments)
         .map(|i| synthetic_fragment(base_seed + i as u64 * 1000, 2, 5, i % 3))
         .collect();
-    let shared_commits_vec = linear_commit_chain(shared_commits, base_seed + 100000);
+    let shared_commits_vec = linear_commit_chain(shared_commits, base_seed + 100_000);
 
     // Tree A unique data
     let a_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
-        .map(|i| synthetic_fragment(base_seed + 200000 + i as u64 * 1000, 2, 5, i % 3))
+        .map(|i| synthetic_fragment(base_seed + 200_000 + i as u64 * 1000, 2, 5, i % 3))
         .collect();
-    let a_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 300000);
+    let a_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 300_000);
 
     // Tree B unique data
     let b_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
-        .map(|i| synthetic_fragment(base_seed + 400000 + i as u64 * 1000, 2, 5, i % 3))
+        .map(|i| synthetic_fragment(base_seed + 400_000 + i as u64 * 1000, 2, 5, i % 3))
         .collect();
-    let b_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 500000);
+    let b_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 500_000);
 
     let mut a_frags = shared_frags.clone();
     a_frags.extend(a_unique_frags);
@@ -179,6 +185,7 @@ fn overlapping_sedimentrees(
 fn bench_digest_hashing(c: &mut Criterion) {
     let mut group = c.benchmark_group("digest_hashing");
 
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     for size in [64, 256, 1024, 4096, 16384, 65536] {
         let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
         group.throughput(Throughput::Bytes(size as u64));
@@ -216,7 +223,7 @@ fn bench_sedimentree_construction(c: &mut Criterion) {
         let fragments: Vec<Fragment> = (0..frag_count)
             .map(|i| synthetic_fragment(i as u64 * 1000, 2, 5, (i % 3).min(2)))
             .collect();
-        let commits = linear_commit_chain(commit_count, 500000);
+        let commits = linear_commit_chain(commit_count, 500_000);
 
         group.bench_with_input(
             BenchmarkId::new("new", format!("{frag_count}f_{commit_count}c")),
@@ -235,7 +242,7 @@ fn bench_sedimentree_merge(c: &mut Criterion) {
 
     for size in [10, 100, 1000] {
         let tree1 = synthetic_sedimentree(size, size, 1);
-        let tree2 = synthetic_sedimentree(size, size, 1000000);
+        let tree2 = synthetic_sedimentree(size, size, 1_000_000);
 
         group.bench_with_input(
             BenchmarkId::new("disjoint", size),
@@ -276,7 +283,7 @@ fn bench_sedimentree_diff(c: &mut Criterion) {
     // Disjoint trees
     for size in [10, 100, 1000] {
         let tree1 = synthetic_sedimentree(size, size, 1);
-        let tree2 = synthetic_sedimentree(size, size, 1000000);
+        let tree2 = synthetic_sedimentree(size, size, 1_000_000);
 
         group.bench_with_input(
             BenchmarkId::new("disjoint", size),
@@ -382,7 +389,7 @@ fn bench_sedimentree_add_operations(c: &mut Criterion) {
     // Benchmark add_commit
     for size in [10, 100, 1000] {
         let tree = synthetic_sedimentree(size, size, 1);
-        let new_commit = synthetic_commit(999999, vec![]);
+        let new_commit = synthetic_commit(999_999, vec![]);
 
         group.bench_with_input(
             BenchmarkId::new("add_commit", size),
@@ -399,7 +406,7 @@ fn bench_sedimentree_add_operations(c: &mut Criterion) {
     // Benchmark add_fragment
     for size in [10, 100, 1000] {
         let tree = synthetic_sedimentree(size, size, 1);
-        let new_fragment = synthetic_fragment(999999, 2, 5, 1);
+        let new_fragment = synthetic_fragment(999_999, 2, 5, 1);
 
         group.bench_with_input(
             BenchmarkId::new("add_fragment", size),

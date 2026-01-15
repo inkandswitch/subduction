@@ -5,13 +5,11 @@
 
 #![allow(missing_docs)]
 
-use criterion::{
-    BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main,
-};
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use sedimentree_core::{
-    Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
     blob::{Blob, BlobMeta, Digest},
+    Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use subduction_core::{
@@ -63,11 +61,13 @@ fn blob_from_seed(seed: u64, size: usize) -> Blob {
 fn loose_commit_from_seed(seed: u64) -> LooseCommit {
     let digest = digest_from_seed(seed);
     let parent = digest_from_seed(seed.wrapping_add(1));
+    #[allow(clippy::cast_possible_truncation)]
     let blob_meta = BlobMeta::new(&[seed as u8; 64]);
     LooseCommit::new(digest, vec![parent], blob_meta)
 }
 
 /// Generate a fragment from a seed.
+#[allow(clippy::cast_sign_loss)]
 fn fragment_from_seed(seed: u64, num_parents: usize, num_members: usize) -> Fragment {
     let digest = digest_from_seed(seed);
     let parents: Vec<Digest> = (0..num_parents)
@@ -76,6 +76,7 @@ fn fragment_from_seed(seed: u64, num_parents: usize, num_members: usize) -> Frag
     let members: Vec<Digest> = (0..num_members)
         .map(|i| digest_from_seed(seed.wrapping_add(200 + i as u64)))
         .collect();
+    #[allow(clippy::cast_possible_truncation)]
     let blob_meta = BlobMeta::new(&[seed as u8; 128]);
     Fragment::new(digest, parents, members, blob_meta)
 }
@@ -90,9 +91,7 @@ fn request_id_from_seed(peer_seed: u64, nonce: u64) -> RequestId {
 
 /// Generate a storage key with path segments.
 fn storage_key_from_seed(seed: u64, depth: usize) -> StorageKey {
-    let segments: Vec<String> = (0..depth)
-        .map(|i| format!("segment_{seed}_{i}"))
-        .collect();
+    let segments: Vec<String> = (0..depth).map(|i| format!("segment_{seed}_{i}")).collect();
     StorageKey::new(segments)
 }
 
@@ -187,8 +186,8 @@ fn bench_peer_id(c: &mut Criterion) {
 
     // Hashing
     group.bench_function("hash", |b| {
-        use std::hash::{Hash, Hasher};
         use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
         let peer_id = peer_id_from_seed(12345);
         b.iter(|| {
             let mut hasher = DefaultHasher::new();
@@ -346,12 +345,10 @@ fn bench_message_construction(c: &mut Criterion) {
         let id = sedimentree_id_from_seed(12345);
         let commit = loose_commit_from_seed(12345);
         let blob = blob_from_seed(12345, 256);
-        b.iter(|| {
-            Message::LooseCommit {
-                id: black_box(id),
-                commit: black_box(commit.clone()),
-                blob: black_box(blob.clone()),
-            }
+        b.iter(|| Message::LooseCommit {
+            id: black_box(id),
+            commit: black_box(commit.clone()),
+            blob: black_box(blob.clone()),
         });
     });
 
@@ -360,16 +357,15 @@ fn bench_message_construction(c: &mut Criterion) {
         let id = sedimentree_id_from_seed(12345);
         let fragment = fragment_from_seed(12345, 3, 10);
         let blob = blob_from_seed(12345, 1024);
-        b.iter(|| {
-            Message::Fragment {
-                id: black_box(id),
-                fragment: black_box(fragment.clone()),
-                blob: black_box(blob.clone()),
-            }
+        b.iter(|| Message::Fragment {
+            id: black_box(id),
+            fragment: black_box(fragment.clone()),
+            blob: black_box(blob.clone()),
         });
     });
 
     // BlobsRequest message
+    #[allow(clippy::cast_sign_loss)]
     for num_digests in [1, 10, 100] {
         group.bench_with_input(
             BenchmarkId::new("blobs_request", num_digests),
@@ -382,6 +378,7 @@ fn bench_message_construction(c: &mut Criterion) {
     }
 
     // BlobsResponse message
+    #[allow(clippy::cast_sign_loss)]
     for num_blobs in [1, 10, 50] {
         group.bench_with_input(
             BenchmarkId::new("blobs_response", num_blobs),
@@ -556,6 +553,7 @@ fn bench_batch_sync(c: &mut Criterion) {
 // COLLECTION BENCHMARKS (HashMap/BTreeMap with subduction types)
 // =============================================================================
 
+#[allow(clippy::too_many_lines, clippy::cast_sign_loss)]
 fn bench_collections(c: &mut Criterion) {
     let mut group = c.benchmark_group("collections");
 
@@ -566,7 +564,8 @@ fn bench_collections(c: &mut Criterion) {
             BenchmarkId::new("hashmap_peer_id_insert", size),
             &size,
             |b, &size| {
-                let peer_ids: Vec<PeerId> = (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
+                let peer_ids: Vec<PeerId> =
+                    (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 b.iter(|| {
                     let mut map: HashMap<PeerId, usize> = HashMap::new();
                     for (i, id) in peer_ids.iter().enumerate() {
@@ -578,11 +577,13 @@ fn bench_collections(c: &mut Criterion) {
         );
 
         // HashMap lookup
+        #[allow(clippy::cast_sign_loss)]
         group.bench_with_input(
             BenchmarkId::new("hashmap_peer_id_lookup", size),
             &size,
             |b, &size| {
-                let peer_ids: Vec<PeerId> = (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
+                let peer_ids: Vec<PeerId> =
+                    (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 let map: HashMap<PeerId, usize> = peer_ids
                     .iter()
                     .enumerate()
@@ -598,7 +599,8 @@ fn bench_collections(c: &mut Criterion) {
             BenchmarkId::new("btreemap_peer_id_insert", size),
             &size,
             |b, &size| {
-                let peer_ids: Vec<PeerId> = (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
+                let peer_ids: Vec<PeerId> =
+                    (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 b.iter(|| {
                     let mut map: BTreeMap<PeerId, usize> = BTreeMap::new();
                     for (i, id) in peer_ids.iter().enumerate() {
@@ -610,6 +612,7 @@ fn bench_collections(c: &mut Criterion) {
         );
 
         // BTreeSet contains
+        #[allow(clippy::cast_sign_loss)]
         group.bench_with_input(
             BenchmarkId::new("btreeset_peer_id_contains", size),
             &size,
@@ -626,8 +629,7 @@ fn bench_collections(c: &mut Criterion) {
             BenchmarkId::new("hashset_peer_id_contains", size),
             &size,
             |b, &size| {
-                let set: HashSet<PeerId> =
-                    (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
+                let set: HashSet<PeerId> = (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 let lookup_key = peer_id_from_seed((size / 2) as u64);
                 b.iter(|| set.contains(black_box(&lookup_key)));
             },
@@ -663,13 +665,15 @@ fn bench_collections(c: &mut Criterion) {
     }
 
     // SedimentreeId in BTreeMap (as used in Subduction)
+    #[allow(clippy::cast_sign_loss)]
     for size in [10, 100, 1000] {
         group.bench_with_input(
             BenchmarkId::new("btreemap_sedimentree_id_insert", size),
             &size,
             |b, &size| {
-                let ids: Vec<SedimentreeId> =
-                    (0..size).map(|i| sedimentree_id_from_seed(i as u64)).collect();
+                let ids: Vec<SedimentreeId> = (0..size)
+                    .map(|i| sedimentree_id_from_seed(i as u64))
+                    .collect();
                 b.iter(|| {
                     let mut map: BTreeMap<SedimentreeId, usize> = BTreeMap::new();
                     for (i, id) in ids.iter().enumerate() {
@@ -684,13 +688,11 @@ fn bench_collections(c: &mut Criterion) {
             BenchmarkId::new("btreemap_sedimentree_id_lookup", size),
             &size,
             |b, &size| {
-                let ids: Vec<SedimentreeId> =
-                    (0..size).map(|i| sedimentree_id_from_seed(i as u64)).collect();
-                let map: BTreeMap<SedimentreeId, usize> = ids
-                    .iter()
-                    .enumerate()
-                    .map(|(i, id)| (*id, i))
+                let ids: Vec<SedimentreeId> = (0..size)
+                    .map(|i| sedimentree_id_from_seed(i as u64))
                     .collect();
+                let map: BTreeMap<SedimentreeId, usize> =
+                    ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
                 let lookup_key = sedimentree_id_from_seed((size / 2) as u64);
                 b.iter(|| map.get(black_box(&lookup_key)));
             },
