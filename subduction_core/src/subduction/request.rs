@@ -141,7 +141,7 @@ mod tests {
         #[test]
         fn test_clone() {
             let req1 = FragmentRequested::new(Digest::from([9u8; 32]), Depth(8));
-            let req2 = req1.clone();
+            let req2 = req1;
 
             assert_eq!(req1, req2);
         }

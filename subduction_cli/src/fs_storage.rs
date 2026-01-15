@@ -72,15 +72,13 @@ impl FsStorage {
 
         if let Ok(entries) = std::fs::read_dir(trees_dir) {
             for entry in entries.flatten() {
-                if let Ok(name) = entry.file_name().into_string() {
-                    if let Ok(bytes) = hex::decode(&name) {
-                        if bytes.len() == 32 {
+                if let Ok(name) = entry.file_name().into_string()
+                    && let Ok(bytes) = hex::decode(&name)
+                        && bytes.len() == 32 {
                             let mut arr = [0u8; 32];
                             arr.copy_from_slice(&bytes);
                             ids.insert(SedimentreeId::new(arr));
                         }
-                    }
-                }
             }
         }
 

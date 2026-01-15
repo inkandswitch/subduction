@@ -71,7 +71,7 @@ mod tests {
         #[test]
         fn test_display_includes_websocket() {
             let err = SendError::WebSocket(tungstenite::Error::ConnectionClosed);
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert!(display.contains("WebSocket error"));
         }
 
@@ -85,7 +85,7 @@ mod tests {
         #[test]
         fn test_debug_output() {
             let err = SendError::WebSocket(tungstenite::Error::ConnectionClosed);
-            let debug = format!("{:?}", err);
+            let debug = format!("{err:?}");
             assert!(debug.contains("WebSocket"));
         }
     }
@@ -96,7 +96,7 @@ mod tests {
         #[test]
         fn test_timeout_display() {
             let err = CallError::Timeout;
-            assert_eq!(format!("{}", err), "Timed out waiting for response");
+            assert_eq!(format!("{err}"), "Timed out waiting for response");
         }
 
         #[test]
@@ -104,14 +104,14 @@ mod tests {
             let (_tx, rx) = oneshot::channel::<()>();
             drop(rx);
             let err = CallError::ChanCanceled(oneshot::Canceled);
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert!(display.contains("Channel canceled"));
         }
 
         #[test]
         fn test_websocket_display() {
             let err = CallError::WebSocket(tungstenite::Error::ConnectionClosed);
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert!(display.contains("WebSocket error"));
         }
 
@@ -142,7 +142,7 @@ mod tests {
         fn test_read_from_closed_display() {
             let err = RecvError::ReadFromClosed;
             assert_eq!(
-                format!("{}", err),
+                format!("{err}"),
                 "Attempted to read from closed channel"
             );
         }
@@ -150,14 +150,14 @@ mod tests {
         #[test]
         fn test_chan_canceled_display() {
             let err = RecvError::ChanCanceled(oneshot::Canceled);
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert!(display.contains("Channel receive error"));
         }
 
         #[test]
         fn test_recv_error_is_clone() {
             let err1 = RecvError::ReadFromClosed;
-            let err2 = err1.clone();
+            let err2 = err1;
             assert!(matches!(err2, RecvError::ReadFromClosed));
         }
 
@@ -185,14 +185,14 @@ mod tests {
         #[test]
         fn test_display() {
             let err = DisconnectionError;
-            assert_eq!(format!("{}", err), "Disconnected");
+            assert_eq!(format!("{err}"), "Disconnected");
         }
 
         #[test]
         fn test_is_clone() {
             let err1 = DisconnectionError;
-            let err2 = err1.clone();
-            assert_eq!(format!("{}", err2), "Disconnected");
+            let err2 = err1;
+            assert_eq!(format!("{err2}"), "Disconnected");
         }
 
         #[test]
@@ -200,14 +200,14 @@ mod tests {
             let err1 = DisconnectionError;
             let err2 = err1;
             // Both should still be usable
-            assert_eq!(format!("{}", err1), "Disconnected");
-            assert_eq!(format!("{}", err2), "Disconnected");
+            assert_eq!(format!("{err1}"), "Disconnected");
+            assert_eq!(format!("{err2}"), "Disconnected");
         }
 
         #[test]
         fn test_debug_output() {
             let err = DisconnectionError;
-            let debug = format!("{:?}", err);
+            let debug = format!("{err:?}");
             assert!(debug.contains("DisconnectionError"));
         }
     }
@@ -218,13 +218,13 @@ mod tests {
         #[test]
         fn test_deserialize_display() {
             let err = RunError::Deserialize;
-            assert_eq!(format!("{}", err), "Deserialize error");
+            assert_eq!(format!("{err}"), "Deserialize error");
         }
 
         #[test]
         fn test_websocket_display() {
             let err = RunError::WebSocket(tungstenite::Error::ConnectionClosed);
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert!(display.contains("WebSocket error"));
         }
 
@@ -244,7 +244,7 @@ mod tests {
         #[test]
         fn test_debug_output() {
             let err = RunError::Deserialize;
-            let debug = format!("{:?}", err);
+            let debug = format!("{err:?}");
             assert!(debug.contains("Deserialize"));
         }
     }

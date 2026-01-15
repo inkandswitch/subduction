@@ -42,26 +42,26 @@ mod tests {
         #[test]
         fn test_display_empty() {
             let id = StorageId::new(String::new());
-            assert_eq!(format!("{}", id), "");
+            assert_eq!(format!("{id}"), "");
         }
 
         #[test]
         fn test_display_simple() {
             let id = StorageId::new("test-storage".to_string());
-            assert_eq!(format!("{}", id), "test-storage");
+            assert_eq!(format!("{id}"), "test-storage");
         }
 
         #[test]
         fn test_display_with_special_chars() {
             let id = StorageId::new("storage/path:123".to_string());
-            assert_eq!(format!("{}", id), "storage/path:123");
+            assert_eq!(format!("{id}"), "storage/path:123");
         }
 
         #[test]
         fn test_display_matches_inner_string() {
             let inner = "my-storage-id".to_string();
             let id = StorageId::new(inner.clone());
-            assert_eq!(format!("{}", id), inner);
+            assert_eq!(format!("{id}"), inner);
         }
     }
 
@@ -128,7 +128,7 @@ mod tests {
                 .with_type::<String>()
                 .for_each(|s| {
                     let id = StorageId::new(s.clone());
-                    assert_eq!(format!("{}", id), *s);
+                    assert_eq!(format!("{id}"), *s);
                 });
         }
 

@@ -67,7 +67,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
                     tracing::error!("Listener error: {}", e);
                 }
             }
-            _ = listener_token.cancelled() => {
+            () = listener_token.cancelled() => {
                 tracing::info!("Listener shutting down...");
             }
         }

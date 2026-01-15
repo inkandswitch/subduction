@@ -172,7 +172,7 @@ impl ShardedDeduplicator {
     }
 
     /// Compute shard index from message key
-    fn get_shard_index(&self, message_key: MessageKey) -> usize {
+    const fn get_shard_index(&self, message_key: MessageKey) -> usize {
         (message_key.0 as usize) & self.shard_mask
     }
 
@@ -248,7 +248,7 @@ pub(crate) async fn run(args: EphemeralRelayArgs, token: CancellationToken) -> R
 
     loop {
         tokio::select! {
-            _ = token.cancelled() => {
+            () = token.cancelled() => {
                 tracing::info!("Ephemeral relay shutting down...");
                 break;
             }
@@ -284,37 +284,34 @@ async fn handle_connection(
     let (tx, mut rx) = tokio::sync::mpsc::channel::<Arc<[u8]>>(100);
 
     // Wait for the first message which should be a join message
-    let peer_id = match ws_receiver.next().await {
-        Some(Ok(WsMessage::Binary(data))) => {
-            // Try to parse as a join message
-            match ciborium::from_reader::<JoinMessage, _>(data.as_ref()) {
-                Ok(join_msg) if join_msg.msg_type == "join" => {
-                    let peer_id = PeerId::from(join_msg.sender_id.clone());
-                    tracing::info!("Peer {} joined from {}", peer_id.0, addr);
+    let peer_id = if let Some(Ok(WsMessage::Binary(data))) = ws_receiver.next().await {
+        // Try to parse as a join message
+        match ciborium::from_reader::<JoinMessage, _>(data.as_ref()) {
+            Ok(join_msg) if join_msg.msg_type == "join" => {
+                let peer_id = PeerId::from(join_msg.sender_id.clone());
+                tracing::info!("Peer {} joined from {}", peer_id.0, addr);
 
-                    // Send peer message back
-                    let peer_msg = PeerMessage {
-                        msg_type: "peer".to_string(),
-                        sender_id: "ephemeral-relay".to_string(),
-                        peer_metadata: join_msg.peer_metadata,
-                    };
+                // Send peer message back
+                let peer_msg = PeerMessage {
+                    msg_type: "peer".to_string(),
+                    sender_id: "ephemeral-relay".to_string(),
+                    peer_metadata: join_msg.peer_metadata,
+                };
 
-                    let mut response = Vec::new();
-                    ciborium::into_writer(&peer_msg, &mut response)?;
-                    ws_sender.send(WsMessage::Binary(response.into())).await?;
+                let mut response = Vec::new();
+                ciborium::into_writer(&peer_msg, &mut response)?;
+                ws_sender.send(WsMessage::Binary(response.into())).await?;
 
-                    peer_id
-                }
-                _ => {
-                    tracing::warn!("First message from {} was not a join message", addr);
-                    return Ok(());
-                }
+                peer_id
+            }
+            _ => {
+                tracing::warn!("First message from {} was not a join message", addr);
+                return Ok(());
             }
         }
-        _ => {
-            tracing::warn!("Connection from {} closed before join", addr);
-            return Ok(());
-        }
+    } else {
+        tracing::warn!("Connection from {} closed before join", addr);
+        return Ok(());
     };
 
     // Register this peer

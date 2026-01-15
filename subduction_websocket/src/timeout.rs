@@ -81,14 +81,14 @@ mod tests {
         #[test]
         fn test_display() {
             let err = TimedOut;
-            assert_eq!(format!("{}", err), "Operation timed out");
+            assert_eq!(format!("{err}"), "Operation timed out");
         }
 
         #[test]
         fn test_is_clone() {
             let err1 = TimedOut;
-            let err2 = err1.clone();
-            assert_eq!(format!("{}", err2), "Operation timed out");
+            let err2 = err1;
+            assert_eq!(format!("{err2}"), "Operation timed out");
         }
 
         #[test]
@@ -96,8 +96,8 @@ mod tests {
             let err1 = TimedOut;
             let err2 = err1;
             // Both should still be usable
-            assert_eq!(format!("{}", err1), "Operation timed out");
-            assert_eq!(format!("{}", err2), "Operation timed out");
+            assert_eq!(format!("{err1}"), "Operation timed out");
+            assert_eq!(format!("{err2}"), "Operation timed out");
         }
 
         #[test]
@@ -116,7 +116,7 @@ mod tests {
         #[test]
         fn test_debug_output() {
             let err = TimedOut;
-            let debug = format!("{:?}", err);
+            let debug = format!("{err:?}");
             assert!(debug.contains("TimedOut"));
         }
 
@@ -145,7 +145,7 @@ mod tests {
         #[test]
         fn test_is_clone() {
             let timeout1 = FuturesTimerTimeout;
-            let timeout2 = timeout1.clone();
+            let timeout2 = timeout1;
             // Both should be usable
             let _ = timeout1;
             let _ = timeout2;
@@ -170,7 +170,7 @@ mod tests {
         #[test]
         fn test_debug_output() {
             let timeout = FuturesTimerTimeout;
-            let debug = format!("{:?}", timeout);
+            let debug = format!("{timeout:?}");
             assert!(debug.contains("FuturesTimerTimeout"));
         }
     }

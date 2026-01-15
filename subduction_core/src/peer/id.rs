@@ -62,7 +62,7 @@ mod tests {
         fn test_hex_formatting_all_zeros() {
             let bytes = [0u8; 32];
             let peer_id = PeerId::new(bytes);
-            let hex = format!("{}", peer_id);
+            let hex = format!("{peer_id}");
 
             assert_eq!(hex.len(), 64);
             assert_eq!(hex, "0".repeat(64));
@@ -72,7 +72,7 @@ mod tests {
         fn test_hex_formatting_all_ones() {
             let bytes = [0xffu8; 32];
             let peer_id = PeerId::new(bytes);
-            let hex = format!("{}", peer_id);
+            let hex = format!("{peer_id}");
 
             assert_eq!(hex.len(), 64);
             assert_eq!(hex, "f".repeat(64));
@@ -87,7 +87,7 @@ mod tests {
             bytes[31] = 0x12;
 
             let peer_id = PeerId::new(bytes);
-            let hex = format!("{}", peer_id);
+            let hex = format!("{peer_id}");
 
             assert!(hex.starts_with("abcdef"));
             assert!(hex.ends_with("12"));
@@ -100,7 +100,7 @@ mod tests {
             bytes[0] = 0xAB; // uppercase in source, should be lowercase in output
 
             let peer_id = PeerId::new(bytes);
-            let hex = format!("{}", peer_id);
+            let hex = format!("{peer_id}");
 
             assert!(hex.starts_with("ab")); // lowercase
             assert!(hex
@@ -113,8 +113,8 @@ mod tests {
             let bytes = [0x42u8; 32];
             let peer_id = PeerId::new(bytes);
 
-            let display = format!("{}", peer_id);
-            let debug = format!("{:?}", peer_id);
+            let display = format!("{peer_id}");
+            let debug = format!("{peer_id:?}");
 
             assert_eq!(display, debug);
         }
@@ -174,7 +174,7 @@ mod tests {
         #[test]
         fn prop_hex_format_always_64_chars() {
             bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
-                let hex = format!("{}", peer_id);
+                let hex = format!("{peer_id}");
                 assert_eq!(hex.len(), 64);
             });
         }
@@ -182,7 +182,7 @@ mod tests {
         #[test]
         fn prop_hex_format_is_valid_lowercase_hex() {
             bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
-                let hex = format!("{}", peer_id);
+                let hex = format!("{peer_id}");
                 assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
                 assert!(hex.chars().all(|c| !c.is_ascii_uppercase()));
             });
@@ -225,8 +225,8 @@ mod tests {
         #[test]
         fn prop_debug_and_display_are_equal() {
             bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
-                let display = format!("{}", peer_id);
-                let debug = format!("{:?}", peer_id);
+                let display = format!("{peer_id}");
+                let debug = format!("{peer_id:?}");
                 assert_eq!(display, debug);
             });
         }
@@ -250,8 +250,8 @@ mod tests {
         #[test]
         fn prop_equal_ids_are_not_less_or_greater() {
             bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
-                assert!(!(peer_id < peer_id));
-                assert!(!(peer_id > peer_id));
+                assert!((peer_id >= peer_id));
+                assert!((peer_id <= peer_id));
                 assert!(peer_id == peer_id);
             });
         }

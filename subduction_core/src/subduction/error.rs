@@ -107,14 +107,14 @@ mod tests {
         #[test]
         fn test_send_to_closed_channel_display() {
             let err = RegistrationError::SendToClosedChannel;
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert_eq!(display, "tried to send to closed channel");
         }
 
         #[test]
         fn test_connection_disallowed_display() {
             let err = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
-            let display = format!("{}", err);
+            let display = format!("{err}");
             assert_eq!(display, "Connection disallowed");
         }
 
@@ -173,7 +173,7 @@ mod tests {
             bolero::check!()
                 .with_type::<RegistrationError>()
                 .for_each(|err| {
-                    let display = format!("{}", err);
+                    let display = format!("{err}");
                     assert!(!display.is_empty());
                 });
         }
