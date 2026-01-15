@@ -7,10 +7,10 @@ use futures_kind::Sendable;
 
 use crate::timeout::{TimedOut, Timeout};
 
-#[cfg(feature = "tokio_client")]
+#[cfg(any(feature = "tokio_client", feature = "tokio_client_rustls"))]
 pub mod client;
 
-#[cfg(feature = "tokio_server")]
+#[cfg(any(feature = "tokio_server", feature = "tokio_server_rustls"))]
 pub mod server;
 
 /// Tokio-backed timeout wrapper.

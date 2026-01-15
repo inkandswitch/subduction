@@ -1,0 +1,141 @@
+name: Build Artifacts
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build-cli:
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact-name: subduction-linux-x86_64
+            cargo-flags: ""
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            artifact-name: subduction-linux-x86_64-musl
+            cargo-flags: "--no-default-features --features rustls"
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            artifact-name: subduction-macos-x86_64
+            cargo-flags: ""
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            artifact-name: subduction-macos-aarch64
+            cargo-flags: ""
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: ${{ matrix.target }}
+          cache: true
+
+      - name: Install musl tools
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+
+      - name: Build CLI
+        run: cargo build --release --package subduction_cli --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
+
+      - name: Rename binary
+        run: |
+          mkdir -p dist
+          cp target/${{ matrix.target }}/release/subduction_cli dist/${{ matrix.artifact-name }}
+
+      - name: Upload CLI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact-name }}
+          path: dist/${{ matrix.artifact-name }}
+          retention-days: 90
+
+  build-wasm:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+          cache: true
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: 'pnpm'
+          cache-dependency-path: '**/pnpm-lock.yaml'
+
+      - name: Install dependencies (subduction_wasm)
+        run: cd ./subduction_wasm && pnpm i
+
+      - name: Build subduction_wasm
+        run: cd ./subduction_wasm && pnpm build
+
+      - name: Upload subduction_wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: subduction-wasm
+          path: |
+            subduction_wasm/pkg/
+            subduction_wasm/pkg-node/
+            subduction_wasm/pkg-slim/
+            subduction_wasm/package.json
+            subduction_wasm/README.md
+          retention-days: 90
+
+      - name: Install dependencies (automerge_sedimentree_wasm)
+        run: cd ./automerge_sedimentree_wasm && pnpm i
+
+      - name: Build automerge_sedimentree_wasm
+        run: cd ./automerge_sedimentree_wasm && pnpm build
+
+      - name: Upload automerge_sedimentree_wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: automerge-sedimentree-wasm
+          path: |
+            automerge_sedimentree_wasm/pkg/
+            automerge_sedimentree_wasm/pkg-node/
+            automerge_sedimentree_wasm/pkg-slim/
+            automerge_sedimentree_wasm/package.json
+          retention-days: 90
+
+      - name: Install dependencies (automerge_subduction_wasm)
+        run: cd ./automerge_subduction_wasm && pnpm i
+
+      - name: Build automerge_subduction_wasm
+        run: cd ./automerge_subduction_wasm && pnpm build
+
+      - name: Upload automerge_subduction_wasm artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: automerge-subduction-wasm
+          path: |
+            automerge_subduction_wasm/pkg/
+            automerge_subduction_wasm/pkg-node/
+            automerge_subduction_wasm/pkg-slim/
+            automerge_subduction_wasm/package.json
+            automerge_subduction_wasm/README.md
+          retention-days: 90
