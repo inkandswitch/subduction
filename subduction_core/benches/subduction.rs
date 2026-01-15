@@ -1,4 +1,4 @@
-//! Benchmarks for subduction_core.
+//! Benchmarks for `subduction_core`.
 //!
 //! These benchmarks focus on the synchronous operations in the crate,
 //! including message construction, ID operations, and type manipulations.
@@ -91,7 +91,7 @@ fn request_id_from_seed(peer_seed: u64, nonce: u64) -> RequestId {
 /// Generate a storage key with path segments.
 fn storage_key_from_seed(seed: u64, depth: usize) -> StorageKey {
     let segments: Vec<String> = (0..depth)
-        .map(|i| format!("segment_{}_{}", seed, i))
+        .map(|i| format!("segment_{seed}_{i}"))
         .collect();
     StorageKey::new(segments)
 }
@@ -152,37 +152,37 @@ fn bench_peer_id(c: &mut Criterion) {
     // Construction
     group.bench_function("new", |b| {
         let bytes = [42u8; 32];
-        b.iter(|| PeerId::new(black_box(bytes)))
+        b.iter(|| PeerId::new(black_box(bytes)));
     });
 
     // Accessors
     group.bench_function("as_bytes", |b| {
         let peer_id = peer_id_from_seed(12345);
-        b.iter(|| black_box(&peer_id).as_bytes())
+        b.iter(|| black_box(&peer_id).as_bytes());
     });
 
     group.bench_function("as_slice", |b| {
         let peer_id = peer_id_from_seed(12345);
-        b.iter(|| black_box(&peer_id).as_slice())
+        b.iter(|| black_box(&peer_id).as_slice());
     });
 
     // Display formatting
     group.bench_function("display_format", |b| {
         let peer_id = peer_id_from_seed(12345);
-        b.iter(|| format!("{}", black_box(&peer_id)))
+        b.iter(|| format!("{}", black_box(&peer_id)));
     });
 
     // Comparison
     group.bench_function("compare_equal", |b| {
         let peer_id1 = peer_id_from_seed(12345);
         let peer_id2 = peer_id_from_seed(12345);
-        b.iter(|| black_box(&peer_id1) == black_box(&peer_id2))
+        b.iter(|| black_box(&peer_id1) == black_box(&peer_id2));
     });
 
     group.bench_function("compare_different", |b| {
         let peer_id1 = peer_id_from_seed(12345);
         let peer_id2 = peer_id_from_seed(54321);
-        b.iter(|| black_box(&peer_id1).cmp(black_box(&peer_id2)))
+        b.iter(|| black_box(&peer_id1).cmp(black_box(&peer_id2)));
     });
 
     // Hashing
@@ -194,7 +194,7 @@ fn bench_peer_id(c: &mut Criterion) {
             let mut hasher = DefaultHasher::new();
             black_box(&peer_id).hash(&mut hasher);
             hasher.finish()
-        })
+        });
     });
 
     group.finish();
@@ -208,13 +208,13 @@ fn bench_connection_id(c: &mut Criterion) {
     let mut group = c.benchmark_group("connection_id");
 
     group.bench_function("new", |b| {
-        b.iter(|| ConnectionId::new(black_box(42usize)))
+        b.iter(|| ConnectionId::new(black_box(42usize)));
     });
 
     group.bench_function("compare", |b| {
         let id1 = ConnectionId::new(1);
         let id2 = ConnectionId::new(2);
-        b.iter(|| black_box(&id1).cmp(black_box(&id2)))
+        b.iter(|| black_box(&id1).cmp(black_box(&id2)));
     });
 
     group.finish();
@@ -232,25 +232,25 @@ fn bench_request_id(c: &mut Criterion) {
         b.iter(|| RequestId {
             requestor: black_box(peer_id),
             nonce: black_box(42u64),
-        })
+        });
     });
 
     group.bench_function("compare_equal", |b| {
         let req1 = request_id_from_seed(12345, 42);
         let req2 = request_id_from_seed(12345, 42);
-        b.iter(|| black_box(&req1) == black_box(&req2))
+        b.iter(|| black_box(&req1) == black_box(&req2));
     });
 
     group.bench_function("compare_by_requestor", |b| {
         let req1 = request_id_from_seed(12345, 100);
         let req2 = request_id_from_seed(54321, 1);
-        b.iter(|| black_box(&req1).cmp(black_box(&req2)))
+        b.iter(|| black_box(&req1).cmp(black_box(&req2)));
     });
 
     group.bench_function("compare_by_nonce", |b| {
         let req1 = request_id_from_seed(12345, 1);
         let req2 = request_id_from_seed(12345, 2);
-        b.iter(|| black_box(&req1).cmp(black_box(&req2)))
+        b.iter(|| black_box(&req1).cmp(black_box(&req2)));
     });
 
     group.finish();
@@ -266,25 +266,25 @@ fn bench_storage_key(c: &mut Criterion) {
     for depth in [1, 3, 5, 10] {
         group.bench_with_input(BenchmarkId::new("new", depth), &depth, |b, &depth| {
             let segments: Vec<String> = (0..depth).map(|i| format!("seg_{i}")).collect();
-            b.iter(|| StorageKey::new(black_box(segments.clone())))
+            b.iter(|| StorageKey::new(black_box(segments.clone())));
         });
 
         group.bench_with_input(BenchmarkId::new("as_slice", depth), &depth, |b, &depth| {
             let key = storage_key_from_seed(12345, depth);
-            b.iter(|| black_box(&key).as_slice())
+            b.iter(|| black_box(&key).as_slice());
         });
 
         group.bench_with_input(BenchmarkId::new("to_vec", depth), &depth, |b, &depth| {
             let key = storage_key_from_seed(12345, depth);
-            b.iter(|| black_box(&key).to_vec())
+            b.iter(|| black_box(&key).to_vec());
         });
 
         group.bench_with_input(BenchmarkId::new("into_vec", depth), &depth, |b, &depth| {
             b.iter_batched(
                 || storage_key_from_seed(12345, depth),
-                |key| key.into_vec(),
+                subduction_core::storage::key::StorageKey::into_vec,
                 criterion::BatchSize::SmallInput,
-            )
+            );
         });
     }
 
@@ -292,13 +292,13 @@ fn bench_storage_key(c: &mut Criterion) {
     group.bench_function("compare_equal", |b| {
         let key1 = storage_key_from_seed(12345, 5);
         let key2 = storage_key_from_seed(12345, 5);
-        b.iter(|| black_box(&key1) == black_box(&key2))
+        b.iter(|| black_box(&key1) == black_box(&key2));
     });
 
     group.bench_function("compare_different_length", |b| {
         let key1 = storage_key_from_seed(12345, 3);
         let key2 = storage_key_from_seed(12345, 5);
-        b.iter(|| black_box(&key1).cmp(black_box(&key2)))
+        b.iter(|| black_box(&key1).cmp(black_box(&key2)));
     });
 
     group.finish();
@@ -312,23 +312,23 @@ fn bench_storage_id(c: &mut Criterion) {
     let mut group = c.benchmark_group("storage_id");
 
     group.bench_function("new", |b| {
-        b.iter(|| StorageId::new(black_box("test-storage-id".to_string())))
+        b.iter(|| StorageId::new(black_box("test-storage-id".to_string())));
     });
 
     group.bench_function("as_str", |b| {
         let id = StorageId::new("test-storage-id".to_string());
-        b.iter(|| black_box(&id).as_str())
+        b.iter(|| black_box(&id).as_str());
     });
 
     group.bench_function("display_format", |b| {
         let id = StorageId::new("test-storage-id".to_string());
-        b.iter(|| format!("{}", black_box(&id)))
+        b.iter(|| format!("{}", black_box(&id)));
     });
 
     group.bench_function("compare", |b| {
         let id1 = StorageId::new("storage-a".to_string());
         let id2 = StorageId::new("storage-b".to_string());
-        b.iter(|| black_box(&id1).cmp(black_box(&id2)))
+        b.iter(|| black_box(&id1).cmp(black_box(&id2)));
     });
 
     group.finish();
@@ -352,7 +352,7 @@ fn bench_message_construction(c: &mut Criterion) {
                 commit: black_box(commit.clone()),
                 blob: black_box(blob.clone()),
             }
-        })
+        });
     });
 
     // Fragment message
@@ -366,7 +366,7 @@ fn bench_message_construction(c: &mut Criterion) {
                 fragment: black_box(fragment.clone()),
                 blob: black_box(blob.clone()),
             }
-        })
+        });
     });
 
     // BlobsRequest message
@@ -376,7 +376,7 @@ fn bench_message_construction(c: &mut Criterion) {
             &num_digests,
             |b, &n| {
                 let digests: Vec<Digest> = (0..n).map(|i| digest_from_seed(i as u64)).collect();
-                b.iter(|| Message::BlobsRequest(black_box(digests.clone())))
+                b.iter(|| Message::BlobsRequest(black_box(digests.clone())));
             },
         );
     }
@@ -388,7 +388,7 @@ fn bench_message_construction(c: &mut Criterion) {
             &num_blobs,
             |b, &n| {
                 let blobs: Vec<Blob> = (0..n).map(|i| blob_from_seed(i as u64, 256)).collect();
-                b.iter(|| Message::BlobsResponse(black_box(blobs.clone())))
+                b.iter(|| Message::BlobsResponse(black_box(blobs.clone())));
             },
         );
     }
@@ -396,17 +396,17 @@ fn bench_message_construction(c: &mut Criterion) {
     // BatchSyncRequest message
     group.bench_function("batch_sync_request", |b| {
         let req = batch_sync_request_from_seed(12345);
-        b.iter(|| Message::BatchSyncRequest(black_box(req.clone())))
+        b.iter(|| Message::BatchSyncRequest(black_box(req.clone())));
     });
 
     // BatchSyncResponse message with varying sizes
     for (commits, fragments) in [(1, 1), (10, 5), (50, 20)] {
         group.bench_with_input(
-            BenchmarkId::new("batch_sync_response", format!("{}c_{}f", commits, fragments)),
+            BenchmarkId::new("batch_sync_response", format!("{commits}c_{fragments}f")),
             &(commits, fragments),
             |b, &(c, f)| {
                 let resp = batch_sync_response_from_seed(12345, c, f);
-                b.iter(|| Message::BatchSyncResponse(black_box(resp.clone())))
+                b.iter(|| Message::BatchSyncResponse(black_box(resp.clone())));
             },
         );
     }
@@ -424,7 +424,7 @@ fn bench_message_request_id(c: &mut Criterion) {
             commit: loose_commit_from_seed(1),
             blob: blob_from_seed(1, 64),
         };
-        b.iter(|| black_box(&msg).request_id())
+        b.iter(|| black_box(&msg).request_id());
     });
 
     group.bench_function("fragment_none", |b| {
@@ -433,28 +433,28 @@ fn bench_message_request_id(c: &mut Criterion) {
             fragment: fragment_from_seed(1, 2, 5),
             blob: blob_from_seed(1, 64),
         };
-        b.iter(|| black_box(&msg).request_id())
+        b.iter(|| black_box(&msg).request_id());
     });
 
     group.bench_function("blobs_request_none", |b| {
         let msg = Message::BlobsRequest(vec![digest_from_seed(1)]);
-        b.iter(|| black_box(&msg).request_id())
+        b.iter(|| black_box(&msg).request_id());
     });
 
     group.bench_function("blobs_response_none", |b| {
         let msg = Message::BlobsResponse(vec![blob_from_seed(1, 64)]);
-        b.iter(|| black_box(&msg).request_id())
+        b.iter(|| black_box(&msg).request_id());
     });
 
     // Messages with request IDs
     group.bench_function("batch_sync_request_some", |b| {
         let msg = Message::BatchSyncRequest(batch_sync_request_from_seed(1));
-        b.iter(|| black_box(&msg).request_id())
+        b.iter(|| black_box(&msg).request_id());
     });
 
     group.bench_function("batch_sync_response_some", |b| {
         let msg = Message::BatchSyncResponse(batch_sync_response_from_seed(1, 5, 3));
-        b.iter(|| black_box(&msg).request_id())
+        b.iter(|| black_box(&msg).request_id());
     });
 
     group.finish();
@@ -471,10 +471,10 @@ fn bench_sync_diff(c: &mut Criterion) {
         group.throughput(Throughput::Elements((commits + fragments) as u64));
 
         group.bench_with_input(
-            BenchmarkId::new("construction", format!("{}c_{}f", commits, fragments)),
+            BenchmarkId::new("construction", format!("{commits}c_{fragments}f")),
             &(commits, fragments),
             |b, &(c, f)| {
-                b.iter(|| sync_diff_from_seed(black_box(12345), c, f))
+                b.iter(|| sync_diff_from_seed(black_box(12345), c, f));
             },
         );
     }
@@ -482,11 +482,11 @@ fn bench_sync_diff(c: &mut Criterion) {
     // Clone benchmark
     for (commits, fragments) in [(10, 5), (50, 20)] {
         group.bench_with_input(
-            BenchmarkId::new("clone", format!("{}c_{}f", commits, fragments)),
+            BenchmarkId::new("clone", format!("{commits}c_{fragments}f")),
             &(commits, fragments),
             |b, &(c, f)| {
                 let diff = sync_diff_from_seed(12345, c, f);
-                b.iter(|| black_box(&diff).clone())
+                b.iter(|| black_box(&diff).clone());
             },
         );
     }
@@ -510,7 +510,7 @@ fn bench_batch_sync(c: &mut Criterion) {
             id: black_box(id),
             req_id: black_box(req_id),
             sedimentree_summary: black_box(summary.clone()),
-        })
+        });
     });
 
     // Request to Message conversion
@@ -519,13 +519,13 @@ fn bench_batch_sync(c: &mut Criterion) {
             || batch_sync_request_from_seed(12345),
             |req| -> Message { req.into() },
             criterion::BatchSize::SmallInput,
-        )
+        );
     });
 
     // Response construction with varying sizes
     for (commits, fragments) in [(1, 1), (10, 5), (50, 20)] {
         group.bench_with_input(
-            BenchmarkId::new("response_new", format!("{}c_{}f", commits, fragments)),
+            BenchmarkId::new("response_new", format!("{commits}c_{fragments}f")),
             &(commits, fragments),
             |b, &(c, f)| {
                 let id = sedimentree_id_from_seed(1);
@@ -535,7 +535,7 @@ fn bench_batch_sync(c: &mut Criterion) {
                     id: black_box(id),
                     req_id: black_box(req_id),
                     diff: black_box(diff.clone()),
-                })
+                });
             },
         );
     }
@@ -546,7 +546,7 @@ fn bench_batch_sync(c: &mut Criterion) {
             || batch_sync_response_from_seed(12345, 10, 5),
             |resp| -> Message { resp.into() },
             criterion::BatchSize::SmallInput,
-        )
+        );
     });
 
     group.finish();
@@ -573,7 +573,7 @@ fn bench_collections(c: &mut Criterion) {
                         map.insert(*id, i);
                     }
                     map
-                })
+                });
             },
         );
 
@@ -589,7 +589,7 @@ fn bench_collections(c: &mut Criterion) {
                     .map(|(i, id)| (*id, i))
                     .collect();
                 let lookup_key = peer_id_from_seed((size / 2) as u64);
-                b.iter(|| map.get(black_box(&lookup_key)))
+                b.iter(|| map.get(black_box(&lookup_key)));
             },
         );
 
@@ -605,7 +605,7 @@ fn bench_collections(c: &mut Criterion) {
                         map.insert(*id, i);
                     }
                     map
-                })
+                });
             },
         );
 
@@ -617,7 +617,7 @@ fn bench_collections(c: &mut Criterion) {
                 let set: BTreeSet<PeerId> =
                     (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 let lookup_key = peer_id_from_seed((size / 2) as u64);
-                b.iter(|| set.contains(black_box(&lookup_key)))
+                b.iter(|| set.contains(black_box(&lookup_key)));
             },
         );
 
@@ -629,7 +629,7 @@ fn bench_collections(c: &mut Criterion) {
                 let set: HashSet<PeerId> =
                     (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 let lookup_key = peer_id_from_seed((size / 2) as u64);
-                b.iter(|| set.contains(black_box(&lookup_key)))
+                b.iter(|| set.contains(black_box(&lookup_key)));
             },
         );
     }
@@ -646,7 +646,7 @@ fn bench_collections(c: &mut Criterion) {
                         map.insert(ConnectionId::new(i), i);
                     }
                     map
-                })
+                });
             },
         );
 
@@ -657,7 +657,7 @@ fn bench_collections(c: &mut Criterion) {
                 let map: BTreeMap<ConnectionId, usize> =
                     (0..size).map(|i| (ConnectionId::new(i), i)).collect();
                 let lookup_key = ConnectionId::new(size / 2);
-                b.iter(|| map.get(black_box(&lookup_key)))
+                b.iter(|| map.get(black_box(&lookup_key)));
             },
         );
     }
@@ -676,7 +676,7 @@ fn bench_collections(c: &mut Criterion) {
                         map.insert(*id, i);
                     }
                     map
-                })
+                });
             },
         );
 
@@ -692,7 +692,7 @@ fn bench_collections(c: &mut Criterion) {
                     .map(|(i, id)| (*id, i))
                     .collect();
                 let lookup_key = sedimentree_id_from_seed((size / 2) as u64);
-                b.iter(|| map.get(black_box(&lookup_key)))
+                b.iter(|| map.get(black_box(&lookup_key)));
             },
         );
     }
@@ -710,13 +710,13 @@ fn bench_cloning(c: &mut Criterion) {
     // Clone PeerId (Copy type, should be very fast)
     group.bench_function("peer_id", |b| {
         let peer_id = peer_id_from_seed(12345);
-        b.iter(|| black_box(peer_id))
+        b.iter(|| black_box(peer_id));
     });
 
     // Clone RequestId
     group.bench_function("request_id", |b| {
         let req_id = request_id_from_seed(12345, 42);
-        b.iter(|| black_box(req_id))
+        b.iter(|| black_box(req_id));
     });
 
     // Clone StorageKey
@@ -726,7 +726,7 @@ fn bench_cloning(c: &mut Criterion) {
             &depth,
             |b, &depth| {
                 let key = storage_key_from_seed(12345, depth);
-                b.iter(|| black_box(&key).clone())
+                b.iter(|| black_box(&key).clone());
             },
         );
     }
@@ -734,11 +734,11 @@ fn bench_cloning(c: &mut Criterion) {
     // Clone SyncDiff
     for (commits, fragments) in [(5, 3), (20, 10)] {
         group.bench_with_input(
-            BenchmarkId::new("sync_diff", format!("{}c_{}f", commits, fragments)),
+            BenchmarkId::new("sync_diff", format!("{commits}c_{fragments}f")),
             &(commits, fragments),
             |b, &(c, f)| {
                 let diff = sync_diff_from_seed(12345, c, f);
-                b.iter(|| black_box(&diff).clone())
+                b.iter(|| black_box(&diff).clone());
             },
         );
     }
@@ -750,7 +750,7 @@ fn bench_cloning(c: &mut Criterion) {
             commit: loose_commit_from_seed(1),
             blob: blob_from_seed(1, 256),
         };
-        b.iter(|| black_box(&msg).clone())
+        b.iter(|| black_box(&msg).clone());
     });
 
     group.bench_function("message_fragment", |b| {
@@ -759,12 +759,12 @@ fn bench_cloning(c: &mut Criterion) {
             fragment: fragment_from_seed(1, 3, 10),
             blob: blob_from_seed(1, 1024),
         };
-        b.iter(|| black_box(&msg).clone())
+        b.iter(|| black_box(&msg).clone());
     });
 
     group.bench_function("message_batch_sync_response", |b| {
         let msg = Message::BatchSyncResponse(batch_sync_response_from_seed(1, 10, 5));
-        b.iter(|| black_box(&msg).clone())
+        b.iter(|| black_box(&msg).clone());
     });
 
     group.finish();

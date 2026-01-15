@@ -1,4 +1,4 @@
-//! Benchmarks for sedimentree_core operations.
+//! Benchmarks for `sedimentree_core` operations.
 //!
 //! Run with: `cargo bench -p sedimentree_core`
 
@@ -219,7 +219,7 @@ fn bench_sedimentree_construction(c: &mut Criterion) {
         let commits = linear_commit_chain(commit_count, 500000);
 
         group.bench_with_input(
-            BenchmarkId::new("new", format!("{}f_{}c", frag_count, commit_count)),
+            BenchmarkId::new("new", format!("{frag_count}f_{commit_count}c")),
             &(fragments.clone(), commits.clone()),
             |b, (f, c)| {
                 b.iter(|| Sedimentree::new(black_box(f.clone()), black_box(c.clone())));
