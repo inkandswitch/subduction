@@ -138,11 +138,10 @@ impl Storage<Sendable> for FsStorage {
 
             // Remove directory (ignore if it does not exist)
             let tree_dir = self.tree_path(sedimentree_id);
-            if let Err(e) = tokio::fs::remove_dir_all(&tree_dir).await {
-                if e.kind() != std::io::ErrorKind::NotFound {
+            if let Err(e) = tokio::fs::remove_dir_all(&tree_dir).await
+                && e.kind() != std::io::ErrorKind::NotFound {
                     return Err(e.into());
                 }
-            }
 
             Ok(())
         }
@@ -249,11 +248,10 @@ impl Storage<Sendable> for FsStorage {
 
             // Delete file (ignore if it does not exist)
             let commits_file = self.commits_file(sedimentree_id);
-            if let Err(e) = tokio::fs::remove_file(&commits_file).await {
-                if e.kind() != std::io::ErrorKind::NotFound {
+            if let Err(e) = tokio::fs::remove_file(&commits_file).await
+                && e.kind() != std::io::ErrorKind::NotFound {
                     return Err(e.into());
                 }
-            }
 
             Ok(())
         }
@@ -350,11 +348,10 @@ impl Storage<Sendable> for FsStorage {
 
             // Delete file (ignore if it does not exist)
             let fragments_file = self.fragments_file(sedimentree_id);
-            if let Err(e) = tokio::fs::remove_file(&fragments_file).await {
-                if e.kind() != std::io::ErrorKind::NotFound {
+            if let Err(e) = tokio::fs::remove_file(&fragments_file).await
+                && e.kind() != std::io::ErrorKind::NotFound {
                     return Err(e.into());
                 }
-            }
 
             Ok(())
         }
@@ -398,11 +395,10 @@ impl Storage<Sendable> for FsStorage {
 
             // Delete file (ignore if it does not exist)
             let blob_path = self.blob_path(blob_digest);
-            if let Err(e) = tokio::fs::remove_file(&blob_path).await {
-                if e.kind() != std::io::ErrorKind::NotFound {
+            if let Err(e) = tokio::fs::remove_file(&blob_path).await
+                && e.kind() != std::io::ErrorKind::NotFound {
                     return Err(e.into());
                 }
-            }
 
             Ok(())
         }
