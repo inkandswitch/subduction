@@ -1,12 +1,12 @@
 //! Simple WebSocket relay server for ephemeral messages (presence, awareness).
 //!
-//! This server implements the automerge-repo NetworkSubsystem protocol handshake
+//! This server implements the automerge-repo `NetworkSubsystem` protocol handshake
 //! and then broadcasts messages between connected peers.
 //!
 //! ## Performance and Security
 //!
-//! Uses AHash (keyed) for DoS-resistant sharding and dedup keying; faster than
-//! SipHash in practice on short inputs; not used as a cryptographic primitive.
+//! Uses `AHash` (keyed) for DoS-resistant sharding and dedup keying; faster than
+//! `SipHash` in practice on short inputs; not used as a cryptographic primitive.
 //!
 //! TODO: Add message authentication to prevent malicious peers from sending
 //! forged ephemeral messages.
@@ -114,11 +114,10 @@ impl MessageDeduplicator {
         self.order.push_back(message_key);
 
         // Evict oldest if over capacity
-        if self.order.len() > self.capacity {
-            if let Some(old_key) = self.order.pop_front() {
+        if self.order.len() > self.capacity
+            && let Some(old_key) = self.order.pop_front() {
                 self.seen.remove(&old_key);
             }
-        }
 
         true
     }
@@ -395,7 +394,7 @@ async fn handle_connection(
             Ok(WsMessage::Text(text)) => {
                 tracing::warn!("Received unexpected text message: {}", text);
             }
-            Ok(WsMessage::Ping(_)) | Ok(WsMessage::Pong(_)) => {
+            Ok(WsMessage::Ping(_) | WsMessage::Pong(_)) => {
                 // Ping/pong are handled automatically by the WebSocket library
             }
             Ok(WsMessage::Close(_)) => {

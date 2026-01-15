@@ -51,26 +51,26 @@ mod tests {
         #[test]
         fn test_display_zero() {
             let id = ConnectionId::new(0);
-            assert_eq!(format!("{}", id), "conn-0");
+            assert_eq!(format!("{id}"), "conn-0");
         }
 
         #[test]
         fn test_display_small_numbers() {
             let id = ConnectionId::new(42);
-            assert_eq!(format!("{}", id), "conn-42");
+            assert_eq!(format!("{id}"), "conn-42");
         }
 
         #[test]
         fn test_display_large_numbers() {
             let id = ConnectionId::new(usize::MAX);
             let expected = format!("conn-{}", usize::MAX);
-            assert_eq!(format!("{}", id), expected);
+            assert_eq!(format!("{id}"), expected);
         }
 
         #[test]
         fn test_debug_shows_inner() {
             let id = ConnectionId::new(123);
-            let debug = format!("{:?}", id);
+            let debug = format!("{id:?}");
             assert!(debug.contains("123"));
         }
     }
@@ -154,23 +154,19 @@ mod tests {
 
         #[test]
         fn prop_display_starts_with_conn() {
-            bolero::check!()
-                .with_type::<ConnectionId>()
-                .for_each(|id| {
-                    let display = format!("{}", id);
-                    assert!(display.starts_with("conn-"));
-                });
+            bolero::check!().with_type::<ConnectionId>().for_each(|id| {
+                let display = format!("{id}");
+                assert!(display.starts_with("conn-"));
+            });
         }
 
         #[test]
         fn prop_roundtrip_usize() {
-            bolero::check!()
-                .with_type::<usize>()
-                .for_each(|value| {
-                    let id = ConnectionId::from(*value);
-                    let back: usize = id.into();
-                    assert_eq!(value, &back);
-                });
+            bolero::check!().with_type::<usize>().for_each(|value| {
+                let id = ConnectionId::from(*value);
+                let back: usize = id.into();
+                assert_eq!(value, &back);
+            });
         }
 
         #[test]
@@ -184,11 +180,9 @@ mod tests {
 
         #[test]
         fn prop_equality_is_reflexive() {
-            bolero::check!()
-                .with_type::<ConnectionId>()
-                .for_each(|id| {
-                    assert_eq!(id, id);
-                });
+            bolero::check!().with_type::<ConnectionId>().for_each(|id| {
+                assert_eq!(id, id);
+            });
         }
     }
 }

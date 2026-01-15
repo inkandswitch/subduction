@@ -286,7 +286,11 @@ mod tests {
                 Message::BatchSyncRequest(inner) => {
                     assert_eq!(inner, req);
                 }
-                _ => panic!("Expected BatchSyncRequest"),
+                Message::LooseCommit { .. }
+                | Message::Fragment { .. }
+                | Message::BlobsRequest(_)
+                | Message::BlobsResponse(_)
+                | Message::BatchSyncResponse(_) => panic!("Expected BatchSyncRequest"),
             }
         }
 

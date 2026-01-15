@@ -1604,6 +1604,7 @@ mod tests {
         storage::MemoryStorage,
         Sedimentree, SedimentreeId,
     };
+    use testresult::TestResult;
 
     mod initialization {
         use super::*;
@@ -1726,7 +1727,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_get_fragments_returns_empty_for_empty_tree() {
+        async fn test_get_fragments_returns_empty_for_empty_tree() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1737,14 +1738,16 @@ mod tests {
             let tree = Sedimentree::default();
             let blobs = Vec::new();
 
-            subduction.add_sedimentree(id, tree, blobs).await.unwrap();
+            subduction.add_sedimentree(id, tree, blobs).await?;
 
             let fragments = subduction.get_fragments(id).await;
             assert_eq!(fragments, Some(Vec::new()));
+
+            Ok(())
         }
 
         #[tokio::test]
-        async fn test_remove_sedimentree_removes_from_ids() {
+        async fn test_remove_sedimentree_removes_from_ids() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1755,11 +1758,13 @@ mod tests {
             let tree = Sedimentree::default();
             let blobs = Vec::new();
 
-            subduction.add_sedimentree(id, tree, blobs).await.unwrap();
+            subduction.add_sedimentree(id, tree, blobs).await?;
             assert_eq!(subduction.sedimentree_ids().await.len(), 1);
 
             subduction.remove_sedimentree(id).await.unwrap();
             assert_eq!(subduction.sedimentree_ids().await.len(), 0);
+
+            Ok(())
         }
     }
 
@@ -1780,7 +1785,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_register_adds_connection() {
+        async fn test_register_adds_connection() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1788,14 +1793,16 @@ mod tests {
                 Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
 
             let conn = MockConnection::new();
-            let (fresh, _conn_id) = subduction.register(conn).await.unwrap();
+            let (fresh, _conn_id) = subduction.register(conn).await?;
 
             assert!(fresh);
             assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            Ok(())
         }
 
         #[tokio::test]
-        async fn test_register_same_connection_twice_returns_false() {
+        async fn test_register_same_connection_twice_returns_false() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1803,17 +1810,20 @@ mod tests {
                 Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
 
             let conn = MockConnection::new();
-            let (fresh1, conn_id1) = subduction.register(conn).await.unwrap();
-            let (fresh2, conn_id2) = subduction.register(conn).await.unwrap();
+            let (fresh1, conn_id1) = subduction.register(conn).await?;
+            let (fresh2, conn_id2) = subduction.register(conn).await?;
 
             assert!(fresh1);
             assert!(!fresh2);
+
             assert_eq!(conn_id1, conn_id2);
             assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            Ok(())
         }
 
         #[tokio::test]
-        async fn test_unregister_removes_connection() {
+        async fn test_unregister_removes_connection() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1821,12 +1831,14 @@ mod tests {
                 Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
 
             let conn = MockConnection::new();
-            let (_fresh, conn_id) = subduction.register(conn).await.unwrap();
+            let (_fresh, conn_id) = subduction.register(conn).await?;
             assert_eq!(subduction.peer_ids().await.len(), 1);
 
             let removed = subduction.unregister(&conn_id).await;
             assert!(removed);
             assert_eq!(subduction.peer_ids().await.len(), 0);
+
+            Ok(())
         }
 
         #[tokio::test]
@@ -1843,7 +1855,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_register_different_peers_increases_count() {
+        async fn test_register_different_peers_increases_count() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1853,14 +1865,15 @@ mod tests {
             let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
             let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
 
-            subduction.register(conn1).await.unwrap();
-            subduction.register(conn2).await.unwrap();
+            subduction.register(conn1).await?;
+            subduction.register(conn2).await?;
 
             assert_eq!(subduction.peer_ids().await.len(), 2);
+            Ok(())
         }
 
         #[tokio::test]
-        async fn test_disconnect_removes_connection() {
+        async fn test_disconnect_removes_connection() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1868,15 +1881,17 @@ mod tests {
                 Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
 
             let conn = MockConnection::new();
-            let (_fresh, conn_id) = subduction.register(conn).await.unwrap();
+            let (_fresh, conn_id) = subduction.register(conn).await?;
 
-            let removed = subduction.disconnect(&conn_id).await.unwrap();
+            let removed = subduction.disconnect(&conn_id).await?;
             assert!(removed);
             assert_eq!(subduction.peer_ids().await.len(), 0);
+
+            Ok(())
         }
 
         #[tokio::test]
-        async fn test_disconnect_nonexistent_returns_false() {
+        async fn test_disconnect_nonexistent_returns_false() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1884,12 +1899,14 @@ mod tests {
                 Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
 
             let conn_id = ConnectionId::new(999);
-            let removed = subduction.disconnect(&conn_id).await.unwrap();
+            let removed = subduction.disconnect(&conn_id).await?;
             assert!(!removed);
+
+            Ok(())
         }
 
         #[tokio::test]
-        async fn test_disconnect_all_removes_all_connections() {
+        async fn test_disconnect_all_removes_all_connections() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1899,16 +1916,18 @@ mod tests {
             let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
             let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
 
-            subduction.register(conn1).await.unwrap();
-            subduction.register(conn2).await.unwrap();
+            subduction.register(conn1).await?;
+            subduction.register(conn2).await?;
             assert_eq!(subduction.peer_ids().await.len(), 2);
 
-            subduction.disconnect_all().await.unwrap();
+            subduction.disconnect_all().await?;
             assert_eq!(subduction.peer_ids().await.len(), 0);
+
+            Ok(())
         }
 
         #[tokio::test]
-        async fn test_disconnect_from_peer_removes_specific_peer() {
+        async fn test_disconnect_from_peer_removes_specific_peer() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1920,15 +1939,17 @@ mod tests {
             let conn1 = MockConnection::with_peer_id(peer_id1);
             let conn2 = MockConnection::with_peer_id(peer_id2);
 
-            subduction.register(conn1).await.unwrap();
-            subduction.register(conn2).await.unwrap();
+            subduction.register(conn1).await?;
+            subduction.register(conn2).await?;
             assert_eq!(subduction.peer_ids().await.len(), 2);
 
-            let removed = subduction.disconnect_from_peer(&peer_id1).await.unwrap();
+            let removed = subduction.disconnect_from_peer(&peer_id1).await?;
             assert!(removed);
             assert_eq!(subduction.peer_ids().await.len(), 1);
             assert!(!subduction.peer_ids().await.contains(&peer_id1));
             assert!(subduction.peer_ids().await.contains(&peer_id2));
+
+            Ok(())
         }
 
         #[tokio::test]
@@ -1940,6 +1961,7 @@ mod tests {
                 Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
 
             let peer_id = PeerId::new([1u8; 32]);
+            #[allow(clippy::unwrap_used)]
             let removed = subduction.disconnect_from_peer(&peer_id).await.unwrap();
             assert!(!removed);
         }

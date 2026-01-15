@@ -510,6 +510,7 @@ mod tests {
     use super::*;
     use core::time::Duration;
     use futures::io::Cursor;
+    use testresult::TestResult;
 
     // Mock timeout strategy for testing
     #[derive(Debug, Clone, Copy, PartialEq)]
@@ -742,7 +743,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_concurrent_request_ids_are_unique() {
+        async fn test_concurrent_request_ids_are_unique() -> TestResult {
             let ws = create_mock_websocket_stream().await;
             let peer_id = PeerId::new([1u8; 32]);
             let timeout = MockTimeout;
@@ -759,14 +760,16 @@ mod tests {
             let handle2 = tokio::spawn(async move { ws2.next_request_id().await });
             let handle3 = tokio::spawn(async move { ws3.next_request_id().await });
 
-            let req_id1 = handle1.await.unwrap();
-            let req_id2 = handle2.await.unwrap();
-            let req_id3 = handle3.await.unwrap();
+            let req_id1 = handle1.await?;
+            let req_id2 = handle2.await?;
+            let req_id3 = handle3.await?;
 
             // All IDs should be unique (have different nonces)
             assert_ne!(req_id1.nonce, req_id2.nonce);
             assert_ne!(req_id2.nonce, req_id3.nonce);
             assert_ne!(req_id1.nonce, req_id3.nonce);
+
+            Ok(())
         }
     }
 }

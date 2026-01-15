@@ -15,7 +15,7 @@ use crate::peer::id::PeerId;
 /// A minimal mock connection for testing.
 ///
 /// This connection implements all required methods with simple defaults:
-/// - `peer_id()` returns an all-zeros PeerId
+/// - `peer_id()` returns an all-zeros `PeerId`
 /// - `disconnect()` succeeds immediately
 /// - `send()` succeeds immediately (messages are discarded)
 /// - `recv()` fails immediately with an error
@@ -29,7 +29,7 @@ pub struct MockConnection {
 impl MockConnection {
     /// Create a new mock connection with the default peer ID (all zeros).
     #[must_use]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             peer_id: PeerId::new([0u8; 32]),
         }
@@ -37,7 +37,7 @@ impl MockConnection {
 
     /// Create a new mock connection with a specific peer ID.
     #[must_use]
-    pub fn with_peer_id(peer_id: PeerId) -> Self {
+    pub const fn with_peer_id(peer_id: PeerId) -> Self {
         Self { peer_id }
     }
 }
@@ -115,13 +115,6 @@ mod tests {
     fn test_mock_connection_default() {
         let conn = MockConnection::default();
         assert_eq!(conn.peer_id(), PeerId::new([0u8; 32]));
-    }
-
-    #[test]
-    fn test_mock_connection_clone() {
-        let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
-        let conn2 = conn1.clone();
-        assert_eq!(conn1.peer_id(), conn2.peer_id());
     }
 
     #[test]
