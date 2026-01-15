@@ -136,10 +136,12 @@ impl Storage<Sendable> for FsStorage {
             // Update cache
             self.ids_cache.lock().await.remove(&sedimentree_id);
 
-            // Remove directory
+            // Remove directory (ignore if it does not exist)
             let tree_dir = self.tree_path(sedimentree_id);
-            if tree_dir.exists() {
-                tokio::fs::remove_dir_all(&tree_dir).await?;
+            if let Err(e) = tokio::fs::remove_dir_all(&tree_dir).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e.into());
+                }
             }
 
             Ok(())
@@ -165,32 +167,35 @@ impl Storage<Sendable> for FsStorage {
         async move {
             tracing::debug!("FsStorage: saving loose commit for {:?}", sedimentree_id);
 
-            // Update cache
+            // Load existing commits
+            let commits_file = self.commits_file(sedimentree_id);
+            let mut commits: Vec<LooseCommit> = match tokio::fs::read(&commits_file).await {
+                Ok(data) => ciborium::from_reader(&data[..])
+                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(e.into()),
+            };
+
+            // Add new commit if not already present
+            if !commits.contains(&loose_commit) {
+                commits.push(loose_commit.clone());
+                let mut data = Vec::new();
+                ciborium::into_writer(&commits, &mut data)
+                    .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
+
+                // Atomic write: write to temp file, then rename
+                let temp_file = commits_file.with_extension("tmp");
+                tokio::fs::write(&temp_file, &data).await?;
+                tokio::fs::rename(&temp_file, &commits_file).await?;
+            }
+
+            // Update cache only after successful write
             self.commits_cache
                 .lock()
                 .await
                 .entry(sedimentree_id)
                 .or_default()
-                .insert(loose_commit.clone());
-
-            // Load existing commits
-            let commits_file = self.commits_file(sedimentree_id);
-            let mut commits: Vec<LooseCommit> = if commits_file.exists() {
-                let data = tokio::fs::read(&commits_file).await?;
-                ciborium::from_reader(&data[..])
-                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?
-            } else {
-                Vec::new()
-            };
-
-            // Add new commit if not already present
-            if !commits.contains(&loose_commit) {
-                commits.push(loose_commit);
-                let mut data = Vec::new();
-                ciborium::into_writer(&commits, &mut data)
-                    .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
-                tokio::fs::write(&commits_file, data).await?;
-            }
+                .insert(loose_commit);
 
             Ok(())
         }
@@ -211,21 +216,22 @@ impl Storage<Sendable> for FsStorage {
 
             // Load from disk
             let commits_file = self.commits_file(sedimentree_id);
-            if commits_file.exists() {
-                let data = tokio::fs::read(&commits_file).await?;
-                let commits: Vec<LooseCommit> = ciborium::from_reader(&data[..])
-                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
+            match tokio::fs::read(&commits_file).await {
+                Ok(data) => {
+                    let commits: Vec<LooseCommit> = ciborium::from_reader(&data[..])
+                        .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
-                // Update cache
-                let commits_set: BTreeSet<_> = commits.iter().cloned().collect();
-                self.commits_cache
-                    .lock()
-                    .await
-                    .insert(sedimentree_id, commits_set);
+                    // Update cache
+                    let commits_set: BTreeSet<_> = commits.iter().cloned().collect();
+                    self.commits_cache
+                        .lock()
+                        .await
+                        .insert(sedimentree_id, commits_set);
 
-                Ok(commits)
-            } else {
-                Ok(Vec::new())
+                    Ok(commits)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+                Err(e) => Err(e.into()),
             }
         }
         .boxed()
@@ -241,10 +247,12 @@ impl Storage<Sendable> for FsStorage {
             // Update cache
             self.commits_cache.lock().await.remove(&sedimentree_id);
 
-            // Delete file
+            // Delete file (ignore if it does not exist)
             let commits_file = self.commits_file(sedimentree_id);
-            if commits_file.exists() {
-                tokio::fs::remove_file(&commits_file).await?;
+            if let Err(e) = tokio::fs::remove_file(&commits_file).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e.into());
+                }
             }
 
             Ok(())
@@ -260,32 +268,35 @@ impl Storage<Sendable> for FsStorage {
         async move {
             tracing::debug!("FsStorage: saving fragment for {:?}", sedimentree_id);
 
-            // Update cache
+            // Load existing fragments
+            let fragments_file = self.fragments_file(sedimentree_id);
+            let mut fragments: Vec<Fragment> = match tokio::fs::read(&fragments_file).await {
+                Ok(data) => ciborium::from_reader(&data[..])
+                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?,
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
+                Err(e) => return Err(e.into()),
+            };
+
+            // Add new fragment if not already present
+            if !fragments.contains(&fragment) {
+                fragments.push(fragment.clone());
+                let mut data = Vec::new();
+                ciborium::into_writer(&fragments, &mut data)
+                    .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
+
+                // Atomic write: write to temp file, then rename
+                let temp_file = fragments_file.with_extension("tmp");
+                tokio::fs::write(&temp_file, &data).await?;
+                tokio::fs::rename(&temp_file, &fragments_file).await?;
+            }
+
+            // Update cache only after successful write
             self.fragments_cache
                 .lock()
                 .await
                 .entry(sedimentree_id)
                 .or_default()
-                .insert(fragment.clone());
-
-            // Load existing fragments
-            let fragments_file = self.fragments_file(sedimentree_id);
-            let mut fragments: Vec<Fragment> = if fragments_file.exists() {
-                let data = tokio::fs::read(&fragments_file).await?;
-                ciborium::from_reader(&data[..])
-                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?
-            } else {
-                Vec::new()
-            };
-
-            // Add new fragment if not already present
-            if !fragments.contains(&fragment) {
-                fragments.push(fragment);
-                let mut data = Vec::new();
-                ciborium::into_writer(&fragments, &mut data)
-                    .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
-                tokio::fs::write(&fragments_file, data).await?;
-            }
+                .insert(fragment);
 
             Ok(())
         }
@@ -306,21 +317,22 @@ impl Storage<Sendable> for FsStorage {
 
             // Load from disk
             let fragments_file = self.fragments_file(sedimentree_id);
-            if fragments_file.exists() {
-                let data = tokio::fs::read(&fragments_file).await?;
-                let fragments: Vec<Fragment> = ciborium::from_reader(&data[..])
-                    .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
+            match tokio::fs::read(&fragments_file).await {
+                Ok(data) => {
+                    let fragments: Vec<Fragment> = ciborium::from_reader(&data[..])
+                        .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
-                // Update cache
-                let fragments_set: BTreeSet<_> = fragments.iter().cloned().collect();
-                self.fragments_cache
-                    .lock()
-                    .await
-                    .insert(sedimentree_id, fragments_set);
+                    // Update cache
+                    let fragments_set: BTreeSet<_> = fragments.iter().cloned().collect();
+                    self.fragments_cache
+                        .lock()
+                        .await
+                        .insert(sedimentree_id, fragments_set);
 
-                Ok(fragments)
-            } else {
-                Ok(Vec::new())
+                    Ok(fragments)
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+                Err(e) => Err(e.into()),
             }
         }
         .boxed()
@@ -336,10 +348,12 @@ impl Storage<Sendable> for FsStorage {
             // Update cache
             self.fragments_cache.lock().await.remove(&sedimentree_id);
 
-            // Delete file
+            // Delete file (ignore if it does not exist)
             let fragments_file = self.fragments_file(sedimentree_id);
-            if fragments_file.exists() {
-                tokio::fs::remove_file(&fragments_file).await?;
+            if let Err(e) = tokio::fs::remove_file(&fragments_file).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e.into());
+                }
             }
 
             Ok(())
@@ -352,8 +366,12 @@ impl Storage<Sendable> for FsStorage {
             let digest = Digest::hash(blob.contents());
             tracing::debug!("FsStorage: saving blob {:?}", digest);
 
+            // Atomic write: write to temp file, then rename
             let blob_path = self.blob_path(digest);
-            tokio::fs::write(&blob_path, blob.contents()).await?;
+            let temp_path = blob_path.with_extension("tmp");
+
+            tokio::fs::write(&temp_path, blob.contents()).await?;
+            tokio::fs::rename(&temp_path, &blob_path).await?;
 
             Ok(digest)
         }
@@ -365,11 +383,10 @@ impl Storage<Sendable> for FsStorage {
             tracing::debug!("FsStorage: loading blob {:?}", blob_digest);
 
             let blob_path = self.blob_path(blob_digest);
-            if blob_path.exists() {
-                let data = tokio::fs::read(&blob_path).await?;
-                Ok(Some(Blob::new(data)))
-            } else {
-                Ok(None)
+            match tokio::fs::read(&blob_path).await {
+                Ok(data) => Ok(Some(Blob::new(data))),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(e.into()),
             }
         }
         .boxed()
@@ -379,9 +396,12 @@ impl Storage<Sendable> for FsStorage {
         async move {
             tracing::debug!("FsStorage: deleting blob {:?}", blob_digest);
 
+            // Delete file (ignore if it does not exist)
             let blob_path = self.blob_path(blob_digest);
-            if blob_path.exists() {
-                tokio::fs::remove_file(&blob_path).await?;
+            if let Err(e) = tokio::fs::remove_file(&blob_path).await {
+                if e.kind() != std::io::ErrorKind::NotFound {
+                    return Err(e.into());
+                }
             }
 
             Ok(())

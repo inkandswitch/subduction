@@ -32,6 +32,27 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
+/// Maximum size for ephemeral messages (1 MB) to prevent memory exhaustion
+const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+
+/// Sanitize a string for logging by truncating and removing control characters
+fn sanitize_for_log(s: &str, max_len: usize) -> String {
+    let truncated = if s.len() > max_len {
+        format!("{}...", &s[..max_len])
+    } else {
+        s.to_string()
+    };
+
+    // Remove control characters (0x00-0x1F except \t, \n, \r)
+    truncated
+        .chars()
+        .filter(|&c| {
+            let code = c as u32;
+            code >= 0x20 || c == '\t' || c == '\n' || c == '\r'
+        })
+        .collect()
+}
+
 /// Peer identifier (newtype for type safety)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PeerId(String);
@@ -341,6 +362,17 @@ async fn handle_connection(
     while let Some(result) = ws_receiver.next().await {
         match result {
             Ok(WsMessage::Binary(data)) => {
+                // Reject messages that are too large
+                if data.len() > MAX_MESSAGE_SIZE {
+                    tracing::warn!(
+                        "Dropping oversized message from {}: {} bytes (max: {} bytes)",
+                        peer_id.0,
+                        data.len(),
+                        MAX_MESSAGE_SIZE
+                    );
+                    continue;
+                }
+
                 // Try to parse message header for deduplication
                 let should_relay = if let Ok(header) =
                     ciborium::from_reader::<EphemeralMessageHeader, _>(data.as_ref())
@@ -352,16 +384,16 @@ async fn handle_connection(
                     if is_new {
                         tracing::debug!(
                             "Relaying new message {}:{}:{} ({} bytes)",
-                            header.sender_id,
-                            header.session_id,
+                            sanitize_for_log(&header.sender_id, 64),
+                            sanitize_for_log(&header.session_id, 64),
                             header.count,
                             data.len()
                         );
                     } else {
                         tracing::debug!(
                             "Dropping duplicate message {}:{}:{}",
-                            header.sender_id,
-                            header.session_id,
+                            sanitize_for_log(&header.sender_id, 64),
+                            sanitize_for_log(&header.session_id, 64),
                             header.count
                         );
                     }
@@ -394,7 +426,10 @@ async fn handle_connection(
                 }
             }
             Ok(WsMessage::Text(text)) => {
-                tracing::warn!("Received unexpected text message: {}", text);
+                tracing::warn!(
+                    "Received unexpected text message: {}",
+                    sanitize_for_log(&text, 256)
+                );
             }
             Ok(WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_)) => {
                 // Ping/pong are handled automatically by the WebSocket library
