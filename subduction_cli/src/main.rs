@@ -3,6 +3,7 @@
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
 mod client;
+mod ephemeral_relay;
 mod fs_storage;
 mod server;
 
@@ -25,6 +26,7 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Server(server_args) => server::run(server_args, token).await?,
         Command::Client(client_args) => client::run(client_args, token).await?,
+        Command::EphemeralRelay(relay_args) => ephemeral_relay::run(relay_args, token).await?,
     }
 
     Ok(())
@@ -115,4 +117,8 @@ enum Command {
     /// Start a Subduction node connecting to a WebSocket server
     #[command(name = "client", alias = "connect")]
     Client(client::ClientArgs),
+
+    /// Start an ephemeral message relay server for presence/awareness
+    #[command(name = "ephemeral-relay", alias = "relay")]
+    EphemeralRelay(ephemeral_relay::EphemeralRelayArgs),
 }
