@@ -137,4 +137,5 @@ jobs:
             automerge_subduction_wasm/pkg-node/
             automerge_subduction_wasm/pkg-slim/
             automerge_subduction_wasm/package.json
+            automerge_subduction_wasm/README.md
           retention-days: 90
