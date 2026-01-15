@@ -32,8 +32,8 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-/// Maximum size for ephemeral messages (1 MB) to prevent memory exhaustion
-const MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+/// Default maximum size for ephemeral messages (1 MB)
+const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
 
 /// Sanitize a string for logging by truncating and removing control characters
 fn sanitize_for_log(s: &str, max_len: usize) -> String {
@@ -255,15 +255,21 @@ pub(crate) struct EphemeralRelayArgs {
     /// Socket address to bind to
     #[arg(short, long, default_value = "0.0.0.0:8081")]
     pub(crate) socket: String,
+
+    /// Maximum message size in bytes (default: 1 MB)
+    #[arg(short, long, default_value_t = DEFAULT_MAX_MESSAGE_SIZE)]
+    pub(crate) max_message_size: usize,
 }
 
 /// Run the ephemeral message relay server.
 pub(crate) async fn run(args: EphemeralRelayArgs, token: CancellationToken) -> Result<()> {
     let addr: SocketAddr = args.socket.parse()?;
     let listener = TcpListener::bind(addr).await?;
+    let max_message_size = args.max_message_size;
 
     tracing::info!("Ephemeral relay server listening on {}", addr);
     tracing::info!("This server relays presence/awareness messages between peers");
+    tracing::info!("Maximum message size: {} bytes ({} MB)", max_message_size, max_message_size / (1024 * 1024));
 
     let peers = PeerConnections::new();
 
@@ -283,7 +289,7 @@ pub(crate) async fn run(args: EphemeralRelayArgs, token: CancellationToken) -> R
                         tracing::info!("New ephemeral connection from {}", addr);
                         let peers = peers.clone();
                         let deduplicator = deduplicator.clone();
-                        tokio::spawn(handle_connection(stream, addr, peers, deduplicator));
+                        tokio::spawn(handle_connection(stream, addr, peers, deduplicator, max_message_size));
                     }
                     Err(e) => {
                         tracing::error!("Failed to accept connection: {}", e);
@@ -302,6 +308,7 @@ async fn handle_connection(
     addr: SocketAddr,
     peers: PeerConnections,
     deduplicator: Deduplicator,
+    max_message_size: usize,
 ) -> Result<()> {
     let ws_stream = accept_async(stream).await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
@@ -363,12 +370,12 @@ async fn handle_connection(
         match result {
             Ok(WsMessage::Binary(data)) => {
                 // Reject messages that are too large
-                if data.len() > MAX_MESSAGE_SIZE {
+                if data.len() > max_message_size {
                     tracing::warn!(
                         "Dropping oversized message from {}: {} bytes (max: {} bytes)",
                         peer_id.0,
                         data.len(),
-                        MAX_MESSAGE_SIZE
+                        max_message_size
                     );
                     continue;
                 }

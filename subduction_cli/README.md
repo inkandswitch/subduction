@@ -89,6 +89,7 @@ Alias: `relay`
 
 Options:
 - `--socket <ADDR>` - Socket address to bind to (default: `0.0.0.0:8081`)
+- `--max-message-size <BYTES>` - Maximum message size in bytes (default: `1048576` = 1 MB)
 
 #### Architecture
 
@@ -216,5 +217,8 @@ nix run .#subduction_cli -- client --server ws://sync.example.com:8080
 
 # Ephemeral relay on custom port
 nix run .#subduction_cli -- relay --socket 0.0.0.0:9000
+
+# Ephemeral relay with 5 MB message size limit
+nix run .#subduction_cli -- relay --max-message-size 5242880
 ```
 
