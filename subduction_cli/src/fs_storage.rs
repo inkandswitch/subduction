@@ -13,7 +13,7 @@ use sedimentree_core::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
 };
 use thiserror::Error;
@@ -56,7 +56,7 @@ impl FsStorage {
         std::fs::create_dir_all(root.join("blobs"))?;
 
         // Load existing data into cache
-        let ids_cache = Arc::new(Mutex::new(Self::load_tree_ids(&root)?));
+        let ids_cache = Arc::new(Mutex::new(Self::load_tree_ids(&root)));
 
         Ok(Self {
             root,
@@ -66,7 +66,7 @@ impl FsStorage {
         })
     }
 
-    fn load_tree_ids(root: &PathBuf) -> Result<BTreeSet<SedimentreeId>, FsStorageError> {
+    fn load_tree_ids(root: &Path) -> BTreeSet<SedimentreeId> {
         let trees_dir = root.join("trees");
         let mut ids = BTreeSet::new();
 
@@ -82,7 +82,7 @@ impl FsStorage {
             }
         }
 
-        Ok(ids)
+        ids
     }
 
     fn tree_path(&self, id: SedimentreeId) -> PathBuf {

@@ -173,13 +173,17 @@ impl ShardedDeduplicator {
 
     /// Compute shard index from message key
     const fn get_shard_index(&self, message_key: MessageKey) -> usize {
-        (message_key.0 as usize) & self.shard_mask
+        #[allow(clippy::cast_possible_truncation)]
+        {
+            (message_key.0 as usize) & self.shard_mask
+        }
     }
 
     /// Returns true if this is a new message (not seen before)
     async fn add(&self, message_key: MessageKey) -> bool {
         let shard_index = self.get_shard_index(message_key);
-        let mut shard = self.shards[shard_index].lock().await;
+        #[allow(clippy::expect_used)]
+        let mut shard = self.shards.get(shard_index).expect("shard index should exist").lock().await;
         shard.add(message_key)
     }
 }
@@ -271,6 +275,7 @@ pub(crate) async fn run(args: EphemeralRelayArgs, token: CancellationToken) -> R
     Ok(())
 }
 
+#[allow(clippy::too_many_lines)]
 async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
@@ -391,7 +396,7 @@ async fn handle_connection(
             Ok(WsMessage::Text(text)) => {
                 tracing::warn!("Received unexpected text message: {}", text);
             }
-            Ok(WsMessage::Ping(_) | WsMessage::Pong(_)) => {
+            Ok(WsMessage::Ping(_) | WsMessage::Pong(_) | WsMessage::Frame(_)) => {
                 // Ping/pong are handled automatically by the WebSocket library
             }
             Ok(WsMessage::Close(_)) => {
@@ -402,7 +407,6 @@ async fn handle_connection(
                 tracing::error!("WebSocket error from {}: {}", peer_id.0, e);
                 break;
             }
-            _ => {}
         }
     }
 

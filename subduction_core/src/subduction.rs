@@ -1664,7 +1664,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_add_sedimentree_increases_count() {
+        async fn test_add_sedimentree_increases_count() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1675,11 +1675,13 @@ mod tests {
             let tree = Sedimentree::default();
             let blobs = Vec::new();
 
-            subduction.add_sedimentree(id, tree, blobs).await.unwrap();
+            subduction.add_sedimentree(id, tree, blobs).await?;
 
             let ids = subduction.sedimentree_ids().await;
             assert_eq!(ids.len(), 1);
             assert!(ids.contains(&id));
+
+            Ok(())
         }
 
         #[tokio::test]
@@ -1696,7 +1698,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_get_commits_returns_empty_for_empty_tree() {
+        async fn test_get_commits_returns_empty_for_empty_tree() -> TestResult {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -1707,10 +1709,12 @@ mod tests {
             let tree = Sedimentree::default();
             let blobs = Vec::new();
 
-            subduction.add_sedimentree(id, tree, blobs).await.unwrap();
+            subduction.add_sedimentree(id, tree, blobs).await?;
 
             let commits = subduction.get_commits(id).await;
             assert_eq!(commits, Some(Vec::new()));
+
+            Ok(())
         }
 
         #[tokio::test]
@@ -1761,7 +1765,7 @@ mod tests {
             subduction.add_sedimentree(id, tree, blobs).await?;
             assert_eq!(subduction.sedimentree_ids().await.len(), 1);
 
-            subduction.remove_sedimentree(id).await.unwrap();
+            subduction.remove_sedimentree(id).await?;
             assert_eq!(subduction.sedimentree_ids().await.len(), 0);
 
             Ok(())

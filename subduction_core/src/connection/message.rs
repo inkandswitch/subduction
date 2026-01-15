@@ -290,7 +290,9 @@ mod tests {
                 | Message::Fragment { .. }
                 | Message::BlobsRequest(_)
                 | Message::BlobsResponse(_)
-                | Message::BatchSyncResponse(_) => panic!("Expected BatchSyncRequest"),
+                | Message::BatchSyncResponse(_) => {
+                    unreachable!("Expected BatchSyncRequest")
+                }
             }
         }
 
@@ -314,7 +316,13 @@ mod tests {
                 Message::BatchSyncResponse(inner) => {
                     assert_eq!(inner, resp);
                 }
-                _ => panic!("Expected BatchSyncResponse"),
+                Message::LooseCommit { .. }
+                | Message::Fragment { .. }
+                | Message::BlobsRequest(_)
+                | Message::BlobsResponse(_)
+                | Message::BatchSyncRequest(_) => {
+                    unreachable!("Expected BatchSyncResponse")
+                }
             }
         }
     }
@@ -348,7 +356,11 @@ mod tests {
             };
 
             assert_eq!(diff.missing_commits.len(), 1);
-            assert_eq!(diff.missing_commits[0].0, commit);
+
+            #[allow(clippy::unwrap_used)]
+            {
+                assert_eq!(diff.missing_commits.first().unwrap().0, commit);
+            }
         }
 
         #[test]
