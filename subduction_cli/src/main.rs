@@ -2,37 +2,61 @@
 
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
-use clap::Parser;
-use sedimentree_core::{commit::CountLeadingZeroBytes, storage::MemoryStorage};
-use std::{
-    net::SocketAddr,
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc,
-    },
-    time::Duration,
+mod client;
+mod ephemeral_relay;
+mod fs_storage;
+mod server;
+
+use clap::{Parser, Subcommand};
+use std::sync::{
+    atomic::{AtomicUsize, Ordering},
+    Arc,
 };
 use subduction_core::peer::id::PeerId;
-use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{prelude::*, util::SubscriberInitExt, EnvFilter};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let args = Arguments::parse();
+
+    setup_tracing();
+    let token = setup_signal_handlers();
+
+    match args.command {
+        Command::Server(server_args) => server::run(server_args, token).await?,
+        Command::Client(client_args) => client::run(client_args, token).await?,
+        Command::EphemeralRelay(relay_args) => ephemeral_relay::run(relay_args, token).await?,
+    }
+
+    Ok(())
+}
+
+fn setup_tracing() {
     let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
 
-    let console_layer = console_subscriber::ConsoleLayer::builder()
-        .with_default_env()
-        .spawn();
+    // Only enable tokio-console if explicitly requested
+    if std::env::var("TOKIO_CONSOLE").is_ok() {
+        let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
+        let console_layer = console_subscriber::ConsoleLayer::builder()
+            .with_default_env()
+            .spawn();
 
-    tracing_subscriber::registry()
-        .with(console_layer.with_filter(console_filter))
-        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
-        .init();
+        tracing_subscriber::registry()
+            .with(console_layer.with_filter(console_filter))
+            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+            .init();
+    } else {
+        tracing_subscriber::registry()
+            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
+            .init();
+    }
+}
 
+fn setup_signal_handlers() -> CancellationToken {
     let token = CancellationToken::new();
     let hits = Arc::new(AtomicUsize::new(0));
+
     {
         let token = token.clone();
         let hits = hits.clone();
@@ -64,36 +88,37 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    let args = Arguments::parse();
+    token
+}
 
-    if args.command.as_deref() == Some("start") {
-        let addr: SocketAddr = args.socket.parse()?;
-        let _server: TokioWebSocketServer<MemoryStorage> = TokioWebSocketServer::setup(
-            addr,
-            FuturesTimerTimeout,
-            Duration::from_secs(5),
-            PeerId::new([0; 32]),
-            MemoryStorage::new(),
-            CountLeadingZeroBytes,
-        )
-        .await?;
-
-        tracing::info!("WebSocket server started on {}", addr);
-        futures::future::pending::<()>().await; // Keep alive
-        tracing::error!("error starting server");
-    } else {
-        eprintln!("Please specify either 'start' or 'connect' command");
-        std::process::exit(1);
+pub(crate) fn parse_peer_id(s: &str) -> anyhow::Result<PeerId> {
+    let bytes = hex::decode(s)?;
+    if bytes.len() != 32 {
+        anyhow::bail!("Peer ID must be 32 bytes (64 hex characters)");
     }
-
-    Ok(())
+    let mut arr = [0u8; 32];
+    arr.copy_from_slice(&bytes);
+    Ok(PeerId::new(arr))
 }
 
 #[derive(Debug, Parser)]
 #[command(author = "Ink & Switch", version, about = "CLI for Subduction")]
 struct Arguments {
-    command: Option<String>,
+    #[command(subcommand)]
+    command: Command,
+}
 
-    #[arg(short, long, default_value = "0.0.0.0:8080")]
-    socket: String,
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Start a Subduction node with WebSocket server
+    #[command(name = "server", alias = "start")]
+    Server(server::ServerArgs),
+
+    /// Start a Subduction node connecting to a WebSocket server
+    #[command(name = "client", alias = "connect")]
+    Client(client::ClientArgs),
+
+    /// Start an ephemeral message relay server for presence/awareness
+    #[command(name = "ephemeral-relay", alias = "relay")]
+    EphemeralRelay(ephemeral_relay::EphemeralRelayArgs),
 }

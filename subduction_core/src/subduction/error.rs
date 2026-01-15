@@ -2,7 +2,8 @@
 
 use alloc::vec::Vec;
 
-use sedimentree_core::{blob::Digest, future::FutureKind, storage::Storage};
+use futures_kind::FutureKind;
+use sedimentree_core::{blob::Digest, storage::Storage};
 use thiserror::Error;
 
 use crate::connection::{Connection, ConnectionDisallowed};
@@ -83,6 +84,8 @@ pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur during registration of a new connection.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 pub enum RegistrationError {
     /// The connection was disallowed by the [`ConnectionPolicy`].
     #[error(transparent)]
@@ -91,4 +94,57 @@ pub enum RegistrationError {
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
     SendToClosedChannel,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::format;
+
+    mod registration_error {
+        use super::*;
+
+        #[test]
+        fn test_equality() {
+            let err1 = RegistrationError::SendToClosedChannel;
+            let err2 = RegistrationError::SendToClosedChannel;
+            let err3 = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
+
+            assert_eq!(err1, err2);
+            assert_ne!(err1, err3);
+        }
+    }
+
+    #[cfg(all(test, feature = "std", feature = "bolero"))]
+    mod proptests {
+        use super::*;
+
+        #[test]
+        fn prop_equality_is_reflexive() {
+            bolero::check!()
+                .with_type::<RegistrationError>()
+                .for_each(|err| {
+                    assert_eq!(err, err);
+                });
+        }
+
+        #[test]
+        fn prop_clone_equals_original() {
+            bolero::check!()
+                .with_type::<RegistrationError>()
+                .for_each(|err| {
+                    assert_eq!(err.clone(), *err);
+                });
+        }
+
+        #[test]
+        fn prop_display_produces_non_empty_string() {
+            bolero::check!()
+                .with_type::<RegistrationError>()
+                .for_each(|err| {
+                    let display = format!("{err}");
+                    assert!(!display.is_empty());
+                });
+        }
+    }
 }

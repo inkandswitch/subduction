@@ -5,10 +5,8 @@ use crate::{
     sedimentree_id::WasmSedimentreeId,
 };
 use alloc::vec::Vec;
-use sedimentree_core::{
-    future::Local,
-    storage::{MemoryStorage, Storage},
-};
+use futures_kind::Local;
+use sedimentree_core::storage::{MemoryStorage, Storage};
 use wasm_bindgen::prelude::*;
 
 /// In-memory storage adapter

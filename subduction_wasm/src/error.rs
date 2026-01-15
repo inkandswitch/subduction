@@ -1,7 +1,7 @@
 //! Error types.
 
 use alloc::string::{String, ToString};
-use sedimentree_core::future::Local;
+use futures_kind::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
     subduction::error::{HydrationError, IoError, ListenError, RegistrationError},

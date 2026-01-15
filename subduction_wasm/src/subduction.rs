@@ -10,12 +10,12 @@ use futures::{
     stream::Aborted,
     FutureExt,
 };
+use futures_kind::Local;
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    future::Local,
 };
 use subduction_core::{peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;

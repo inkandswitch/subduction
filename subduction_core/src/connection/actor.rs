@@ -13,7 +13,7 @@ use futures::{
     stream::{AbortRegistration, Abortable, Aborted, FuturesUnordered},
     FutureExt, StreamExt,
 };
-use sedimentree_core::future::{FutureKind, Local, Sendable};
+use futures_kind::{FutureKind, Local, Sendable};
 
 use super::{id::ConnectionId, message::Message, recv_once::RecvOnce, Connection};
 
@@ -178,5 +178,90 @@ impl<'a, F: StartConnectionActor<'a, C>, C: Connection<F> + PartialEq> Deref
 
     fn deref(&self) -> &Self::Target {
         &self.fut
+    }
+}
+
+#[cfg(all(test, feature = "test_utils"))]
+mod tests {
+    use super::*;
+    use crate::connection::test_utils::MockConnection;
+
+    mod connection_actor {
+        use super::*;
+
+        #[test]
+        fn test_new_creates_empty_queue() {
+            let (inbox_tx, inbox_rx) = async_channel::unbounded();
+            let (outbox_tx, _outbox_rx) = async_channel::unbounded();
+
+            let actor: ConnectionActor<'_, Sendable, MockConnection> =
+                ConnectionActor::new(inbox_rx, outbox_tx);
+
+            assert_eq!(actor.queue.len(), 0);
+
+            drop(inbox_tx);
+        }
+
+        #[test]
+        fn test_new_preserves_inbox() {
+            let (inbox_tx, inbox_rx) = async_channel::unbounded();
+            let (outbox_tx, _outbox_rx) = async_channel::unbounded();
+
+            let _actor: ConnectionActor<'_, Sendable, MockConnection> =
+                ConnectionActor::new(inbox_rx, outbox_tx);
+
+            // Verify inbox is connected by checking we can send
+            assert!(inbox_tx
+                .try_send((ConnectionId::new(0), MockConnection::new()))
+                .is_ok());
+        }
+
+        #[test]
+        fn test_new_preserves_outbox() {
+            let (_inbox_tx, inbox_rx) = async_channel::unbounded();
+            let (outbox_tx, outbox_rx) = async_channel::unbounded();
+
+            let _actor: ConnectionActor<'_, Sendable, MockConnection> =
+                ConnectionActor::new(inbox_rx, outbox_tx);
+
+            // Verify outbox is connected (receiver is still alive)
+            assert!(!outbox_rx.is_closed());
+        }
+    }
+
+    mod connection_actor_future {
+        use super::*;
+
+        #[test]
+        fn test_is_aborted_initially_false() {
+            let (abort_handle, abort_reg) = futures::stream::AbortHandle::new_pair();
+            let abortable = Abortable::new(
+                Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>,
+                abort_reg,
+            );
+
+            let fut: ConnectionActorFuture<'_, Sendable, MockConnection> =
+                ConnectionActorFuture::new(abortable);
+
+            assert!(!fut.is_aborted());
+
+            drop(abort_handle);
+        }
+
+        #[test]
+        fn test_is_aborted_after_abort() {
+            let (abort_handle, abort_reg) = futures::stream::AbortHandle::new_pair();
+            let abortable = Abortable::new(
+                Box::pin(async {}) as Pin<Box<dyn Future<Output = ()> + Send>>,
+                abort_reg,
+            );
+
+            let fut: ConnectionActorFuture<'_, Sendable, MockConnection> =
+                ConnectionActorFuture::new(abortable);
+
+            abort_handle.abort();
+
+            assert!(fut.is_aborted());
+        }
     }
 }

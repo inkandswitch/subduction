@@ -8,9 +8,8 @@ use crate::{
 use alloc::{string::ToString, sync::Arc};
 use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
 use core::{net::SocketAddr, time::Duration};
-use sedimentree_core::{
-    commit::CountLeadingZeroBytes, depth::DepthMetric, future::Sendable, storage::Storage,
-};
+use futures_kind::Sendable;
+use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric, storage::Storage};
 use subduction_core::{
     connection::id::ConnectionId, peer::id::PeerId, subduction::error::RegistrationError,
     Subduction,

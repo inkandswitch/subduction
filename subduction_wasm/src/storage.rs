@@ -6,10 +6,10 @@ pub mod memory;
 use alloc::{collections::BTreeSet, string::ToString, vec::Vec};
 
 use futures::{future::LocalBoxFuture, FutureExt};
+use futures_kind::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::{Blob, Digest},
-    future::Local,
     storage::Storage,
     BadSedimentreeId, Fragment, LooseCommit, SedimentreeId,
 };

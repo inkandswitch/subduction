@@ -301,6 +301,56 @@
           (release // build // bench // lint // watch // test // docs);
 
       in rec {
+        packages = {
+          subduction_cli = pkgs.rustPlatform.buildRustPackage {
+            pname = "subduction_cli";
+            version = "0.1.0";
+            meta = {
+              description = "CLI tool for running Subduction with WebSockets";
+              longDescription = ''
+                Subduction is a peer-to-peer synchronization protocol built on top of
+                Sedimentree, providing efficient data synchronization with support for
+                multiple transports. This CLI tool provides WebSocket-based
+                server and client implementations for running Subduction nodes.
+              '';
+              homepage = "https://github.com/inkandswitch/subduction";
+              license = [
+                pkgs.lib.licenses.mit
+                pkgs.lib.licenses.asl20
+              ];
+              maintainers = [ pkgs.lib.maintainers.expede ];
+              platforms = pkgs.lib.platforms.unix;
+              mainProgram = "subduction_cli";
+            };
+
+            src = ./.;
+
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              outputHashes = {
+                "wasm-tracing-3.0.0-alpha.0" = "sha256-b5XSxRM601ID/uT2aLMb0WrP3lSGALrh0bPB+7Va/6s=";
+              };
+            };
+
+            buildInputs = [ pkgs.openssl ];
+            nativeBuildInputs = [ pkgs.pkg-config ];
+
+            cargoBuildFlags = [ "--bin" "subduction_cli" ];
+
+            doCheck = !pkgs.stdenv.buildPlatform.canExecute pkgs.stdenv.hostPlatform;
+
+            nativeCheckInputs = [
+              pkgs.rustPlatform.cargoCheckHook
+            ];
+
+            checkPhase = ''
+              cargo test --release --locked
+            '';
+          };
+
+          default = packages.subduction_cli;
+        };
+
         devShells.default = pkgs.mkShell {
           name = "subduction_shell";
 

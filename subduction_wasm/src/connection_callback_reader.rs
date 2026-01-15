@@ -3,8 +3,8 @@ use core::time::Duration;
 
 use async_lock::Mutex;
 use futures::future::{FutureExt, LocalBoxFuture};
+use futures_kind::Local;
 use js_sys::Uint8Array;
-use sedimentree_core::future::Local;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},

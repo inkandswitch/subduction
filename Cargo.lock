@@ -9,6 +9,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
+name = "ahash"
+version = "0.8.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5a15f179cd60c4584b8a8c596927aadc462e27f2ca70c04e0071964a73ba7a75"
+dependencies = [
+ "cfg-if 1.0.4",
+ "getrandom",
+ "once_cell",
+ "version_check",
+ "zerocopy",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "1.1.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -937,6 +950,15 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
+]
+
+[[package]]
+name = "futures_kind"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "899ed6916770c69d5dabc3d8b8438f39961056ca3b870aab9179608cc01dc5a1"
+dependencies = [
+ "futures 0.3.31",
 ]
 
 [[package]]
@@ -1889,6 +1911,7 @@ dependencies = [
  "bolero",
  "futures 0.3.31",
  "futures-util",
+ "futures_kind",
  "num",
  "rand",
  "serde",
@@ -2041,12 +2064,17 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 name = "subduction_cli"
 version = "0.1.0"
 dependencies = [
+ "ahash",
  "anyhow",
+ "async-lock",
  "async-tungstenite",
+ "ciborium",
  "clap",
  "console-subscriber",
  "futures 0.3.31",
  "futures-util",
+ "futures_kind",
+ "hex",
  "rand",
  "sedimentree_core",
  "serde",
@@ -2068,11 +2096,15 @@ dependencies = [
  "arbitrary",
  "async-channel",
  "async-lock",
+ "bolero",
  "futures 0.3.31",
+ "futures_kind",
  "nonempty",
  "sedimentree_core",
  "serde",
+ "testresult",
  "thiserror",
+ "tokio",
  "tracing",
 ]
 
@@ -2089,6 +2121,7 @@ dependencies = [
  "from_js_ref",
  "futures 0.3.31",
  "futures-util",
+ "futures_kind",
  "getrandom",
  "js-sys",
  "rand",
@@ -2118,6 +2151,7 @@ dependencies = [
  "futures 0.3.31",
  "futures-timer",
  "futures-util",
+ "futures_kind",
  "rand",
  "sedimentree_core",
  "serde",

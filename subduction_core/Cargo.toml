@@ -15,16 +15,24 @@ repository.workspace = true
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 futures = { workspace = true }
+futures_kind = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
+[dev-dependencies]
+bolero = { workspace = true, features = ["arbitrary"] }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros"] }
+
 [features]
 default = []
-arbitrary = ["dep:arbitrary"]
+arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
+bolero = ["dep:bolero", "arbitrary"]
 serde = ["dep:serde"]
 serde-std = ["serde/std"]
 std = [
@@ -35,6 +43,7 @@ std = [
   "sedimentree_core/std",
   "thiserror/std"
 ]
+test_utils = ["std"]
 
 [lints]
 workspace = true

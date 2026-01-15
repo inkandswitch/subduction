@@ -19,13 +19,13 @@ use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationEr
 use futures::{
     FutureExt, StreamExt, future::try_join_all, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
 };
+use futures_kind::{Local, Sendable};
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    future::{Local, Sendable},
     storage::Storage,
     Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
@@ -1593,4 +1593,432 @@ impl<
         M: DepthMetric,
     > Unpin for ListenerFuture<'a, F, S, C, M>
 {
+}
+
+#[cfg(all(test, feature = "test_utils"))]
+mod tests {
+    use super::*;
+    use crate::connection::test_utils::MockConnection;
+    use sedimentree_core::{
+        commit::CountLeadingZeroBytes,
+        storage::MemoryStorage,
+        Sedimentree, SedimentreeId,
+    };
+    use testresult::TestResult;
+
+    mod initialization {
+        use super::*;
+
+        #[test]
+        fn test_new_creates_empty_subduction() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            // Verify initial state via async runtime would be needed,
+            // but we can at least verify construction doesn't panic
+            assert!(!subduction.abort_actor_handle.is_aborted());
+            assert!(!subduction.abort_listener_handle.is_aborted());
+        }
+
+        #[tokio::test]
+        async fn test_new_has_empty_sedimentrees() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let ids = subduction.sedimentree_ids().await;
+            assert!(ids.is_empty());
+        }
+
+        #[tokio::test]
+        async fn test_new_has_no_connections() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let peer_ids = subduction.peer_ids().await;
+            assert!(peer_ids.is_empty());
+        }
+    }
+
+    mod sedimentree_operations {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_sedimentree_ids_returns_empty_initially() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let ids = subduction.sedimentree_ids().await;
+            assert_eq!(ids.len(), 0);
+        }
+
+        #[tokio::test]
+        async fn test_add_sedimentree_increases_count() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let id = SedimentreeId::new([1u8; 32]);
+            let tree = Sedimentree::default();
+            let blobs = Vec::new();
+
+            subduction.add_sedimentree(id, tree, blobs).await?;
+
+            let ids = subduction.sedimentree_ids().await;
+            assert_eq!(ids.len(), 1);
+            assert!(ids.contains(&id));
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_get_commits_returns_none_for_missing_tree() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let id = SedimentreeId::new([1u8; 32]);
+            let commits = subduction.get_commits(id).await;
+            assert!(commits.is_none());
+        }
+
+        #[tokio::test]
+        async fn test_get_commits_returns_empty_for_empty_tree() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let id = SedimentreeId::new([1u8; 32]);
+            let tree = Sedimentree::default();
+            let blobs = Vec::new();
+
+            subduction.add_sedimentree(id, tree, blobs).await?;
+
+            let commits = subduction.get_commits(id).await;
+            assert_eq!(commits, Some(Vec::new()));
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_get_fragments_returns_none_for_missing_tree() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let id = SedimentreeId::new([1u8; 32]);
+            let fragments = subduction.get_fragments(id).await;
+            assert!(fragments.is_none());
+        }
+
+        #[tokio::test]
+        async fn test_get_fragments_returns_empty_for_empty_tree() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let id = SedimentreeId::new([1u8; 32]);
+            let tree = Sedimentree::default();
+            let blobs = Vec::new();
+
+            subduction.add_sedimentree(id, tree, blobs).await?;
+
+            let fragments = subduction.get_fragments(id).await;
+            assert_eq!(fragments, Some(Vec::new()));
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_remove_sedimentree_removes_from_ids() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let id = SedimentreeId::new([1u8; 32]);
+            let tree = Sedimentree::default();
+            let blobs = Vec::new();
+
+            subduction.add_sedimentree(id, tree, blobs).await?;
+            assert_eq!(subduction.sedimentree_ids().await.len(), 1);
+
+            subduction.remove_sedimentree(id).await?;
+            assert_eq!(subduction.sedimentree_ids().await.len(), 0);
+
+            Ok(())
+        }
+    }
+
+    mod connection_management {
+        use super::*;
+        use crate::peer::id::PeerId;
+
+        #[tokio::test]
+        async fn test_peer_ids_returns_empty_initially() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let peer_ids = subduction.peer_ids().await;
+            assert_eq!(peer_ids.len(), 0);
+        }
+
+        #[tokio::test]
+        async fn test_register_adds_connection() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn = MockConnection::new();
+            let (fresh, _conn_id) = subduction.register(conn).await?;
+
+            assert!(fresh);
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_register_same_connection_twice_returns_false() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn = MockConnection::new();
+            let (fresh1, conn_id1) = subduction.register(conn).await?;
+            let (fresh2, conn_id2) = subduction.register(conn).await?;
+
+            assert!(fresh1);
+            assert!(!fresh2);
+
+            assert_eq!(conn_id1, conn_id2);
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_unregister_removes_connection() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn = MockConnection::new();
+            let (_fresh, conn_id) = subduction.register(conn).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            let removed = subduction.unregister(&conn_id).await;
+            assert!(removed);
+            assert_eq!(subduction.peer_ids().await.len(), 0);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_unregister_nonexistent_returns_false() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn_id = ConnectionId::new(999);
+            let removed = subduction.unregister(&conn_id).await;
+            assert!(!removed);
+        }
+
+        #[tokio::test]
+        async fn test_register_different_peers_increases_count() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
+            let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
+
+            subduction.register(conn1).await?;
+            subduction.register(conn2).await?;
+
+            assert_eq!(subduction.peer_ids().await.len(), 2);
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_disconnect_removes_connection() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn = MockConnection::new();
+            let (_fresh, conn_id) = subduction.register(conn).await?;
+
+            let removed = subduction.disconnect(&conn_id).await?;
+            assert!(removed);
+            assert_eq!(subduction.peer_ids().await.len(), 0);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_disconnect_nonexistent_returns_false() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn_id = ConnectionId::new(999);
+            let removed = subduction.disconnect(&conn_id).await?;
+            assert!(!removed);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_disconnect_all_removes_all_connections() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
+            let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
+
+            subduction.register(conn1).await?;
+            subduction.register(conn2).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 2);
+
+            subduction.disconnect_all().await?;
+            assert_eq!(subduction.peer_ids().await.len(), 0);
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_disconnect_from_peer_removes_specific_peer() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let peer_id1 = PeerId::new([1u8; 32]);
+            let peer_id2 = PeerId::new([2u8; 32]);
+            let conn1 = MockConnection::with_peer_id(peer_id1);
+            let conn2 = MockConnection::with_peer_id(peer_id2);
+
+            subduction.register(conn1).await?;
+            subduction.register(conn2).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 2);
+
+            let removed = subduction.disconnect_from_peer(&peer_id1).await?;
+            assert!(removed);
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert!(!subduction.peer_ids().await.contains(&peer_id1));
+            assert!(subduction.peer_ids().await.contains(&peer_id2));
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_disconnect_from_nonexistent_peer_returns_false() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let peer_id = PeerId::new([1u8; 32]);
+            #[allow(clippy::unwrap_used)]
+            let removed = subduction.disconnect_from_peer(&peer_id).await.unwrap();
+            assert!(!removed);
+        }
+    }
+
+    mod connection_policy {
+        use super::*;
+        use crate::peer::id::PeerId;
+
+        #[tokio::test]
+        async fn test_allowed_to_connect_allows_all_peers() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let peer_id = PeerId::new([1u8; 32]);
+            let result = subduction.allowed_to_connect(&peer_id).await;
+            assert!(result.is_ok());
+        }
+
+        // TODO also test when the policy says no
+    }
+
+    mod blob_operations {
+        use super::*;
+        use sedimentree_core::blob::Digest;
+
+        #[tokio::test]
+        async fn test_get_local_blob_returns_none_for_missing() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let digest = Digest::from([1u8; 32]);
+            let blob = subduction.get_local_blob(digest).await.unwrap();
+            assert!(blob.is_none());
+        }
+
+        #[tokio::test]
+        async fn test_get_local_blobs_returns_none_for_missing_tree() {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+
+            let id = SedimentreeId::new([1u8; 32]);
+            let blobs = subduction.get_local_blobs(id).await.unwrap();
+            assert!(blobs.is_none());
+        }
+    }
 }

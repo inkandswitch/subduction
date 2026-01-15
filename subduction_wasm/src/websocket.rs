@@ -21,7 +21,7 @@ use futures::{
     future::LocalBoxFuture,
     FutureExt,
 };
-use sedimentree_core::future::Local;
+use futures_kind::Local;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},

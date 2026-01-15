@@ -14,8 +14,8 @@ use futures::{
     future::{BoxFuture, LocalBoxFuture},
     FutureExt,
 };
+use futures_kind::{FutureKind, Local, Sendable};
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
-use sedimentree_core::future::{FutureKind, Local, Sendable};
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -502,5 +502,274 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> PartialEq
             && Arc::ptr_eq(&self.pending, &other.pending)
             && self.inbound_writer.same_channel(&other.inbound_writer)
             && self.inbound_reader.same_channel(&other.inbound_reader)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use core::time::Duration;
+    use futures::io::Cursor;
+    use testresult::TestResult;
+
+    // Mock timeout strategy for testing
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct MockTimeout;
+
+    impl Timeout<Local> for MockTimeout {
+        fn timeout<'a, T: 'a>(
+            &'a self,
+            _dur: Duration,
+            fut: LocalBoxFuture<'a, T>,
+        ) -> LocalBoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+            async move { Ok(fut.await) }.boxed_local()
+        }
+    }
+
+    impl Timeout<Sendable> for MockTimeout {
+        fn timeout<'a, T: 'a>(
+            &'a self,
+            _dur: Duration,
+            fut: BoxFuture<'a, T>,
+        ) -> BoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+            async move { Ok(fut.await) }.boxed()
+        }
+    }
+
+    async fn create_mock_websocket_stream() -> WebSocketStream<Cursor<Vec<u8>>> {
+        use async_tungstenite::WebSocketStream;
+        use futures::io::Cursor;
+
+        // Create a mock stream
+        let buffer = Cursor::new(Vec::new());
+        WebSocketStream::from_raw_socket(buffer, tungstenite::protocol::Role::Client, None).await
+    }
+
+    mod construction {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_new_sets_peer_id() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([42u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+
+            assert_eq!(websocket.peer_id(), peer_id);
+        }
+
+        #[tokio::test]
+        async fn test_new_sets_timeout_strategy() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+
+            assert_eq!(*websocket.timeout_strategy(), MockTimeout);
+        }
+
+        #[tokio::test]
+        async fn test_new_sets_default_time_limit() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(42);
+
+            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+
+            assert_eq!(websocket.default_time_limit(), duration);
+        }
+    }
+
+    mod accessors {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_peer_id_returns_correct_value() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([99u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+
+            assert_eq!(websocket.peer_id(), peer_id);
+        }
+
+        #[tokio::test]
+        async fn test_timeout_strategy_returns_reference() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+
+            let strategy = websocket.timeout_strategy();
+            assert_eq!(*strategy, MockTimeout);
+        }
+
+        #[tokio::test]
+        async fn test_default_time_limit_returns_duration() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let expected_duration = Duration::from_millis(5000);
+
+            let websocket: WebSocket<_, Local, _> =
+                WebSocket::new(ws, timeout, expected_duration, peer_id);
+
+            assert_eq!(websocket.default_time_limit(), expected_duration);
+        }
+    }
+
+    mod equality {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_websockets_equal_when_cloned() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket2 = websocket1.clone();
+
+            assert_eq!(websocket1, websocket2);
+        }
+
+        #[tokio::test]
+        async fn test_websockets_not_equal_different_peer() {
+            let ws1 = create_mock_websocket_stream().await;
+            let ws2 = create_mock_websocket_stream().await;
+            let peer_id1 = PeerId::new([1u8; 32]);
+            let peer_id2 = PeerId::new([2u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket1: WebSocket<_, Local, _> =
+                WebSocket::new(ws1, timeout, duration, peer_id1);
+            let websocket2: WebSocket<_, Local, _> =
+                WebSocket::new(ws2, timeout, duration, peer_id2);
+
+            assert_ne!(websocket1, websocket2);
+        }
+    }
+
+    mod cloning {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_clone_has_same_peer_id() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([123u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket2 = websocket1.clone();
+
+            assert_eq!(websocket1.peer_id(), websocket2.peer_id());
+        }
+
+        #[tokio::test]
+        async fn test_clone_shares_same_timeout() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket2 = websocket1.clone();
+
+            assert_eq!(
+                websocket1.default_time_limit(),
+                websocket2.default_time_limit()
+            );
+        }
+
+        #[tokio::test]
+        async fn test_clone_equals_original() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let websocket2 = websocket1.clone();
+
+            assert_eq!(websocket1, websocket2);
+        }
+    }
+
+    mod request_ids {
+        use super::*;
+
+        #[tokio::test]
+        async fn test_next_request_id_includes_peer_id() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([99u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket: WebSocket<_, Sendable, _> =
+                WebSocket::new(ws, timeout, duration, peer_id);
+
+            let req_id = websocket.next_request_id().await;
+            assert_eq!(req_id.requestor, peer_id);
+        }
+
+        #[tokio::test]
+        async fn test_next_request_id_increments_nonce() {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket: WebSocket<_, Sendable, _> =
+                WebSocket::new(ws, timeout, duration, peer_id);
+
+            let req_id1 = websocket.next_request_id().await;
+            let req_id2 = websocket.next_request_id().await;
+            let req_id3 = websocket.next_request_id().await;
+
+            assert_eq!(req_id2.nonce, req_id1.nonce + 1);
+            assert_eq!(req_id3.nonce, req_id2.nonce + 1);
+        }
+
+        #[tokio::test]
+        async fn test_concurrent_request_ids_are_unique() -> TestResult {
+            let ws = create_mock_websocket_stream().await;
+            let peer_id = PeerId::new([1u8; 32]);
+            let timeout = MockTimeout;
+            let duration = Duration::from_secs(30);
+
+            let websocket: WebSocket<_, Sendable, _> =
+                WebSocket::new(ws, timeout, duration, peer_id);
+
+            let ws1 = websocket.clone();
+            let ws2 = websocket.clone();
+            let ws3 = websocket.clone();
+
+            let handle1 = tokio::spawn(async move { ws1.next_request_id().await });
+            let handle2 = tokio::spawn(async move { ws2.next_request_id().await });
+            let handle3 = tokio::spawn(async move { ws3.next_request_id().await });
+
+            let req_id1 = handle1.await?;
+            let req_id2 = handle2.await?;
+            let req_id3 = handle3.await?;
+
+            // All IDs should be unique (have different nonces)
+            assert_ne!(req_id1.nonce, req_id2.nonce);
+            assert_ne!(req_id2.nonce, req_id3.nonce);
+            assert_ne!(req_id1.nonce, req_id3.nonce);
+
+            Ok(())
+        }
     }
 }

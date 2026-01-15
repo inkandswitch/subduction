@@ -1,3 +1,4 @@
+AHash
 APIs
 ATProto
 Auth
@@ -7,6 +8,7 @@ BChaCha
 BeeKEM
 Beelay
 BigCo
+CBOR-encoded
 CGKA
 CLI
 CRDT
@@ -20,6 +22,7 @@ DCGKA
 DCGKA's
 DNS
 Dev
+DoS-resistant
 ECDH
 EE
 EdDSA
@@ -33,6 +36,7 @@ Keyoxide
 MLS
 Memoization
 MiCKey
+NetworkSubsystem
 Nonces
 OCAP's
 OCap
@@ -48,13 +52,16 @@ RPC
 SChaCha
 SDK
 SPKI
+Scalable
 Sedimentree
 Sedimentrees
+Sharded
 ShareSecretKeys
 Stateful
 Subduction
 TLS
 TODO
+TODOs
 Tokio-based
 Traceback
 TreeKEM
@@ -74,6 +81,7 @@ authN
 authZ
 authn
 authz
+automerge-repo
 backoff
 bchacha-note
 blake
@@ -90,6 +98,7 @@ decrypt
 decrypted
 decrypting
 deduplicate
+deduplication
 delegator
 edgenames
 encrypter
@@ -134,6 +143,7 @@ revoker
 sedimentree
 sedimentrees
 sexualized
+sharded
 sneakernets
 socio-economic
 stateful
@@ -144,6 +154,8 @@ subsumptions
 subtype
 subtyping
 symlink
+targetId
+tokio
 tombstoned
 tradeoffs
 unwieldly
