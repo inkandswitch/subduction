@@ -71,6 +71,13 @@ impl WasmFragment {
             .map(Into::into)
             .collect()
     }
+
+    /// Get the blob metadata of the fragment.
+    #[must_use]
+    #[wasm_bindgen(getter, js_name = blobMeta)]
+    pub fn blob_meta(&self) -> WasmBlobMeta {
+        self.0.summary().blob_meta().clone().into()
+    }
 }
 
 impl From<Fragment> for WasmFragment {

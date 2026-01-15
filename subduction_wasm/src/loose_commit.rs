@@ -83,6 +83,16 @@ impl WasmBlobMeta {
         BlobMeta::new(blob).into()
     }
 
+    /// Create a `BlobMeta` from a digest and size.
+    ///
+    /// This is useful for deserialization when the original blob is not available.
+    /// Since this is manual, the caller must ensure the digest and size are correct.
+    #[wasm_bindgen(js_name = fromDigestSize)]
+    #[must_use]
+    pub fn from_digest_size(digest: &WasmDigest, size_bytes: u64) -> Self {
+        BlobMeta::from_digest_size(digest.clone().into(), size_bytes).into()
+    }
+
     /// Get the digest of the blob.
     #[must_use]
     pub fn digest(&self) -> WasmDigest {

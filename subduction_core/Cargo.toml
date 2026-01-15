@@ -26,8 +26,14 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 bolero = { workspace = true, features = ["arbitrary"] }
+criterion = { workspace = true }
+rand = { workspace = true }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros"] }
+
+[[bench]]
+name = "subduction"
+harness = false
 
 [features]
 default = []

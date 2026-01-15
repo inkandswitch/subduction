@@ -84,6 +84,12 @@ impl WasmDigest {
     pub fn to_hex_string(&self) -> String {
         self.0.to_string()
     }
+
+    /// Hash the given data and return the digest.
+    #[must_use]
+    pub fn hash(data: &[u8]) -> WasmDigest {
+        WasmDigest(Digest::hash(data))
+    }
 }
 
 impl From<Digest> for WasmDigest {
