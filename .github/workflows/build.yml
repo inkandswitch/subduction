@@ -85,7 +85,7 @@ jobs:
         with:
           node-version: 22
           cache: 'pnpm'
-          cache-dependency-path: subduction_wasm/pnpm-lock.yaml
+          cache-dependency-path: '**/pnpm-lock.yaml'
 
       - name: Install dependencies (subduction_wasm)
         run: cd ./subduction_wasm && pnpm i
