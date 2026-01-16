@@ -4,22 +4,25 @@ use alloc::{
 };
 use crate::collections::{Map, Set};
 
-use crate::{depth::DepthMetric, Digest, LooseCommit};
-
-use super::Fragment;
+use crate::{
+    blob::Digest,
+    depth::{DepthMetric, MAX_STRATA_DEPTH},
+    fragment::Fragment,
+    loose_commit::LooseCommit,
+};
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
 // `nodes` and `edges` vectors instead of pointers in order to please the borrow checker.
 #[derive(Debug, Clone)]
 pub(crate) struct CommitDag {
     nodes: Vec<Node>,
-    node_map: Map<crate::Digest, NodeIdx>,
+    node_map: Map<Digest, NodeIdx>,
     edges: Vec<Edge>,
 }
 
 #[derive(Debug, Clone)]
 struct Node {
-    hash: crate::Digest,
+    hash: Digest,
     parents: Option<EdgeIdx>,
     children: Option<EdgeIdx>,
 }
@@ -217,7 +220,7 @@ impl CommitDag {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
             for hash in self.reverse_topo(tip) {
                 let depth = strategy.to_depth(hash);
-                if depth >= crate::MAX_STRATA_DEPTH {
+                if depth >= MAX_STRATA_DEPTH {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -232,10 +235,10 @@ impl CommitDag {
                     block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if depth < crate::MAX_STRATA_DEPTH {
+                    if depth < MAX_STRATA_DEPTH {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && depth < crate::MAX_STRATA_DEPTH
+                } else if !commits_to_blocks.contains_key(&hash) && depth < MAX_STRATA_DEPTH
                 {
                     blockless_commits.insert(hash);
                 }
@@ -491,10 +494,13 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::LooseCommit, CommitDag};
-    use crate::collections::{Map, Set};
-
-    use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes, Digest};
+    use super::CommitDag;
+    use crate::{
+        blob::{BlobMeta, Digest},
+        collections::{Map, Set},
+        commit::CountLeadingZeroBytes,
+        loose_commit::LooseCommit,
+    };
 
     fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest {
         let mut byte_arr: [u8; 32] = rng.random::<[u8; 32]>();
@@ -550,12 +556,9 @@ mod tests {
             for hash in self.nodes.values() {
                 #[allow(clippy::unwrap_used)]
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
-                commits.push(LooseCommit {
-                    #[allow(clippy::unwrap_used)]
-                    blob_meta: *self.commits.get(hash).unwrap(),
-                    digest: *hash,
-                    parents,
-                });
+                #[allow(clippy::unwrap_used)]
+                let blob_meta = *self.commits.get(hash).unwrap();
+                commits.push(LooseCommit::new(*hash, parents, blob_meta));
             }
             commits
         }

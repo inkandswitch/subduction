@@ -1,7 +1,7 @@
 //! The main data type for Sedimentree.
 
 use alloc::vec::Vec;
-use sedimentree_core::Sedimentree;
+use sedimentree_core::sedimentree::Sedimentree;
 use wasm_bindgen::prelude::*;
 
 use crate::{

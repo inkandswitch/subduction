@@ -26,8 +26,11 @@ use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+    sedimentree::{RemoteDiff, Sedimentree, SedimentreeSummary},
     storage::Storage,
-    Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
 use alloc::{
     boxed::Box,
@@ -1601,8 +1604,9 @@ mod tests {
     use crate::connection::test_utils::MockConnection;
     use sedimentree_core::{
         commit::CountLeadingZeroBytes,
+        id::SedimentreeId,
+        sedimentree::Sedimentree,
         storage::MemoryStorage,
-        Sedimentree, SedimentreeId,
     };
     use testresult::TestResult;
 

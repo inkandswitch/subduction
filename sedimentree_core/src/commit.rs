@@ -6,7 +6,11 @@ use core::{error::Error, mem::take, num::NonZero};
 
 use thiserror::Error;
 
-use crate::{blob::BlobMeta, depth::DepthMetric, Depth, Digest, Fragment};
+use crate::{
+    blob::{BlobMeta, Digest},
+    depth::{Depth, DepthMetric},
+    fragment::Fragment,
+};
 
 /// An error indicating that a commit is missing from the store.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]

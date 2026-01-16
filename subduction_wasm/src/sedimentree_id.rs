@@ -4,7 +4,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use sedimentree_core::SedimentreeId;
+use sedimentree_core::id::SedimentreeId;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;

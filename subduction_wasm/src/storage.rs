@@ -11,8 +11,10 @@ use futures_kind::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::{Blob, Digest},
+    fragment::Fragment,
+    id::{BadSedimentreeId, SedimentreeId},
+    loose_commit::LooseCommit,
     storage::Storage,
-    BadSedimentreeId, Fragment, LooseCommit, SedimentreeId,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;

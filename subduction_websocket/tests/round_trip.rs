@@ -9,8 +9,9 @@ use rand::Rng;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
     storage::MemoryStorage,
-    LooseCommit, SedimentreeId,
 };
 use subduction_core::{
     connection::{message::Message, Connection},

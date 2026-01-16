@@ -4,7 +4,10 @@ use alloc::vec::Vec;
 
 use sedimentree_core::{
     blob::{Blob, Digest},
-    Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+    sedimentree::SedimentreeSummary,
 };
 
 use crate::peer::id::PeerId;

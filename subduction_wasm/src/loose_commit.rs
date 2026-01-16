@@ -3,7 +3,7 @@
 use alloc::{borrow::ToOwned, vec::Vec};
 use sedimentree_core::{
     blob::{BlobMeta, Digest},
-    LooseCommit,
+    loose_commit::LooseCommit,
 };
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;

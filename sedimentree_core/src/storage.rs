@@ -15,9 +15,12 @@ use futures::{
 };
 use futures_kind::{FutureKind, Local, Sendable};
 
-use crate::{blob::Blob, Digest, SedimentreeId};
-
-use super::{Fragment, LooseCommit};
+use crate::{
+    blob::{Blob, Digest},
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+};
 
 /// Abstraction over storage for `Sedimentree` data.
 pub trait Storage<K: FutureKind + ?Sized> {

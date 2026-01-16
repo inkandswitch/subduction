@@ -20,7 +20,9 @@ mod generators {
     use rand::{Rng, SeedableRng};
     use sedimentree_core::{
         blob::{BlobMeta, Digest},
-        Fragment, LooseCommit, Sedimentree,
+        fragment::Fragment,
+        loose_commit::LooseCommit,
+        sedimentree::Sedimentree,
     };
 
     /// Generate a deterministic digest from a seed.
@@ -303,7 +305,7 @@ mod sedimentree {
     use std::hint::black_box;
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{commit::CountLeadingZeroBytes, Fragment, Sedimentree};
+    use sedimentree_core::{commit::CountLeadingZeroBytes, fragment::Fragment, loose_commit::LooseCommit, sedimentree::Sedimentree};
 
     use super::generators::{
         linear_commit_chain, overlapping_sedimentrees, synthetic_commit, synthetic_fragment,
@@ -713,7 +715,7 @@ mod sedimentree {
             group.throughput(Throughput::Elements(batch_size as u64));
 
             let tree = synthetic_sedimentree(100, 100, 1);
-            let new_commits: Vec<sedimentree_core::LooseCommit> = (0..batch_size)
+            let new_commits: Vec<LooseCommit> = (0..batch_size)
                 .map(|i| synthetic_commit(900_000 + i as u64, vec![]))
                 .collect();
 
@@ -833,7 +835,7 @@ mod topology {
     use std::hint::black_box;
 
     use criterion::{BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{commit::CountLeadingZeroBytes, Sedimentree};
+    use sedimentree_core::{commit::CountLeadingZeroBytes, sedimentree::Sedimentree};
 
     use super::generators::{linear_commit_chain, merge_heavy_dag};
 

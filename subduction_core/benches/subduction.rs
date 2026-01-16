@@ -28,7 +28,10 @@ mod generators {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta, Digest},
-        Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
+        fragment::Fragment,
+        id::SedimentreeId,
+        loose_commit::LooseCommit,
+        sedimentree::SedimentreeSummary,
     };
     use subduction_core::{
         connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncDiff},
@@ -161,7 +164,7 @@ mod generators {
 
 mod id {
     use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::SedimentreeId;
+    use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::{id::ConnectionId, message::RequestId},
         peer::id::PeerId,
@@ -428,7 +431,7 @@ mod message {
 
 mod sync {
     use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::SedimentreeSummary;
+    use sedimentree_core::sedimentree::SedimentreeSummary;
     use subduction_core::connection::message::{BatchSyncRequest, BatchSyncResponse, Message};
 
     use super::generators::{
@@ -574,7 +577,7 @@ mod collections {
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
     use criterion::{black_box, BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::SedimentreeId;
+    use sedimentree_core::id::SedimentreeId;
     use subduction_core::{connection::id::ConnectionId, peer::id::PeerId};
 
     use super::generators::{peer_id_from_seed, sedimentree_id_from_seed};
