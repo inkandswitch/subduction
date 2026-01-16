@@ -24,9 +24,9 @@ use alloc::{
     fmt::Formatter,
     str::FromStr,
     string::{String, ToString},
-    collections::{BTreeMap, BTreeSet},
     vec, vec::Vec,
 };
+use collections::{Map, Set};
 
 use blob::{BlobMeta, Digest};
 use depth::{Depth, DepthMetric, MAX_STRATA_DEPTH};
@@ -124,20 +124,21 @@ impl core::fmt::Display for SedimentreeId {
 }
 
 /// A less detailed representation of a Sedimentree that omits strata checkpoints.
-#[derive(Clone, Debug, PartialEq, Eq, Default, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SedimentreeSummary {
-    fragment_summaries: BTreeSet<FragmentSummary>,
-    commits: BTreeSet<LooseCommit>,
+    fragment_summaries: Set<FragmentSummary>,
+    commits: Set<LooseCommit>,
 }
 
 impl SedimentreeSummary {
     /// Constructor for a [`SedimentreeSummary`].
     #[must_use]
     pub const fn new(
-        fragment_summaries: BTreeSet<FragmentSummary>,
-        commits: BTreeSet<LooseCommit>,
+        fragment_summaries: Set<FragmentSummary>,
+        commits: Set<LooseCommit>,
     ) -> SedimentreeSummary {
         SedimentreeSummary {
             fragment_summaries,
@@ -147,13 +148,13 @@ impl SedimentreeSummary {
 
     /// The set of fragment summaries in this [`SedimentreeSummary`].
     #[must_use]
-    pub const fn fragment_summaries(&self) -> &BTreeSet<FragmentSummary> {
+    pub const fn fragment_summaries(&self) -> &Set<FragmentSummary> {
         &self.fragment_summaries
     }
 
     /// The set of loose commits in this [`SedimentreeSummary`].
     #[must_use]
-    pub const fn loose_commits(&self) -> &BTreeSet<LooseCommit> {
+    pub const fn loose_commits(&self) -> &Set<LooseCommit> {
         &self.commits
     }
 
@@ -236,8 +237,8 @@ impl Fragment {
             && self
                 .checkpoints
                 .iter()
-                .collect::<BTreeSet<_>>()
-                .is_superset(&other.boundary.iter().collect::<BTreeSet<_>>())
+                .collect::<Set<_>>()
+                .is_superset(&other.boundary.iter().collect::<Set<_>>())
         {
             return true;
         }
@@ -256,8 +257,8 @@ impl Fragment {
                 .summary
                 .boundary
                 .iter()
-                .collect::<BTreeSet<_>>()
-                .is_superset(&other.boundary.iter().collect::<BTreeSet<_>>())
+                .collect::<Set<_>>()
+                .is_superset(&other.boundary.iter().collect::<Set<_>>())
         {
             return true;
         }
@@ -429,11 +430,12 @@ pub struct RemoteDiff<'a> {
 }
 
 /// All of the Sedimentree metadata about all the fragments for a series of payload.
-#[derive(Default, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Default, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Sedimentree {
-    fragments: BTreeSet<Fragment>,
-    commits: BTreeSet<LooseCommit>,
+    fragments: Set<Fragment>,
+    commits: Set<LooseCommit>,
 }
 
 impl Sedimentree {
@@ -491,12 +493,12 @@ impl Sedimentree {
     /// Compute the difference between two local [`Sedimentree`]s.
     #[must_use]
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
-        let our_fragments = self.fragments.iter().collect::<BTreeSet<_>>();
+        let our_fragments = self.fragments.iter().collect::<Set<_>>();
         let their_fragments = other.fragments.iter().collect();
         let left_missing_fragments = our_fragments.difference(&their_fragments);
         let right_missing_fragments = their_fragments.difference(&our_fragments);
 
-        let our_commits = self.commits.iter().collect::<BTreeSet<_>>();
+        let our_commits = self.commits.iter().collect::<Set<_>>();
         let their_commits = other.commits.iter().collect();
         let left_missing_commits = our_commits.difference(&their_commits);
         let right_missing_commits = their_commits.difference(&our_commits);
@@ -520,8 +522,8 @@ impl Sedimentree {
             .fragments
             .iter()
             .map(|s| &s.summary)
-            .collect::<BTreeSet<&FragmentSummary>>();
-        let their_fragments = remote.fragment_summaries.iter().collect::<BTreeSet<_>>();
+            .collect::<Set<&FragmentSummary>>();
+        let their_fragments = remote.fragment_summaries.iter().collect::<Set<_>>();
         let mut local_fragments = Vec::new();
         for m in our_fragments_meta.difference(&their_fragments) {
             for s in &self.fragments {
@@ -536,7 +538,7 @@ impl Sedimentree {
         }
         let remote_fragments = their_fragments.difference(&our_fragments_meta);
 
-        let our_commits = self.commits.iter().collect::<BTreeSet<&LooseCommit>>();
+        let our_commits = self.commits.iter().collect::<Set<&LooseCommit>>();
         let their_commits = remote.commits.iter().collect();
         let local_commits = our_commits.difference(&their_commits);
         let remote_commits = their_commits.difference(&our_commits);
@@ -671,7 +673,7 @@ impl Sedimentree {
         depth_metric: &M,
     ) -> Vec<FragmentSpec> {
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
-        let mut runs_by_level = BTreeMap::<Depth, (Digest, Vec<Digest>)>::new();
+        let mut runs_by_level = Map::<Depth, (Digest, Vec<Digest>)>::new();
         let mut all_bundles = Vec::new();
         for commit_hash in dag.canonical_sequence(self.fragments.iter(), depth_metric) {
             let level = depth_metric.to_depth(commit_hash);

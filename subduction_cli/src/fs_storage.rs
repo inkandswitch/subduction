@@ -11,11 +11,9 @@ use sedimentree_core::{
     storage::Storage,
     Fragment, LooseCommit, SedimentreeId,
 };
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    path::{Path, PathBuf},
-    sync::Arc,
-};
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use sedimentree_core::collections::{Map, Set};
 use thiserror::Error;
 
 /// Errors that can occur during filesystem storage operations.
@@ -39,9 +37,9 @@ pub(crate) enum FsStorageError {
 pub(crate) struct FsStorage {
     root: PathBuf,
     // In-memory cache for performance
-    ids_cache: Arc<Mutex<BTreeSet<SedimentreeId>>>,
-    fragments_cache: Arc<Mutex<BTreeMap<SedimentreeId, BTreeSet<Fragment>>>>,
-    commits_cache: Arc<Mutex<BTreeMap<SedimentreeId, BTreeSet<LooseCommit>>>>,
+    ids_cache: Arc<Mutex<Set<SedimentreeId>>>,
+    fragments_cache: Arc<Mutex<Map<SedimentreeId, Set<Fragment>>>>,
+    commits_cache: Arc<Mutex<Map<SedimentreeId, Set<LooseCommit>>>>,
 }
 
 impl FsStorage {
@@ -61,14 +59,14 @@ impl FsStorage {
         Ok(Self {
             root,
             ids_cache,
-            fragments_cache: Arc::new(Mutex::new(BTreeMap::new())),
-            commits_cache: Arc::new(Mutex::new(BTreeMap::new())),
+            fragments_cache: Arc::new(Mutex::new(Map::new())),
+            commits_cache: Arc::new(Mutex::new(Map::new())),
         })
     }
 
-    fn load_tree_ids(root: &Path) -> BTreeSet<SedimentreeId> {
+    fn load_tree_ids(root: &Path) -> Set<SedimentreeId> {
         let trees_dir = root.join("trees");
-        let mut ids = BTreeSet::new();
+        let mut ids = Set::new();
 
         if let Ok(entries) = std::fs::read_dir(trees_dir) {
             for entry in entries.flatten() {
@@ -150,7 +148,7 @@ impl Storage<Sendable> for FsStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> BoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
+    ) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         async move {
             tracing::debug!("FsStorage: loading all sedimentree_ids");
             Ok(self.ids_cache.lock().await.clone())
@@ -221,7 +219,7 @@ impl Storage<Sendable> for FsStorage {
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
                     // Update cache
-                    let commits_set: BTreeSet<_> = commits.iter().cloned().collect();
+                    let commits_set: Set<_> = commits.iter().cloned().collect();
                     self.commits_cache
                         .lock()
                         .await
@@ -321,7 +319,7 @@ impl Storage<Sendable> for FsStorage {
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
                     // Update cache
-                    let fragments_set: BTreeSet<_> = fragments.iter().cloned().collect();
+                    let fragments_set: Set<_> = fragments.iter().cloned().collect();
                     self.fragments_cache
                         .lock()
                         .await
@@ -425,7 +423,7 @@ impl Storage<Local> for FsStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> LocalBoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         <Self as Storage<Sendable>>::load_all_sedimentree_ids(self).boxed_local()
     }
 

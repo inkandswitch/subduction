@@ -1,6 +1,7 @@
 //! Subduction node.
 
-use alloc::{collections::BTreeMap, rc::Rc, sync::Arc, vec::Vec};
+use alloc::{rc::Rc, sync::Arc, vec::Vec};
+use sedimentree_core::collections::Map;
 use core::{convert::Infallible, fmt::Debug, time::Duration};
 
 use async_lock::Mutex;
@@ -665,7 +666,7 @@ impl ConnErrPair {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    BTreeMap<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
+    Map<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]

@@ -3,7 +3,8 @@
 pub mod idb;
 pub mod memory;
 
-use alloc::{collections::BTreeSet, string::ToString, vec::Vec};
+use alloc::{string::ToString, vec::Vec};
+use sedimentree_core::collections::Set;
 
 use futures::{future::LocalBoxFuture, FutureExt};
 use futures_kind::Local;
@@ -162,7 +163,7 @@ impl Storage<Local> for JsStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> LocalBoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         async move {
             let span = tracing::debug_span!("JsStorage::load_all_sedimentree_ids");
             let _enter = span.enter();
@@ -172,7 +173,7 @@ impl Storage<Local> for JsStorage {
                 .await
                 .map_err(JsStorageError::LoadLooseCommitsError)?;
             let xs: Vec<WasmSedimentreeId> = WasmSedimentreeIdsArray::try_from(&js_value)?.0;
-            let mut sedimentree_ids_set = BTreeSet::new();
+            let mut sedimentree_ids_set = Set::new();
             for wasm_id in xs {
                 sedimentree_ids_set.insert(wasm_id.into());
             }

@@ -1,6 +1,7 @@
 //! # Generic WebSocket connection for Subduction
 
-use alloc::{boxed::Box, collections::BTreeMap, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use sedimentree_core::collections::Map;
 use core::{
     marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
@@ -42,7 +43,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeou
     ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
     outbound: Arc<Mutex<WebSocketSender<T>>>,
 
-    pending: Arc<Mutex<BTreeMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
+    pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
     inbound_writer: async_channel::Sender<Message>,
     inbound_reader: async_channel::Receiver<Message>,
@@ -184,7 +185,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> WebSocket<
     ) -> Self {
         tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
-        let pending = Arc::new(Mutex::new(BTreeMap::<
+        let pending = Arc::new(Mutex::new(Map::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));

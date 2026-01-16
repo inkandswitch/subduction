@@ -10,7 +10,8 @@ use sedimentree_core::{
 use crate::peer::id::PeerId;
 
 /// The API contact messages to be sent over a [`Connection`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Message {
@@ -67,7 +68,8 @@ impl Message {
 }
 
 /// A request to sync a sedimentree in batch.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncRequest {
@@ -88,7 +90,8 @@ impl From<BatchSyncRequest> for Message {
 }
 
 /// A response to a [`BatchSyncRequest`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncResponse {

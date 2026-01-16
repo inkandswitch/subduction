@@ -1,9 +1,7 @@
 //! Abstractions for working with commits.
 
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    vec::Vec,
-};
+use alloc::vec::Vec;
+use crate::collections::{Map, Set};
 use core::{error::Error, mem::take, num::NonZero};
 
 use thiserror::Error;
@@ -18,11 +16,11 @@ pub struct MissingCommitError(Digest);
 /// A trait for types that have parent hashes.
 pub trait Parents {
     /// The parent digests of this node.
-    fn parents(&self) -> BTreeSet<Digest>;
+    fn parents(&self) -> Set<Digest>;
 }
 
-impl Parents for BTreeSet<Digest> {
-    fn parents(&self) -> BTreeSet<Digest> {
+impl Parents for Set<Digest> {
+    fn parents(&self) -> Set<Digest> {
         self.clone()
     }
 }
@@ -62,22 +60,22 @@ pub trait CommitStore<'a> {
     fn fragment<D: DepthMetric>(
         &self,
         head_digest: Digest,
-        known_fragment_states: &BTreeMap<Digest, FragmentState<Self::Node>>,
+        known_fragment_states: &Map<Digest, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
         let min_depth = strategy.to_depth(head_digest);
 
-        let mut visited: BTreeSet<Digest> = BTreeSet::from([head_digest]);
-        let mut members: BTreeSet<Digest> = BTreeSet::from([head_digest]);
+        let mut visited: Set<Digest> = Set::from([head_digest]);
+        let mut members: Set<Digest> = Set::from([head_digest]);
 
-        let mut boundary: BTreeMap<Digest, Self::Node> = BTreeMap::new();
-        let mut checkpoints: BTreeSet<Digest> = BTreeSet::new();
+        let mut boundary: Map<Digest, Self::Node> = Map::new();
+        let mut checkpoints: Set<Digest> = Set::new();
 
         let head_change = self
             .lookup(head_digest)
             .map_err(|e| FragmentError::LookupError(e))?
             .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
-        let mut horizon: BTreeSet<Digest> = head_change.parents();
+        let mut horizon: Set<Digest> = head_change.parents();
 
         while !horizon.is_empty() {
             let local_horizon = take(&mut horizon);
@@ -162,7 +160,7 @@ pub trait CommitStore<'a> {
     fn build_fragment_store<'b, D: DepthMetric>(
         &self,
         head_digests: &[Digest],
-        known_fragment_states: &'b mut BTreeMap<Digest, FragmentState<Self::Node>>,
+        known_fragment_states: &'b mut Map<Digest, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<Vec<&'b FragmentState<Self::Node>>, FragmentError<'a, Self>> {
         let mut fresh_heads = Vec::new();
@@ -272,9 +270,9 @@ impl DepthMetric for CountTrailingZerosInBase {
 #[derive(Debug, Clone)]
 pub struct FragmentState<T> {
     head_digest: Digest,
-    members: BTreeSet<Digest>,
-    checkpoints: BTreeSet<Digest>,
-    boundary: BTreeMap<Digest, T>,
+    members: Set<Digest>,
+    checkpoints: Set<Digest>,
+    boundary: Map<Digest, T>,
 }
 
 impl<T> FragmentState<T> {
@@ -282,9 +280,9 @@ impl<T> FragmentState<T> {
     #[must_use]
     pub const fn new(
         head_digest: Digest,
-        members: BTreeSet<Digest>,
-        checkpoints: BTreeSet<Digest>,
-        boundary: BTreeMap<Digest, T>,
+        members: Set<Digest>,
+        checkpoints: Set<Digest>,
+        boundary: Map<Digest, T>,
     ) -> Self {
         Self {
             head_digest,
@@ -308,7 +306,7 @@ impl<T> FragmentState<T> {
     /// This includes all history between the `head_digest`
     /// and the `boundary` (not including the boundary elements).
     #[must_use]
-    pub const fn members(&self) -> &BTreeSet<Digest> {
+    pub const fn members(&self) -> &Set<Digest> {
         &self.members
     }
 
@@ -318,13 +316,13 @@ impl<T> FragmentState<T> {
     /// below the target, so that it is possible to know which other fragments
     /// this one covers.
     #[must_use]
-    pub const fn checkpoints(&self) -> &BTreeSet<Digest> {
+    pub const fn checkpoints(&self) -> &Set<Digest> {
         &self.checkpoints
     }
 
     /// The boundary from which the next set of fragments would be built.
     #[must_use]
-    pub const fn boundary(&self) -> &BTreeMap<Digest, T> {
+    pub const fn boundary(&self) -> &Map<Digest, T> {
         &self.boundary
     }
 

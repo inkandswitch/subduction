@@ -2,12 +2,12 @@
 
 use alloc::{
     boxed::Box,
-    collections::BTreeMap,
     rc::Rc,
     string::ToString,
     sync::Arc,
     vec::Vec
 };
+use sedimentree_core::collections::Map;
 use core::{
     cell::RefCell,
     convert::Infallible,
@@ -48,7 +48,7 @@ pub struct WasmWebSocket {
     request_id_counter: Arc<AtomicU64>,
     socket: WebSocket,
 
-    pending: Arc<Mutex<BTreeMap<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
+    pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
     inbound_reader: async_channel::Receiver<Message>,
 }
 
@@ -64,7 +64,7 @@ impl WasmWebSocket {
     pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(64);
 
-        let pending = Arc::new(Mutex::new(BTreeMap::<
+        let pending = Arc::new(Mutex::new(Map::<
             RequestId,
             oneshot::Sender<BatchSyncResponse>,
         >::new()));

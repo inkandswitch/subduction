@@ -17,22 +17,26 @@
 
 Subduction is organized as a Rust workspace with multiple crates:
 
-### Core Libraries
-
-- **`sedimentree_core`**: The core data partitioning scheme that enables efficient metadata-based synchronization
-- **`subduction_core`**: The main synchronization protocol implementation
-- **`subduction_websocket`**: WebSocket transport layer for peer-to-peer connections
+| Crate                  | Description                                                                             |
+|------------------------|-----------------------------------------------------------------------------------------|
+| `sedimentree_core`     | The core data partitioning scheme that enables efficient metadata-based synchronization |
+| `subduction_core`      | The main synchronization protocol implementation                                        |
+| `subduction_websocket` | WebSocket transport layer for peer-to-peer connections                                  |
 
 ### Platform Bindings
 
-- **`subduction_wasm`**: WebAssembly bindings for browser and Node.js environments
-- **`automerge_sedimentree`**: Sedimentree adapter for Automerge documents
-- **`automerge_sedimentree_wasm`**: Wasm bindings for Automerge + Sedimentree
-- **`automerge_subduction_wasm`**: Wasm bindings for Automerge + Subduction (full sync stack)
+| Crate                        | Description                                                |
+|------------------------------|------------------------------------------------------------|
+| `subduction_wasm`            | WebAssembly bindings for browser and Node.js environments  |
+| `automerge_sedimentree`      | Sedimentree adapter for Automerge documents                |
+| `automerge_sedimentree_wasm` | Wasm bindings for Automerge + Sedimentree                  |
+| `automerge_subduction_wasm`  | Wasm bindings for Automerge + Subduction (full sync stack) |
 
 ### Tools
 
-- **`subduction_cli`**: Command-line tool for running Subduction servers and clients
+| Crate            | Description                                                  |
+|------------------|--------------------------------------------------------------|
+| `subduction_cli` | Command-line tool for running Subduction servers and clients |
 
 ## Sedimentree
 

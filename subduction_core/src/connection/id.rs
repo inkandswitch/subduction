@@ -42,7 +42,7 @@ impl core::fmt::Display for ConnectionId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::collections::BTreeMap;
+    use sedimentree_core::collections::Map;
     use alloc::format;
 
     mod display {
@@ -131,7 +131,7 @@ mod tests {
             let id1 = ConnectionId::new(1);
             let id2 = ConnectionId::new(1);
 
-            let mut map = BTreeMap::new();
+            let mut map = Map::new();
             map.insert(id1, "value");
 
             assert_eq!(map.get(&id2), Some(&"value"));
