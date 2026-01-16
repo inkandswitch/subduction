@@ -1,11 +1,12 @@
 //! The main Sedimentree data structure and related types.
 
+mod commit_dag;
+
 use alloc::vec::Vec;
 
 use crate::{
     blob::Digest,
     collections::{Map, Set},
-    commit_dag,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
     fragment::{Fragment, FragmentSpec, FragmentSummary},
     id::SedimentreeId,

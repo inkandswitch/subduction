@@ -31,5 +31,3 @@ pub mod loose_commit;
 pub mod sedimentree;
 pub mod storage;
 
-mod commit_dag;
-

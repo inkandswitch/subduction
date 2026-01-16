@@ -1,11 +1,17 @@
-use alloc::{
-    vec,
-    vec::Vec,
-};
-use crate::collections::{Map, Set};
+//! Internal commit DAG representation for Sedimentree operations.
+//!
+//! This module provides an adjacency representation of a commit DAG,
+//! used internally for operations like [`Sedimentree::minimize`] and [`Sedimentree::heads`].
+//! It is not part of the public API.
+//!
+//! [`Sedimentree::minimize`]: super::Sedimentree::minimize
+//! [`Sedimentree::heads`]: super::Sedimentree::heads
+
+use alloc::{vec, vec::Vec};
 
 use crate::{
     blob::Digest,
+    collections::{Map, Set},
     depth::{DepthMetric, MAX_STRATA_DEPTH},
     fragment::Fragment,
     loose_commit::LooseCommit,
@@ -238,8 +244,7 @@ impl CommitDag {
                     if depth < MAX_STRATA_DEPTH {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && depth < MAX_STRATA_DEPTH
-                {
+                } else if !commits_to_blocks.contains_key(&hash) && depth < MAX_STRATA_DEPTH {
                     blockless_commits.insert(hash);
                 }
             }
@@ -643,10 +648,7 @@ mod tests {
         };
     }
 
-    fn pretty_hashes(
-        name_map: &Map<Digest, &'_ str>,
-        hashes: &Set<Digest>,
-    ) -> Set<String> {
+    fn pretty_hashes(name_map: &Map<Digest, &'_ str>, hashes: &Set<Digest>) -> Set<String> {
         hashes
             .iter()
             .map(|h| {
@@ -749,9 +751,7 @@ mod tests {
         let graph = CommitDag::from_commits(vec![&a, &b, &c, &d].into_iter());
         assert_eq!(
             graph.parents_of_hash(c.digest()).collect::<Set<_>>(),
-            vec![a.digest(), b.digest()]
-                .into_iter()
-                .collect::<Set<_>>()
+            vec![a.digest(), b.digest()].into_iter().collect::<Set<_>>()
         );
     }
 }
