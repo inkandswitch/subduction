@@ -25,6 +25,9 @@ impl<'a, C: 'a + Connection<Sendable> + Send> RecvOnce<'a, C> for Sendable {
                     msg
                 }
                 Err(e) => {
+                    // NOTE: This early return is how dead connections get fully cleaned up.
+                    // By not sending to `sender`, the connection is never re-registered
+                    // to the actor_channel, so it gets dropped here.
                     tracing::error!("error when waiting for {conn_id} to receive: {e:?}");
                     return;
                 }
@@ -32,6 +35,8 @@ impl<'a, C: 'a + Connection<Sendable> + Send> RecvOnce<'a, C> for Sendable {
 
             tracing::debug!("recv_once: received message from {conn_id}: {msg:?}");
 
+            // Send to msg_queue for dispatch. The listener will re-register
+            // this connection to actor_channel after processing.
             if let Err(e) = sender.send((conn_id, conn, msg)).await {
                 tracing::error!("unable to send msg about {conn_id} to Subduction: {e:?}");
             }
@@ -55,6 +60,9 @@ impl<'a, C: 'a + Connection<Local>> RecvOnce<'a, C> for Local {
                     msg
                 }
                 Err(e) => {
+                    // NOTE: This early return is how dead connections get fully cleaned up.
+                    // By not sending to `sender`, the connection is never re-registered
+                    // to the actor_channel, so it gets dropped here.
                     tracing::error!("error when waiting for {conn_id} to receive: {e:?}");
                     return;
                 }
@@ -62,6 +70,8 @@ impl<'a, C: 'a + Connection<Local>> RecvOnce<'a, C> for Local {
 
             tracing::debug!("recv_once: received message from {conn_id}: {msg:?}");
 
+            // Send to msg_queue for dispatch. The listener will re-register
+            // this connection to actor_channel after processing.
             if let Err(e) = sender.send((conn_id, conn, msg)).await {
                 tracing::error!("unable to send msg about {conn_id} to Subduction: {e:?}");
             }

@@ -162,23 +162,22 @@ impl<
                 msg
             );
 
-            let should_reregister = if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
+            if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
                 tracing::error!(
                     "error dispatching message from connection {:?}: {}",
                     conn_id,
                     e
                 );
-                // Connection is broken - unregister it and don't re-queue
+                // Connection is broken - unregister from conns map.
+                // We still re-register to actor_channel below to drain any remaining
+                // buffered messages. The connection will fully close when recv_once
+                // fails on the broken connection.
                 let _ = self.unregister(&conn_id).await;
                 tracing::info!("unregistered failed connection {:?}", conn_id);
+            }
 
-                false
-            } else {
-                true
-            };
-
-            if should_reregister
-                && let Err(e) = self.actor_channel.send((conn_id, conn)).await {
+            // Always re-register to drain buffered messages and listen for more
+            if let Err(e) = self.actor_channel.send((conn_id, conn)).await {
                     tracing::error!(
                         "error re-sending connection {:?} to actor channel: {:?}",
                         conn_id,
