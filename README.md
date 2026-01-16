@@ -142,23 +142,26 @@ await syncer.register(subductionWs);
 
 ```
 subduction/
-├── sedimentree_core/       # Core Sedimentree data structure
-├── subduction_core/        # Sync protocol implementation
-├── subduction_websocket/   # WebSocket transport
-├── subduction_wasm/        # Wasm bindings
-├── subduction_cli/         # CLI tool
-├── automerge_sedimentree/  # Automerge integration
-└── automerge_*_wasm/       # Automerge Wasm bindings
+├── sedimentree_core/           # Core Sedimentree data structure
+├── subduction_core/            # Sync protocol implementation
+├── subduction_websocket/       # WebSocket transport
+├── subduction_wasm/            # Wasm bindings
+├── subduction_cli/             # CLI for server & client nodes
+├── automerge_sedimentree/      # Automerge integration
+├── automerge_sedimentree_wasm/ # Wasm wrapper for automerge_sedimentree
+└── automerge_subduction_wasm/  # Wasm wrapper for automerge_sedimentree + subduction
 ```
 
 ### Testing
 
-The project uses multiple testing strategies:
+The project uses several testing strategies:
 
-- **Unit tests**: Standard `cargo test` for Rust code
-- **Property-based tests**: [`bolero`] for fuzz testing
-- **E2E tests**: Playwright tests for Wasm bindings (see `subduction_wasm/e2e/`)
-- **Integration tests**: WebSocket connection tests with real peer interactions
+| Strategy             | Description                                                     |
+|----------------------|-----------------------------------------------------------------|
+| Unit Tests           | Standard `cargo test` for Rust code                             |
+| Property-based Tests | [`bolero`] for fuzz testing                                     |
+| E2E Tests            | Playwright tests for Wasm bindings (see `subduction_wasm/e2e/`) |
+| Integration Tests    | WebSocket connection tests with real peer interactions          |
 
 <!-- Internal Links -->
 

@@ -94,6 +94,82 @@ impl Connection<Sendable> for MockConnection {
     }
 }
 
+/// A mock connection that always fails on send.
+///
+/// This is useful for testing connection cleanup when send operations fail.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct FailingSendMockConnection {
+    peer_id: PeerId,
+}
+
+impl FailingSendMockConnection {
+    /// Create a new failing mock connection with the default peer ID (all zeros).
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            peer_id: PeerId::new([0u8; 32]),
+        }
+    }
+
+    /// Create a new failing mock connection with a specific peer ID.
+    #[must_use]
+    pub const fn with_peer_id(peer_id: PeerId) -> Self {
+        Self { peer_id }
+    }
+}
+
+impl Default for FailingSendMockConnection {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Connection<Sendable> for FailingSendMockConnection {
+    type DisconnectionError = core::fmt::Error;
+    type SendError = core::fmt::Error;
+    type RecvError = core::fmt::Error;
+    type CallError = core::fmt::Error;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    fn disconnect(
+        &self,
+    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+        Box::pin(async { Ok(()) })
+    }
+
+    fn send(
+        &self,
+        _message: Message,
+    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+        Box::pin(async { Err(core::fmt::Error) })
+    }
+
+    fn recv(&self) -> <Sendable as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+        Box::pin(async { Err(core::fmt::Error) })
+    }
+
+    fn next_request_id(&self) -> <Sendable as FutureKind>::Future<'_, RequestId> {
+        let peer_id = self.peer_id;
+        Box::pin(async move {
+            RequestId {
+                requestor: peer_id,
+                nonce: 0,
+            }
+        })
+    }
+
+    fn call(
+        &self,
+        _req: BatchSyncRequest,
+        _timeout: Option<Duration>,
+    ) -> <Sendable as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+        Box::pin(async { Err(core::fmt::Error) })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
