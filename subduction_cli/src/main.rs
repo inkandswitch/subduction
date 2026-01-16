@@ -5,6 +5,7 @@
 mod client;
 mod ephemeral_relay;
 mod fs_storage;
+pub mod metrics;
 mod server;
 
 use clap::{Parser, Subcommand};

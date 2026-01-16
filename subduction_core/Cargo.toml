@@ -18,6 +18,7 @@ async-lock = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 futures = { workspace = true }
 futures_kind = { workspace = true }
+metrics = { workspace = true, optional = true }
 nonempty = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
 serde = { workspace = true, optional = true, features = ["derive"] }
@@ -39,6 +40,7 @@ harness = false
 default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
 bolero = ["dep:bolero", "arbitrary"]
+metrics = ["dep:metrics"]
 serde = ["dep:serde"]
 serde-std = ["serde/std"]
 std = [

@@ -198,7 +198,16 @@ impl<
         message: Message,
     ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
-        tracing::info!("dispatch: {:?}: {:?}", from, message);
+        tracing::info!(
+            from = %from,
+            message_type = message.variant_name(),
+            sedimentree_id = ?message.sedimentree_id(),
+            request_id = ?message.request_id(),
+            "dispatch"
+        );
+
+        #[cfg(feature = "metrics")]
+        crate::metrics::message_dispatched(message.variant_name());
 
         match message {
             Message::LooseCommit { id, commit, blob } => {
@@ -405,13 +414,23 @@ impl<
                 .await
                 .map_err(|_| RegistrationError::SendToClosedChannel)?;
 
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_opened();
+
             Ok((true, conn_id))
         }
     }
 
     /// Low-level unregistration of a connection.
     pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
-        self.conns.lock().await.remove(conn_id).is_some()
+        let removed = self.conns.lock().await.remove(conn_id).is_some();
+
+        #[cfg(feature = "metrics")]
+        if removed {
+            crate::metrics::connection_closed();
+        }
+
+        removed
     }
 
     /*********

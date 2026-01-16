@@ -319,7 +319,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> WebSocket<
                     tracing::warn!("unexpected text message: {}", text);
                 }
                 Ok(tungstenite::Message::Ping(p)) => {
-                    tracing::info!("received ping: {:x?}", p);
+                    tracing::debug!(size = p.len(), "received ping");
                     self.outbound
                         .lock()
                         .await

@@ -68,6 +68,31 @@ impl Message {
             | Message::BlobsResponse(_) => None,
         }
     }
+
+    /// Get the variant name of this message for logging purposes.
+    #[must_use]
+    pub const fn variant_name(&self) -> &'static str {
+        match self {
+            Message::LooseCommit { .. } => "LooseCommit",
+            Message::Fragment { .. } => "Fragment",
+            Message::BlobsRequest(_) => "BlobsRequest",
+            Message::BlobsResponse(_) => "BlobsResponse",
+            Message::BatchSyncRequest(_) => "BatchSyncRequest",
+            Message::BatchSyncResponse(_) => "BatchSyncResponse",
+        }
+    }
+
+    /// Get the sedimentree ID associated with this message, if any.
+    #[must_use]
+    pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
+        match self {
+            Message::LooseCommit { id, .. }
+            | Message::Fragment { id, .. }
+            | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
+            | Message::BatchSyncResponse(BatchSyncResponse { id, .. }) => Some(*id),
+            Message::BlobsRequest(_) | Message::BlobsResponse(_) => None,
+        }
+    }
 }
 
 /// A request to sync a sedimentree in batch.
