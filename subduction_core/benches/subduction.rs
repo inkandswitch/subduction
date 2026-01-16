@@ -1,11 +1,33 @@
 //! Benchmarks for `subduction_core`.
 //!
-//! These benchmarks focus on the synchronous operations in the crate,
-//! including message construction, ID operations, and type manipulations.
+//! Run with: `cargo bench -p subduction_core`
+//!
+//! ## Benchmark Philosophy
+//!
+//! These benchmarks cover the sync protocol's data types and operations. They're organized into:
+//!
+//! 1. **Microbenchmarks** - ID types, accessors, trivial operations. These complete in nanoseconds
+//!    and are unlikely to be bottlenecks. Kept for regression detection and API overhead tracking.
+//!
+//! 2. **Scaling benchmarks** - Collection operations, message construction at various sizes.
+//!    These help understand how the system behaves as data grows.
+//!
+//! 3. **Protocol operation benchmarks** - SyncDiff, BatchSync request/response construction.
+//!    These are closer to real workloads but still don't include serialization or network I/O.
+//!
+//! ## What's NOT Tested Here
+//!
+//! - Actual sync protocol execution (see integration tests)
+//! - CBOR serialization/deserialization
+//! - WebSocket round-trip latency
+//! - Storage I/O
+//! - Async runtime overhead
 
 #![allow(missing_docs)]
 
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{
+    black_box, criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
+};
 use rand::{rngs::StdRng, Rng, SeedableRng};
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
@@ -96,11 +118,16 @@ fn storage_key_from_seed(seed: u64, depth: usize) -> StorageKey {
 }
 
 /// Generate a sync diff with commits and fragments.
-fn sync_diff_from_seed(seed: u64, num_commits: usize, num_fragments: usize) -> SyncDiff {
+fn sync_diff_from_seed(
+    seed: u64,
+    num_commits: usize,
+    num_fragments: usize,
+    blob_size: usize,
+) -> SyncDiff {
     let missing_commits: Vec<(LooseCommit, Blob)> = (0..num_commits)
         .map(|i| {
             let commit = loose_commit_from_seed(seed.wrapping_add(i as u64));
-            let blob = blob_from_seed(seed.wrapping_add(1000 + i as u64), 256);
+            let blob = blob_from_seed(seed.wrapping_add(1000 + i as u64), blob_size);
             (commit, blob)
         })
         .collect();
@@ -108,7 +135,7 @@ fn sync_diff_from_seed(seed: u64, num_commits: usize, num_fragments: usize) -> S
     let missing_fragments: Vec<(Fragment, Blob)> = (0..num_fragments)
         .map(|i| {
             let fragment = fragment_from_seed(seed.wrapping_add(2000 + i as u64), 3, 10);
-            let blob = blob_from_seed(seed.wrapping_add(3000 + i as u64), 1024);
+            let blob = blob_from_seed(seed.wrapping_add(3000 + i as u64), blob_size * 4);
             (fragment, blob)
         })
         .collect();
@@ -133,59 +160,49 @@ fn batch_sync_response_from_seed(
     seed: u64,
     num_commits: usize,
     num_fragments: usize,
+    blob_size: usize,
 ) -> BatchSyncResponse {
     BatchSyncResponse {
         id: sedimentree_id_from_seed(seed),
         req_id: request_id_from_seed(seed.wrapping_add(1), seed),
-        diff: sync_diff_from_seed(seed.wrapping_add(2), num_commits, num_fragments),
+        diff: sync_diff_from_seed(seed.wrapping_add(2), num_commits, num_fragments, blob_size),
     }
 }
 
 // =============================================================================
-// PEER ID BENCHMARKS
+// MICROBENCHMARKS: ID Types and Basic Operations
 // =============================================================================
+// These are sub-microsecond operations. Kept for regression detection but
+// unlikely to be real-world bottlenecks.
 
-fn bench_peer_id(c: &mut Criterion) {
-    let mut group = c.benchmark_group("peer_id");
+/// Microbenchmarks for identifier types (PeerId, ConnectionId, RequestId).
+///
+/// **Intent**: Establish baseline costs for ID operations. These are foundational
+/// types used throughout the sync protocol.
+///
+/// **Expected performance**: Sub-100ns for all operations. These are effectively
+/// just byte array/integer wrappers.
+fn bench_id_micros(c: &mut Criterion) {
+    let mut group = c.benchmark_group("id_micro");
 
-    // Construction
-    group.bench_function("new", |b| {
+    // PeerId operations
+    group.bench_function("peer_id/new", |b| {
         let bytes = [42u8; 32];
         b.iter(|| PeerId::new(black_box(bytes)));
     });
 
-    // Accessors
-    group.bench_function("as_bytes", |b| {
+    group.bench_function("peer_id/as_bytes", |b| {
         let peer_id = peer_id_from_seed(12345);
         b.iter(|| black_box(&peer_id).as_bytes());
     });
 
-    group.bench_function("as_slice", |b| {
-        let peer_id = peer_id_from_seed(12345);
-        b.iter(|| black_box(&peer_id).as_slice());
-    });
-
-    // Display formatting
-    group.bench_function("display_format", |b| {
-        let peer_id = peer_id_from_seed(12345);
-        b.iter(|| format!("{}", black_box(&peer_id)));
-    });
-
-    // Comparison
-    group.bench_function("compare_equal", |b| {
-        let peer_id1 = peer_id_from_seed(12345);
-        let peer_id2 = peer_id_from_seed(12345);
-        b.iter(|| black_box(&peer_id1) == black_box(&peer_id2));
-    });
-
-    group.bench_function("compare_different", |b| {
+    group.bench_function("peer_id/compare", |b| {
         let peer_id1 = peer_id_from_seed(12345);
         let peer_id2 = peer_id_from_seed(54321);
         b.iter(|| black_box(&peer_id1).cmp(black_box(&peer_id2)));
     });
 
-    // Hashing
-    group.bench_function("hash", |b| {
+    group.bench_function("peer_id/hash", |b| {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
         let peer_id = peer_id_from_seed(12345);
@@ -196,37 +213,19 @@ fn bench_peer_id(c: &mut Criterion) {
         });
     });
 
-    group.finish();
-}
-
-// =============================================================================
-// CONNECTION ID BENCHMARKS
-// =============================================================================
-
-fn bench_connection_id(c: &mut Criterion) {
-    let mut group = c.benchmark_group("connection_id");
-
-    group.bench_function("new", |b| {
+    // ConnectionId operations
+    group.bench_function("connection_id/new", |b| {
         b.iter(|| ConnectionId::new(black_box(42usize)));
     });
 
-    group.bench_function("compare", |b| {
+    group.bench_function("connection_id/compare", |b| {
         let id1 = ConnectionId::new(1);
         let id2 = ConnectionId::new(2);
         b.iter(|| black_box(&id1).cmp(black_box(&id2)));
     });
 
-    group.finish();
-}
-
-// =============================================================================
-// REQUEST ID BENCHMARKS
-// =============================================================================
-
-fn bench_request_id(c: &mut Criterion) {
-    let mut group = c.benchmark_group("request_id");
-
-    group.bench_function("new", |b| {
+    // RequestId operations
+    group.bench_function("request_id/new", |b| {
         let peer_id = peer_id_from_seed(12345);
         b.iter(|| RequestId {
             requestor: black_box(peer_id),
@@ -234,38 +233,49 @@ fn bench_request_id(c: &mut Criterion) {
         });
     });
 
-    group.bench_function("compare_equal", |b| {
+    group.bench_function("request_id/compare", |b| {
         let req1 = request_id_from_seed(12345, 42);
-        let req2 = request_id_from_seed(12345, 42);
-        b.iter(|| black_box(&req1) == black_box(&req2));
-    });
-
-    group.bench_function("compare_by_requestor", |b| {
-        let req1 = request_id_from_seed(12345, 100);
         let req2 = request_id_from_seed(54321, 1);
         b.iter(|| black_box(&req1).cmp(black_box(&req2)));
     });
 
-    group.bench_function("compare_by_nonce", |b| {
-        let req1 = request_id_from_seed(12345, 1);
-        let req2 = request_id_from_seed(12345, 2);
-        b.iter(|| black_box(&req1).cmp(black_box(&req2)));
+    // SedimentreeId operations
+    group.bench_function("sedimentree_id/new", |b| {
+        let bytes = [42u8; 32];
+        b.iter(|| SedimentreeId::new(black_box(bytes)));
+    });
+
+    // StorageId operations
+    group.bench_function("storage_id/new", |b| {
+        b.iter(|| StorageId::new(black_box("test-storage-id".to_string())));
+    });
+
+    group.bench_function("storage_id/as_str", |b| {
+        let id = StorageId::new("test-storage-id".to_string());
+        b.iter(|| black_box(&id).as_str());
     });
 
     group.finish();
 }
 
-// =============================================================================
-// STORAGE KEY BENCHMARKS
-// =============================================================================
-
+/// Microbenchmarks for StorageKey operations.
+///
+/// **Intent**: Measure cost of path-based storage key operations.
+/// StorageKeys are used for addressing data in storage backends.
+///
+/// **Expected complexity**: O(depth) for most operations.
 fn bench_storage_key(c: &mut Criterion) {
     let mut group = c.benchmark_group("storage_key");
 
-    for depth in [1, 3, 5, 10] {
+    for depth in [1, 3, 5, 10, 20] {
+        group.throughput(Throughput::Elements(depth as u64));
+
         group.bench_with_input(BenchmarkId::new("new", depth), &depth, |b, &depth| {
-            let segments: Vec<String> = (0..depth).map(|i| format!("seg_{i}")).collect();
-            b.iter(|| StorageKey::new(black_box(segments.clone())));
+            b.iter_batched(
+                || (0..depth).map(|i| format!("seg_{i}")).collect::<Vec<_>>(),
+                |segments| StorageKey::new(black_box(segments)),
+                BatchSize::SmallInput,
+            );
         });
 
         group.bench_with_input(BenchmarkId::new("as_slice", depth), &depth, |b, &depth| {
@@ -278,95 +288,74 @@ fn bench_storage_key(c: &mut Criterion) {
             b.iter(|| black_box(&key).to_vec());
         });
 
-        group.bench_with_input(BenchmarkId::new("into_vec", depth), &depth, |b, &depth| {
-            b.iter_batched(
-                || storage_key_from_seed(12345, depth),
-                subduction_core::storage::key::StorageKey::into_vec,
-                criterion::BatchSize::SmallInput,
-            );
+        group.bench_with_input(BenchmarkId::new("clone", depth), &depth, |b, &depth| {
+            let key = storage_key_from_seed(12345, depth);
+            b.iter(|| black_box(&key).clone());
         });
     }
 
-    // Comparison benchmarks
-    group.bench_function("compare_equal", |b| {
-        let key1 = storage_key_from_seed(12345, 5);
-        let key2 = storage_key_from_seed(12345, 5);
-        b.iter(|| black_box(&key1) == black_box(&key2));
-    });
-
-    group.bench_function("compare_different_length", |b| {
-        let key1 = storage_key_from_seed(12345, 3);
-        let key2 = storage_key_from_seed(12345, 5);
-        b.iter(|| black_box(&key1).cmp(black_box(&key2)));
-    });
-
     group.finish();
 }
 
 // =============================================================================
-// STORAGE ID BENCHMARKS
+// MESSAGE CONSTRUCTION BENCHMARKS
 // =============================================================================
 
-fn bench_storage_id(c: &mut Criterion) {
-    let mut group = c.benchmark_group("storage_id");
-
-    group.bench_function("new", |b| {
-        b.iter(|| StorageId::new(black_box("test-storage-id".to_string())));
-    });
-
-    group.bench_function("as_str", |b| {
-        let id = StorageId::new("test-storage-id".to_string());
-        b.iter(|| black_box(&id).as_str());
-    });
-
-    group.bench_function("display_format", |b| {
-        let id = StorageId::new("test-storage-id".to_string());
-        b.iter(|| format!("{}", black_box(&id)));
-    });
-
-    group.bench_function("compare", |b| {
-        let id1 = StorageId::new("storage-a".to_string());
-        let id2 = StorageId::new("storage-b".to_string());
-        b.iter(|| black_box(&id1).cmp(black_box(&id2)));
-    });
-
-    group.finish();
-}
-
-// =============================================================================
-// MESSAGE BENCHMARKS
-// =============================================================================
-
+/// Benchmark Message enum construction with various payloads.
+///
+/// **Intent**: Measure the cost of building protocol messages. These are constructed
+/// during sync operations before serialization.
+///
+/// **Note**: These benchmarks include cloning of input data as part of the cost,
+/// which reflects real usage where messages typically own their data.
 fn bench_message_construction(c: &mut Criterion) {
     let mut group = c.benchmark_group("message_construction");
 
-    // LooseCommit message
-    group.bench_function("loose_commit", |b| {
-        let id = sedimentree_id_from_seed(12345);
-        let commit = loose_commit_from_seed(12345);
-        let blob = blob_from_seed(12345, 256);
-        b.iter(|| Message::LooseCommit {
-            id: black_box(id),
-            commit: black_box(commit.clone()),
-            blob: black_box(blob.clone()),
-        });
-    });
+    // LooseCommit message (single commit + blob)
+    for blob_size in [64, 256, 1024, 4096] {
+        group.throughput(Throughput::Bytes(blob_size as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("loose_commit", blob_size),
+            &blob_size,
+            |b, &size| {
+                let id = sedimentree_id_from_seed(12345);
+                let commit = loose_commit_from_seed(12345);
+                let blob = blob_from_seed(12345, size);
+                b.iter(|| Message::LooseCommit {
+                    id: black_box(id),
+                    commit: black_box(commit.clone()),
+                    blob: black_box(blob.clone()),
+                });
+            },
+        );
+    }
 
     // Fragment message
-    group.bench_function("fragment", |b| {
-        let id = sedimentree_id_from_seed(12345);
-        let fragment = fragment_from_seed(12345, 3, 10);
-        let blob = blob_from_seed(12345, 1024);
-        b.iter(|| Message::Fragment {
-            id: black_box(id),
-            fragment: black_box(fragment.clone()),
-            blob: black_box(blob.clone()),
-        });
-    });
+    for blob_size in [256, 1024, 4096, 16384] {
+        group.throughput(Throughput::Bytes(blob_size as u64));
 
-    // BlobsRequest message
+        group.bench_with_input(
+            BenchmarkId::new("fragment", blob_size),
+            &blob_size,
+            |b, &size| {
+                let id = sedimentree_id_from_seed(12345);
+                let fragment = fragment_from_seed(12345, 3, 10);
+                let blob = blob_from_seed(12345, size);
+                b.iter(|| Message::Fragment {
+                    id: black_box(id),
+                    fragment: black_box(fragment.clone()),
+                    blob: black_box(blob.clone()),
+                });
+            },
+        );
+    }
+
+    // BlobsRequest message (varying number of digests)
     #[allow(clippy::cast_sign_loss)]
-    for num_digests in [1, 10, 100] {
+    for num_digests in [1, 10, 50, 100, 500] {
+        group.throughput(Throughput::Elements(num_digests as u64));
+
         group.bench_with_input(
             BenchmarkId::new("blobs_request", num_digests),
             &num_digests,
@@ -377,113 +366,119 @@ fn bench_message_construction(c: &mut Criterion) {
         );
     }
 
-    // BlobsResponse message
+    // BlobsResponse message (varying number and size of blobs)
     #[allow(clippy::cast_sign_loss)]
-    for num_blobs in [1, 10, 50] {
+    for (num_blobs, blob_size) in [(1, 256), (10, 256), (50, 256), (10, 4096), (50, 4096)] {
+        let total_bytes = num_blobs * blob_size;
+        group.throughput(Throughput::Bytes(total_bytes as u64));
+
         group.bench_with_input(
-            BenchmarkId::new("blobs_response", num_blobs),
-            &num_blobs,
-            |b, &n| {
-                let blobs: Vec<Blob> = (0..n).map(|i| blob_from_seed(i as u64, 256)).collect();
+            BenchmarkId::new("blobs_response", format!("{num_blobs}x{blob_size}")),
+            &(num_blobs, blob_size),
+            |b, &(n, size)| {
+                let blobs: Vec<Blob> = (0..n).map(|i| blob_from_seed(i as u64, size)).collect();
                 b.iter(|| Message::BlobsResponse(black_box(blobs.clone())));
             },
         );
     }
 
-    // BatchSyncRequest message
-    group.bench_function("batch_sync_request", |b| {
-        let req = batch_sync_request_from_seed(12345);
-        b.iter(|| Message::BatchSyncRequest(black_box(req.clone())));
-    });
-
-    // BatchSyncResponse message with varying sizes
-    for (commits, fragments) in [(1, 1), (10, 5), (50, 20)] {
-        group.bench_with_input(
-            BenchmarkId::new("batch_sync_response", format!("{commits}c_{fragments}f")),
-            &(commits, fragments),
-            |b, &(c, f)| {
-                let resp = batch_sync_response_from_seed(12345, c, f);
-                b.iter(|| Message::BatchSyncResponse(black_box(resp.clone())));
-            },
-        );
-    }
-
     group.finish();
 }
 
+/// Benchmark extracting request IDs from messages.
+///
+/// **Intent**: Measure the cost of routing messages by request ID.
+/// This is a simple pattern match operation.
+///
+/// **Expected performance**: Sub-10ns - just enum variant matching.
 fn bench_message_request_id(c: &mut Criterion) {
     let mut group = c.benchmark_group("message_request_id");
 
-    // Messages without request IDs
+    // Messages without request IDs (should return None quickly)
+    let msg_loose = Message::LooseCommit {
+        id: sedimentree_id_from_seed(1),
+        commit: loose_commit_from_seed(1),
+        blob: blob_from_seed(1, 64),
+    };
     group.bench_function("loose_commit_none", |b| {
-        let msg = Message::LooseCommit {
-            id: sedimentree_id_from_seed(1),
-            commit: loose_commit_from_seed(1),
-            blob: blob_from_seed(1, 64),
-        };
-        b.iter(|| black_box(&msg).request_id());
+        b.iter(|| black_box(&msg_loose).request_id());
     });
 
-    group.bench_function("fragment_none", |b| {
-        let msg = Message::Fragment {
-            id: sedimentree_id_from_seed(1),
-            fragment: fragment_from_seed(1, 2, 5),
-            blob: blob_from_seed(1, 64),
-        };
-        b.iter(|| black_box(&msg).request_id());
-    });
-
+    let msg_blobs_req = Message::BlobsRequest(vec![digest_from_seed(1)]);
     group.bench_function("blobs_request_none", |b| {
-        let msg = Message::BlobsRequest(vec![digest_from_seed(1)]);
-        b.iter(|| black_box(&msg).request_id());
-    });
-
-    group.bench_function("blobs_response_none", |b| {
-        let msg = Message::BlobsResponse(vec![blob_from_seed(1, 64)]);
-        b.iter(|| black_box(&msg).request_id());
+        b.iter(|| black_box(&msg_blobs_req).request_id());
     });
 
     // Messages with request IDs
+    let msg_batch_req = Message::BatchSyncRequest(batch_sync_request_from_seed(1));
     group.bench_function("batch_sync_request_some", |b| {
-        let msg = Message::BatchSyncRequest(batch_sync_request_from_seed(1));
-        b.iter(|| black_box(&msg).request_id());
+        b.iter(|| black_box(&msg_batch_req).request_id());
     });
 
+    let msg_batch_resp =
+        Message::BatchSyncResponse(batch_sync_response_from_seed(1, 5, 3, 256));
     group.bench_function("batch_sync_response_some", |b| {
-        let msg = Message::BatchSyncResponse(batch_sync_response_from_seed(1, 5, 3));
-        b.iter(|| black_box(&msg).request_id());
+        b.iter(|| black_box(&msg_batch_resp).request_id());
     });
 
     group.finish();
 }
 
 // =============================================================================
-// SYNC DIFF BENCHMARKS
+// SYNC DIFF AND BATCH SYNC BENCHMARKS
 // =============================================================================
 
+/// Benchmark SyncDiff construction and cloning at various scales.
+///
+/// **Intent**: Measure the cost of building sync diffs, which represent the
+/// data delta to send to a peer. Includes blob data allocation.
+///
+/// **Expected complexity**: O(commits + fragments) for construction,
+/// with significant constant factor from blob allocation.
 fn bench_sync_diff(c: &mut Criterion) {
     let mut group = c.benchmark_group("sync_diff");
 
-    for (commits, fragments) in [(0, 0), (1, 1), (10, 5), (50, 20), (100, 50)] {
-        group.throughput(Throughput::Elements((commits + fragments) as u64));
+    // Varying number of items with fixed blob size
+    for (commits, fragments) in [(1, 1), (10, 5), (50, 20), (100, 50), (200, 100)] {
+        let total = commits + fragments;
+        group.throughput(Throughput::Elements(total as u64));
 
         group.bench_with_input(
-            BenchmarkId::new("construction", format!("{commits}c_{fragments}f")),
+            BenchmarkId::new("construction_256b", format!("{commits}c_{fragments}f")),
             &(commits, fragments),
             |b, &(c, f)| {
-                b.iter(|| sync_diff_from_seed(black_box(12345), c, f));
+                b.iter(|| sync_diff_from_seed(black_box(12345), c, f, 256));
             },
         );
     }
 
-    // Clone benchmark
-    for (commits, fragments) in [(10, 5), (50, 20)] {
+    // Varying blob size with fixed item count
+    for blob_size in [64, 256, 1024, 4096, 16384] {
+        let commits = 20;
+        let fragments = 10;
+        let total_bytes = commits * blob_size + fragments * blob_size * 4;
+        group.throughput(Throughput::Bytes(total_bytes as u64));
+
+        group.bench_with_input(
+            BenchmarkId::new("construction_varying_blob", blob_size),
+            &blob_size,
+            |b, &size| {
+                b.iter(|| sync_diff_from_seed(black_box(12345), commits, fragments, size));
+            },
+        );
+    }
+
+    // Clone benchmarks (important for message passing)
+    for (commits, fragments) in [(10, 5), (50, 20), (100, 50)] {
+        let total = commits + fragments;
+        group.throughput(Throughput::Elements(total as u64));
+
+        let diff = sync_diff_from_seed(12345, commits, fragments, 256);
         group.bench_with_input(
             BenchmarkId::new("clone", format!("{commits}c_{fragments}f")),
-            &(commits, fragments),
-            |b, &(c, f)| {
-                let diff = sync_diff_from_seed(12345, c, f);
-                b.iter(|| black_box(&diff).clone());
+            &diff,
+            |b, diff| {
+                b.iter(|| black_box(diff).clone());
             },
         );
     }
@@ -491,14 +486,16 @@ fn bench_sync_diff(c: &mut Criterion) {
     group.finish();
 }
 
-// =============================================================================
-// BATCH SYNC REQUEST/RESPONSE BENCHMARKS
-// =============================================================================
-
+/// Benchmark BatchSyncRequest and BatchSyncResponse operations.
+///
+/// **Intent**: Measure the cost of constructing the main sync protocol messages.
+/// These wrap SyncDiff with routing metadata.
+///
+/// **Note**: Construction cost is dominated by SyncDiff for responses.
 fn bench_batch_sync(c: &mut Criterion) {
     let mut group = c.benchmark_group("batch_sync");
 
-    // Request construction
+    // Request construction (lightweight - just metadata)
     group.bench_function("request_new", |b| {
         let id = sedimentree_id_from_seed(1);
         let req_id = request_id_from_seed(1, 42);
@@ -515,59 +512,86 @@ fn bench_batch_sync(c: &mut Criterion) {
         b.iter_batched(
             || batch_sync_request_from_seed(12345),
             |req| -> Message { req.into() },
-            criterion::BatchSize::SmallInput,
+            BatchSize::SmallInput,
         );
     });
 
-    // Response construction with varying sizes
-    for (commits, fragments) in [(1, 1), (10, 5), (50, 20)] {
+    // Response construction with varying payload sizes
+    for (commits, fragments) in [(1, 1), (10, 5), (50, 20), (100, 50)] {
+        let total = commits + fragments;
+        group.throughput(Throughput::Elements(total as u64));
+
         group.bench_with_input(
             BenchmarkId::new("response_new", format!("{commits}c_{fragments}f")),
             &(commits, fragments),
             |b, &(c, f)| {
-                let id = sedimentree_id_from_seed(1);
-                let req_id = request_id_from_seed(1, 42);
-                let diff = sync_diff_from_seed(12345, c, f);
-                b.iter(|| BatchSyncResponse {
-                    id: black_box(id),
-                    req_id: black_box(req_id),
-                    diff: black_box(diff.clone()),
-                });
+                b.iter_batched(
+                    || {
+                        let id = sedimentree_id_from_seed(1);
+                        let req_id = request_id_from_seed(1, 42);
+                        let diff = sync_diff_from_seed(12345, c, f, 256);
+                        (id, req_id, diff)
+                    },
+                    |(id, req_id, diff)| BatchSyncResponse {
+                        id: black_box(id),
+                        req_id: black_box(req_id),
+                        diff: black_box(diff),
+                    },
+                    BatchSize::SmallInput,
+                );
             },
         );
     }
 
     // Response to Message conversion
-    group.bench_function("response_into_message", |b| {
-        b.iter_batched(
-            || batch_sync_response_from_seed(12345, 10, 5),
-            |resp| -> Message { resp.into() },
-            criterion::BatchSize::SmallInput,
+    for (commits, fragments) in [(10, 5), (50, 20)] {
+        group.bench_with_input(
+            BenchmarkId::new("response_into_message", format!("{commits}c_{fragments}f")),
+            &(commits, fragments),
+            |b, &(c, f)| {
+                b.iter_batched(
+                    || batch_sync_response_from_seed(12345, c, f, 256),
+                    |resp| -> Message { resp.into() },
+                    BatchSize::SmallInput,
+                );
+            },
         );
-    });
+    }
 
     group.finish();
 }
 
 // =============================================================================
-// COLLECTION BENCHMARKS (HashMap/BTreeMap with subduction types)
+// COLLECTION BENCHMARKS
 // =============================================================================
 
+/// Benchmark collection operations with subduction ID types as keys.
+///
+/// **Intent**: Measure HashMap/BTreeMap performance with our ID types. The sync
+/// protocol maintains maps of peers, connections, and sedimentrees.
+///
+/// **Expected complexity**: O(1) average for HashMap, O(log n) for BTreeMap.
+/// Hash quality of our ID types affects HashMap performance.
 #[allow(clippy::too_many_lines, clippy::cast_sign_loss)]
 fn bench_collections(c: &mut Criterion) {
     let mut group = c.benchmark_group("collections");
 
-    // PeerId in collections
-    for size in [10, 100, 1000] {
-        // HashMap insertion
+    // ==========================================================================
+    // PeerId in collections (common for peer tracking)
+    // ==========================================================================
+
+    for size in [10, 100, 1000, 10000] {
+        group.throughput(Throughput::Elements(size as u64));
+
+        // HashMap insertion (bulk)
         group.bench_with_input(
-            BenchmarkId::new("hashmap_peer_id_insert", size),
+            BenchmarkId::new("hashmap_peer_id/insert_all", size),
             &size,
             |b, &size| {
                 let peer_ids: Vec<PeerId> =
                     (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 b.iter(|| {
-                    let mut map: HashMap<PeerId, usize> = HashMap::new();
+                    let mut map: HashMap<PeerId, usize> = HashMap::with_capacity(size);
                     for (i, id) in peer_ids.iter().enumerate() {
                         map.insert(*id, i);
                     }
@@ -576,10 +600,10 @@ fn bench_collections(c: &mut Criterion) {
             },
         );
 
-        // HashMap lookup
+        // HashMap lookup (single key)
         #[allow(clippy::cast_sign_loss)]
         group.bench_with_input(
-            BenchmarkId::new("hashmap_peer_id_lookup", size),
+            BenchmarkId::new("hashmap_peer_id/lookup", size),
             &size,
             |b, &size| {
                 let peer_ids: Vec<PeerId> =
@@ -594,9 +618,26 @@ fn bench_collections(c: &mut Criterion) {
             },
         );
 
+        // HashMap lookup (missing key)
+        group.bench_with_input(
+            BenchmarkId::new("hashmap_peer_id/lookup_miss", size),
+            &size,
+            |b, &size| {
+                let peer_ids: Vec<PeerId> =
+                    (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
+                let map: HashMap<PeerId, usize> = peer_ids
+                    .iter()
+                    .enumerate()
+                    .map(|(i, id)| (*id, i))
+                    .collect();
+                let missing_key = peer_id_from_seed(999_999); // Not in map
+                b.iter(|| map.get(black_box(&missing_key)));
+            },
+        );
+
         // BTreeMap insertion
         group.bench_with_input(
-            BenchmarkId::new("btreemap_peer_id_insert", size),
+            BenchmarkId::new("btreemap_peer_id/insert_all", size),
             &size,
             |b, &size| {
                 let peer_ids: Vec<PeerId> =
@@ -614,7 +655,7 @@ fn bench_collections(c: &mut Criterion) {
         // BTreeSet contains
         #[allow(clippy::cast_sign_loss)]
         group.bench_with_input(
-            BenchmarkId::new("btreeset_peer_id_contains", size),
+            BenchmarkId::new("btreeset_peer_id/contains", size),
             &size,
             |b, &size| {
                 let set: BTreeSet<PeerId> =
@@ -626,20 +667,26 @@ fn bench_collections(c: &mut Criterion) {
 
         // HashSet contains
         group.bench_with_input(
-            BenchmarkId::new("hashset_peer_id_contains", size),
+            BenchmarkId::new("hashset_peer_id/contains", size),
             &size,
             |b, &size| {
-                let set: HashSet<PeerId> = (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
+                let set: HashSet<PeerId> =
+                    (0..size).map(|i| peer_id_from_seed(i as u64)).collect();
                 let lookup_key = peer_id_from_seed((size / 2) as u64);
                 b.iter(|| set.contains(black_box(&lookup_key)));
             },
         );
     }
 
-    // ConnectionId in BTreeMap (as used in Subduction)
-    for size in [10, 100, 1000] {
+    // ==========================================================================
+    // ConnectionId in BTreeMap (used in Subduction connection tracking)
+    // ==========================================================================
+
+    for size in [10, 100, 1000, 10000] {
+        group.throughput(Throughput::Elements(size as u64));
+
         group.bench_with_input(
-            BenchmarkId::new("btreemap_connection_id_insert", size),
+            BenchmarkId::new("btreemap_connection_id/insert_all", size),
             &size,
             |b, &size| {
                 b.iter(|| {
@@ -653,7 +700,7 @@ fn bench_collections(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("btreemap_connection_id_lookup", size),
+            BenchmarkId::new("btreemap_connection_id/lookup", size),
             &size,
             |b, &size| {
                 let map: BTreeMap<ConnectionId, usize> =
@@ -664,11 +711,16 @@ fn bench_collections(c: &mut Criterion) {
         );
     }
 
-    // SedimentreeId in BTreeMap (as used in Subduction)
+    // ==========================================================================
+    // SedimentreeId in BTreeMap (used for tracking synced documents)
+    // ==========================================================================
+
     #[allow(clippy::cast_sign_loss)]
-    for size in [10, 100, 1000] {
+    for size in [10, 100, 1000, 10000] {
+        group.throughput(Throughput::Elements(size as u64));
+
         group.bench_with_input(
-            BenchmarkId::new("btreemap_sedimentree_id_insert", size),
+            BenchmarkId::new("btreemap_sedimentree_id/insert_all", size),
             &size,
             |b, &size| {
                 let ids: Vec<SedimentreeId> = (0..size)
@@ -685,7 +737,7 @@ fn bench_collections(c: &mut Criterion) {
         );
 
         group.bench_with_input(
-            BenchmarkId::new("btreemap_sedimentree_id_lookup", size),
+            BenchmarkId::new("btreemap_sedimentree_id/lookup", size),
             &size,
             |b, &size| {
                 let ids: Vec<SedimentreeId> = (0..size)
@@ -706,23 +758,39 @@ fn bench_collections(c: &mut Criterion) {
 // CLONING BENCHMARKS
 // =============================================================================
 
+/// Benchmark cloning costs for various protocol types.
+///
+/// **Intent**: Cloning is common in async message passing. Understanding clone
+/// costs helps identify where Arc/Rc might be beneficial.
+///
+/// **Note**: Small ID types (PeerId, RequestId) are Copy/cheap-Clone.
+/// Larger types (SyncDiff, Messages) have significant clone costs.
 fn bench_cloning(c: &mut Criterion) {
     let mut group = c.benchmark_group("cloning");
 
-    // Clone PeerId (Copy type, should be very fast)
+    // Small types (should be very fast)
     group.bench_function("peer_id", |b| {
         let peer_id = peer_id_from_seed(12345);
-        b.iter(|| black_box(peer_id));
+        b.iter(|| black_box(peer_id)); // Copy
     });
 
-    // Clone RequestId
     group.bench_function("request_id", |b| {
         let req_id = request_id_from_seed(12345, 42);
-        b.iter(|| black_box(req_id));
+        b.iter(|| black_box(req_id)); // Copy
     });
 
-    // Clone StorageKey
-    for depth in [3, 10] {
+    group.bench_function("sedimentree_id", |b| {
+        let id = sedimentree_id_from_seed(12345);
+        b.iter(|| black_box(id)); // Copy
+    });
+
+    group.bench_function("connection_id", |b| {
+        let id = ConnectionId::new(42);
+        b.iter(|| black_box(id)); // Copy
+    });
+
+    // StorageKey (heap allocated)
+    for depth in [3, 10, 20] {
         group.bench_with_input(
             BenchmarkId::new("storage_key", depth),
             &depth,
@@ -733,40 +801,87 @@ fn bench_cloning(c: &mut Criterion) {
         );
     }
 
-    // Clone SyncDiff
-    for (commits, fragments) in [(5, 3), (20, 10)] {
+    // SyncDiff (significant clone cost)
+    for (commits, fragments) in [(5, 3), (20, 10), (50, 25)] {
+        let diff = sync_diff_from_seed(12345, commits, fragments, 256);
+        let total = commits + fragments;
+        group.throughput(Throughput::Elements(total as u64));
+
         group.bench_with_input(
             BenchmarkId::new("sync_diff", format!("{commits}c_{fragments}f")),
-            &(commits, fragments),
-            |b, &(c, f)| {
-                let diff = sync_diff_from_seed(12345, c, f);
-                b.iter(|| black_box(&diff).clone());
+            &diff,
+            |b, diff| {
+                b.iter(|| black_box(diff).clone());
             },
         );
     }
 
-    // Clone Message variants
-    group.bench_function("message_loose_commit", |b| {
-        let msg = Message::LooseCommit {
-            id: sedimentree_id_from_seed(1),
-            commit: loose_commit_from_seed(1),
-            blob: blob_from_seed(1, 256),
-        };
-        b.iter(|| black_box(&msg).clone());
+    // Message variants
+    let msg_loose = Message::LooseCommit {
+        id: sedimentree_id_from_seed(1),
+        commit: loose_commit_from_seed(1),
+        blob: blob_from_seed(1, 256),
+    };
+    group.bench_function("message/loose_commit_256b", |b| {
+        b.iter(|| black_box(&msg_loose).clone());
     });
 
-    group.bench_function("message_fragment", |b| {
-        let msg = Message::Fragment {
-            id: sedimentree_id_from_seed(1),
-            fragment: fragment_from_seed(1, 3, 10),
-            blob: blob_from_seed(1, 1024),
-        };
-        b.iter(|| black_box(&msg).clone());
+    let msg_fragment = Message::Fragment {
+        id: sedimentree_id_from_seed(1),
+        fragment: fragment_from_seed(1, 3, 10),
+        blob: blob_from_seed(1, 1024),
+    };
+    group.bench_function("message/fragment_1kb", |b| {
+        b.iter(|| black_box(&msg_fragment).clone());
     });
 
-    group.bench_function("message_batch_sync_response", |b| {
-        let msg = Message::BatchSyncResponse(batch_sync_response_from_seed(1, 10, 5));
-        b.iter(|| black_box(&msg).clone());
+    let msg_batch_resp =
+        Message::BatchSyncResponse(batch_sync_response_from_seed(1, 20, 10, 256));
+    group.bench_function("message/batch_sync_response_20c_10f", |b| {
+        b.iter(|| black_box(&msg_batch_resp).clone());
+    });
+
+    // Large message (stress test)
+    let msg_large_resp =
+        Message::BatchSyncResponse(batch_sync_response_from_seed(1, 100, 50, 1024));
+    group.bench_function("message/batch_sync_response_100c_50f_1kb", |b| {
+        b.iter(|| black_box(&msg_large_resp).clone());
+    });
+
+    group.finish();
+}
+
+// =============================================================================
+// DISPLAY/FORMAT BENCHMARKS
+// =============================================================================
+
+/// Benchmark Display implementations for ID types.
+///
+/// **Intent**: Display is used in logging and debugging. High-frequency logging
+/// could make this a bottleneck.
+///
+/// **Expected performance**: Dominated by string allocation and hex encoding.
+fn bench_display(c: &mut Criterion) {
+    let mut group = c.benchmark_group("display");
+
+    group.bench_function("peer_id", |b| {
+        let peer_id = peer_id_from_seed(12345);
+        b.iter(|| format!("{}", black_box(&peer_id)));
+    });
+
+    group.bench_function("sedimentree_id", |b| {
+        let id = sedimentree_id_from_seed(12345);
+        b.iter(|| format!("{}", black_box(&id)));
+    });
+
+    group.bench_function("storage_id", |b| {
+        let id = StorageId::new("test-storage-id".to_string());
+        b.iter(|| format!("{}", black_box(&id)));
+    });
+
+    group.bench_function("digest", |b| {
+        let digest = digest_from_seed(12345);
+        b.iter(|| format!("{}", black_box(&digest)));
     });
 
     group.finish();
@@ -778,17 +893,15 @@ fn bench_cloning(c: &mut Criterion) {
 
 criterion_group!(
     benches,
-    bench_peer_id,
-    bench_connection_id,
-    bench_request_id,
+    bench_id_micros,
     bench_storage_key,
-    bench_storage_id,
     bench_message_construction,
     bench_message_request_id,
     bench_sync_diff,
     bench_batch_sync,
     bench_collections,
     bench_cloning,
+    bench_display,
 );
 
 criterion_main!(benches);

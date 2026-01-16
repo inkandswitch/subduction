@@ -124,7 +124,7 @@ test.afterAll(async () => {
 
 test.beforeEach(async ({ page }) => {
   await page.goto(URL);
-  // Increase timeout for CI environments where WASM loading can be slower
+  // Increase timeout for CI environments where Wasm loading can be slower
   const wasmTimeout = process.env.CI ? 30000 : 10000;
   await page.waitForFunction(() => window.subductionReady === true, { timeout: wasmTimeout });
 });

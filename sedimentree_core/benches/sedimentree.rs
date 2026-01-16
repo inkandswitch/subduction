@@ -1,12 +1,22 @@
 //! Benchmarks for `sedimentree_core` operations.
 //!
 //! Run with: `cargo bench -p sedimentree_core`
+//!
+//! ## Benchmark Philosophy
+//!
+//! These benchmarks are designed to:
+//! 1. **Isolate algorithm cost** - Use `iter_batched` to separate setup (cloning) from measurement
+//! 2. **Test realistic scenarios** - Include both typical and worst-case workloads
+//! 3. **Enable scaling analysis** - Use `Throughput::Elements` to understand O(n) behavior
+//! 4. **Document expectations** - Each benchmark group states what it measures and expected complexity
 
 #![allow(missing_docs)]
 
 use std::hint::black_box;
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{
+    criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput,
+};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
 
@@ -30,6 +40,8 @@ fn digest_from_seed(seed: u64) -> Digest {
 }
 
 /// Generate a digest with a specific number of leading zero bytes.
+/// The byte immediately after the zeros is guaranteed to be non-zero
+/// to ensure exact depth control.
 fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest {
     let mut bytes = [0u8; 32];
     let mut rng = StdRng::seed_from_u64(seed);
@@ -39,7 +51,10 @@ fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest {
             .get_mut(zeros..)
             .expect("should have slice with leading zeros"),
     );
-    // First `zeros` bytes are already 0
+    // Ensure the first non-zero byte is actually non-zero for precise depth control
+    if zeros < 32 && bytes[zeros] == 0 {
+        bytes[zeros] = 1;
+    }
     Digest::from(bytes)
 }
 
@@ -55,7 +70,7 @@ fn synthetic_commit(seed: u64, parents: Vec<Digest>) -> LooseCommit {
     LooseCommit::new(digest, parents, blob_meta)
 }
 
-/// Generate a synthetic fragment.
+/// Generate a synthetic fragment with configurable complexity.
 fn synthetic_fragment(
     head_seed: u64,
     boundary_count: usize,
@@ -118,6 +133,24 @@ fn merge_heavy_dag(count: usize, merge_frequency: usize, base_seed: u64) -> Vec<
     commits
 }
 
+/// Generate a wide DAG with many independent heads (simulates many concurrent writers).
+fn wide_dag(width: usize, depth_per_branch: usize, base_seed: u64) -> Vec<LooseCommit> {
+    let mut commits = Vec::with_capacity(width * depth_per_branch);
+
+    for branch in 0..width {
+        let branch_seed = base_seed + (branch as u64 * 10_000);
+        let mut prev_digest = None;
+
+        for i in 0..depth_per_branch {
+            let parents = prev_digest.map(|d| vec![d]).unwrap_or_default();
+            let commit = synthetic_commit(branch_seed + i as u64, parents);
+            prev_digest = Some(commit.digest());
+            commits.push(commit);
+        }
+    }
+    commits
+}
+
 /// Generate a Sedimentree with specified fragment and commit counts.
 fn synthetic_sedimentree(
     fragment_count: usize,
@@ -128,6 +161,31 @@ fn synthetic_sedimentree(
         .map(|i| {
             let leading_zeros = (i % 3).min(2); // Vary depth 0, 1, 2
             synthetic_fragment(base_seed + i as u64 * 1000, 2, 5, leading_zeros)
+        })
+        .collect();
+
+    let commits = linear_commit_chain(commit_count, base_seed + 500_000);
+
+    Sedimentree::new(fragments, commits)
+}
+
+/// Generate a Sedimentree with variable fragment complexity.
+fn synthetic_sedimentree_varied(
+    fragment_count: usize,
+    commit_count: usize,
+    boundaries_per_fragment: usize,
+    checkpoints_per_fragment: usize,
+    base_seed: u64,
+) -> Sedimentree {
+    let fragments: Vec<Fragment> = (0..fragment_count)
+        .map(|i| {
+            let leading_zeros = (i % 3).min(2);
+            synthetic_fragment(
+                base_seed + i as u64 * 1000,
+                boundaries_per_fragment,
+                checkpoints_per_fragment,
+                leading_zeros,
+            )
         })
         .collect();
 
@@ -182,11 +240,18 @@ fn overlapping_sedimentrees(
 // Benchmarks
 // ============================================================================
 
+/// Benchmark BLAKE3 digest hashing.
+///
+/// **Intent**: Measure raw hashing throughput at various payload sizes.
+/// This is a foundational operation used throughout the system.
+///
+/// **Expected complexity**: O(n) where n is input size.
+/// BLAKE3 is designed for high throughput; expect ~1GB/s on modern CPUs.
 fn bench_digest_hashing(c: &mut Criterion) {
     let mut group = c.benchmark_group("digest_hashing");
 
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-    for size in [64, 256, 1024, 4096, 16384, 65536] {
+    for size in [32, 64, 256, 1024, 4096, 16384, 65536] {
         let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
         group.throughput(Throughput::Bytes(size as u64));
         group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
@@ -197,13 +262,19 @@ fn bench_digest_hashing(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark depth metric calculation (counting leading zero bytes).
+///
+/// **Intent**: Measure the cost of determining a digest's stratum depth.
+/// This is called frequently during diff/merge operations.
+///
+/// **Expected complexity**: O(1) - simple byte scan, typically finds non-zero quickly.
 fn bench_depth_metric(c: &mut Criterion) {
     let mut group = c.benchmark_group("depth_metric");
     let metric = CountLeadingZeroBytes;
 
-    // Test with various leading zero counts
-    for zeros in 0..=4 {
-        let digest = digest_with_leading_zeros(zeros, 12345);
+    // Test with various leading zero counts including worst-case
+    for zeros in [0, 1, 2, 4, 8, 16] {
+        let digest = digest_with_leading_zeros(zeros.min(31), 12345);
         group.bench_with_input(
             BenchmarkId::new("leading_zeros", zeros),
             &digest,
@@ -213,23 +284,43 @@ fn bench_depth_metric(c: &mut Criterion) {
         );
     }
 
+    // Random digest for average-case
+    group.bench_function("random_digest", |b| {
+        let digest = digest_from_seed(99999);
+        b.iter(|| metric.to_depth(black_box(digest)));
+    });
+
     group.finish();
 }
 
+/// Benchmark Sedimentree construction from fragments and commits.
+///
+/// **Intent**: Measure the cost of building a new Sedimentree from raw parts.
+/// This occurs during hydration from storage and after sync operations.
+///
+/// **Expected complexity**: O(n) where n = fragments + commits.
 fn bench_sedimentree_construction(c: &mut Criterion) {
     let mut group = c.benchmark_group("sedimentree_construction");
 
-    for (frag_count, commit_count) in [(10, 10), (100, 100), (1000, 1000)] {
-        let fragments: Vec<Fragment> = (0..frag_count)
-            .map(|i| synthetic_fragment(i as u64 * 1000, 2, 5, (i % 3).min(2)))
-            .collect();
-        let commits = linear_commit_chain(commit_count, 500_000);
+    for (frag_count, commit_count) in [(10, 10), (100, 100), (1000, 1000), (5000, 5000)] {
+        let total = frag_count + commit_count;
+        group.throughput(Throughput::Elements(total as u64));
 
         group.bench_with_input(
             BenchmarkId::new("new", format!("{frag_count}f_{commit_count}c")),
-            &(fragments.clone(), commits.clone()),
-            |b, (f, c)| {
-                b.iter(|| Sedimentree::new(black_box(f.clone()), black_box(c.clone())));
+            &(frag_count, commit_count),
+            |b, &(fc, cc)| {
+                b.iter_batched(
+                    || {
+                        let fragments: Vec<Fragment> = (0..fc)
+                            .map(|i| synthetic_fragment(i as u64 * 1000, 2, 5, (i % 3).min(2)))
+                            .collect();
+                        let commits = linear_commit_chain(cc, 500_000);
+                        (fragments, commits)
+                    },
+                    |(f, c)| Sedimentree::new(black_box(f), black_box(c)),
+                    BatchSize::SmallInput,
+                );
             },
         );
     }
@@ -237,78 +328,122 @@ fn bench_sedimentree_construction(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark merging two Sedimentrees.
+///
+/// **Intent**: Measure the cost of combining two trees (e.g., after receiving remote data).
+/// Uses `iter_batched` to isolate merge cost from cloning cost.
+///
+/// **Expected complexity**: O(n + m) where n, m are the sizes of the two trees.
+/// Set operations on fragments and commits should be roughly linear.
 fn bench_sedimentree_merge(c: &mut Criterion) {
     let mut group = c.benchmark_group("sedimentree_merge");
 
-    for size in [10, 100, 1000] {
+    // Disjoint trees (no overlap - worst case for output size)
+    for size in [10, 100, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64 * 2));
+
         let tree1 = synthetic_sedimentree(size, size, 1);
         let tree2 = synthetic_sedimentree(size, size, 1_000_000);
 
-        group.bench_with_input(
-            BenchmarkId::new("disjoint", size),
-            &(tree1.clone(), tree2.clone()),
-            |b, (t1, t2)| {
-                b.iter(|| {
-                    let mut merged = t1.clone();
-                    merged.merge(black_box(t2.clone()));
+        group.bench_with_input(BenchmarkId::new("disjoint", size), &(tree1, tree2), |b, (t1, t2)| {
+            b.iter_batched(
+                || (t1.clone(), t2.clone()),
+                |(mut merged, other)| {
+                    merged.merge(black_box(other));
                     merged
-                });
-            },
-        );
+                },
+                BatchSize::SmallInput,
+            );
+        });
     }
 
-    // Overlapping merge
-    for size in [10, 100, 500] {
+    // 50% overlapping trees (typical sync scenario)
+    for size in [10, 100, 500, 2000] {
+        group.throughput(Throughput::Elements(size as u64 * 2));
+
         let (tree1, tree2) = overlapping_sedimentrees(size / 2, size / 2, size / 2, size / 2, 42);
 
         group.bench_with_input(
             BenchmarkId::new("overlapping_50pct", size),
-            &(tree1.clone(), tree2.clone()),
+            &(tree1, tree2),
             |b, (t1, t2)| {
-                b.iter(|| {
-                    let mut merged = t1.clone();
-                    merged.merge(black_box(t2.clone()));
-                    merged
-                });
+                b.iter_batched(
+                    || (t1.clone(), t2.clone()),
+                    |(mut merged, other)| {
+                        merged.merge(black_box(other));
+                        merged
+                    },
+                    BatchSize::SmallInput,
+                );
             },
         );
+    }
+
+    // Identical trees (best case - no new data)
+    for size in [100, 1000] {
+        group.throughput(Throughput::Elements(size as u64 * 2));
+
+        let tree = synthetic_sedimentree(size, size, 1);
+
+        group.bench_with_input(BenchmarkId::new("identical", size), &tree, |b, t| {
+            b.iter_batched(
+                || (t.clone(), t.clone()),
+                |(mut merged, other)| {
+                    merged.merge(black_box(other));
+                    merged
+                },
+                BatchSize::SmallInput,
+            );
+        });
     }
 
     group.finish();
 }
 
+/// Benchmark computing diffs between two local Sedimentrees.
+///
+/// **Intent**: Measure the cost of finding what data one tree has that another lacks.
+/// This is the core operation for determining what to sync.
+///
+/// **Expected complexity**: O(n + m) for set difference operations.
 fn bench_sedimentree_diff(c: &mut Criterion) {
     let mut group = c.benchmark_group("sedimentree_diff");
 
-    // Disjoint trees
-    for size in [10, 100, 1000] {
+    // Disjoint trees (maximum diff size)
+    for size in [10, 100, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64 * 2));
+
         let tree1 = synthetic_sedimentree(size, size, 1);
         let tree2 = synthetic_sedimentree(size, size, 1_000_000);
 
         group.bench_with_input(
             BenchmarkId::new("disjoint", size),
-            &(tree1.clone(), tree2.clone()),
+            &(tree1, tree2),
             |b, (t1, t2)| {
                 b.iter(|| t1.diff(black_box(t2)));
             },
         );
     }
 
-    // Overlapping trees
-    for size in [10, 100, 500] {
+    // Overlapping trees (typical scenario)
+    for size in [10, 100, 500, 2000] {
+        group.throughput(Throughput::Elements(size as u64 * 2));
+
         let (tree1, tree2) = overlapping_sedimentrees(size / 2, size / 2, size / 2, size / 2, 42);
 
         group.bench_with_input(
             BenchmarkId::new("overlapping_50pct", size),
-            &(tree1.clone(), tree2.clone()),
+            &(tree1, tree2),
             |b, (t1, t2)| {
                 b.iter(|| t1.diff(black_box(t2)));
             },
         );
     }
 
-    // Identical trees
-    for size in [10, 100, 1000] {
+    // Identical trees (best case - empty diff)
+    for size in [10, 100, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64 * 2));
+
         let tree = synthetic_sedimentree(size, size, 1);
 
         group.bench_with_input(BenchmarkId::new("identical", size), &tree, |b, t| {
@@ -319,17 +454,43 @@ fn bench_sedimentree_diff(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark computing diff against a remote summary (metadata-only diff).
+///
+/// **Intent**: Measure the cost of the primary sync operation - determining what
+/// we have that a remote peer lacks, using only their summary (no full tree).
+///
+/// **Expected complexity**: O(n) where n is local tree size, since we scan local
+/// data against the summary.
 fn bench_sedimentree_diff_remote(c: &mut Criterion) {
     let mut group = c.benchmark_group("sedimentree_diff_remote");
     let metric = CountLeadingZeroBytes;
 
-    for size in [10, 100, 500] {
+    for size in [10, 100, 500, 2000, 5000] {
+        group.throughput(Throughput::Elements(size as u64));
+
         let (local, remote) = overlapping_sedimentrees(size / 2, size / 2, size / 2, size / 2, 42);
         let remote_summary = remote.summarize();
 
         group.bench_with_input(
             BenchmarkId::new("overlapping_50pct", size),
-            &(local.clone(), remote_summary.clone()),
+            &(local, remote_summary),
+            |b, (local, summary)| {
+                b.iter(|| local.diff_remote(black_box(summary), &metric));
+            },
+        );
+    }
+
+    // Completely missing remote (empty summary)
+    for size in [100, 1000] {
+        group.throughput(Throughput::Elements(size as u64));
+
+        let local = synthetic_sedimentree(size, size, 1);
+        let empty_remote = Sedimentree::new(vec![], vec![]);
+        let empty_summary = empty_remote.summarize();
+
+        group.bench_with_input(
+            BenchmarkId::new("vs_empty_remote", size),
+            &(local, empty_summary),
             |b, (local, summary)| {
                 b.iter(|| local.diff_remote(black_box(summary), &metric));
             },
@@ -339,40 +500,114 @@ fn bench_sedimentree_diff_remote(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark minimizing a Sedimentree (removing redundant data).
+///
+/// **Intent**: Measure the cost of compacting a tree by removing fragments/commits
+/// that are subsumed by others at higher strata.
+///
+/// **Expected complexity**: Depends on DAG structure. Linear DAGs should be O(n),
+/// merge-heavy DAGs may be O(n log n) or worse due to traversal.
 fn bench_sedimentree_minimize(c: &mut Criterion) {
     let mut group = c.benchmark_group("sedimentree_minimize");
     let metric = CountLeadingZeroBytes;
 
-    for size in [10, 100, 500, 1000] {
+    // Standard linear DAG
+    for size in [10, 100, 500, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64));
+
         let tree = synthetic_sedimentree(size, size, 1);
 
-        group.bench_with_input(BenchmarkId::from_parameter(size), &tree, |b, t| {
+        group.bench_with_input(BenchmarkId::new("linear_dag", size), &tree, |b, t| {
             b.iter(|| t.minimize(black_box(&metric)));
         });
     }
 
-    group.finish();
-}
+    // Merge-heavy DAG (merge every 5 commits)
+    for size in [100, 500, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64));
 
-fn bench_sedimentree_heads(c: &mut Criterion) {
-    let mut group = c.benchmark_group("sedimentree_heads");
-    let metric = CountLeadingZeroBytes;
+        let commits = merge_heavy_dag(size, 5, 1);
+        let tree = Sedimentree::new(vec![], commits);
 
-    for size in [10, 100, 500, 1000] {
-        let tree = synthetic_sedimentree(size, size, 1);
-
-        group.bench_with_input(BenchmarkId::from_parameter(size), &tree, |b, t| {
-            b.iter(|| t.heads(black_box(&metric)));
+        group.bench_with_input(BenchmarkId::new("merge_heavy_dag", size), &tree, |b, t| {
+            b.iter(|| t.minimize(black_box(&metric)));
         });
+    }
+
+    // Wide DAG (many independent heads - stress test)
+    for (width, depth) in [(10, 100), (50, 20), (100, 10)] {
+        let total = width * depth;
+        group.throughput(Throughput::Elements(total as u64));
+
+        let commits = wide_dag(width, depth, 1);
+        let tree = Sedimentree::new(vec![], commits);
+
+        group.bench_with_input(
+            BenchmarkId::new("wide_dag", format!("{width}w_{depth}d")),
+            &tree,
+            |b, t| {
+                b.iter(|| t.minimize(black_box(&metric)));
+            },
+        );
     }
 
     group.finish();
 }
 
+/// Benchmark finding head commits in a Sedimentree.
+///
+/// **Intent**: Measure the cost of identifying all commits with no children.
+/// This is used to determine the current "tips" of the commit DAG.
+///
+/// **Expected complexity**: O(n) for linear DAGs (one head), potentially higher
+/// for wide DAGs with many heads.
+fn bench_sedimentree_heads(c: &mut Criterion) {
+    let mut group = c.benchmark_group("sedimentree_heads");
+    let metric = CountLeadingZeroBytes;
+
+    // Linear DAG (single head)
+    for size in [10, 100, 500, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64));
+
+        let tree = synthetic_sedimentree(size, size, 1);
+
+        group.bench_with_input(BenchmarkId::new("linear_dag", size), &tree, |b, t| {
+            b.iter(|| t.heads(black_box(&metric)));
+        });
+    }
+
+    // Wide DAG (many heads)
+    for (width, depth) in [(10, 100), (50, 20), (100, 10)] {
+        let total = width * depth;
+        group.throughput(Throughput::Elements(total as u64));
+
+        let commits = wide_dag(width, depth, 1);
+        let tree = Sedimentree::new(vec![], commits);
+
+        group.bench_with_input(
+            BenchmarkId::new("wide_dag", format!("{width}heads")),
+            &tree,
+            |b, t| {
+                b.iter(|| t.heads(black_box(&metric)));
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark creating a summary of a Sedimentree for remote sync.
+///
+/// **Intent**: Measure the cost of producing a compact representation of tree
+/// contents that can be sent to peers for diff calculation.
+///
+/// **Expected complexity**: O(n) - should scan all fragments and commits once.
 fn bench_sedimentree_summarize(c: &mut Criterion) {
     let mut group = c.benchmark_group("sedimentree_summarize");
 
-    for size in [10, 100, 1000] {
+    for size in [10, 100, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64 * 2)); // fragments + commits
+
         let tree = synthetic_sedimentree(size, size, 1);
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &tree, |b, t| {
@@ -380,42 +615,102 @@ fn bench_sedimentree_summarize(c: &mut Criterion) {
         });
     }
 
+    // Tree with many checkpoints per fragment (stress metadata size)
+    for size in [100, 500] {
+        let tree = synthetic_sedimentree_varied(size, size, 5, 50, 1);
+        group.throughput(Throughput::Elements(size as u64 * 2));
+
+        group.bench_with_input(
+            BenchmarkId::new("many_checkpoints", size),
+            &tree,
+            |b, t| {
+                b.iter(|| t.summarize());
+            },
+        );
+    }
+
     group.finish();
 }
 
+/// Benchmark adding individual commits and fragments to a Sedimentree.
+///
+/// **Intent**: Measure incremental update cost (e.g., as new data arrives during sync).
+/// Uses `iter_batched` to isolate add cost from tree cloning.
+///
+/// **Expected complexity**: O(1) amortized for adding to a set-based structure,
+/// but may vary based on internal representation.
 fn bench_sedimentree_add_operations(c: &mut Criterion) {
     let mut group = c.benchmark_group("sedimentree_add");
 
-    // Benchmark add_commit
-    for size in [10, 100, 1000] {
+    // Adding a single commit to trees of various sizes
+    for size in [10, 100, 1000, 5000] {
+        group.throughput(Throughput::Elements(1));
+
         let tree = synthetic_sedimentree(size, size, 1);
         let new_commit = synthetic_commit(999_999, vec![]);
 
         group.bench_with_input(
             BenchmarkId::new("add_commit", size),
-            &(tree.clone(), new_commit.clone()),
+            &(tree, new_commit),
             |b, (t, c)| {
-                b.iter(|| {
-                    let mut tree = t.clone();
-                    tree.add_commit(black_box(c.clone()))
-                });
+                b.iter_batched(
+                    || (t.clone(), c.clone()),
+                    |(mut tree, commit)| {
+                        tree.add_commit(black_box(commit));
+                        tree
+                    },
+                    BatchSize::SmallInput,
+                );
             },
         );
     }
 
-    // Benchmark add_fragment
-    for size in [10, 100, 1000] {
+    // Adding a single fragment to trees of various sizes
+    for size in [10, 100, 1000, 5000] {
+        group.throughput(Throughput::Elements(1));
+
         let tree = synthetic_sedimentree(size, size, 1);
         let new_fragment = synthetic_fragment(999_999, 2, 5, 1);
 
         group.bench_with_input(
             BenchmarkId::new("add_fragment", size),
-            &(tree.clone(), new_fragment.clone()),
+            &(tree, new_fragment),
             |b, (t, f)| {
-                b.iter(|| {
-                    let mut tree = t.clone();
-                    tree.add_fragment(black_box(f.clone()))
-                });
+                b.iter_batched(
+                    || (t.clone(), f.clone()),
+                    |(mut tree, fragment)| {
+                        tree.add_fragment(black_box(fragment));
+                        tree
+                    },
+                    BatchSize::SmallInput,
+                );
+            },
+        );
+    }
+
+    // Batch adding multiple commits (simulates receiving sync response)
+    for batch_size in [10, 50, 100] {
+        group.throughput(Throughput::Elements(batch_size as u64));
+
+        let tree = synthetic_sedimentree(100, 100, 1);
+        let new_commits: Vec<LooseCommit> = (0..batch_size)
+            .map(|i| synthetic_commit(900_000 + i as u64, vec![]))
+            .collect();
+
+        group.bench_with_input(
+            BenchmarkId::new("add_commits_batch", batch_size),
+            &(tree, new_commits),
+            |b, (t, commits)| {
+                b.iter_batched(
+                    || (t.clone(), commits.clone()),
+                    |(mut tree, commits)| {
+                        for c in commits {
+                            tree.add_commit(black_box(c));
+                        }
+                        tree
+                    },
+                    BatchSize::SmallInput,
+                );
             },
         );
     }
@@ -423,21 +718,55 @@ fn bench_sedimentree_add_operations(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark fragment support checking.
+///
+/// **Intent**: Measure the cost of determining if a fragment "supports" another
+/// (i.e., covers its commit range). Used during diff and minimize operations.
+///
+/// **Expected complexity**: O(checkpoints) - needs to scan checkpoint sets.
 fn bench_fragment_supports(c: &mut Criterion) {
     let mut group = c.benchmark_group("fragment_supports");
     let metric = CountLeadingZeroBytes;
 
-    // Create fragments at different depths
+    // Same depth comparison
     for depth in 0..=2 {
         let fragment = synthetic_fragment(1000, 3, 10, depth);
-
-        // Test against fragments at same depth
         let other_fragment = synthetic_fragment(2000, 3, 10, depth);
         let other_summary = other_fragment.summary();
 
         group.bench_with_input(
             BenchmarkId::new("same_depth", depth),
-            &(fragment.clone(), other_summary.clone()),
+            &(fragment, other_summary),
+            |b, (f, s)| {
+                b.iter(|| f.supports(black_box(s), &metric));
+            },
+        );
+    }
+
+    // Cross-depth comparison (shallower checking deeper)
+    for (frag_depth, other_depth) in [(0, 2), (1, 2), (2, 0)] {
+        let fragment = synthetic_fragment(1000, 3, 10, frag_depth);
+        let other_fragment = synthetic_fragment(2000, 3, 10, other_depth);
+        let other_summary = other_fragment.summary();
+
+        group.bench_with_input(
+            BenchmarkId::new("cross_depth", format!("{frag_depth}_vs_{other_depth}")),
+            &(fragment, other_summary),
+            |b, (f, s)| {
+                b.iter(|| f.supports(black_box(s), &metric));
+            },
+        );
+    }
+
+    // Fragment with many checkpoints (stress test)
+    for checkpoint_count in [10, 50, 100] {
+        let fragment = synthetic_fragment(1000, 3, checkpoint_count, 1);
+        let other_fragment = synthetic_fragment(2000, 3, checkpoint_count, 1);
+        let other_summary = other_fragment.summary();
+
+        group.bench_with_input(
+            BenchmarkId::new("many_checkpoints", checkpoint_count),
+            &(fragment, other_summary),
             |b, (f, s)| {
                 b.iter(|| f.supports(black_box(s), &metric));
             },
@@ -447,11 +776,19 @@ fn bench_fragment_supports(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark computing minimal hash of a Sedimentree.
+///
+/// **Intent**: Measure the cost of computing a compact hash representing the
+/// tree's minimized state. Used for quick equality/change detection.
+///
+/// **Expected complexity**: O(n) - needs to minimize then hash resulting fragments.
 fn bench_minimal_hash(c: &mut Criterion) {
     let mut group = c.benchmark_group("minimal_hash");
     let metric = CountLeadingZeroBytes;
 
-    for size in [10, 100, 500] {
+    for size in [10, 100, 500, 2000] {
+        group.throughput(Throughput::Elements(size as u64));
+
         let tree = synthetic_sedimentree(size, size, 1);
 
         group.bench_with_input(BenchmarkId::from_parameter(size), &tree, |b, t| {
@@ -462,21 +799,37 @@ fn bench_minimal_hash(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_merge_heavy_dag(c: &mut Criterion) {
-    let mut group = c.benchmark_group("merge_heavy_dag");
+/// Benchmark comparing linear vs merge-heavy DAG performance.
+///
+/// **Intent**: Understand how DAG topology affects algorithm performance.
+/// Real-world usage may have varying merge patterns; this helps identify
+/// pathological cases.
+///
+/// **Expected complexity**: Linear DAGs should be faster due to simpler traversal.
+fn bench_dag_topology_comparison(c: &mut Criterion) {
+    let mut group = c.benchmark_group("dag_topology");
     let metric = CountLeadingZeroBytes;
 
-    // Compare linear vs merge-heavy DAGs
-    for size in [100, 500, 1000] {
+    for size in [100, 500, 1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64));
+
         // Linear DAG
         let linear_commits = linear_commit_chain(size, 1);
         let linear_tree = Sedimentree::new(vec![], linear_commits);
 
         group.bench_with_input(
-            BenchmarkId::new("linear_minimize", size),
+            BenchmarkId::new("linear/minimize", size),
             &linear_tree,
             |b, t| {
                 b.iter(|| t.minimize(black_box(&metric)));
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("linear/heads", size),
+            &linear_tree,
+            |b, t| {
+                b.iter(|| t.heads(black_box(&metric)));
             },
         );
 
@@ -485,10 +838,84 @@ fn bench_merge_heavy_dag(c: &mut Criterion) {
         let merge_tree = Sedimentree::new(vec![], merge_commits);
 
         group.bench_with_input(
-            BenchmarkId::new("merge_heavy_minimize", size),
+            BenchmarkId::new("merge_heavy/minimize", size),
             &merge_tree,
             |b, t| {
                 b.iter(|| t.minimize(black_box(&metric)));
+            },
+        );
+
+        group.bench_with_input(
+            BenchmarkId::new("merge_heavy/heads", size),
+            &merge_tree,
+            |b, t| {
+                b.iter(|| t.heads(black_box(&metric)));
+            },
+        );
+
+        // Very frequent merges (merge every 2 commits - stress test)
+        let frequent_merge_commits = merge_heavy_dag(size, 2, 1);
+        let frequent_merge_tree = Sedimentree::new(vec![], frequent_merge_commits);
+
+        group.bench_with_input(
+            BenchmarkId::new("very_merge_heavy/minimize", size),
+            &frequent_merge_tree,
+            |b, t| {
+                b.iter(|| t.minimize(black_box(&metric)));
+            },
+        );
+    }
+
+    group.finish();
+}
+
+/// Benchmark deep commit chains (stress test for traversal algorithms).
+///
+/// **Intent**: Test performance on very long linear histories, which may occur
+/// in long-running documents with many small edits.
+///
+/// **Expected complexity**: Should remain O(n), but constant factors matter at scale.
+fn bench_deep_chains(c: &mut Criterion) {
+    let mut group = c.benchmark_group("deep_chains");
+    let metric = CountLeadingZeroBytes;
+
+    // Measurement time needs to be longer for large chains
+    group.measurement_time(std::time::Duration::from_secs(10));
+
+    for size in [1000, 5000, 10000, 20000] {
+        group.throughput(Throughput::Elements(size as u64));
+
+        let commits = linear_commit_chain(size, 1);
+        let tree = Sedimentree::new(vec![], commits);
+
+        group.bench_with_input(BenchmarkId::new("minimize", size), &tree, |b, t| {
+            b.iter(|| t.minimize(black_box(&metric)));
+        });
+
+        group.bench_with_input(BenchmarkId::new("heads", size), &tree, |b, t| {
+            b.iter(|| t.heads(black_box(&metric)));
+        });
+
+        group.bench_with_input(BenchmarkId::new("summarize", size), &tree, |b, t| {
+            b.iter(|| t.summarize());
+        });
+    }
+
+    // Diff between two deep chains (one subset of other)
+    for size in [1000, 5000] {
+        group.throughput(Throughput::Elements(size as u64));
+
+        let commits1 = linear_commit_chain(size, 1);
+        let commits2 = linear_commit_chain(size / 2, 1); // Half the commits
+
+        let tree1 = Sedimentree::new(vec![], commits1);
+        let tree2 = Sedimentree::new(vec![], commits2);
+
+        group.bench_with_input(
+            BenchmarkId::new("diff_subset", size),
+            &(tree1, tree2),
+            |b, (t1, t2)| {
+                b.iter(|| t1.diff(black_box(t2)));
             },
         );
     }
@@ -510,7 +937,8 @@ criterion_group!(
     bench_sedimentree_add_operations,
     bench_fragment_supports,
     bench_minimal_hash,
-    bench_merge_heavy_dag,
+    bench_dag_topology_comparison,
+    bench_deep_chains,
 );
 
 criterion_main!(benches);

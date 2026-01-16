@@ -1,10 +1,10 @@
-# Subduction WASM E2E Tests
+# Subduction Wasm E2E Tests
 
 End-to-end Playwright tests for `subduction_wasm`.
 
 ## Setup
 
-1. **Build the WASM package:**
+1. **Build the Wasm package:**
 
 ```bash
 cd subduction_wasm
@@ -110,9 +110,9 @@ npx playwright show-trace trace.zip
 
 ### Core Tests
 ```
-Browser → http-server (port 9891) → index.html → pkg-slim (WASM)
+Browser → http-server (port 9891) → index.html → pkg-slim (Wasm)
   ↓
-page.evaluate() → window.subduction → WASM API
+page.evaluate() → window.subduction → Wasm API
   ↓
 Assertions in Node.js test runner
 ```
@@ -121,11 +121,11 @@ Assertions in Node.js test runner
 ```
 Node.js Test → spawn(subduction_cli) → WebSocket Server (port 9892)
   ↓
-Browser → http-server (port 9891) → index.html → pkg-slim (WASM)
+Browser → http-server (port 9891) → index.html → pkg-slim (Wasm)
   ↓
 page.evaluate() → SubductionWebSocket.connect(ws://127.0.0.1:9892)
   ↓
-WASM Client ←WebSocket→ Rust Server (subduction_cli)
+Wasm Client ←WebSocket→ Rust Server (subduction_cli)
   ↓
 Assertions verify actual peer sync operations
 ```
@@ -134,8 +134,8 @@ Assertions verify actual peer sync operations
 
 - `playwright.config.ts` - Playwright test configuration
 - `e2e/config.ts` - Test URL configuration
-- `e2e/server/index.html` - Test HTML page that loads WASM
-- `e2e/server/pkg/` - Symlink to `pkg-slim` (base64-encoded WASM)
+- `e2e/server/index.html` - Test HTML page that loads Wasm
+- `e2e/server/pkg/` - Symlink to `pkg-slim` (base64-encoded Wasm)
 
 ## Troubleshooting
 
@@ -144,8 +144,8 @@ Assertions verify actual peer sync operations
 - Check if WebSocket server is running: `lsof -i :9892`
 - Ensure pkg-slim is built: `ls e2e/server/pkg/`
 
-### WASM not loading
-- Rebuild WASM: `pnpm build`
+### Wasm not loading
+- Rebuild Wasm: `pnpm build`
 - Check symlink: `ls -la e2e/server/pkg`
 - Should point to `../../pkg-slim`
 
@@ -157,7 +157,7 @@ Assertions verify actual peer sync operations
 ## Development Workflow
 
 1. Make changes to Rust code
-2. Rebuild WASM: `pnpm build`
+2. Rebuild Wasm: `pnpm build`
 3. Run tests: `npx playwright test`
 4. View failures: `npx playwright show-report`
 5. Debug specific test: `npx playwright test --debug --grep "test name"`

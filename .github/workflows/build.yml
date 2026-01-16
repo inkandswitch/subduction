@@ -82,7 +82,7 @@ jobs:
             cd ../automerge_subduction_wasm && pnpm i
           "
 
-      - name: Build all WASM packages
+      - name: Build all Wasm packages
         run: nix develop --command release:wasm
 
       - name: Upload subduction_wasm artifact
