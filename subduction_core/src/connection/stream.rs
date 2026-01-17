@@ -5,9 +5,7 @@
 //! until it errors, at which point the stream terminates and the connection is
 //! automatically cleaned up.
 
-use alloc::boxed::Box;
-use core::pin::Pin;
-use futures::stream::Stream;
+use futures::stream::{BoxStream, LocalBoxStream, Stream, StreamExt};
 use futures_kind::{FutureKind, Local, Sendable};
 
 use super::{id::ConnectionId, message::Message, Connection};
@@ -34,11 +32,10 @@ impl<'a, C: Connection<Sendable> + Send + 'a> IntoConnectionStream<'a, C> for Se
 where
     C::RecvError: Send,
 {
-    type Stream =
-        Pin<Box<dyn Stream<Item = (ConnectionId, Result<Message, C::RecvError>)> + Send + 'a>>;
+    type Stream = BoxStream<'a, (ConnectionId, Result<Message, C::RecvError>)>;
 
     fn into_stream(conn_id: ConnectionId, conn: C) -> Self::Stream {
-        Box::pin(futures::stream::unfold(conn, move |conn| async move {
+        futures::stream::unfold(conn, move |conn| async move {
             let result = conn.recv().await;
             if result.is_ok() {
                 tracing::debug!("connection {conn_id}: received message");
@@ -49,15 +46,16 @@ where
                 tracing::debug!("connection {conn_id}: stream ending due to recv error");
                 None
             }
-        }))
+        })
+        .boxed()
     }
 }
 
 impl<'a, C: Connection<Local> + 'a> IntoConnectionStream<'a, C> for Local {
-    type Stream = Pin<Box<dyn Stream<Item = (ConnectionId, Result<Message, C::RecvError>)> + 'a>>;
+    type Stream = LocalBoxStream<'a, (ConnectionId, Result<Message, C::RecvError>)>;
 
     fn into_stream(conn_id: ConnectionId, conn: C) -> Self::Stream {
-        Box::pin(futures::stream::unfold(conn, move |conn| async move {
+        futures::stream::unfold(conn, move |conn| async move {
             let result = conn.recv().await;
             if result.is_ok() {
                 tracing::debug!("connection {conn_id}: received message");
@@ -68,6 +66,7 @@ impl<'a, C: Connection<Local> + 'a> IntoConnectionStream<'a, C> for Local {
                 tracing::debug!("connection {conn_id}: stream ending due to recv error");
                 None
             }
-        }))
+        })
+        .boxed_local()
     }
 }
