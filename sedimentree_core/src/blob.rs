@@ -7,10 +7,45 @@ use crate::hex::decode_hex;
 /// A binary object.
 ///
 /// Just a wrapper around a `Vec<u8>`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Blob(Vec<u8>);
+
+impl core::fmt::Debug for Blob {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        const MAX_PREVIEW_BYTES: usize = 32;
+        write!(f, "Blob({} bytes, ", self.0.len())?;
+        if self.0.len() <= MAX_PREVIEW_BYTES {
+            for byte in &self.0 {
+                write!(f, "{byte:02x}")?;
+            }
+        } else {
+            for byte in &self.0[..MAX_PREVIEW_BYTES] {
+                write!(f, "{byte:02x}")?;
+            }
+            write!(f, "...")?;
+        }
+        write!(f, ")")
+    }
+}
+
+impl core::fmt::Display for Blob {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        const MAX_PREVIEW_BYTES: usize = 16;
+        if self.0.len() <= MAX_PREVIEW_BYTES {
+            for byte in &self.0 {
+                write!(f, "{byte:02x}")?;
+            }
+        } else {
+            for byte in &self.0[..MAX_PREVIEW_BYTES] {
+                write!(f, "{byte:02x}")?;
+            }
+            write!(f, "..({} bytes total)", self.0.len())?;
+        }
+        Ok(())
+    }
+}
 
 impl Blob {
     /// Create a new blob from the given contents.

@@ -30,7 +30,7 @@ bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
 rand = { workspace = true }
 testresult = { workspace = true }
-tokio = { workspace = true, features = ["rt", "macros"] }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [[bench]]
 name = "subduction"
