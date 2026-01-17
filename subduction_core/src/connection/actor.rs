@@ -40,7 +40,7 @@ pub struct ConnectionActor<'a, F: IntoConnectionStream<'a, C>, C: Connection<F>>
     /// Incoming commands (add/remove connections).
     commands: async_channel::Receiver<ActorCommand<C>>,
 
-    /// Outbound messages: (connection_id, message).
+    /// Outbound messages: (`connection_id`, message).
     outbox: async_channel::Sender<(ConnectionId, Message)>,
 
     /// Notification channel for when connections die.

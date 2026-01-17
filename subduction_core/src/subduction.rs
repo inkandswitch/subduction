@@ -168,38 +168,35 @@ impl<
 
             match select(msg_fut, closed_fut).await {
                 Either::Left((msg_result, _)) => {
-                    match msg_result {
-                        Ok((conn_id, msg)) => {
-                            tracing::debug!(
-                                "Subduction listener received message from {:?}: {:?}",
-                                conn_id,
-                                msg
-                            );
+                    if let Ok((conn_id, msg)) = msg_result {
+                        tracing::debug!(
+                            "Subduction listener received message from {:?}: {:?}",
+                            conn_id,
+                            msg
+                        );
 
-                            // Look up connection for sending responses
-                            let conn = { self.conns.lock().await.get(&conn_id).cloned() };
+                        // Look up connection for sending responses
+                        let conn = { self.conns.lock().await.get(&conn_id).cloned() };
 
-                            if let Some(conn) = conn {
-                                if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
-                                    tracing::error!(
-                                        "error dispatching message from connection {:?}: {}",
-                                        conn_id,
-                                        e
-                                    );
-                                    // Connection is broken - unregister from conns map.
-                                    // The stream in the actor will naturally end when recv fails.
-                                    let _ = self.unregister(&conn_id).await;
-                                    tracing::info!("unregistered failed connection {:?}", conn_id);
-                                }
-                                // No re-registration needed - the stream handles continuous recv
-                            } else {
-                                tracing::warn!("Message from unknown/unregistered connection {:?}", conn_id);
+                        if let Some(conn) = conn {
+                            if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
+                                tracing::error!(
+                                    "error dispatching message from connection {:?}: {}",
+                                    conn_id,
+                                    e
+                                );
+                                // Connection is broken - unregister from conns map.
+                                // The stream in the actor will naturally end when recv fails.
+                                let _ = self.unregister(&conn_id).await;
+                                tracing::info!("unregistered failed connection {:?}", conn_id);
                             }
+                            // No re-registration needed - the stream handles continuous recv
+                        } else {
+                            tracing::warn!("Message from unknown/unregistered connection {:?}", conn_id);
                         }
-                        Err(_) => {
-                            tracing::info!("Message queue closed");
-                            break;
-                        }
+                    } else {
+                        tracing::info!("Message queue closed");
+                        break;
                     }
                 }
                 Either::Right((closed_result, _)) => {

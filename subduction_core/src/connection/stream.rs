@@ -40,17 +40,14 @@ where
     fn into_stream(conn_id: ConnectionId, conn: C) -> Self::Stream {
         Box::pin(futures::stream::unfold(conn, move |conn| async move {
             let result = conn.recv().await;
-            match &result {
-                Ok(_) => {
-                    tracing::debug!("connection {conn_id}: received message");
-                    Some(((conn_id, result), conn))
-                }
-                Err(_) => {
-                    // Stream terminates on error - this is how dead connections get cleaned up.
-                    // The actor will be notified when the stream ends.
-                    tracing::debug!("connection {conn_id}: stream ending due to recv error");
-                    None
-                }
+            if result.is_ok() {
+                tracing::debug!("connection {conn_id}: received message");
+                Some(((conn_id, result), conn))
+            } else {
+                // Stream terminates on error - this is how dead connections get cleaned up.
+                // The actor will be notified when the stream ends.
+                tracing::debug!("connection {conn_id}: stream ending due to recv error");
+                None
             }
         }))
     }
@@ -62,17 +59,14 @@ impl<'a, C: Connection<Local> + 'a> IntoConnectionStream<'a, C> for Local {
     fn into_stream(conn_id: ConnectionId, conn: C) -> Self::Stream {
         Box::pin(futures::stream::unfold(conn, move |conn| async move {
             let result = conn.recv().await;
-            match &result {
-                Ok(_) => {
-                    tracing::debug!("connection {conn_id}: received message");
-                    Some(((conn_id, result), conn))
-                }
-                Err(_) => {
-                    // Stream terminates on error - this is how dead connections get cleaned up.
-                    // The actor will be notified when the stream ends.
-                    tracing::debug!("connection {conn_id}: stream ending due to recv error");
-                    None
-                }
+            if result.is_ok() {
+                tracing::debug!("connection {conn_id}: received message");
+                Some(((conn_id, result), conn))
+            } else {
+                // Stream terminates on error - this is how dead connections get cleaned up.
+                // The actor will be notified when the stream ends.
+                tracing::debug!("connection {conn_id}: stream ending due to recv error");
+                None
             }
         }))
     }

@@ -10,7 +10,7 @@
 //! |-----------------------|-------------|
 //! | Microbenchmarks       | ID types, accessors, trivial operations. Sub-microsecond, kept for regression detection. |
 //! | Scaling benchmarks    | Collection operations, message construction at various sizes. |
-//! | Protocol operations   | SyncDiff, BatchSync request/response construction. |
+//! | Protocol operations   | `SyncDiff`, `BatchSync` request/response construction. |
 //!
 //! ## What's NOT Tested Here
 //!
@@ -173,7 +173,7 @@ mod id {
 
     use super::generators::{peer_id_from_seed, request_id_from_seed, storage_key_from_seed};
 
-    /// Microbenchmarks for identifier types (PeerId, ConnectionId, RequestId).
+    /// Microbenchmarks for identifier types (`PeerId`, `ConnectionId`, `RequestId`).
     ///
     /// **Intent**: Establish baseline costs for ID operations. These are foundational
     /// types used throughout the sync protocol.
@@ -256,10 +256,10 @@ mod id {
         group.finish();
     }
 
-    /// Microbenchmarks for StorageKey operations.
+    /// Microbenchmarks for `StorageKey` operations.
     ///
     /// **Intent**: Measure cost of path-based storage key operations.
-    /// StorageKeys are used for addressing data in storage backends.
+    /// `StorageKeys` are used for addressing data in storage backends.
     ///
     /// **Expected complexity**: O(depth) for most operations.
     pub fn bench_storage_key(c: &mut Criterion) {
@@ -439,7 +439,7 @@ mod sync {
         sedimentree_id_from_seed, sync_diff_from_seed,
     };
 
-    /// Benchmark SyncDiff construction and cloning at various scales.
+    /// Benchmark `SyncDiff` construction and cloning at various scales.
     ///
     /// **Intent**: Measure the cost of building sync diffs, which represent the
     /// data delta to send to a peer. Includes blob data allocation.
@@ -497,12 +497,12 @@ mod sync {
         group.finish();
     }
 
-    /// Benchmark BatchSyncRequest and BatchSyncResponse operations.
+    /// Benchmark `BatchSyncRequest` and `BatchSyncResponse` operations.
     ///
     /// **Intent**: Measure the cost of constructing the main sync protocol messages.
-    /// These wrap SyncDiff with routing metadata.
+    /// These wrap `SyncDiff` with routing metadata.
     ///
-    /// **Note**: Construction cost is dominated by SyncDiff for responses.
+    /// **Note**: Construction cost is dominated by `SyncDiff` for responses.
     pub fn bench_batch_sync(c: &mut Criterion) {
         let mut group = c.benchmark_group("batch_sync");
 
@@ -587,8 +587,8 @@ mod collections {
     /// **Intent**: Measure HashMap/BTreeMap performance with our ID types. The sync
     /// protocol maintains maps of peers, connections, and sedimentrees.
     ///
-    /// **Expected complexity**: O(1) average for HashMap, O(log n) for BTreeMap.
-    /// Hash quality of our ID types affects HashMap performance.
+    /// **Expected complexity**: O(1) average for `HashMap`, O(log n) for `BTreeMap`.
+    /// Hash quality of our ID types affects `HashMap` performance.
     #[allow(clippy::too_many_lines, clippy::cast_sign_loss)]
     pub fn bench_collections(c: &mut Criterion) {
         let mut group = c.benchmark_group("collections");
@@ -774,8 +774,8 @@ mod cloning {
     /// **Intent**: Cloning is common in async message passing. Understanding clone
     /// costs helps identify where Arc/Rc might be beneficial.
     ///
-    /// **Note**: Small ID types (PeerId, RequestId) are Copy/cheap-Clone.
-    /// Larger types (SyncDiff, Messages) have significant clone costs.
+    /// **Note**: Small ID types (`PeerId`, `RequestId`) are Copy/cheap-Clone.
+    /// Larger types (`SyncDiff`, Messages) have significant clone costs.
     pub fn bench_cloning(c: &mut Criterion) {
         let mut group = c.benchmark_group("cloning");
 
