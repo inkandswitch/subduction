@@ -2579,4 +2579,218 @@ mod tests {
             Ok(())
         }
     }
+
+    /// Tests for the callback timing bug that causes the "one behind" issue.
+    ///
+    /// The WASM layer (`WasmConnectionCallbackReader`) fires callbacks during `recv()`,
+    /// BEFORE the message is dispatched to storage. This means any data queries in
+    /// callbacks see stale state.
+    ///
+    /// These tests assert the CORRECT expected behavior: data SHOULD be visible
+    /// at "callback moment". They FAIL now (confirming the bug) and will PASS
+    /// once the fix is implemented.
+    mod callback_timing_tests {
+        use super::*;
+        use crate::connection::test_utils::ChannelMockConnection;
+        use crate::peer::id::PeerId;
+        use core::time::Duration;
+        use sedimentree_core::{
+            blob::{Blob, BlobMeta, Digest},
+            loose_commit::LooseCommit,
+        };
+
+        fn make_test_commit_with_data(data: &[u8]) -> (LooseCommit, Blob) {
+            let blob = Blob::new(data.to_vec());
+            let blob_meta = BlobMeta::new(data);
+            let digest = Digest::hash(data);
+            let commit = LooseCommit::new(digest, vec![], blob_meta);
+            (commit, blob)
+        }
+
+        /// Test that data IS visible at "callback moment".
+        ///
+        /// This test simulates WASM's callback timing by:
+        /// 1. Starting ONLY the actor (not the listener)
+        /// 2. Sending a message through the channel
+        /// 3. Waiting for actor to forward it to msg_queue
+        /// 4. Checking visibility (this is the "callback moment")
+        ///
+        /// EXPECTED (correct behavior): Data SHOULD be visible at callback moment.
+        /// ACTUAL (bug): Data is NOT visible because dispatch hasn't happened yet.
+        ///
+        /// This test FAILS now (confirming the bug) and will PASS after the fix.
+        #[tokio::test]
+        async fn test_data_visible_at_callback_moment() -> TestResult {
+            let storage = MemoryStorage::new();
+            let (subduction, listener_fut, actor_fut) =
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                    storage,
+                    CountLeadingZeroBytes,
+                );
+
+            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            subduction.register(conn).await?;
+
+            // Start ONLY the actor - it will process recv() and forward to msg_queue
+            let actor_task = tokio::spawn(actor_fut);
+
+            // Give actor time to start listening
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            let sedimentree_id = SedimentreeId::new([42u8; 32]);
+            let (commit, blob) = make_test_commit_with_data(b"callback timing test");
+
+            // Send the message
+            handle.inbound_tx.send(Message::LooseCommit {
+                id: sedimentree_id, commit, blob,
+            }).await?;
+
+            // Wait for actor to process and forward to msg_queue
+            // This is the "callback moment" - when WASM callbacks fire
+            tokio::time::sleep(Duration::from_millis(20)).await;
+
+            // At the "callback moment": this is when WASM callbacks fire
+            // CORRECT BEHAVIOR: data SHOULD be visible here
+            let visibility_at_callback_moment = subduction.sedimentree_ids().await;
+            let commits_at_callback_moment = subduction.get_commits(sedimentree_id).await;
+
+            // Clean up (start listener briefly to avoid hangs, then abort)
+            let listener_task = tokio::spawn(listener_fut);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            actor_task.abort();
+            listener_task.abort();
+
+            // Assert CORRECT behavior: data SHOULD be visible at callback moment
+            // This FAILS now (confirming the bug) and will PASS after the fix
+            assert!(
+                visibility_at_callback_moment.contains(&sedimentree_id),
+                "BUG: At callback moment, sedimentree should be visible but isn't. \
+                 Found: {:?}. Callbacks see stale data!",
+                visibility_at_callback_moment
+            );
+            assert_eq!(
+                commits_at_callback_moment.as_ref().map(|c| c.len()),
+                Some(1),
+                "BUG: At callback moment, commit should be visible but isn't. \
+                 Found: {:?}. Callbacks see stale data!",
+                commits_at_callback_moment
+            );
+
+            Ok(())
+        }
+
+        /// Same test but for Local futures (WASM-like single-threaded environment)
+        ///
+        /// This test FAILS now (confirming the bug) and will PASS after the fix.
+        #[tokio::test]
+        async fn test_data_visible_at_callback_moment_local() -> TestResult {
+            tokio::task::LocalSet::new().run_until(async {
+                let storage = MemoryStorage::new();
+                let (subduction, listener_fut, actor_fut) =
+                    Subduction::<'_, Local, _, ChannelMockConnection, _>::new(
+                        storage,
+                        CountLeadingZeroBytes,
+                    );
+
+                let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+                subduction.register(conn).await?;
+
+                // Start ONLY the actor
+                let actor_task = tokio::task::spawn_local(actor_fut);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+
+                let sedimentree_id = SedimentreeId::new([42u8; 32]);
+                let (commit, blob) = make_test_commit_with_data(b"callback timing test local");
+
+                handle.inbound_tx.send(Message::LooseCommit {
+                    id: sedimentree_id, commit, blob,
+                }).await?;
+
+                // "Callback moment" - when WASM callbacks fire
+                tokio::time::sleep(Duration::from_millis(20)).await;
+
+                let visibility_at_callback_moment = subduction.sedimentree_ids().await;
+                let commits_at_callback_moment = subduction.get_commits(sedimentree_id).await;
+
+                // Clean up
+                let listener_task = tokio::task::spawn_local(listener_fut);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+                actor_task.abort();
+                listener_task.abort();
+
+                // Assert CORRECT behavior - this FAILS now, will PASS after fix
+                assert!(
+                    visibility_at_callback_moment.contains(&sedimentree_id),
+                    "[LOCAL] BUG: At callback moment, sedimentree should be visible. Found: {:?}",
+                    visibility_at_callback_moment
+                );
+                assert_eq!(
+                    commits_at_callback_moment.as_ref().map(|c| c.len()),
+                    Some(1),
+                    "[LOCAL] BUG: At callback moment, commit should be visible"
+                );
+
+                Ok::<_, Box<dyn std::error::Error>>(())
+            }).await?;
+            Ok(())
+        }
+
+        /// Test that each commit is immediately visible when its callback fires.
+        ///
+        /// For each message sent, we check visibility immediately (simulating callback).
+        /// CORRECT BEHAVIOR: Should see N commits after Nth message is received.
+        /// ACTUAL (bug): Sees N-1 commits (the "one behind" pattern).
+        ///
+        /// This test FAILS now (confirming the bug) and will PASS after the fix.
+        #[tokio::test]
+        async fn test_no_one_behind_pattern() -> TestResult {
+            let storage = MemoryStorage::new();
+            let (subduction, listener_fut, actor_fut) =
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                    storage,
+                    CountLeadingZeroBytes,
+                );
+
+            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            subduction.register(conn).await?;
+
+            let actor_task = tokio::spawn(actor_fut);
+            let listener_task = tokio::spawn(listener_fut);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            let sedimentree_id = SedimentreeId::new([99u8; 32]);
+
+            for i in 0..3u8 {
+                let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes());
+
+                // Send message
+                handle.inbound_tx.send(Message::LooseCommit {
+                    id: sedimentree_id, commit, blob,
+                }).await?;
+
+                // Immediately check visibility (simulating callback timing)
+                let commits_seen = subduction.get_commits(sedimentree_id).await
+                    .map(|c| c.len())
+                    .unwrap_or(0);
+
+                // CORRECT BEHAVIOR: Should see i+1 commits (including the one just sent)
+                // ACTUAL (bug): Sees fewer commits because dispatch hasn't happened
+                assert_eq!(
+                    commits_seen,
+                    (i + 1) as usize,
+                    "BUG: After sending commit {}, should see {} commits but saw {}. \
+                     This is the 'one behind' bug - callbacks see stale data!",
+                    i, i + 1, commits_seen
+                );
+
+                // Let some time pass before next message
+                tokio::time::sleep(Duration::from_millis(30)).await;
+            }
+
+            actor_task.abort();
+            listener_task.abort();
+
+            Ok(())
+        }
+    }
 }

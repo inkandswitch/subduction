@@ -182,7 +182,8 @@ pub struct ChannelMockConnection {
     outbound_tx: async_channel::Sender<Message>,
     /// Receiver for inbound messages (from "remote" to Subduction)
     inbound_rx: async_channel::Receiver<Message>,
-    /// Sender for inbound messages (used by test to inject messages)
+    /// Sender for inbound messages (kept for potential direct access in complex tests)
+    #[allow(dead_code)]
     inbound_tx: async_channel::Sender<Message>,
     /// Request ID counter
     request_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
@@ -338,6 +339,150 @@ impl Connection<Local> for ChannelMockConnection {
         _timeout: Option<Duration>,
     ) -> <Local as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         async { Err(core::fmt::Error) }.boxed_local()
+    }
+}
+
+/// A connection wrapper that fires callbacks during recv(), mimicking WASM behavior.
+///
+/// This wrapper demonstrates the "one behind" bug: callbacks fire BEFORE the message
+/// is dispatched and stored, so any data queries in the callback see stale state.
+///
+/// The callback receives the message and a sender to report what it observed.
+#[derive(Clone, Debug)]
+pub struct CallbackOnRecvConnection<C> {
+    inner: C,
+    /// Channel to send observation results from callback
+    callback_result_tx: async_channel::Sender<CallbackObservation>,
+}
+
+/// What the callback observed when it fired.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CallbackObservation {
+    /// The sedimentree ID from the message.
+    pub sedimentree_id: sedimentree_core::id::SedimentreeId,
+    /// Whether the sedimentree was visible when callback fired.
+    pub was_visible: bool,
+    /// Number of commits visible when callback fired.
+    pub commit_count: usize,
+}
+
+/// Handle for receiving callback observations in tests.
+#[derive(Clone, Debug)]
+pub struct CallbackObservationHandle {
+    /// Receiver channel for callback observations.
+    pub rx: async_channel::Receiver<CallbackObservation>,
+}
+
+impl<C> CallbackOnRecvConnection<C> {
+    /// Create a new callback wrapper with observation channel.
+    #[must_use]
+    pub fn new(inner: C) -> (Self, CallbackObservationHandle) {
+        let (tx, rx) = async_channel::unbounded();
+        (
+            Self {
+                inner,
+                callback_result_tx: tx,
+            },
+            CallbackObservationHandle { rx },
+        )
+    }
+
+    /// Get a sender for reporting observations (used by external callback logic).
+    #[must_use]
+    pub fn observation_sender(&self) -> async_channel::Sender<CallbackObservation> {
+        self.callback_result_tx.clone()
+    }
+}
+
+impl<C: PartialEq> PartialEq for CallbackOnRecvConnection<C> {
+    fn eq(&self, other: &Self) -> bool {
+        self.inner == other.inner
+    }
+}
+
+impl<C: Connection<Sendable> + Send> Connection<Sendable> for CallbackOnRecvConnection<C>
+where
+    C::RecvError: Send,
+{
+    type DisconnectionError = C::DisconnectionError;
+    type SendError = C::SendError;
+    type RecvError = C::RecvError;
+    type CallError = C::CallError;
+
+    fn peer_id(&self) -> PeerId {
+        self.inner.peer_id()
+    }
+
+    fn disconnect(
+        &self,
+    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+        self.inner.disconnect()
+    }
+
+    fn send(
+        &self,
+        message: Message,
+    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+        self.inner.send(message)
+    }
+
+    fn recv(&self) -> <Sendable as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+        // Note: This mimics WASM behavior where callbacks would fire here,
+        // but we can't actually fire callbacks here without access to Subduction.
+        // The test will inject a callback-like check separately.
+        self.inner.recv()
+    }
+
+    fn next_request_id(&self) -> <Sendable as FutureKind>::Future<'_, RequestId> {
+        self.inner.next_request_id()
+    }
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> <Sendable as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+        self.inner.call(req, timeout)
+    }
+}
+
+impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
+    type DisconnectionError = C::DisconnectionError;
+    type SendError = C::SendError;
+    type RecvError = C::RecvError;
+    type CallError = C::CallError;
+
+    fn peer_id(&self) -> PeerId {
+        self.inner.peer_id()
+    }
+
+    fn disconnect(
+        &self,
+    ) -> <Local as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+        self.inner.disconnect()
+    }
+
+    fn send(
+        &self,
+        message: Message,
+    ) -> <Local as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+        self.inner.send(message)
+    }
+
+    fn recv(&self) -> <Local as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+        self.inner.recv()
+    }
+
+    fn next_request_id(&self) -> <Local as FutureKind>::Future<'_, RequestId> {
+        self.inner.next_request_id()
+    }
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> <Local as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+        self.inner.call(req, timeout)
     }
 }
 
