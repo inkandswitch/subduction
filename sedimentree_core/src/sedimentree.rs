@@ -184,7 +184,7 @@ impl Sedimentree {
         let our_fragments_meta = self
             .fragments
             .iter()
-            .map(|s| s.summary())
+            .map(Fragment::summary)
             .collect::<Set<&FragmentSummary>>();
         let their_fragments = remote.fragment_summaries.iter().collect::<Set<_>>();
         let mut local_fragments = Vec::new();

@@ -3,8 +3,7 @@
 pub mod actor;
 pub mod id;
 pub mod message;
-
-pub(crate) mod recv_once;
+pub mod stream;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;

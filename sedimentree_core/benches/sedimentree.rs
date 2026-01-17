@@ -46,6 +46,7 @@ mod generators {
                 .expect("should have slice with leading zeros"),
         );
         // Ensure the first non-zero byte is actually non-zero for precise depth control
+        #[allow(clippy::indexing_slicing)]
         if zeros < 32 && bytes[zeros] == 0 {
             bytes[zeros] = 1;
         }
@@ -305,7 +306,10 @@ mod sedimentree {
     use std::hint::black_box;
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{commit::CountLeadingZeroBytes, fragment::Fragment, loose_commit::LooseCommit, sedimentree::Sedimentree};
+    use sedimentree_core::{
+        commit::CountLeadingZeroBytes, fragment::Fragment, loose_commit::LooseCommit,
+        sedimentree::Sedimentree,
+    };
 
     use super::generators::{
         linear_commit_chain, overlapping_sedimentrees, synthetic_commit, synthetic_fragment,
@@ -711,6 +715,7 @@ mod sedimentree {
         }
 
         // Batch adding multiple commits (simulates receiving sync response)
+        #[allow(clippy::cast_sign_loss)]
         for batch_size in [10, 50, 100] {
             group.throughput(Throughput::Elements(batch_size as u64));
 

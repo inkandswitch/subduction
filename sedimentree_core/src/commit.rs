@@ -1,7 +1,7 @@
 //! Abstractions for working with commits.
 
-use alloc::vec::Vec;
 use crate::collections::{Map, Set};
+use alloc::vec::Vec;
 use core::{error::Error, mem::take, num::NonZero};
 
 use thiserror::Error;
@@ -23,6 +23,7 @@ pub trait Parents {
     fn parents(&self) -> Set<Digest>;
 }
 
+#[allow(clippy::implicit_hasher)]
 impl Parents for Set<Digest> {
     fn parents(&self) -> Set<Digest> {
         self.clone()

@@ -5,10 +5,10 @@ pub mod request;
 
 use crate::{
     connection::{
-        actor::{ConnectionActor, ConnectionActorFuture, StartConnectionActor},
+        actor::{ActorCommand, ConnectionActor, ConnectionActorFuture, StartConnectionActor},
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
-        recv_once::RecvOnce,
+        stream::IntoConnectionStream,
         Connection, ConnectionDisallowed, ConnectionPolicy,
     },
     peer::id::PeerId,
@@ -54,7 +54,7 @@ pub struct Subduction<
     'a,
     F: SubductionFutureKind<'a, S, C, M>,
     S: Storage<F>,
-    C: Connection<F> + PartialEq,
+    C: Connection<F> + PartialEq + 'a,
     M: DepthMetric = CountLeadingZeroBytes,
 > {
     depth_metric: M,
@@ -63,8 +63,9 @@ pub struct Subduction<
     conns: Arc<Mutex<Map<ConnectionId, C>>>,
     storage: S,
 
-    actor_channel: Sender<(ConnectionId, C)>,
-    msg_queue: async_channel::Receiver<(ConnectionId, C, Message)>,
+    actor_channel: Sender<ActorCommand<C>>,
+    msg_queue: async_channel::Receiver<(ConnectionId, Message)>,
+    connection_closed: async_channel::Receiver<ConnectionId>,
 
     abort_actor_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
@@ -76,7 +77,7 @@ impl<
         'a,
         F: SubductionFutureKind<'a, S, C, M>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq,
+        C: Connection<F> + PartialEq + 'a,
         M: DepthMetric,
     > Subduction<'a, F, S, C, M>
 {
@@ -94,7 +95,8 @@ impl<
 
         let (actor_sender, actor_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(256);
-        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
+        let (closed_sender, closed_receiver) = async_channel::bounded(32);
+        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender, closed_sender);
 
         let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
@@ -107,6 +109,7 @@ impl<
             storage,
             actor_channel: actor_sender,
             msg_queue: queue_receiver,
+            connection_closed: closed_receiver,
             abort_actor_handle,
             abort_listener_handle,
             _phantom: PhantomData,
@@ -154,38 +157,58 @@ impl<
     ///
     /// * Returns `ListenError` if a storage or network error occurs.
     pub async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
+        use core::pin::pin;
+        use futures::future::{select, Either};
+
         tracing::info!("starting Subduction listener");
-        while let Ok((conn_id, conn, msg)) = self.msg_queue.recv().await {
-            tracing::debug!(
-                "Subduction listener received message from {:?}: {:?}",
-                conn_id,
-                msg
-            );
 
-            if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
-                tracing::error!(
-                    "error dispatching message from connection {:?}: {}",
-                    conn_id,
-                    e
-                );
-                // Connection is broken - unregister from conns map.
-                // We still re-register to actor_channel below to drain any remaining
-                // buffered messages. The connection will fully close when recv_once
-                // fails on the broken connection.
-                let _ = self.unregister(&conn_id).await;
-                tracing::info!("unregistered failed connection {:?}", conn_id);
-            }
+        loop {
+            let msg_fut = pin!(self.msg_queue.recv().fuse());
+            let closed_fut = pin!(self.connection_closed.recv().fuse());
 
-            // Always re-register to drain buffered messages and listen for more
-            if let Err(e) = self.actor_channel.send((conn_id, conn)).await {
-                    tracing::error!(
-                        "error re-sending connection {:?} to actor channel: {:?}",
-                        conn_id,
-                        e
-                    );
-                    // Channel closed, exit loop
-                    break;
+            match select(msg_fut, closed_fut).await {
+                Either::Left((msg_result, _)) => {
+                    match msg_result {
+                        Ok((conn_id, msg)) => {
+                            tracing::debug!(
+                                "Subduction listener received message from {:?}: {:?}",
+                                conn_id,
+                                msg
+                            );
+
+                            // Look up connection for sending responses
+                            let conn = { self.conns.lock().await.get(&conn_id).cloned() };
+
+                            if let Some(conn) = conn {
+                                if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
+                                    tracing::error!(
+                                        "error dispatching message from connection {:?}: {}",
+                                        conn_id,
+                                        e
+                                    );
+                                    // Connection is broken - unregister from conns map.
+                                    // The stream in the actor will naturally end when recv fails.
+                                    let _ = self.unregister(&conn_id).await;
+                                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                                }
+                                // No re-registration needed - the stream handles continuous recv
+                            } else {
+                                tracing::warn!("Message from unknown/unregistered connection {:?}", conn_id);
+                            }
+                        }
+                        Err(_) => {
+                            tracing::info!("Message queue closed");
+                            break;
+                        }
+                    }
                 }
+                Either::Right((closed_result, _)) => {
+                    if let Ok(conn_id) = closed_result {
+                        tracing::info!("Connection {:?} closed, unregistering", conn_id);
+                        self.unregister(&conn_id).await;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -409,7 +432,7 @@ impl<
 
             self.conns.lock().await.insert(conn_id, conn.clone());
             self.actor_channel
-                .send((conn_id, conn))
+                .send(ActorCommand::AddConnection(conn_id, conn))
                 .await
                 .map_err(|_| RegistrationError::SendToClosedChannel)?;
 
@@ -1445,7 +1468,7 @@ impl<
         'a,
         F: SubductionFutureKind<'a, S, C, M>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq,
+        C: Connection<F> + PartialEq + 'a,
         M: DepthMetric,
     > Drop for Subduction<'a, F, S, C, M>
 {
@@ -1459,7 +1482,7 @@ impl<
         'a,
         F: SubductionFutureKind<'a, S, C, M>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq,
+        C: Connection<F> + PartialEq + 'a,
         M: DepthMetric,
     > ConnectionPolicy for Subduction<'a, F, S, C, M>
 {
@@ -1478,18 +1501,18 @@ impl<
 pub trait SubductionFutureKind<
     'a,
     S: Storage<Self>,
-    C: Connection<Self> + PartialEq,
+    C: Connection<Self> + PartialEq + 'a,
     M: DepthMetric,
->: RecvOnce<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>
+>: IntoConnectionStream<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>
 {
 }
 
 impl<
         'a,
         S: Storage<Self>,
-        C: Connection<Self> + PartialEq,
+        C: Connection<Self> + PartialEq + 'a,
         M: DepthMetric,
-        T: RecvOnce<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>,
+        T: IntoConnectionStream<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>,
     > SubductionFutureKind<'a, S, C, M> for T
 {
 }
@@ -1497,8 +1520,8 @@ impl<
 /// A trait for starting the listener task for Subduction.
 ///
 /// This lets us abstract over `Send` and `!Send` futures
-pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq, M: DepthMetric>:
-    RecvOnce<'a, C> + StartConnectionActor<'a, C>
+pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq + 'a, M: DepthMetric>:
+    IntoConnectionStream<'a, C> + StartConnectionActor<'a, C>
 {
     /// Start the listener task for Subduction.
     fn start_listener(
@@ -1509,7 +1532,7 @@ pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq, M
 
 impl<
         'a,
-        C: Connection<Self> + PartialEq + Send + Sync + 'a,
+        C: Connection<Self> + PartialEq + Send + Sync + 'static,
         S: Storage<Self> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
     > StartListener<'a, S, C, M> for Sendable
@@ -1564,7 +1587,7 @@ pub struct ListenerFuture<
     'a,
     F: StartListener<'a, S, C, M>,
     S: Storage<F>,
-    C: Connection<F> + PartialEq,
+    C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
@@ -1575,7 +1598,7 @@ impl<
         'a,
         F: StartListener<'a, S, C, M>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq,
+        C: Connection<F> + PartialEq + 'a,
         M: DepthMetric,
     > ListenerFuture<'a, F, S, C, M>
 {
@@ -1598,7 +1621,7 @@ impl<
         'a,
         F: StartListener<'a, S, C, M>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq,
+        C: Connection<F> + PartialEq + 'a,
         M: DepthMetric,
     > Deref for ListenerFuture<'a, F, S, C, M>
 {
@@ -1613,7 +1636,7 @@ impl<
         'a,
         F: StartListener<'a, S, C, M>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq,
+        C: Connection<F> + PartialEq + 'a,
         M: DepthMetric,
     > Future for ListenerFuture<'a, F, S, C, M>
 {
@@ -1628,7 +1651,7 @@ impl<
         'a,
         F: StartListener<'a, S, C, M>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq,
+        C: Connection<F> + PartialEq + 'a,
         M: DepthMetric,
     > Unpin for ListenerFuture<'a, F, S, C, M>
 {
