@@ -482,6 +482,14 @@ impl WasmSubduction {
             .map(WasmPeerId::from)
             .collect()
     }
+
+    /// Get the backing storage.
+    #[wasm_bindgen(getter, js_name = storage)]
+    pub fn storage(&self) -> JsStorage {
+        // HACK to avoid requring the JS side to implement Clone
+        let js_val: JsValue = self.core.storage().into();
+        js_val.unchecked_into()
+    }
 }
 
 /// Result of registering a connection.
