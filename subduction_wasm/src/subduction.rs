@@ -1,10 +1,9 @@
 //! Subduction node.
 
-use alloc::{rc::Rc, sync::Arc, vec::Vec};
+use alloc::{format, sync::Arc, vec::Vec};
+use core::{fmt::Debug, time::Duration};
 use sedimentree_core::collections::Map;
-use core::{convert::Infallible, fmt::Debug, time::Duration};
 
-use async_lock::Mutex;
 use from_js_ref::FromJsRef;
 use futures::{
     future::{select, Either},
@@ -22,21 +21,17 @@ use subduction_core::{peer::id::PeerId, Subduction};
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    connection_callback_reader::WasmConnectionCallbackReader,
+    connection::{JsConnection, JsConnectionError},
     connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::{JsDigest, WasmDigest},
-    error::{
-        WasmCallError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
-        WasmRegistrationError,
-    },
+    error::{WasmDisconnectionError, WasmHydrationError, WasmIoError, WasmRegistrationError},
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
     sedimentree::WasmSedimentree,
     sedimentree_id::WasmSedimentreeId,
     storage::{JsStorage, JsStorageError},
-    websocket::WasmWebSocket,
 };
 
 use super::depth::WasmDepth;
@@ -45,18 +40,7 @@ use super::depth::WasmDepth;
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
 pub struct WasmSubduction {
-    core: Arc<
-        Subduction<
-            'static,
-            Local,
-            JsStorage,
-            WasmConnectionCallbackReader<WasmWebSocket>,
-            WasmHashMetric,
-        >,
-    >,
-    commit_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
-    fragment_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
-    blob_callbacks: Rc<Mutex<Vec<js_sys::Function>>>,
+    core: Arc<Subduction<'static, Local, JsStorage, JsConnection, WasmHashMetric>>,
 }
 
 #[wasm_bindgen(js_class = Subduction)]
@@ -87,12 +71,7 @@ impl WasmSubduction {
             }
         });
 
-        Self {
-            core,
-            commit_callbacks: Rc::new(Mutex::new(Vec::new())),
-            fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
-            blob_callbacks: Rc::new(Mutex::new(Vec::new())),
-        }
+        Self { core }
     }
 
     /// Hydrate a [`Subduction`] instance from external storage.
@@ -128,12 +107,7 @@ impl WasmSubduction {
             }
         });
 
-        Ok(Self {
-            core,
-            commit_callbacks: Rc::new(Mutex::new(Vec::new())),
-            fragment_callbacks: Rc::new(Mutex::new(Vec::new())),
-            blob_callbacks: Rc::new(Mutex::new(Vec::new())),
-        })
+        Ok(Self { core })
     }
 
     /// Add a Sedimentree.
@@ -177,19 +151,8 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a `WasmIoError` if attaching the connection fails.
-    pub async fn attach(&self, conn: &WasmWebSocket) -> Result<Registered, WasmIoError> {
-        let conn_with_callbacks = WasmConnectionCallbackReader {
-            conn: conn.clone(),
-            commit_callbacks: self.commit_callbacks.clone(),
-            fragment_callbacks: self.fragment_callbacks.clone(),
-            blob_callbacks: self.blob_callbacks.clone(),
-        };
-
-        let (is_new, conn_id) = self
-            .core
-            .attach(conn_with_callbacks)
-            .await
-            .map_err(WasmIoError::from)?;
+    pub async fn attach(&self, conn: JsConnection) -> Result<Registered, WasmIoError> {
+        let (is_new, conn_id) = self.core.attach(conn).await.map_err(WasmIoError::from)?;
 
         Ok(Registered {
             is_new,
@@ -199,10 +162,7 @@ impl WasmSubduction {
 
     /// Disconnect a connection by its ID.
     pub async fn disconnect(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core
-            .disconnect(&conn_id.clone().into())
-            .await
-            .unwrap_or_else(|e: Infallible| match e {})
+        self.core.disconnect(&conn_id.clone().into()).await.is_ok()
     }
 
     /// Disconnect from all peers.
@@ -235,18 +195,9 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns [`WasmConnectionDisallowed`] if the connection is not allowed.
-    pub async fn register(
-        &self,
-        conn: &WasmWebSocket,
-    ) -> Result<Registered, WasmRegistrationError> {
-        let conn_with_callbacks = WasmConnectionCallbackReader {
-            conn: conn.clone(),
-            commit_callbacks: self.commit_callbacks.clone(),
-            fragment_callbacks: self.fragment_callbacks.clone(),
-            blob_callbacks: self.blob_callbacks.clone(),
-        };
-        let (is_new, conn_id) = self.core.register(conn_with_callbacks).await?;
+    /// Returns [`WasmRegistrationError`] if the connection is not allowed.
+    pub async fn register(&self, conn: JsConnection) -> Result<Registered, WasmRegistrationError> {
+        let (is_new, conn_id) = self.core.register(conn).await?;
         Ok(Registered {
             is_new,
             conn_id: conn_id.into(),
@@ -259,48 +210,6 @@ impl WasmSubduction {
     #[must_use]
     pub async fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
         self.core.unregister(&conn_id.clone().into()).await
-    }
-
-    /// Add a callback for commit events.
-    #[wasm_bindgen(js_name = onCommit)]
-    pub async fn on_commit(&self, callback: js_sys::Function) {
-        let mut lock = self.commit_callbacks.lock().await;
-        lock.push(callback);
-    }
-
-    /// Remove a callback for commit events.
-    #[wasm_bindgen(js_name = offCommit)]
-    pub async fn off_commit(&self, callback: js_sys::Function) {
-        let mut lock = self.commit_callbacks.lock().await;
-        lock.retain(|cb| cb != &callback);
-    }
-
-    /// Add a callback for fragment events.
-    #[wasm_bindgen(js_name = onFragment)]
-    pub async fn on_fragment(&self, callback: js_sys::Function) {
-        let mut lock = self.fragment_callbacks.lock().await;
-        lock.push(callback);
-    }
-
-    /// Remove a callback for fragment events.
-    #[wasm_bindgen(js_name = offFragment)]
-    pub async fn off_fragment(&self, callback: js_sys::Function) {
-        let mut lock = self.fragment_callbacks.lock().await;
-        lock.retain(|cb| cb != &callback);
-    }
-
-    /// Add a callback for blob events.
-    #[wasm_bindgen(js_name = onBlob)]
-    pub async fn on_blob(&self, callback: js_sys::Function) {
-        let mut lock = self.blob_callbacks.lock().await;
-        lock.push(callback);
-    }
-
-    /// Remove a callback for blob events.
-    #[wasm_bindgen(js_name = offBlob)]
-    pub async fn off_blob(&self, callback: js_sys::Function) {
-        let mut lock = self.blob_callbacks.lock().await;
-        lock.retain(|cb| cb != &callback);
     }
 
     /// Get a local blob by its digest.
@@ -453,8 +362,8 @@ impl WasmSubduction {
                 .collect(),
             conn_errors: conn_errors
                 .into_iter()
-                .map(|(ws, err)| ConnErrPair {
-                    ws: ws.conn.clone(),
+                .map(|(conn, err)| ConnErrPair {
+                    conn,
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -490,7 +399,7 @@ impl WasmSubduction {
                             blobs,
                             conn_errs
                                 .into_iter()
-                                .map(|(ws, err)| (ws.conn.clone(), WasmCallError::from(err)))
+                                .map(|(conn, err)| (conn, WasmCallError::from(err)))
                                 .collect::<Vec<_>>(),
                         ),
                     )
@@ -524,8 +433,8 @@ impl WasmSubduction {
                 .collect(),
             conn_errors: errs
                 .into_iter()
-                .map(|(ws, err)| ConnErrPair {
-                    ws: ws.conn.clone(),
+                .map(|(conn, err)| ConnErrPair {
+                    conn,
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -636,21 +545,21 @@ impl PeerBatchSyncResult {
     }
 }
 
-/// A pair of a WebSocket connection and an error that occurred during a call.
+/// A pair of a connection and an error that occurred during a call.
 #[wasm_bindgen(js_name = ConnErrorPair)]
 #[derive(Debug, Clone)]
 pub struct ConnErrPair {
-    ws: WasmWebSocket,
+    conn: JsConnection,
     err: WasmCallError,
 }
 
 #[wasm_bindgen(js_class = ConnErrorPair)]
 impl ConnErrPair {
-    /// The WebSocket connection that encountered the error.
+    /// The connection that encountered the error.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn ws(&self) -> WasmWebSocket {
-        self.ws.clone()
+    pub fn conn(&self) -> JsConnection {
+        self.conn.clone()
     }
 
     /// The error that occurred during the call.
@@ -665,9 +574,7 @@ impl ConnErrPair {
 #[wasm_bindgen(js_name = PeerResultMap)]
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
-pub struct WasmPeerResultMap(
-    Map<PeerId, (bool, Vec<Blob>, Vec<(WasmWebSocket, WasmCallError)>)>,
-);
+pub struct WasmPeerResultMap(Map<PeerId, (bool, Vec<Blob>, Vec<(JsConnection, WasmCallError)>)>);
 
 #[wasm_bindgen(js_class = PeerResultMap)]
 impl WasmPeerResultMap {
@@ -685,8 +592,8 @@ impl WasmPeerResultMap {
                     .collect(),
                 conn_errors: conn_errs
                     .iter()
-                    .map(|(ws, err)| ConnErrPair {
-                        ws: ws.clone(),
+                    .map(|(conn, err)| ConnErrPair {
+                        conn: conn.clone(),
                         err: err.clone(),
                     })
                     .collect(),
@@ -706,8 +613,8 @@ impl WasmPeerResultMap {
                     .collect(),
                 conn_errors: conn_errs
                     .iter()
-                    .map(|(ws, err)| ConnErrPair {
-                        ws: ws.clone(),
+                    .map(|(conn, err)| ConnErrPair {
+                        conn: conn.clone(),
                         err: err.clone(),
                     })
                     .collect(),
@@ -738,11 +645,11 @@ impl WasmHashMetric {
 impl DepthMetric for WasmHashMetric {
     fn to_depth(&self, digest: Digest) -> Depth {
         if let Some(func) = &self.0 {
-            let js_digest = WasmDigest::from(digest);
+            let wasm_digest = WasmDigest::from(digest);
 
             #[allow(clippy::expect_used)]
             let js_value = func
-                .call1(&JsValue::NULL, &JsValue::from(js_digest))
+                .call1(&JsValue::NULL, &JsValue::from(wasm_digest))
                 .expect("callback failed");
 
             #[allow(clippy::expect_used)]
@@ -752,5 +659,24 @@ impl DepthMetric for WasmHashMetric {
         } else {
             CountLeadingZeroBytes.to_depth(digest)
         }
+    }
+}
+
+/// WASM wrapper for call errors from the connection.
+#[wasm_bindgen(js_name = CallError)]
+#[derive(Debug, Clone)]
+pub struct WasmCallError(JsConnectionError);
+
+impl From<JsConnectionError> for WasmCallError {
+    fn from(err: JsConnectionError) -> Self {
+        Self(err)
+    }
+}
+
+impl From<WasmCallError> for js_sys::Error {
+    fn from(err: WasmCallError) -> Self {
+        let js_err = js_sys::Error::new(&format!("{:?}", err.0));
+        js_err.set_name("CallError");
+        js_err
     }
 }

@@ -36,7 +36,8 @@ use web_sys::{
     js_sys::{self, Promise}, BinaryType, Event, MessageEvent, Url, WebSocket
 };
 
-use super::peer_id::WasmPeerId;
+use crate::peer_id::WasmPeerId;
+use super::{WasmMessage, WasmRequestId, WasmBatchSyncRequest, WasmBatchSyncResponse};
 
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.
 #[wasm_bindgen(js_name = SubductionWebSocket)]
@@ -204,6 +205,54 @@ impl WasmWebSocket {
                 .map_err(WebSocketConnectionError::SocketCreationFailed)?,
             timeout_milliseconds,
         ).await?)
+    }
+
+    /// Get the peer ID of the remote peer.
+    #[wasm_bindgen(js_name = peerId)]
+    pub fn wasm_peer_id(&self) -> WasmPeerId {
+        self.peer_id.into()
+    }
+
+    /// Disconnect from the peer gracefully.
+    #[wasm_bindgen(js_name = disconnect)]
+    pub async fn wasm_disconnect(&self) {
+        match self.disconnect().await {
+            Ok(()) => (),
+            Err(_infallible) => {}
+        }
+    }
+
+    /// Send a message.
+    #[wasm_bindgen(js_name = send)]
+    pub  async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
+        self.send(wasm_message.into()).await?;
+        Ok(())
+    }
+
+    /// Receive a message.
+    #[wasm_bindgen(js_name = recv)]
+    pub async fn wasm_recv(&self) -> Result<WasmMessage, ReadFromClosedChannel> {
+        let msg = self.recv().await?;
+        Ok(msg.into())
+    }
+
+    /// Get the next request ID.
+    #[wasm_bindgen(js_name = nextRequestId)]
+    pub async fn wasm_next_request_id(&self) -> WasmRequestId {
+        self.next_request_id().await.into()
+    }
+
+    /// Make a synchronous call to the peer.
+    #[wasm_bindgen(js_name = call)]
+    pub async fn wasm_call(
+        &self,
+        request: WasmBatchSyncRequest,
+        timeout_ms: Option<f64>,
+    ) -> Result<WasmBatchSyncResponse, WasmCallError> {
+        let optional_duration = timeout_ms.map(|f64_ms| {
+            Duration::from_millis(f64_ms as u64)
+        });
+        self.call(request.into(), optional_duration).await.map(Into::into).map_err(Into::into)
     }
 }
 
@@ -445,6 +494,14 @@ pub enum SendError {
 #[error("Attempted to read from closed channel")]
 pub struct ReadFromClosedChannel;
 
+impl From<ReadFromClosedChannel> for JsValue {
+    fn from(err: ReadFromClosedChannel) -> JsValue {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("ReadFromClosedChannel");
+        js_err.into()
+    }
+}
+
 /// Problem while attempting to make a roundtrip call.
 #[derive(Debug, Error)]
 pub enum CallError {
@@ -504,3 +561,28 @@ impl From<WasmWebSocketSetupCanceled> for JsValue {
         js_err.into()
     }
 }
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmSendError(#[from] SendError);
+
+impl From<WasmSendError> for JsValue {
+    fn from(err: WasmSendError) -> JsValue {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("SendError");
+        js_err.into()
+    }
+}
+
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmCallError(#[from] CallError);
+
+impl From<WasmCallError> for JsValue {
+    fn from(err: WasmCallError) -> JsValue {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("CallError");
+        js_err.into()
+    }
+}
+

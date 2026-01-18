@@ -9,10 +9,9 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use super::{
-    connection_callback_reader::WasmConnectionCallbackReader,
+use crate::{
+    connection::{websocket::CallError, JsConnection},
     storage::JsStorage,
-    websocket::{CallError, WasmWebSocket},
 };
 
 /// A Wasm wrapper around the [`HydrationError`] type.
@@ -34,9 +33,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(
-    #[from] IoError<Local, JsStorage, WasmConnectionCallbackReader<WasmWebSocket>>,
-);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, JsConnection>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -63,9 +60,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(
-    #[from] ListenError<Local, JsStorage, WasmConnectionCallbackReader<WasmWebSocket>>,
-);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, JsConnection>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
@@ -164,9 +159,7 @@ impl From<WasmRegistrationError> for JsValue {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmDisconnectionError(
-    #[from] <WasmConnectionCallbackReader<WasmWebSocket> as Connection<Local>>::DisconnectionError,
-);
+pub struct WasmDisconnectionError(#[from] <JsConnection as Connection<Local>>::DisconnectionError);
 
 impl From<WasmDisconnectionError> for JsValue {
     fn from(err: WasmDisconnectionError) -> Self {

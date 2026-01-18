@@ -8,6 +8,7 @@ extern crate std;
 
 extern crate alloc;
 
+pub mod connection;
 pub mod connection_id;
 pub mod depth;
 pub mod digest;
@@ -19,8 +20,5 @@ pub mod sedimentree;
 pub mod sedimentree_id;
 pub mod storage;
 pub mod subduction;
-pub mod websocket;
-
-pub(crate) mod connection_callback_reader;
 
 pub use subduction::WasmSubduction;
