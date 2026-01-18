@@ -1336,6 +1336,11 @@ impl<
         self.conns.lock().await.values().map(Connection::peer_id).collect()
     }
 
+    /// Get a reference to the storage backend.
+    pub fn storage(&self) -> &S {
+        &self.storage
+    }
+
     /*******************
      * PRIVATE METHODS *
      *******************/
