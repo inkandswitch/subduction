@@ -1343,6 +1343,11 @@ impl<
     async fn insert_sedimentree_locally(&self, id: SedimentreeId, sedimentree: Sedimentree, blobs: Vec<Blob>) -> Result<(), S::Error> {
         tracing::debug!("adding sedimentree with id {:?}", id);
 
+        // Save blobs first so they're available when commit/fragment callbacks fire
+        for blob in blobs {
+            self.storage.save_blob(blob).await?;
+        }
+
         self.storage.save_sedimentree_id(id).await?;
 
         for commit in sedimentree.loose_commits() {
@@ -1355,10 +1360,6 @@ impl<
             self.storage
                 .save_fragment(id, fragment.clone())
                 .await?;
-        }
-
-        for blob in blobs {
-            self.storage.save_blob(blob).await?;
         }
 
         {
@@ -1433,9 +1434,10 @@ impl<
             }
         }
 
+        // Save blob first so callback wrappers can load it by digest
+        self.storage.save_blob(blob).await?;
         self.storage.save_sedimentree_id(id).await?;
         self.storage.save_loose_commit(id, commit).await?;
-        self.storage.save_blob(blob).await?;
 
         Ok(true)
     }
@@ -1454,9 +1456,10 @@ impl<
             }
         }
 
+        // Save blob first so callback wrappers can load it by digest
+        self.storage.save_blob(blob).await?;
         self.storage.save_sedimentree_id(id).await?;
         self.storage.save_fragment(id, fragment).await?;
-        self.storage.save_blob(blob).await?;
         Ok(true)
     }
 }
