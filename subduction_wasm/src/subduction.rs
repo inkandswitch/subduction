@@ -31,7 +31,7 @@ use crate::{
     peer_id::WasmPeerId,
     sedimentree::WasmSedimentree,
     sedimentree_id::WasmSedimentreeId,
-    storage::{JsStorage, JsStorageError},
+    storage::{JsSubductionStorage, JsSubductionStorageError},
 };
 
 use super::depth::WasmDepth;
@@ -40,7 +40,8 @@ use super::depth::WasmDepth;
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
 pub struct WasmSubduction {
-    core: Arc<Subduction<'static, Local, JsStorage, JsConnection, WasmHashMetric>>,
+    core: Arc<Subduction<'static, Local, JsSubductionStorage, JsConnection, WasmHashMetric>>,
+    js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
 }
 
 #[wasm_bindgen(js_class = Subduction)]
@@ -48,8 +49,9 @@ impl WasmSubduction {
     /// Create a new [`Subduction`] instance.
     #[must_use]
     #[wasm_bindgen(constructor)]
-    pub fn new(storage: JsStorage, hash_metric_override: Option<JsToDepth>) -> Self {
+    pub fn new(storage: JsSubductionStorage, hash_metric_override: Option<JsToDepth>) -> Self {
         tracing::debug!("new Subduction node");
+        let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let (core, listener_fut, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
 
@@ -71,7 +73,7 @@ impl WasmSubduction {
             }
         });
 
-        Self { core }
+        Self { core, js_storage }
     }
 
     /// Hydrate a [`Subduction`] instance from external storage.
@@ -81,10 +83,11 @@ impl WasmSubduction {
     /// Returns [`WasmHydrationError`] if hydration fails.
     #[wasm_bindgen]
     pub async fn hydrate(
-        storage: JsStorage,
+        storage: JsSubductionStorage,
         hash_metric_override: Option<JsToDepth>,
     ) -> Result<Self, WasmHydrationError> {
         tracing::debug!("hydrating new Subduction node");
+        let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let (core, listener_fut, actor_fut) =
             Subduction::hydrate(storage, WasmHashMetric(raw_fn)).await?;
@@ -107,7 +110,7 @@ impl WasmSubduction {
             }
         });
 
-        Ok(Self { core })
+        Ok(Self { core, js_storage })
     }
 
     /// Add a Sedimentree.
@@ -216,12 +219,12 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`JsStorageError`] if JS storage fails.
+    /// Returns a [`JsSubductionStorageError`] if JS storage fails.
     #[wasm_bindgen(js_name = getLocalBlob)]
     pub async fn get_local_blob(
         &self,
         digest: &WasmDigest,
-    ) -> Result<Option<Uint8Array>, JsStorageError> {
+    ) -> Result<Option<Uint8Array>, JsSubductionStorageError> {
         Ok(self
             .core
             .get_local_blob(digest.clone().into())
@@ -233,12 +236,12 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`JsStorageError`] if JS storage fails.
+    /// Returns a [`JsSubductionStorageError`] if JS storage fails.
     #[wasm_bindgen(js_name = getLocalBlobs)]
     pub async fn get_local_blobs(
         &self,
         id: &WasmSedimentreeId,
-    ) -> Result<Vec<Uint8Array>, JsStorageError> {
+    ) -> Result<Vec<Uint8Array>, JsSubductionStorageError> {
         #[allow(clippy::expect_used)]
         if let Some(blobs) = self.core.get_local_blobs(id.clone().into()).await? {
             Ok(blobs
@@ -485,10 +488,8 @@ impl WasmSubduction {
 
     /// Get the backing storage.
     #[wasm_bindgen(getter, js_name = storage)]
-    pub fn storage(&self) -> JsStorage {
-        // HACK to avoid requring the JS side to implement Clone
-        let js_val: JsValue = self.core.storage().into();
-        js_val.unchecked_into()
+    pub fn storage(&self) -> JsValue {
+        self.js_storage.clone()
     }
 }
 

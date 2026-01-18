@@ -11,13 +11,13 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     connection::{websocket::CallError, JsConnection},
-    storage::JsStorage,
+    storage::JsSubductionStorage,
 };
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmHydrationError(#[from] HydrationError<Local, JsStorage>);
+pub struct WasmHydrationError(#[from] HydrationError<Local, JsSubductionStorage>);
 
 impl From<WasmHydrationError> for JsValue {
     fn from(err: WasmHydrationError) -> Self {
@@ -33,7 +33,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, JsConnection>);
+pub struct WasmIoError(#[from] IoError<Local, JsSubductionStorage, JsConnection>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -60,7 +60,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, JsConnection>);
+pub struct WasmListenError(#[from] ListenError<Local, JsSubductionStorage, JsConnection>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
