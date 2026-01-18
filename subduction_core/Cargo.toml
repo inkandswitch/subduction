@@ -18,6 +18,8 @@ async-lock = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 futures = { workspace = true }
 futures_kind = { workspace = true }
+getrandom = { workspace = true, optional = true }
+siphasher = { workspace = true }
 metrics = { workspace = true, optional = true }
 nonempty = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
@@ -39,6 +41,7 @@ harness = false
 [features]
 default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
+getrandom = ["dep:getrandom"]
 bolero = ["dep:bolero", "arbitrary"]
 metrics = ["dep:metrics"]
 serde = ["dep:serde"]
@@ -47,6 +50,7 @@ std = [
   "async-channel/std",
   "async-lock/std",
   "futures/std",
+  "getrandom",
   "nonempty/std",
   "sedimentree_core/std",
   "thiserror/std"

@@ -31,7 +31,7 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 js-sys = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false, features = ["serde"] }
-subduction_core = { path = "../subduction_core", default-features = false, features = ["serde"] }
+subduction_core = { path = "../subduction_core", default-features = false, features = ["getrandom", "serde"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }

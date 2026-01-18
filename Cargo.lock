@@ -2432,6 +2432,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e320a6c5ad31d271ad523dcf3ad13e2767ad8b1cb8f047f75a8aeaf8da139da2"
 
 [[package]]
+name = "siphasher"
+version = "1.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "56199f7ddabf13fe5074ce809e7d3f42b42ae711800501b5b16ea82ad029c39d"
+
+[[package]]
 name = "sketches-ddsketch"
 version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2524,11 +2530,13 @@ dependencies = [
  "criterion",
  "futures 0.3.31",
  "futures_kind",
+ "getrandom 0.3.4",
  "metrics",
  "nonempty",
  "rand",
  "sedimentree_core",
  "serde",
+ "siphasher",
  "testresult",
  "thiserror 2.0.17",
  "tokio",

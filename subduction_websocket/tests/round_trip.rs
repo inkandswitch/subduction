@@ -11,11 +11,13 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::LooseCommit,
+    sedimentree::Sedimentree,
     storage::MemoryStorage,
 };
 use subduction_core::{
     connection::{message::Message, Connection},
     peer::id::PeerId,
+    sharded_map::ShardedMap,
     Subduction,
 };
 use subduction_websocket::tokio::{
@@ -36,8 +38,11 @@ async fn rend_receive() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
-    let (suduction, listener_fut, conn_actor_fut) =
-        Subduction::new(memory_storage.clone(), CountLeadingZeroBytes);
+    let (suduction, listener_fut, conn_actor_fut) = Subduction::new(
+        memory_storage.clone(),
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+    );
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -116,8 +121,11 @@ async fn batch_sync() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, conn_actor_fut) =
-        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+    let (server_subduction, listener_fut, conn_actor_fut) = Subduction::new(
+        server_storage.clone(),
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+    );
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), anyhow::Error>(())
@@ -160,7 +168,7 @@ async fn batch_sync() -> TestResult {
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<TimeoutTokio>,
-    >::new(client_storage, CountLeadingZeroBytes);
+    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);

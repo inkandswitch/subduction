@@ -17,7 +17,8 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
 };
-use subduction_core::{peer::id::PeerId, Subduction};
+use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
+use subduction_core::{peer::id::PeerId, sharded_map::ShardedMap, Subduction};
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -36,11 +37,16 @@ use crate::{
 
 use super::depth::WasmDepth;
 
+/// Number of shards for the sedimentree map in WASM (smaller for client-side).
+const WASM_SHARD_COUNT: usize = 4;
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 #[derive(Debug)]
 pub struct WasmSubduction {
-    core: Arc<Subduction<'static, Local, JsSubductionStorage, JsConnection, WasmHashMetric>>,
+    core: Arc<
+        Subduction<'static, Local, JsSubductionStorage, JsConnection, WasmHashMetric, WASM_SHARD_COUNT>,
+    >,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
 }
 
@@ -53,7 +59,10 @@ impl WasmSubduction {
         tracing::debug!("new Subduction node");
         let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
-        let (core, listener_fut, actor_fut) = Subduction::new(storage, WasmHashMetric(raw_fn));
+        let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
+            ShardedMap::new();
+        let (core, listener_fut, actor_fut) =
+            Subduction::new(storage, WasmHashMetric(raw_fn), sedimentrees);
 
         wasm_bindgen_futures::spawn_local(async move {
             let actor = actor_fut.fuse();
@@ -89,8 +98,10 @@ impl WasmSubduction {
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
+            ShardedMap::new();
         let (core, listener_fut, actor_fut) =
-            Subduction::hydrate(storage, WasmHashMetric(raw_fn)).await?;
+            Subduction::hydrate(storage, WasmHashMetric(raw_fn), sedimentrees).await?;
 
         wasm_bindgen_futures::spawn_local(async move {
             let actor = actor_fut.fuse();

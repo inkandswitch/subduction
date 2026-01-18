@@ -11,6 +11,7 @@ extern crate alloc;
 pub mod connection;
 pub mod peer;
 pub mod run;
+pub mod sharded_map;
 pub mod storage;
 pub mod subduction;
 
