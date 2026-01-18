@@ -208,6 +208,7 @@ impl WasmWebSocket {
     }
 
     /// Get the peer ID of the remote peer.
+    #[must_use]
     #[wasm_bindgen(js_name = peerId)]
     pub fn wasm_peer_id(&self) -> WasmPeerId {
         self.peer_id.into()
@@ -223,13 +224,21 @@ impl WasmWebSocket {
     }
 
     /// Send a message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmSendError`] if the message could not be sent over the WebSocket.
     #[wasm_bindgen(js_name = send)]
-    pub  async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
+    pub async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
         self.send(wasm_message.into()).await?;
         Ok(())
     }
 
     /// Receive a message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ReadFromClosedChannel`] if the channel has been closed.
     #[wasm_bindgen(js_name = recv)]
     pub async fn wasm_recv(&self) -> Result<WasmMessage, ReadFromClosedChannel> {
         let msg = self.recv().await?;
@@ -243,6 +252,10 @@ impl WasmWebSocket {
     }
 
     /// Make a synchronous call to the peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmCallError`] if the call fails or times out.
     #[wasm_bindgen(js_name = call)]
     pub async fn wasm_call(
         &self,
@@ -250,6 +263,7 @@ impl WasmWebSocket {
         timeout_ms: Option<f64>,
     ) -> Result<WasmBatchSyncResponse, WasmCallError> {
         let optional_duration = timeout_ms.map(|f64_ms| {
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             Duration::from_millis(f64_ms as u64)
         });
         self.call(request.into(), optional_duration).await.map(Into::into).map_err(Into::into)

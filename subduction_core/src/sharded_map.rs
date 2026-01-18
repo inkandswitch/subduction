@@ -326,6 +326,7 @@ impl<K: Hash + Ord, V, const N: usize> Default for ShardedMap<K, V, N> {
 mod tests {
     use super::*;
     use sedimentree_core::id::SedimentreeId;
+    use testresult::TestResult;
 
     #[tokio::test]
     async fn test_basic_operations() {
@@ -363,7 +364,8 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<(u64, u64, [u8; 32], [u8; 32], [u8; 32], [u8; 32])>()
                 .for_each(|(key0, key1, id0, id1, id2, id3)| {
-                    let map: ShardedMap<SedimentreeId, (), 16> = ShardedMap::with_key(*key0, *key1);
+                    let map: ShardedMap<SedimentreeId, (), 16> =
+                        ShardedMap::with_key(*key0, *key1);
 
                     // With 4 random IDs into 16 shards, we should usually see multiple shards used
                     let ids = [
@@ -443,15 +445,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_with_entry_or_default() {
+    async fn test_with_entry_or_default() -> TestResult {
         let map: ShardedMap<SedimentreeId, Vec<u32>, 16> = ShardedMap::with_key(0, 0);
         let id = SedimentreeId::new([1; 32]);
 
         map.with_entry_or_default(id, |v| v.push(1)).await;
         map.with_entry_or_default(id, |v| v.push(2)).await;
 
-        let value = map.get_cloned(&id).await.expect("should exist");
+        let value = map.get_cloned(&id).await.ok_or("should exist")?;
         assert_eq!(value, vec![1, 2]);
+
+        Ok(())
     }
 
     #[tokio::test]

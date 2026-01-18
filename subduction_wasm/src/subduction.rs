@@ -37,7 +37,7 @@ use crate::{
 
 use super::depth::WasmDepth;
 
-/// Number of shards for the sedimentree map in WASM (smaller for client-side).
+/// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 const WASM_SHARD_COUNT: usize = 4;
 
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
@@ -45,7 +45,14 @@ const WASM_SHARD_COUNT: usize = 4;
 #[derive(Debug)]
 pub struct WasmSubduction {
     core: Arc<
-        Subduction<'static, Local, JsSubductionStorage, JsConnection, WasmHashMetric, WASM_SHARD_COUNT>,
+        Subduction<
+            'static,
+            Local,
+            JsSubductionStorage,
+            JsConnection,
+            WasmHashMetric,
+            WASM_SHARD_COUNT,
+        >,
     >,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
 }
@@ -498,6 +505,7 @@ impl WasmSubduction {
     }
 
     /// Get the backing storage.
+    #[must_use]
     #[wasm_bindgen(getter, js_name = storage)]
     pub fn storage(&self) -> JsValue {
         self.js_storage.clone()
@@ -682,7 +690,7 @@ impl DepthMetric for WasmHashMetric {
     }
 }
 
-/// WASM wrapper for call errors from the connection.
+/// Wasm wrapper for call errors from the connection.
 #[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone)]
 pub struct WasmCallError(JsConnectionError);

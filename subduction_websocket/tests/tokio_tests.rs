@@ -287,12 +287,11 @@ async fn multiple_concurrent_clients() -> TestResult {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify all clients have all commits (1 server + 3 client commits = 4 total)
-    #[allow(clippy::expect_used)]
     for client in &clients {
         let loose_commits = client
             .get_commits(sed_id)
             .await
-            .expect("sedimentree exists");
+            .ok_or("sedimentree exists")?;
         assert_eq!(
             loose_commits.len(),
             num_clients + 1,
@@ -301,11 +300,10 @@ async fn multiple_concurrent_clients() -> TestResult {
     }
 
     // Verify server has all commits
-    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
     assert_eq!(
         server_commits.len(),
         num_clients + 1,
@@ -513,11 +511,10 @@ async fn large_message_handling() -> TestResult {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify server received the large commit
-    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 1);
     assert!(server_commits.contains(&commit));
 
@@ -612,11 +609,10 @@ async fn message_ordering() -> TestResult {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify server has all commits
-    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 5);
 
     for commit in &commits {

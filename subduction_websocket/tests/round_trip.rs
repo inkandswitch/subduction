@@ -139,11 +139,10 @@ async fn batch_sync() -> TestResult {
         .add_commit(sed_id, &commit1, blob1)
         .await?;
 
-    #[allow(clippy::expect_used)]
     let inserted = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
     assert_eq!(inserted.len(), 1);
 
     let server = TokioWebSocketServer::new(
@@ -220,22 +219,20 @@ async fn batch_sync() -> TestResult {
         .request_all_batch_sync_all(Some(Duration::from_millis(100)))
         .await?;
 
-    #[allow(clippy::expect_used)]
     let server_updated = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
 
     assert_eq!(server_updated.len(), 3);
     assert!(server_updated.contains(&commit1));
     assert!(server_updated.contains(&commit2));
     assert!(server_updated.contains(&commit3));
 
-    #[allow(clippy::expect_used)]
     let client_updated = client
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
 
     assert_eq!(client_updated.len(), 3);
     assert!(client_updated.contains(&commit1));

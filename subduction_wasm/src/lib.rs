@@ -1,7 +1,8 @@
-//! # Wasm Bindings for the Subduction sync protocol.
+//! # Wasm bindings for the Subduction sync protocol.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
+#![allow(clippy::missing_const_for_fn)]
 
 #[cfg(feature = "std")]
 extern crate std;
