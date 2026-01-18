@@ -1,5 +1,7 @@
 //! Binary objects.
 
+use core::cmp::min;
+
 use alloc::{format, str::FromStr, vec::Vec};
 
 use crate::hex::decode_hex;
@@ -14,33 +16,58 @@ pub struct Blob(Vec<u8>);
 
 impl core::fmt::Debug for Blob {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        const MAX_PREVIEW_BYTES: usize = 32;
+        let preview_byte_count = {
+            const MAX_PREVIEW_BYTES: usize = 32;
+            min(MAX_PREVIEW_BYTES, self.0.len())
+        };
+
         write!(f, "Blob({} bytes, ", self.0.len())?;
-        if self.0.len() <= MAX_PREVIEW_BYTES {
+
+        if self.0.len() <= preview_byte_count {
             for byte in &self.0 {
                 write!(f, "{byte:02x}")?;
             }
         } else {
-            for byte in &self.0[..MAX_PREVIEW_BYTES] {
+            #[allow(clippy::expect_used)]
+            let preview_bytes = self
+                .0
+                .get(..preview_byte_count)
+                .expect("sliced out of bounds");
+
+            for byte in preview_bytes {
                 write!(f, "{byte:02x}")?;
             }
+
             write!(f, "...")?;
         }
-        write!(f, ")")
+
+        write!(f, " ({} bytes total)", self.0.len())?;
+        Ok(())
     }
 }
 
 impl core::fmt::Display for Blob {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        const MAX_PREVIEW_BYTES: usize = 16;
-        if self.0.len() <= MAX_PREVIEW_BYTES {
+        let preview_byte_count = {
+            const MAX_PREVIEW_BYTES: usize = 32;
+            min(MAX_PREVIEW_BYTES, self.0.len())
+        };
+
+        if self.0.len() <= preview_byte_count {
             for byte in &self.0 {
                 write!(f, "{byte:02x}")?;
             }
         } else {
-            for byte in &self.0[..MAX_PREVIEW_BYTES] {
+            #[allow(clippy::expect_used)]
+            let preview_bytes = self
+                .0
+                .get(..preview_byte_count)
+                .expect("sliced out of bounds");
+
+            for byte in preview_bytes {
                 write!(f, "{byte:02x}")?;
             }
+
             write!(f, "..({} bytes total)", self.0.len())?;
         }
         Ok(())

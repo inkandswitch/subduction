@@ -11,7 +11,6 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    sedimentree::Sedimentree,
     storage::MemoryStorage,
 };
 use subduction_core::{

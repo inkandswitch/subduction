@@ -195,7 +195,7 @@ impl PartialEq for ChannelMockConnection {
     }
 }
 
-/// Handle for controlling a ChannelMockConnection from tests.
+/// Handle for controlling a `ChannelMockConnection` from tests.
 #[derive(Clone, Debug)]
 pub struct ChannelMockConnectionHandle {
     /// Receiver for outbound messages (messages Subduction sends)
@@ -342,7 +342,7 @@ impl Connection<Local> for ChannelMockConnection {
     }
 }
 
-/// A connection wrapper that fires callbacks during recv(), mimicking WASM behavior.
+/// A connection wrapper that fires callbacks during `recv()`, mimicking WASM behavior.
 ///
 /// This wrapper demonstrates the "one behind" bug: callbacks fire BEFORE the message
 /// is dispatched and stored, so any data queries in the callback see stale state.
@@ -489,6 +489,7 @@ impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use testresult::TestResult;
 
     #[test]
     fn test_mock_connection_new() {
@@ -520,20 +521,20 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_channel_mock_connection_send_recv() {
+    async fn test_channel_mock_connection_send_recv() -> TestResult {
         let peer_id = PeerId::new([1u8; 32]);
         let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
 
-        // Test that messages sent by Subduction are received by the handle
         let msg = Message::BlobsRequest(vec![]);
-        Connection::<Sendable>::send(&conn, msg.clone()).await.unwrap();
-        let received = handle.outbound_rx.recv().await.unwrap();
+        Connection::<Sendable>::send(&conn, msg.clone()).await?;
+        let received = handle.outbound_rx.recv().await?;
         assert!(matches!(received, Message::BlobsRequest(_)));
 
-        // Test that messages injected by the handle are received by Subduction
         let inject_msg = Message::BlobsResponse(vec![]);
-        handle.inbound_tx.send(inject_msg).await.unwrap();
-        let received = Connection::<Sendable>::recv(&conn).await.unwrap();
+        handle.inbound_tx.send(inject_msg).await?;
+        let received = Connection::<Sendable>::recv(&conn).await?;
         assert!(matches!(received, Message::BlobsResponse(_)));
+
+        Ok(())
     }
 }

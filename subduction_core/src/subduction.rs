@@ -90,7 +90,7 @@ where
     /// Initialize a new `Subduction` with the given storage backend, depth metric, and sharded `Sedimentree` map.
     ///
     /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
-    /// For DoS resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
+    /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
     /// or provide secure random keys to [`ShardedMap::with_key`].
     #[allow(clippy::type_complexity)]
     pub fn new(
@@ -136,7 +136,7 @@ where
     /// Hydrate a `Subduction` instance from existing sedimentrees in external storage.
     ///
     /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
-    /// For DoS resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
+    /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
     /// or provide secure random keys to [`ShardedMap::with_key`].
     ///
     /// # Errors
@@ -2472,7 +2472,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
 
             let ids = subduction.sedimentree_ids().await;
-            assert!(ids.contains(&sedimentree_id), "[SENDABLE] Sedimentree should be visible. Found: {:?}", ids);
+            assert!(ids.contains(&sedimentree_id), "[SENDABLE] Sedimentree should be visible. Found: {ids:?}");
             assert_eq!(subduction.get_commits(sedimentree_id).await.map(|c| c.len()), Some(1));
 
             actor_task.abort();
@@ -2547,7 +2547,7 @@ mod tests {
 
                 tokio::time::sleep(Duration::from_millis(20)).await;
 
-                let count = subduction.get_commits(sedimentree_id).await.map(|c| c.len()).unwrap_or(0);
+                let count = subduction.get_commits(sedimentree_id).await.map_or(0, |c| c.len());
                 assert_eq!(count, i + 1,
                     "[SENDABLE] After commit {i}, expected {} commits but found {}. DELAYED!",
                     i + 1, count);
@@ -2590,7 +2590,7 @@ mod tests {
                 tokio::time::sleep(Duration::from_millis(50)).await;
 
                 let ids = subduction.sedimentree_ids().await;
-                assert!(ids.contains(&sedimentree_id), "[LOCAL] Sedimentree should be visible. Found: {:?}", ids);
+                assert!(ids.contains(&sedimentree_id), "[LOCAL] Sedimentree should be visible. Found: {ids:?}");
                 assert_eq!(subduction.get_commits(sedimentree_id).await.map(|c| c.len()), Some(1));
 
                 actor_task.abort();
@@ -2671,7 +2671,7 @@ mod tests {
 
                     tokio::time::sleep(Duration::from_millis(20)).await;
 
-                    let count = subduction.get_commits(sedimentree_id).await.map(|c| c.len()).unwrap_or(0);
+                    let count = subduction.get_commits(sedimentree_id).await.map_or(0, |c| c.len());
                     assert_eq!(count, i + 1,
                         "[LOCAL] After commit {i}, expected {} commits but found {}. DELAYED!",
                         i + 1, count);

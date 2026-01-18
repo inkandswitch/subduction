@@ -4,7 +4,7 @@
 //! `N` shards, each protected by its own mutex. This reduces contention compared
 //! to a single global lock, especially under high concurrency.
 //!
-//! Shard selection uses SipHash-2-4 with a random key to prevent DoS attacks
+//! Shard selection uses SipHash-2-4 with a random key to prevent `DoS` attacks
 //! where an adversary crafts keys that all hash to the same shard.
 
 use alloc::vec::Vec;
@@ -17,7 +17,7 @@ use siphasher::sip::SipHasher24;
 ///
 /// Each shard contains a separate [`Map`] protected by its own [`Mutex`],
 /// allowing concurrent access to different shards. Shard selection uses
-/// SipHash-2-4 with a secret key for DoS resistance.
+/// SipHash-2-4 with a secret key for `DoS` resistance.
 ///
 /// # Type Parameters
 ///
@@ -57,13 +57,28 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     #[must_use]
     pub fn new() -> Self {
         let mut key_bytes = [0u8; 16];
+
+        #[allow(clippy::expect_used)]
         getrandom::fill(&mut key_bytes).expect("getrandom failed");
-        let key0 = u64::from_le_bytes(key_bytes[0..8].try_into().expect("correct length"));
-        let key1 = u64::from_le_bytes(key_bytes[8..16].try_into().expect("correct length"));
+
+        #[allow(clippy::expect_used)]
+        let key0 = u64::from_le_bytes(
+            key_bytes[0..8]
+                .try_into()
+                .expect("generated too few key bytes"),
+        );
+
+        #[allow(clippy::expect_used)]
+        let key1 = u64::from_le_bytes(
+            key_bytes[8..16]
+                .try_into()
+                .expect("generated too few key bytes"),
+        );
+
         Self::with_key(key0, key1)
     }
 
-    /// Creates a new empty [`ShardedMap`] with the given SipHash keys.
+    /// Creates a new empty [`ShardedMap`] with the given `SipHash` keys.
     ///
     /// Use this constructor when you need deterministic behavior (e.g., testing)
     /// or when you want to persist and restore the key.
@@ -76,7 +91,7 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
         }
     }
 
-    /// Returns the SipHash keys used for shard selection.
+    /// Returns the `SipHash` keys used for shard selection.
     ///
     /// Useful for persisting the key to restore deterministic behavior.
     #[must_use]
@@ -85,14 +100,18 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     }
 
     /// Returns the shard index for the given key.
+    ///
+    /// # Note
+    ///
+    /// Uses [Lemire's "fast range" method][post] to map hash to $[0, N)$ without modulo bias.
+    ///
+    /// [post]: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction
     #[inline]
-    fn shard_index(&self, key: &K) -> usize
-    where
-        K: Hash,
-    {
+    fn shard_index(&self, key: &K) -> usize {
         let mut hasher = SipHasher24::new_with_keys(self.key0, self.key1);
         key.hash(&mut hasher);
-        (hasher.finish() as usize) % N
+        let hash = hasher.finish();
+        (((hash as u128) * (N as u128)) >> 64) as usize
     }
 
     /// Returns a reference to the shard mutex for the given key.
@@ -110,7 +129,7 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     ///
     /// Panics if `index >= N`.
     #[inline]
-    pub fn shard_at(&self, index: usize) -> &Mutex<Map<K, V>> {
+    pub const fn shard_at(&self, index: usize) -> &Mutex<Map<K, V>> {
         &self.shards[index]
     }
 
@@ -375,7 +394,7 @@ mod tests {
                     // This is a probabilistic test - with 4 items and 16 shards, probability of
                     // all same shard is (1/16)^3 ≈ 0.02%, so this should almost always pass
                     // We're just checking basic sanity that hashing works
-                    assert!(shards_used.len() >= 1, "at least one shard should be used");
+                    assert!(!shards_used.is_empty(), "at least one shard should be used");
                 });
         }
 
