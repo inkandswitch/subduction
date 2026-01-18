@@ -562,6 +562,7 @@ impl From<WasmWebSocketSetupCanceled> for JsValue {
     }
 }
 
+/// An error that occurred while sending a message over a WebSocket.
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmSendError(#[from] SendError);
@@ -574,6 +575,7 @@ impl From<WasmSendError> for JsValue {
     }
 }
 
+/// An error that occurred during a synchronous call over a WebSocket.
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmCallError(#[from] CallError);

@@ -329,7 +329,7 @@ where
 
         let (fresh, conn_id) = self.register(conn).await?;
 
-        let ids = self.sedimentrees.keys().await;
+        let ids = self.sedimentrees.into_keys().await;
 
         for tree_id in ids {
             self.request_peer_batch_sync(&peer_id, tree_id, None)
@@ -902,7 +902,7 @@ where
         let mut our_missing_blobs = Vec::new();
 
         let sync_diff = {
-            let mut locked = self.sedimentrees.get_shard_for(&id).lock().await;
+            let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
             let sedimentree = locked.entry(id).or_default();
             let local_sedimentree = sedimentree.clone();
             tracing::debug!(
@@ -1268,7 +1268,7 @@ where
     ) -> Result<(bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>), IoError<F, S, C>>
     {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
-        let tree_ids = self.sedimentrees.keys().await;
+        let tree_ids = self.sedimentrees.into_keys().await;
 
         let mut had_success = false;
         let mut blobs: Vec<Blob> = Vec::new();
@@ -1297,7 +1297,7 @@ where
 
     /// Get an iterator over all known sedimentree IDs.
     pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
-        self.sedimentrees.keys().await
+        self.sedimentrees.into_keys().await
     }
 
     /// Get all commits for a given sedimentree ID.

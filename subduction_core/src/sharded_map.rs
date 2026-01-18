@@ -37,7 +37,7 @@ use siphasher::sip::SipHasher24;
 /// let map: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::with_key(0, 0);
 /// ```
 #[derive(Debug)]
-pub struct ShardedMap<K: Hash, V, const N: usize = 256> {
+pub struct ShardedMap<K: Hash + Ord, V, const N: usize = 256> {
     shards: [Mutex<Map<K, V>>; N],
 
     /// Seed 0 for keyed hash.
@@ -47,7 +47,7 @@ pub struct ShardedMap<K: Hash, V, const N: usize = 256> {
     key1: u64,
 }
 
-impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
+impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
     /// Creates a new empty [`ShardedMap`] with a randomly generated key.
     ///
     /// # Panics
@@ -111,26 +111,22 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
         let mut hasher = SipHasher24::new_with_keys(self.key0, self.key1);
         key.hash(&mut hasher);
         let hash = hasher.finish();
-        (((hash as u128) * (N as u128)) >> 64) as usize
+
+        #[allow(clippy::expect_used)]
+        usize::try_from((u128::from(hash) * (N as u128)) >> 64).expect("N must stay in usize")
     }
 
-    /// Returns a reference to the shard mutex for the given key.
-    #[inline]
-    fn shard(&self, key: &K) -> &Mutex<Map<K, V>>
-    where
-        K: Hash,
-    {
-        &self.shards[self.shard_index(key)]
-    }
-
-    /// Returns a reference to the shard mutex at the given index.
+    /// Returns a reference to the shard mutex at the given index, if valid.
     ///
-    /// # Panics
-    ///
-    /// Panics if `index >= N`.
+    /// Returns `None` if `index >= N`.
     #[inline]
-    pub const fn shard_at(&self, index: usize) -> &Mutex<Map<K, V>> {
-        &self.shards[index]
+    pub const fn shard_at(&self, index: usize) -> Option<&Mutex<Map<K, V>>> {
+        if index < N {
+            #[allow(clippy::indexing_slicing)] // checked above + no `get` on array to avoid nighly
+            Some(&self.shards[index])
+        } else {
+            None
+        }
     }
 
     /// Returns a reference to the shard mutex for the given key.
@@ -141,13 +137,14 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     /// # Example
     ///
     /// ```ignore
-    /// let shard = map.get_shard_for(&key);
+    /// let shard = map.get_shard_containing(&key);
     /// let mut guard = shard.lock().await;
     /// // Complex operations with the guard...
     /// ```
     #[inline]
-    pub fn get_shard_for(&self, key: &K) -> &Mutex<Map<K, V>> {
-        self.shard(key)
+    pub fn get_shard_containing(&self, key: &K) -> &Mutex<Map<K, V>> {
+        #[allow(clippy::indexing_slicing)] // shard_index always returns valid index
+        &self.shards[self.shard_index(key)]
     }
 
     /// Returns the number of shards.
@@ -160,36 +157,36 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     /// Gets a cloned value for the given key, if it exists.
     pub async fn get_cloned(&self, key: &K) -> Option<V>
     where
-        K: Hash + Eq + Ord,
         V: Clone,
     {
-        self.shard(key).lock().await.get(key).cloned()
+        self.get_shard_containing(key)
+            .lock()
+            .await
+            .get(key)
+            .cloned()
     }
 
     /// Returns `true` if the map contains the given key.
-    pub async fn contains_key(&self, key: &K) -> bool
-    where
-        K: Hash + Eq + Ord,
-    {
-        self.shard(key).lock().await.contains_key(key)
+    pub async fn contains_key(&self, key: &K) -> bool {
+        self.get_shard_containing(key)
+            .lock()
+            .await
+            .contains_key(key)
     }
 
     /// Inserts a key-value pair into the map.
     ///
     /// Returns the previous value if the key was already present.
-    pub async fn insert(&self, key: K, value: V) -> Option<V>
-    where
-        K: Hash + Eq + Ord,
-    {
-        self.shard(&key).lock().await.insert(key, value)
+    pub async fn insert(&self, key: K, value: V) -> Option<V> {
+        self.get_shard_containing(&key)
+            .lock()
+            .await
+            .insert(key, value)
     }
 
     /// Removes a key from the map, returning the value if it was present.
-    pub async fn remove(&self, key: &K) -> Option<V>
-    where
-        K: Hash + Eq + Ord,
-    {
-        self.shard(key).lock().await.remove(key)
+    pub async fn remove(&self, key: &K) -> Option<V> {
+        self.get_shard_containing(key).lock().await.remove(key)
     }
 
     /// Gets or inserts a default value for the given key.
@@ -197,10 +194,9 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     /// Returns a clone of the value (either existing or newly inserted).
     pub async fn entry_or_default(&self, key: K) -> V
     where
-        K: Hash + Eq + Ord,
         V: Default + Clone,
     {
-        self.shard(&key)
+        self.get_shard_containing(&key)
             .lock()
             .await
             .entry(key)
@@ -211,13 +207,11 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     /// Gets or inserts a default value, then applies a function to it.
     ///
     /// This is useful for mutating the value in place without cloning.
-    pub async fn with_entry_or_default<F, R>(&self, key: K, f: F) -> R
+    pub async fn with_entry_or_default<F: FnOnce(&mut V) -> R, R>(&self, key: K, f: F) -> R
     where
-        K: Hash + Eq + Ord,
         V: Default,
-        F: FnOnce(&mut V) -> R,
     {
-        let mut guard = self.shard(&key).lock().await;
+        let mut guard = self.get_shard_containing(&key).lock().await;
         let value = guard.entry(key).or_default();
         f(value)
     }
@@ -225,12 +219,8 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     /// Applies a function to a value if it exists.
     ///
     /// Returns `None` if the key doesn't exist, otherwise returns the result of `f`.
-    pub async fn with_entry<F, R>(&self, key: &K, f: F) -> Option<R>
-    where
-        K: Hash + Eq + Ord,
-        F: FnOnce(&mut V) -> R,
-    {
-        let mut guard = self.shard(key).lock().await;
+    pub async fn with_entry<F: FnOnce(&mut V) -> R, R>(&self, key: &K, f: F) -> Option<R> {
+        let mut guard = self.get_shard_containing(key).lock().await;
         guard.get_mut(key).map(f)
     }
 
@@ -238,7 +228,7 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     ///
     /// Note: This acquires each shard lock sequentially, releasing between shards.
     /// For very large maps, consider using [`shard_at`] for incremental processing.
-    pub async fn keys(&self) -> Vec<K>
+    pub async fn into_keys(&self) -> Vec<K>
     where
         K: Clone,
     {
@@ -252,7 +242,7 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     /// Collects all values from all shards.
     ///
     /// Note: This acquires each shard lock sequentially, releasing between shards.
-    pub async fn values(&self) -> Vec<V>
+    pub async fn into_values(&self) -> Vec<V>
     where
         V: Clone,
     {
@@ -270,8 +260,10 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     ///
     /// ```ignore
     /// for idx in map.shard_indices() {
-    ///     let guard = map.shard_at(idx).lock().await;
-    ///     // Process shard, lock is released at end of scope
+    ///     if let Some(shard) = map.shard_at(idx) {
+    ///         let guard = shard.lock().await;
+    ///         // Process shard, lock is released at end of scope
+    ///     }
     /// }
     /// ```
     pub fn shard_indices(&self) -> impl Iterator<Item = usize> {
@@ -282,12 +274,8 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
     ///
     /// If the key exists, calls `merge(existing, value)`.
     /// If the key doesn't exist, inserts the value directly.
-    pub async fn merge_with<F>(&self, key: K, value: V, merge: F)
-    where
-        K: Hash + Eq + Ord,
-        F: FnOnce(&mut V, V),
-    {
-        let mut guard = self.shard(&key).lock().await;
+    pub async fn merge_with<F: FnOnce(&mut V, V)>(&self, key: K, value: V, merge: F) {
+        let mut guard = self.get_shard_containing(&key).lock().await;
         match guard.get_mut(&key) {
             Some(existing) => merge(existing, value),
             None => {
@@ -328,7 +316,7 @@ impl<K: Hash, V, const N: usize> ShardedMap<K, V, N> {
 }
 
 #[cfg(feature = "getrandom")]
-impl<K: Hash, V, const N: usize> Default for ShardedMap<K, V, N> {
+impl<K: Hash + Ord, V, const N: usize> Default for ShardedMap<K, V, N> {
     fn default() -> Self {
         Self::new()
     }

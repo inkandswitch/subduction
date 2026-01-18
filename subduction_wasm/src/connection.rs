@@ -172,15 +172,19 @@ impl Connection<Local> for JsConnection {
 /// Errors from the JS connection.
 #[derive(Error, Debug, Clone)]
 pub enum JsConnectionError {
+    /// An error that occurred while disconnecting.
     #[error("Disconnect error")]
     Disconnect(JsValue),
 
+    /// An error that occurred while sending a message.
     #[error("Send error")]
     Send(JsValue),
 
+    /// An error that occurred while receiving a message.
     #[error("Recv error")]
     Recv(JsValue),
 
+    /// An error that occurred during a synchronous call.
     #[error("Call error")]
     Call(JsValue),
 }
@@ -201,6 +205,7 @@ pub struct WasmMessage(Message);
 #[wasm_refgen(js_ref = JsMessage)]
 #[wasm_bindgen(js_class = Message)]
 impl WasmMessage {
+    /// Create a [`Message::LooseCommit`] message.
     #[wasm_bindgen(js_name = looseCommit)]
     #[must_use]
     pub fn loose_commit(
@@ -216,6 +221,7 @@ impl WasmMessage {
         .into()
     }
 
+    /// Create a [`Message::Fragment`] message.
     #[wasm_bindgen(js_name = newFragment)]
     #[must_use]
     pub fn new_fragment(
@@ -231,6 +237,7 @@ impl WasmMessage {
         .into()
     }
 
+    /// Create a [`Message::BlobsRequest`] message.
     #[wasm_bindgen(js_name = blobsRequest)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
@@ -238,6 +245,7 @@ impl WasmMessage {
         Message::BlobsRequest(digests.into_iter().map(Into::into).collect()).into()
     }
 
+    /// Create a [`Message::BlobsResponse`] message.
     #[wasm_bindgen(js_name = blobsResponse)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
@@ -245,30 +253,35 @@ impl WasmMessage {
         Message::BlobsResponse(blobs.iter().map(|b| Blob::from(b.to_vec())).collect()).into()
     }
 
+    /// Create a [`Message::BatchSyncRequest`] message.
     #[wasm_bindgen(js_name = batchSyncRequest)]
     #[must_use]
     pub fn batch_sync_request(request: &WasmBatchSyncRequest) -> Self {
         Message::BatchSyncRequest(request.clone().into()).into()
     }
 
+    /// Create a [`Message::BatchSyncResponse`] message.
     #[wasm_bindgen(js_name = batchSyncResponse)]
     #[must_use]
     pub fn batch_sync_response(response: &WasmBatchSyncResponse) -> Self {
         Message::BatchSyncResponse(response.clone().into()).into()
     }
 
+    /// The message variant name.
     #[wasm_bindgen(getter, js_name = type)]
     #[must_use]
     pub fn msg_type(&self) -> String {
         self.0.variant_name().into()
     }
 
+    /// The [`SedimentreeId`] associated with this message, if any.
     #[wasm_bindgen(getter, js_name = sedimentreeId)]
     #[must_use]
     pub fn sedimentree_id(&self) -> Option<WasmSedimentreeId> {
         self.0.sedimentree_id().map(WasmSedimentreeId::from)
     }
 
+    /// The [`LooseCommit`] for a [`Message::LooseCommit`], if applicable.
     #[wasm_bindgen(getter, js_name = commit)]
     #[must_use]
     pub fn commit(&self) -> Option<WasmLooseCommit> {
@@ -278,6 +291,7 @@ impl WasmMessage {
         }
     }
 
+    /// The [`Fragment`] for a [`Message::Fragment`], if applicable.
     #[wasm_bindgen(getter, js_name = fragment)]
     #[must_use]
     pub fn fragment(&self) -> Option<WasmFragment> {
@@ -287,6 +301,7 @@ impl WasmMessage {
         }
     }
 
+    /// The [`Blob`] for commit or fragment messages, if applicable.
     #[wasm_bindgen(getter, js_name = blob)]
     #[must_use]
     pub fn blob(&self) -> Option<Uint8Array> {
@@ -298,6 +313,7 @@ impl WasmMessage {
         }
     }
 
+    /// The requested [`Digest`]s for a [`Message::BlobsRequest`], if applicable.
     #[wasm_bindgen(getter, js_name = digests)]
     #[must_use]
     pub fn digests(&self) -> Option<Vec<WasmDigest>> {
@@ -309,6 +325,7 @@ impl WasmMessage {
         }
     }
 
+    /// The [`Blob`]s for a [`Message::BlobsResponse`], if applicable.
     #[wasm_bindgen(getter, js_name = blobs)]
     #[must_use]
     pub fn blobs(&self) -> Option<Vec<Uint8Array>> {
@@ -323,6 +340,7 @@ impl WasmMessage {
         }
     }
 
+    /// The [`BatchSyncRequest`] for a [`Message::BatchSyncRequest`], if applicable.
     #[wasm_bindgen(getter, js_name = request)]
     #[must_use]
     pub fn request(&self) -> Option<WasmBatchSyncRequest> {
@@ -332,6 +350,7 @@ impl WasmMessage {
         }
     }
 
+    /// The [`BatchSyncResponse`] for a [`Message::BatchSyncResponse`], if applicable.
     #[wasm_bindgen(getter, js_name = response)]
     #[must_use]
     pub fn response(&self) -> Option<WasmBatchSyncResponse> {
@@ -366,6 +385,7 @@ pub struct WasmRequestId(RequestId);
 #[wasm_refgen(js_ref = JsRequestId)]
 #[wasm_bindgen(js_class = RequestId)]
 impl WasmRequestId {
+    /// Create a new [`RequestId`] from a requestor peer ID and nonce.
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new(requestor: &WasmPeerId, nonce: f64) -> Self {
@@ -376,12 +396,14 @@ impl WasmRequestId {
         .into()
     }
 
+    /// The peer ID of the requestor.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn requestor(&self) -> WasmPeerId {
         self.0.requestor.into()
     }
 
+    /// The request nonce.
     #[wasm_bindgen(getter)]
     #[must_use]
     pub fn nonce(&self) -> f64 {
