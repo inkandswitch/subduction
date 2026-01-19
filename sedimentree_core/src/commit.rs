@@ -252,7 +252,7 @@ impl DepthMetric for CountTrailingZerosInBase {
     fn to_depth(&self, digest: Digest) -> Depth {
         let arr = digest.as_bytes();
         let inner_depth: u8 = self.0.into();
-        let (_, bytes) = num::BigInt::from_bytes_be(num::bigint::Sign::Plus, arr)
+        let (_, bytes) = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, arr)
             .to_radix_be(inner_depth.into());
 
         #[allow(clippy::expect_used)]
@@ -263,8 +263,6 @@ impl DepthMetric for CountTrailingZerosInBase {
     }
 }
 
-/// EXPERIMENTAL: A "fragment" of Automerge history.
-///
 /// `Fragment`s are a consistent unit of document history,
 /// which may end before the complete history is covered.
 /// In this way, a document can be broken up into a series

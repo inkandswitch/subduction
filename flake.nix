@@ -104,6 +104,7 @@
 
           "release:wasm" = cmd "Build all JS-wrapped wasm libraries for release"
             ''
+            set -e
             export INITIAL_DIR="$(pwd)"
             ${cargo} build --release
 

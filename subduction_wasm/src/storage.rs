@@ -1,5 +1,6 @@
 //! Persistent storage.
 
+#[cfg(feature = "idb")]
 pub mod idb;
 pub mod memory;
 
