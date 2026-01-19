@@ -1,25 +1,34 @@
-use alloc::{
-    collections::{BTreeMap, BTreeSet},
-    vec,
-    vec::Vec,
+//! Internal commit DAG representation for Sedimentree operations.
+//!
+//! This module provides an adjacency representation of a commit DAG,
+//! used internally for operations like [`Sedimentree::minimize`] and [`Sedimentree::heads`].
+//! It is not part of the public API.
+//!
+//! [`Sedimentree::minimize`]: super::Sedimentree::minimize
+//! [`Sedimentree::heads`]: super::Sedimentree::heads
+
+use alloc::{vec, vec::Vec};
+
+use crate::{
+    blob::Digest,
+    collections::{Map, Set},
+    depth::{DepthMetric, MAX_STRATA_DEPTH},
+    fragment::Fragment,
+    loose_commit::LooseCommit,
 };
-
-use crate::{depth::DepthMetric, Digest, LooseCommit};
-
-use super::Fragment;
 
 // An adjacency list based representation of a commit DAG except that we use indexes into the
 // `nodes` and `edges` vectors instead of pointers in order to please the borrow checker.
 #[derive(Debug, Clone)]
 pub(crate) struct CommitDag {
     nodes: Vec<Node>,
-    node_map: BTreeMap<crate::Digest, NodeIdx>,
+    node_map: Map<Digest, NodeIdx>,
     edges: Vec<Edge>,
 }
 
 #[derive(Debug, Clone)]
 struct Node {
-    hash: crate::Digest,
+    hash: Digest,
     parents: Option<EdgeIdx>,
     children: Option<EdgeIdx>,
 }
@@ -54,7 +63,7 @@ impl CommitDag {
             .iter()
             .enumerate()
             .map(|(idx, node)| (node.hash, NodeIdx(idx)))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Map<_, _>>();
 
         let mut dag = CommitDag {
             nodes,
@@ -201,8 +210,8 @@ impl CommitDag {
         // in a block which is covered by at least one stratum in the tree.
 
         // Identify blocks by their end hash and store a mapping from commit hash to block end hash
-        let mut commits_to_blocks = BTreeMap::new();
-        let mut blockless_commits = BTreeSet::new();
+        let mut commits_to_blocks = Map::new();
+        let mut blockless_commits = Set::new();
 
         let mut tips = self.tips().collect::<Vec<_>>();
         tips.sort_by_key(|idx| {
@@ -217,7 +226,7 @@ impl CommitDag {
             let mut block: Option<(Digest, Vec<Digest>)> = None;
             for hash in self.reverse_topo(tip) {
                 let depth = strategy.to_depth(hash);
-                if depth >= crate::MAX_STRATA_DEPTH {
+                if depth >= MAX_STRATA_DEPTH {
                     // We're in a block and we just found a checkpoint, this must be the start hash
                     // for the block we're in. Flush the current block and start a new one.
                     if let Some((block, commits)) = block.take() {
@@ -232,11 +241,10 @@ impl CommitDag {
                     block = Some((hash, vec![hash]));
                 }
                 if let Some((_, commits)) = &mut block {
-                    if depth < crate::MAX_STRATA_DEPTH {
+                    if depth < MAX_STRATA_DEPTH {
                         commits.push(hash);
                     }
-                } else if !commits_to_blocks.contains_key(&hash) && depth < crate::MAX_STRATA_DEPTH
-                {
+                } else if !commits_to_blocks.contains_key(&hash) && depth < MAX_STRATA_DEPTH {
                     blockless_commits.insert(hash);
                 }
             }
@@ -283,7 +291,7 @@ impl CommitDag {
             .iter()
             .enumerate()
             .map(|(idx, node)| (node.hash, NodeIdx(idx)))
-            .collect::<BTreeMap<_, _>>();
+            .collect::<Map<_, _>>();
 
         let mut dag = CommitDag {
             nodes,
@@ -379,7 +387,7 @@ impl CommitDag {
         // traversal with the commits and checkpoints from the given stratum
         heads.into_iter().flat_map(move |head| {
             let mut stack = vec![head];
-            let mut visited = BTreeSet::new();
+            let mut visited = Set::new();
             let fragments = fragments.clone();
             core::iter::from_fn(move || {
                 while let Some(commit) = stack.pop() {
@@ -426,7 +434,7 @@ impl CommitDag {
 struct ReverseTopo<'a> {
     dag: &'a CommitDag,
     stack: Vec<NodeIdx>,
-    visited: BTreeSet<NodeIdx>,
+    visited: Set<NodeIdx>,
 }
 
 impl<'a> ReverseTopo<'a> {
@@ -435,7 +443,7 @@ impl<'a> ReverseTopo<'a> {
         ReverseTopo {
             dag,
             stack,
-            visited: BTreeSet::new(),
+            visited: Set::new(),
         }
     }
 }
@@ -491,10 +499,13 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
-    use super::{super::LooseCommit, CommitDag};
-    use std::collections::{BTreeMap, BTreeSet};
-
-    use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes, Digest};
+    use super::CommitDag;
+    use crate::{
+        blob::{BlobMeta, Digest},
+        collections::{Map, Set},
+        commit::CountLeadingZeroBytes,
+        loose_commit::LooseCommit,
+    };
 
     fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest {
         let mut byte_arr: [u8; 32] = rng.random::<[u8; 32]>();
@@ -506,9 +517,9 @@ mod tests {
 
     #[derive(Debug)]
     struct TestGraph {
-        nodes: BTreeMap<String, Digest>,
-        parents: BTreeMap<Digest, Vec<Digest>>,
-        commits: BTreeMap<Digest, BlobMeta>,
+        nodes: Map<String, Digest>,
+        parents: Map<Digest, Vec<Digest>>,
+        commits: Map<Digest, BlobMeta>,
     }
 
     impl TestGraph {
@@ -518,13 +529,13 @@ mod tests {
             edges: Vec<(&'static str, &'static str)>,
         ) -> Self {
             let commit_hashes = make_commit_hashes(rng, node_info);
-            let mut nodes = BTreeMap::new();
-            let mut commits = BTreeMap::new();
+            let mut nodes = Map::new();
+            let mut commits = Map::new();
             for (commit_name, commit_hash) in commit_hashes {
                 commits.insert(commit_hash, random_blob(rng));
                 nodes.insert(commit_name, commit_hash);
             }
-            let mut parents = BTreeMap::new();
+            let mut parents = Map::new();
             #[allow(clippy::panic)]
             for (parent, child) in edges {
                 let Some(child_hash) = nodes.get(child) else {
@@ -550,12 +561,9 @@ mod tests {
             for hash in self.nodes.values() {
                 #[allow(clippy::unwrap_used)]
                 let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
-                commits.push(LooseCommit {
-                    #[allow(clippy::unwrap_used)]
-                    blob_meta: *self.commits.get(hash).unwrap(),
-                    digest: *hash,
-                    parents,
-                });
+                #[allow(clippy::unwrap_used)]
+                let blob_meta = *self.commits.get(hash).unwrap();
+                commits.push(LooseCommit::new(*hash, parents, blob_meta));
             }
             commits
         }
@@ -576,8 +584,8 @@ mod tests {
     fn make_commit_hashes<R: rand::Rng>(
         rng: &mut R,
         names: Vec<(&'static str, usize)>,
-    ) -> BTreeMap<String, Digest> {
-        let mut commits = BTreeMap::new();
+    ) -> Map<String, Digest> {
+        let mut commits = Map::new();
         let mut last_commit = None;
         for (name, level) in names {
             loop {
@@ -628,22 +636,19 @@ mod tests {
                 random_blob($rng),
             ),)*];
             let dag = graph.as_dag();
-            let mut commit_name_map = BTreeMap::<Digest, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
+            let mut commit_name_map = Map::<Digest, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
             $(
                 commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
             )*
-            let expected_commits = BTreeSet::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
-            let actual_commits = dag.simplify(&fragments, &CountLeadingZeroBytes).commit_hashes().collect::<BTreeSet<_>>();
+            let expected_commits = Set::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
+            let actual_commits = dag.simplify(&fragments, &CountLeadingZeroBytes).commit_hashes().collect::<Set<_>>();
             let expected_message = pretty_hashes(&commit_name_map, &expected_commits);
             let actual_message = pretty_hashes(&commit_name_map, &actual_commits);
             assert_eq!(expected_commits, actual_commits, "\nexpected: {:?}, \nactual: {:?}", expected_message, actual_message);
         };
     }
 
-    fn pretty_hashes(
-        name_map: &BTreeMap<Digest, &'_ str>,
-        hashes: &BTreeSet<Digest>,
-    ) -> BTreeSet<String> {
+    fn pretty_hashes(name_map: &Map<Digest, &'_ str>, hashes: &Set<Digest>) -> Set<String> {
         hashes
             .iter()
             .map(|h| {
@@ -745,10 +750,8 @@ mod tests {
         );
         let graph = CommitDag::from_commits(vec![&a, &b, &c, &d].into_iter());
         assert_eq!(
-            graph.parents_of_hash(c.digest()).collect::<BTreeSet<_>>(),
-            vec![a.digest(), b.digest()]
-                .into_iter()
-                .collect::<BTreeSet<_>>()
+            graph.parents_of_hash(c.digest()).collect::<Set<_>>(),
+            vec![a.digest(), b.digest()].into_iter().collect::<Set<_>>()
         );
     }
 }

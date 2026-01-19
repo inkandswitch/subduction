@@ -12,7 +12,8 @@ extern crate alloc;
 pub mod error;
 pub mod fragment;
 
-use alloc::{collections::BTreeSet, string::String, vec::Vec};
+use alloc::{string::String, vec::Vec};
+use sedimentree_core::collections::Set;
 
 use base58::FromBase58;
 use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
@@ -94,7 +95,7 @@ impl core::fmt::Debug for WasmSedimentreeAutomerge {
 }
 
 impl CommitStore<'static> for WasmSedimentreeAutomerge {
-    type Node = BTreeSet<Digest>;
+    type Node = Set<Digest>;
     type LookupError = WasmLookupError;
 
     fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {

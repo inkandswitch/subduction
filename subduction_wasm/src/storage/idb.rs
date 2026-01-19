@@ -4,7 +4,12 @@ use alloc::{boxed::Box, rc::Rc, str::FromStr, string::{String, ToString}, vec::V
 use core::{cell::RefCell};
 use futures::{channel::oneshot};
 use js_sys::Uint8Array;
-use sedimentree_core::{BadSedimentreeId, Fragment, LooseCommit, SedimentreeId, blob::Digest};
+use sedimentree_core::{
+    blob::Digest,
+    fragment::Fragment,
+    id::{BadSedimentreeId, SedimentreeId},
+    loose_commit::LooseCommit,
+};
 use thiserror::Error;
 use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use web_sys::{

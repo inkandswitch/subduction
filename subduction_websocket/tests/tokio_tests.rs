@@ -6,13 +6,15 @@ use rand::Rng;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
     storage::MemoryStorage,
-    LooseCommit, SedimentreeId,
 };
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{message::Message, Connection, Reconnect},
     peer::id::PeerId,
+    sharded_map::ShardedMap,
     Subduction,
 };
 use subduction_websocket::tokio::{
@@ -55,7 +57,7 @@ async fn client_reconnect() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, conn_actor_fut) =
-        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+        Subduction::new(server_storage.clone(), CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -118,7 +120,7 @@ async fn server_graceful_shutdown() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, conn_actor_fut) =
-        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+        Subduction::new(server_storage.clone(), CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -188,7 +190,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, conn_actor_fut) =
-        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+        Subduction::new(server_storage.clone(), CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -228,6 +230,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             Subduction::<Sendable, MemoryStorage, TokioWebSocketClient<TimeoutTokio>>::new(
                 client_storage,
                 CountLeadingZeroBytes,
+                ShardedMap::with_key(0, 0),
             );
 
         tokio::spawn(actor_fut);
@@ -284,12 +287,11 @@ async fn multiple_concurrent_clients() -> TestResult {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify all clients have all commits (1 server + 3 client commits = 4 total)
-    #[allow(clippy::expect_used)]
     for client in &clients {
         let loose_commits = client
             .get_commits(sed_id)
             .await
-            .expect("sedimentree exists");
+            .ok_or("sedimentree exists")?;
         assert_eq!(
             loose_commits.len(),
             num_clients + 1,
@@ -298,11 +300,10 @@ async fn multiple_concurrent_clients() -> TestResult {
     }
 
     // Verify server has all commits
-    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
     assert_eq!(
         server_commits.len(),
         num_clients + 1,
@@ -321,7 +322,7 @@ async fn request_with_delayed_response() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, conn_actor_fut) =
-        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+        Subduction::new(server_storage.clone(), CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -353,7 +354,7 @@ async fn request_with_delayed_response() -> TestResult {
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<TimeoutTokio>,
-    >::new(client_storage, CountLeadingZeroBytes);
+    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -430,7 +431,7 @@ async fn large_message_handling() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, conn_actor_fut) =
-        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+        Subduction::new(server_storage.clone(), CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -458,7 +459,7 @@ async fn large_message_handling() -> TestResult {
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<TimeoutTokio>,
-    >::new(client_storage, CountLeadingZeroBytes);
+    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -510,11 +511,10 @@ async fn large_message_handling() -> TestResult {
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     // Verify server received the large commit
-    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 1);
     assert!(server_commits.contains(&commit));
 
@@ -530,7 +530,7 @@ async fn message_ordering() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, conn_actor_fut) =
-        Subduction::new(server_storage.clone(), CountLeadingZeroBytes);
+        Subduction::new(server_storage.clone(), CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -558,7 +558,7 @@ async fn message_ordering() -> TestResult {
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<TimeoutTokio>,
-    >::new(client_storage, CountLeadingZeroBytes);
+    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -609,11 +609,10 @@ async fn message_ordering() -> TestResult {
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Verify server has all commits
-    #[allow(clippy::expect_used)]
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .expect("sedimentree exists");
+        .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 5);
 
     for commit in &commits {

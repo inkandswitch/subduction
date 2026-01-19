@@ -5,13 +5,14 @@ pub mod request;
 
 use crate::{
     connection::{
-        actor::{ConnectionActor, ConnectionActorFuture, StartConnectionActor},
+        actor::{ActorCommand, ConnectionActor, ConnectionActorFuture, StartConnectionActor},
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
-        recv_once::RecvOnce,
+        stream::IntoConnectionStream,
         Connection, ConnectionDisallowed, ConnectionPolicy,
     },
     peer::id::PeerId,
+    sharded_map::ShardedMap,
 };
 use async_channel::{bounded, Sender};
 use async_lock::Mutex;
@@ -26,16 +27,19 @@ use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+    sedimentree::{RemoteDiff, Sedimentree, SedimentreeSummary},
     storage::Storage,
-    Fragment, LooseCommit, RemoteDiff, Sedimentree, SedimentreeId, SedimentreeSummary,
 };
 use alloc::{
     boxed::Box,
-    collections::{BTreeMap, BTreeSet},
     string::ToString,
     sync::Arc,
     vec::Vec,
 };
+use sedimentree_core::collections::{Map, Set};
 use core::{
     sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll},
@@ -49,19 +53,26 @@ use core::{
 #[derive(Debug, Clone)]
 pub struct Subduction<
     'a,
-    F: SubductionFutureKind<'a, S, C, M>,
+    F,
+    S,
+    C,
+    M = CountLeadingZeroBytes,
+    const N: usize = 256,
+>
+where
+    F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
-    C: Connection<F> + PartialEq,
-    M: DepthMetric = CountLeadingZeroBytes,
-> {
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric, {
     depth_metric: M,
-    sedimentrees: Arc<Mutex<BTreeMap<SedimentreeId, Sedimentree>>>,
+    sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
     next_connection_id: Arc<AtomicUsize>,
-    conns: Arc<Mutex<BTreeMap<ConnectionId, C>>>,
+    conns: Arc<Mutex<Map<ConnectionId, C>>>,
     storage: S,
 
-    actor_channel: Sender<(ConnectionId, C)>,
-    msg_queue: async_channel::Receiver<(ConnectionId, C, Message)>,
+    actor_channel: Sender<ActorCommand<C>>,
+    msg_queue: async_channel::Receiver<(ConnectionId, Message)>,
+    connection_closed: async_channel::Receiver<ConnectionId>,
 
     abort_actor_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
@@ -69,41 +80,47 @@ pub struct Subduction<
     _phantom: core::marker::PhantomData<&'a F>,
 }
 
-impl<
-        'a,
-        F: SubductionFutureKind<'a, S, C, M>,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq,
-        M: DepthMetric,
-    > Subduction<'a, F, S, C, M>
+impl<'a, F, S, C, M, const N: usize> Subduction<'a, F, S, C, M, N>
+where
+    F: SubductionFutureKind<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
 {
-    /// Initialize a new `Subduction` with the given storage backend and network adapters.
+    /// Initialize a new `Subduction` with the given storage backend, depth metric, and sharded `Sedimentree` map.
+    ///
+    /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
+    /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
+    /// or provide secure random keys to [`ShardedMap::with_key`].
     #[allow(clippy::type_complexity)]
     pub fn new(
         storage: S,
         depth_metric: M,
+        sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
     ) -> (
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, M>,
+        ListenerFuture<'a, F, S, C, M, N>,
         ConnectionActorFuture<'a, F, C>,
     ) {
         tracing::info!("initializing Subduction instance");
 
         let (actor_sender, actor_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(256);
-        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender);
+        let (closed_sender, closed_receiver) = async_channel::bounded(32);
+        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender, closed_sender);
 
         let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
 
         let sd = Arc::new(Self {
             depth_metric,
-            sedimentrees: Arc::new(Mutex::new(BTreeMap::new())),
+            sedimentrees: Arc::new(sedimentrees),
             next_connection_id: Arc::new(AtomicUsize::new(0)),
-            conns: Arc::new(Mutex::new(BTreeMap::new())),
+            conns: Arc::new(Mutex::new(Map::new())),
             storage,
             actor_channel: actor_sender,
             msg_queue: queue_receiver,
+            connection_closed: closed_receiver,
             abort_actor_handle,
             abort_listener_handle,
             _phantom: PhantomData,
@@ -118,26 +135,33 @@ impl<
 
     /// Hydrate a `Subduction` instance from existing sedimentrees in external storage.
     ///
+    /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
+    /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
+    /// or provide secure random keys to [`ShardedMap::with_key`].
+    ///
     /// # Errors
     ///
     /// * Returns [`HydrationError`] if loading from storage fails.
-    pub async fn hydrate(storage: S, depth_metric: M
+    pub async fn hydrate(
+        storage: S,
+        depth_metric: M,
+        sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
     ) -> Result<(
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, M>,
+        ListenerFuture<'a, F, S, C, M, N>,
         ConnectionActorFuture<'a, F, C>,
     ), HydrationError<F, S>> {
         let ids = storage.load_all_sedimentree_ids().await.map_err(HydrationError::LoadAllIdsError)?;
-        let (subduction, fut_listener, conn_actor) = Self::new(storage, depth_metric);
+        let (subduction, fut_listener, conn_actor) = Self::new(storage, depth_metric, sedimentrees);
         for id in ids {
             let loose_commits = subduction.storage.load_loose_commits(id).await.map_err(HydrationError::LoadLooseCommitsError)?;
             let fragments = subduction.storage.load_fragments(id).await.map_err(HydrationError::LoadFragmentsError)?;
             let sedimentree = Sedimentree::new(fragments, loose_commits);
 
-            {
-                let mut locked = subduction.sedimentrees.lock().await;
-                locked.entry(id).or_default().merge(sedimentree);
-            }
+            subduction
+                .sedimentrees
+                .with_entry_or_default(id, |tree| tree.merge(sedimentree))
+                .await;
         }
         Ok((subduction, fut_listener, conn_actor))
     }
@@ -151,41 +175,55 @@ impl<
     ///
     /// * Returns `ListenError` if a storage or network error occurs.
     pub async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
+        use core::pin::pin;
+        use futures::future::{select, Either};
+
         tracing::info!("starting Subduction listener");
-        while let Ok((conn_id, conn, msg)) = self.msg_queue.recv().await {
-            tracing::debug!(
-                "Subduction listener received message from {:?}: {:?}",
-                conn_id,
-                msg
-            );
 
-            let should_reregister = if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
-                tracing::error!(
-                    "error dispatching message from connection {:?}: {}",
-                    conn_id,
-                    e
-                );
-                // Connection is broken - unregister it but keep draining messages
-                let _ = self.unregister(&conn_id).await;
-                tracing::info!("unregistered failed connection {:?}", conn_id);
+        loop {
+            let msg_fut = pin!(self.msg_queue.recv().fuse());
+            let closed_fut = pin!(self.connection_closed.recv().fuse());
 
-                // NOTE Re-register temporarily to drain remaining messages from the channel
-                // This prevents messages from piling up in inbound_writer
-                true
-            } else {
-                true
-            };
+            match select(msg_fut, closed_fut).await {
+                Either::Left((msg_result, _)) => {
+                    if let Ok((conn_id, msg)) = msg_result {
+                        tracing::debug!(
+                            "Subduction listener received message from {:?}: {:?}",
+                            conn_id,
+                            msg
+                        );
 
-            if should_reregister
-                && let Err(e) = self.actor_channel.send((conn_id, conn)).await {
-                    tracing::error!(
-                        "error re-sending connection {:?} to actor channel: {:?}",
-                        conn_id,
-                        e
-                    );
-                    // Channel closed, exit loop
-                    break;
+                        // Look up connection for sending responses
+                        let conn = { self.conns.lock().await.get(&conn_id).cloned() };
+
+                        if let Some(conn) = conn {
+                            if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
+                                tracing::error!(
+                                    "error dispatching message from connection {:?}: {}",
+                                    conn_id,
+                                    e
+                                );
+                                // Connection is broken - unregister from conns map.
+                                // The stream in the actor will naturally end when recv fails.
+                                let _ = self.unregister(&conn_id).await;
+                                tracing::info!("unregistered failed connection {:?}", conn_id);
+                            }
+                            // No re-registration needed - the stream handles continuous recv
+                        } else {
+                            tracing::warn!("Message from unknown/unregistered connection {:?}", conn_id);
+                        }
+                    } else {
+                        tracing::info!("Message queue closed");
+                        break;
+                    }
                 }
+                Either::Right((closed_result, _)) => {
+                    if let Ok(conn_id) = closed_result {
+                        tracing::info!("Connection {:?} closed, unregistering", conn_id);
+                        self.unregister(&conn_id).await;
+                    }
+                }
+            }
         }
         Ok(())
     }
@@ -197,7 +235,16 @@ impl<
         message: Message,
     ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
-        tracing::info!("dispatch: {:?}: {:?}", from, message);
+        tracing::info!(
+            from = %from,
+            message_type = message.variant_name(),
+            sedimentree_id = ?message.sedimentree_id(),
+            request_id = ?message.request_id(),
+            "dispatch"
+        );
+
+        #[cfg(feature = "metrics")]
+        crate::metrics::message_dispatched(message.variant_name());
 
         match message {
             Message::LooseCommit { id, commit, blob } => {
@@ -282,14 +329,7 @@ impl<
 
         let (fresh, conn_id) = self.register(conn).await?;
 
-        let ids = {
-          self.sedimentrees
-              .lock()
-              .await
-              .keys()
-              .copied()
-              .collect::<Vec<_>>()
-        };
+        let ids = self.sedimentrees.into_keys().await;
 
         for tree_id in ids {
             self.request_peer_batch_sync(&peer_id, tree_id, None)
@@ -400,9 +440,12 @@ impl<
 
             self.conns.lock().await.insert(conn_id, conn.clone());
             self.actor_channel
-                .send((conn_id, conn))
+                .send(ActorCommand::AddConnection(conn_id, conn))
                 .await
                 .map_err(|_| RegistrationError::SendToClosedChannel)?;
+
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_opened();
 
             Ok((true, conn_id))
         }
@@ -410,7 +453,14 @@ impl<
 
     /// Low-level unregistration of a connection.
     pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
-        self.conns.lock().await.remove(conn_id).is_some()
+        let removed = self.conns.lock().await.remove(conn_id).is_some();
+
+        #[cfg(feature = "metrics")]
+        if removed {
+            crate::metrics::connection_closed();
+        }
+
+        removed
     }
 
     /*********
@@ -451,7 +501,7 @@ impl<
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
         tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
-        let tree = { self.sedimentrees.lock().await.get(&id).cloned() };
+        let tree = self.sedimentrees.get_cloned(&id).await;
         if let Some(sedimentree) = tree {
             tracing::debug!("Found sedimentree with id {:?}", id);
             let mut results = Vec::new();
@@ -499,7 +549,7 @@ impl<
         if let Some(maybe_blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
-            let tree = { self.sedimentrees.lock().await.get(&id).cloned() };
+            let tree = self.sedimentrees.get_cloned(&id).await;
             if let Some(tree) = tree {
                 let summary = tree.summarize();
                 let conns: Vec<_> = { self.conns.lock().await.values().cloned().collect() };
@@ -594,12 +644,7 @@ impl<
     ///
     /// * [`IoError`] if a storage or network error occurs.
     pub async fn remove_sedimentree(&self, id: SedimentreeId) -> Result<(), IoError<F, S, C>> {
-        let maybe_sedimentree = {
-            self.sedimentrees
-                .lock()
-                .await
-                .remove(&id)
-        };
+        let maybe_sedimentree = self.sedimentrees.remove(&id).await;
 
         if let Some(sedimentree) = maybe_sedimentree {
             for commit in sedimentree.loose_commits() {
@@ -648,8 +693,10 @@ impl<
             .map_err(IoError::Storage)?;
 
         {
-            let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
-            for conn in conns {
+            let conns_with_ids: Vec<(ConnectionId, C)> = {
+                self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
+            };
+            for (conn_id, conn) in conns_with_ids {
                 tracing::debug!(
                     "Propagating commit {:?} for sedimentree {:?} to peer {:?}",
                     commit.digest(),
@@ -663,6 +710,8 @@ impl<
                     blob: blob.clone(),
                 }).await {
                     tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
+                    self.unregister(&conn_id).await;
+                    tracing::info!("unregistered failed connection {:?}", conn_id);
                 }
             }
         }
@@ -697,17 +746,19 @@ impl<
             id
         );
 
-        {
-            self.sedimentrees.lock().await.entry(id).or_default().add_fragment(fragment.clone());
-        }
+        self.sedimentrees
+            .with_entry_or_default(id, |tree| tree.add_fragment(fragment.clone()))
+            .await;
 
         self.storage
             .save_blob(blob.clone()) // TODO lots of cloning
             .await
             .map_err(IoError::Storage)?;
 
-        let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
-        for conn in conns {
+        let conns_with_ids: Vec<(ConnectionId, C)> = {
+            self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
+        };
+        for (conn_id, conn) in conns_with_ids {
             tracing::debug!(
                 "Propagating fragment {:?} for sedimentree {:?} to peer {:?}",
                 fragment.digest(),
@@ -720,6 +771,8 @@ impl<
                 blob: blob.clone(),
             }).await {
                 tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
+                self.unregister(&conn_id).await;
+                tracing::info!("unregistered failed connection {:?}", conn_id);
             }
         }
 
@@ -757,8 +810,10 @@ impl<
             .map_err(IoError::Storage)?;
 
         if was_new {
-            let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
-            for conn in conns {
+            let conns_with_ids: Vec<(ConnectionId, C)> = {
+                self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
+            };
+            for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
                     && let Err(e) = conn.send(Message::LooseCommit {
                         id,
@@ -767,6 +822,8 @@ impl<
                     })
                     .await {
                         tracing::error!("{e}");
+                        self.unregister(&conn_id).await;
+                        tracing::info!("unregistered failed connection {:?}", conn_id);
                     }
             }
         }
@@ -801,8 +858,10 @@ impl<
             .map_err(IoError::Storage)?;
 
         if was_new {
-            let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
-            for conn in conns {
+            let conns_with_ids: Vec<(ConnectionId, C)> = {
+                self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
+            };
+            for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
                     && let Err(e) = conn.send(Message::Fragment {
                         id,
@@ -811,6 +870,8 @@ impl<
                     })
                     .await {
                         tracing::error!("{e}");
+                        self.unregister(&conn_id).await;
+                        tracing::info!("unregistered failed connection {:?}", conn_id);
                     }
             }
         }
@@ -841,7 +902,7 @@ impl<
         let mut our_missing_blobs = Vec::new();
 
         let sync_diff = {
-            let mut locked = self.sedimentrees.lock().await;
+            let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
             let sedimentree = locked.entry(id).or_default();
             let local_sedimentree = sedimentree.clone();
             tracing::debug!(
@@ -951,8 +1012,10 @@ impl<
 
     /// Find blobs from connected peers.
     pub async fn request_blobs(&self, digests: Vec<Digest>) {
-        let conns = { self.conns.lock().await.values().cloned().collect::<Vec<_>>() };
-        for conn in conns {
+        let conns_with_ids: Vec<(ConnectionId, C)> = {
+            self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
+        };
+        for (conn_id, conn) in conns_with_ids {
             if let Err(e) = conn.send(Message::BlobsRequest(digests.clone())).await {
                 tracing::error!(
                     "Error requesting blobs {:?} from peer {:?}: {:?}",
@@ -960,6 +1023,8 @@ impl<
                     conn.peer_id(),
                     e
                 );
+                self.unregister(&conn_id).await;
+                tracing::info!("unregistered failed connection {:?}", conn_id);
             }
         }
     }
@@ -1001,15 +1066,12 @@ impl<
 
         for (conn_id, conn) in peer_conns {
             tracing::info!("Using connection {:?} to peer {:?}", conn_id, to_ask);
-            let summary = {
-                self
-                    .sedimentrees
-                    .lock()
-                    .await
-                    .get(&id)
-                    .map(Sedimentree::summarize)
-                    .unwrap_or_default()
-            };
+            let summary = self
+                .sedimentrees
+                .get_cloned(&id)
+                .await
+                .map(|t| t.summarize())
+                .unwrap_or_default();
 
             let req_id = conn.next_request_id().await;
 
@@ -1073,14 +1135,14 @@ impl<
         id: SedimentreeId,
         timeout: Option<Duration>,
     ) -> Result<
-        BTreeMap<PeerId, (bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>)>,
+        Map<PeerId, (bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>)>,
         IoError<F, S, C>,
     > {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
         );
-        let mut peers: BTreeMap<PeerId, Vec<(ConnectionId, C)>> = BTreeMap::new();
+        let mut peers: Map<PeerId, Vec<(ConnectionId, C)>> = Map::new();
         {
             for (conn_id, conn) in self.conns.lock().await.iter() {
                 peers
@@ -1091,7 +1153,7 @@ impl<
         }
 
         tracing::debug!("Found {} peer(s)", peers.len());
-        let blobs = Arc::new(Mutex::new(BTreeSet::<Blob>::new()));
+        let blobs = Arc::new(Mutex::new(Set::<Blob>::new()));
         let mut set: FuturesUnordered<_> = peers
             .iter()
             .map(|(peer_id, peer_conns)| {
@@ -1112,15 +1174,12 @@ impl<
                             conn_id,
                             conn.peer_id()
                         );
-                        let summary = {
-                            self
-                                .sedimentrees
-                                .lock()
-                                .await
-                                .get(&id)
-                                .map(Sedimentree::summarize)
-                                .unwrap_or_default()
-                        };
+                        let summary = self
+                            .sedimentrees
+                            .get_cloned(&id)
+                            .await
+                            .map(|t| t.summarize())
+                            .unwrap_or_default();
 
                         let req_id = conn.next_request_id().await;
 
@@ -1178,7 +1237,7 @@ impl<
             })
             .collect();
 
-        let mut out = BTreeMap::new();
+        let mut out = Map::new();
         while let Some(result) = set.next().await {
             match result {
                 Err(e) =>  {
@@ -1209,15 +1268,7 @@ impl<
     ) -> Result<(bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>), IoError<F, S, C>>
     {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
-        let tree_ids = {
-            self
-                .sedimentrees
-                .lock()
-                .await
-                .keys()
-                .copied()
-                .collect::<Vec<_>>()
-        };
+        let tree_ids = self.sedimentrees.into_keys().await;
 
         let mut had_success = false;
         let mut blobs: Vec<Blob> = Vec::new();
@@ -1246,34 +1297,27 @@ impl<
 
     /// Get an iterator over all known sedimentree IDs.
     pub async fn sedimentree_ids(&self) -> Vec<SedimentreeId> {
-        self.sedimentrees
-            .lock()
-            .await
-            .keys()
-            .copied()
-            .collect::<Vec<_>>()
+        self.sedimentrees.into_keys().await
     }
 
     /// Get all commits for a given sedimentree ID.
     pub async fn get_commits(&self, id: SedimentreeId) -> Option<Vec<LooseCommit>> {
         self.sedimentrees
-            .lock()
+            .get_cloned(&id)
             .await
-            .get(&id)
             .map(|tree| tree.loose_commits().cloned().collect())
     }
 
     /// Get all fragments for a given sedimentree ID.
     pub async fn get_fragments(&self, id: SedimentreeId) -> Option<Vec<Fragment>> {
         self.sedimentrees
-            .lock()
+            .get_cloned(&id)
             .await
-            .get(&id)
             .map(|tree| tree.fragments().cloned().collect())
     }
 
     /// Get the set of all connected peer IDs.
-    pub async fn peer_ids(&self) -> BTreeSet<PeerId> {
+    pub async fn peer_ids(&self) -> Set<PeerId> {
         self.conns.lock().await.values().map(Connection::peer_id).collect()
     }
 
@@ -1283,6 +1327,11 @@ impl<
 
     async fn insert_sedimentree_locally(&self, id: SedimentreeId, sedimentree: Sedimentree, blobs: Vec<Blob>) -> Result<(), S::Error> {
         tracing::debug!("adding sedimentree with id {:?}", id);
+
+        // Save blobs first so they're available when commit/fragment callbacks fire
+        for blob in blobs {
+            self.storage.save_blob(blob).await?;
+        }
 
         self.storage.save_sedimentree_id(id).await?;
 
@@ -1298,13 +1347,9 @@ impl<
                 .await?;
         }
 
-        for blob in blobs {
-            self.storage.save_blob(blob).await?;
-        }
-
-        {
-            self.sedimentrees.lock().await.entry(id).or_default().merge(sedimentree);
-        }
+        self.sedimentrees
+            .with_entry_or_default(id, |tree| tree.merge(sedimentree))
+            .await;
 
         Ok(())
     }
@@ -1367,16 +1412,18 @@ impl<
         blob: Blob,
     ) -> Result<bool, S::Error> {
         tracing::debug!("inserting commit {:?} locally", commit.digest());
-        {
-            let mut locked = self.sedimentrees.lock().await;
-            if !locked.entry(id).or_default().add_commit(commit.clone()) {
-                return Ok(false);
-            }
+        let was_added = self
+            .sedimentrees
+            .with_entry_or_default(id, |tree| tree.add_commit(commit.clone()))
+            .await;
+        if !was_added {
+            return Ok(false);
         }
 
+        // Save blob first so callback wrappers can load it by digest
+        self.storage.save_blob(blob).await?;
         self.storage.save_sedimentree_id(id).await?;
         self.storage.save_loose_commit(id, commit).await?;
-        self.storage.save_blob(blob).await?;
 
         Ok(true)
     }
@@ -1388,27 +1435,28 @@ impl<
         fragment: Fragment,
         blob: Blob,
     ) -> Result<bool, S::Error> {
-        {
-            let mut locked = self.sedimentrees.lock().await;
-            if !locked.entry(id).or_default().add_fragment(fragment.clone()) {
-                return Ok(false);
-            }
+        let was_added = self
+            .sedimentrees
+            .with_entry_or_default(id, |tree| tree.add_fragment(fragment.clone()))
+            .await;
+        if !was_added {
+            return Ok(false);
         }
 
+        // Save blob first so callback wrappers can load it by digest
+        self.storage.save_blob(blob).await?;
         self.storage.save_sedimentree_id(id).await?;
         self.storage.save_fragment(id, fragment).await?;
-        self.storage.save_blob(blob).await?;
         Ok(true)
     }
 }
 
-impl<
-        'a,
-        F: SubductionFutureKind<'a, S, C, M>,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq,
-        M: DepthMetric,
-    > Drop for Subduction<'a, F, S, C, M>
+impl<'a, F, S, C, M, const N: usize> Drop for Subduction<'a, F, S, C, M, N>
+where
+    F: SubductionFutureKind<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
 {
     fn drop(&mut self) {
         self.abort_actor_handle.abort();
@@ -1416,13 +1464,12 @@ impl<
     }
 }
 
-impl<
-        'a,
-        F: SubductionFutureKind<'a, S, C, M>,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq,
-        M: DepthMetric,
-    > ConnectionPolicy for Subduction<'a, F, S, C, M>
+impl<'a, F, S, C, M, const N: usize> ConnectionPolicy for Subduction<'a, F, S, C, M, N>
+where
+    F: SubductionFutureKind<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
 {
     async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
         Ok(()) // TODO currently allows all
@@ -1439,41 +1486,44 @@ impl<
 pub trait SubductionFutureKind<
     'a,
     S: Storage<Self>,
-    C: Connection<Self> + PartialEq,
+    C: Connection<Self> + PartialEq + 'a,
     M: DepthMetric,
->: RecvOnce<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>
+    const N: usize,
+>: IntoConnectionStream<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M, N>
 {
 }
 
 impl<
         'a,
         S: Storage<Self>,
-        C: Connection<Self> + PartialEq,
+        C: Connection<Self> + PartialEq + 'a,
         M: DepthMetric,
-        T: RecvOnce<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M>,
-    > SubductionFutureKind<'a, S, C, M> for T
+        const N: usize,
+        T: IntoConnectionStream<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M, N>,
+    > SubductionFutureKind<'a, S, C, M, N> for T
 {
 }
 
 /// A trait for starting the listener task for Subduction.
 ///
 /// This lets us abstract over `Send` and `!Send` futures
-pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq, M: DepthMetric>:
-    RecvOnce<'a, C> + StartConnectionActor<'a, C>
+pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq + 'a, M: DepthMetric, const N: usize>:
+    IntoConnectionStream<'a, C> + StartConnectionActor<'a, C>
 {
     /// Start the listener task for Subduction.
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, M>>,
+        subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>;
 }
 
 impl<
         'a,
-        C: Connection<Self> + PartialEq + Send + Sync + 'a,
+        C: Connection<Self> + PartialEq + Send + Sync + 'static,
         S: Storage<Self> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
-    > StartListener<'a, S, C, M> for Sendable
+        const N: usize,
+    > StartListener<'a, S, C, M, N> for Sendable
 where
     S::Error: Send + 'static,
     C::DisconnectionError: Send + 'static,
@@ -1482,7 +1532,7 @@ where
     C::SendError: Send + 'static,
 {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, M>>,
+        subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -1497,11 +1547,11 @@ where
     }
 }
 
-impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMetric + 'a>
-    StartListener<'a, S, C, M> for Local
+impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMetric + 'a, const N: usize>
+    StartListener<'a, S, C, M, N> for Local
 {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, M>>,
+        subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -1523,22 +1573,28 @@ impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMe
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,
-    F: StartListener<'a, S, C, M>,
+    F,
+    S,
+    C,
+    M,
+    const N: usize = 256,
+>
+where
+    F: StartListener<'a, S, C, M, N>,
     S: Storage<F>,
-    C: Connection<F> + PartialEq,
+    C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-> {
+{
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
     _phantom: PhantomData<(S, C, M)>,
 }
 
-impl<
-        'a,
-        F: StartListener<'a, S, C, M>,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq,
-        M: DepthMetric,
-    > ListenerFuture<'a, F, S, C, M>
+impl<'a, F, S, C, M, const N: usize> ListenerFuture<'a, F, S, C, M, N>
+where
+    F: StartListener<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
@@ -1555,13 +1611,12 @@ impl<
     }
 }
 
-impl<
-        'a,
-        F: StartListener<'a, S, C, M>,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq,
-        M: DepthMetric,
-    > Deref for ListenerFuture<'a, F, S, C, M>
+impl<'a, F, S, C, M, const N: usize> Deref for ListenerFuture<'a, F, S, C, M, N>
+where
+    F: StartListener<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
 {
     type Target = Abortable<F::Future<'a, ()>>;
 
@@ -1570,13 +1625,12 @@ impl<
     }
 }
 
-impl<
-        'a,
-        F: StartListener<'a, S, C, M>,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq,
-        M: DepthMetric,
-    > Future for ListenerFuture<'a, F, S, C, M>
+impl<'a, F, S, C, M, const N: usize> Future for ListenerFuture<'a, F, S, C, M, N>
+where
+    F: StartListener<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
 {
     type Output = Result<(), Aborted>;
 
@@ -1585,13 +1639,12 @@ impl<
     }
 }
 
-impl<
-        'a,
-        F: StartListener<'a, S, C, M>,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq,
-        M: DepthMetric,
-    > Unpin for ListenerFuture<'a, F, S, C, M>
+impl<'a, F, S, C, M, const N: usize> Unpin for ListenerFuture<'a, F, S, C, M, N>
+where
+    F: StartListener<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
 {
 }
 
@@ -1601,8 +1654,9 @@ mod tests {
     use crate::connection::test_utils::MockConnection;
     use sedimentree_core::{
         commit::CountLeadingZeroBytes,
+        id::SedimentreeId,
+        sedimentree::Sedimentree,
         storage::MemoryStorage,
-        Sedimentree, SedimentreeId,
     };
     use testresult::TestResult;
 
@@ -1615,7 +1669,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             // Verify initial state via async runtime would be needed,
             // but we can at least verify construction doesn't panic
@@ -1629,7 +1687,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let ids = subduction.sedimentree_ids().await;
             assert!(ids.is_empty());
@@ -1641,7 +1703,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let peer_ids = subduction.peer_ids().await;
             assert!(peer_ids.is_empty());
@@ -1657,7 +1723,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let ids = subduction.sedimentree_ids().await;
             assert_eq!(ids.len(), 0);
@@ -1669,7 +1739,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let id = SedimentreeId::new([1u8; 32]);
             let tree = Sedimentree::default();
@@ -1690,7 +1764,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let id = SedimentreeId::new([1u8; 32]);
             let commits = subduction.get_commits(id).await;
@@ -1703,7 +1781,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let id = SedimentreeId::new([1u8; 32]);
             let tree = Sedimentree::default();
@@ -1723,7 +1805,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let id = SedimentreeId::new([1u8; 32]);
             let fragments = subduction.get_fragments(id).await;
@@ -1736,7 +1822,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let id = SedimentreeId::new([1u8; 32]);
             let tree = Sedimentree::default();
@@ -1756,7 +1846,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let id = SedimentreeId::new([1u8; 32]);
             let tree = Sedimentree::default();
@@ -1782,7 +1876,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let peer_ids = subduction.peer_ids().await;
             assert_eq!(peer_ids.len(), 0);
@@ -1794,7 +1892,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn = MockConnection::new();
             let (fresh, _conn_id) = subduction.register(conn).await?;
@@ -1811,7 +1913,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn = MockConnection::new();
             let (fresh1, conn_id1) = subduction.register(conn).await?;
@@ -1832,7 +1938,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn = MockConnection::new();
             let (_fresh, conn_id) = subduction.register(conn).await?;
@@ -1851,7 +1961,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn_id = ConnectionId::new(999);
             let removed = subduction.unregister(&conn_id).await;
@@ -1864,7 +1978,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
             let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
@@ -1882,7 +2000,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn = MockConnection::new();
             let (_fresh, conn_id) = subduction.register(conn).await?;
@@ -1900,7 +2022,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn_id = ConnectionId::new(999);
             let removed = subduction.disconnect(&conn_id).await?;
@@ -1915,7 +2041,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
             let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
@@ -1936,7 +2066,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let peer_id1 = PeerId::new([1u8; 32]);
             let peer_id2 = PeerId::new([2u8; 32]);
@@ -1962,7 +2096,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let peer_id = PeerId::new([1u8; 32]);
             #[allow(clippy::unwrap_used)]
@@ -1981,7 +2119,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let peer_id = PeerId::new([1u8; 32]);
             let result = subduction.allowed_to_connect(&peer_id).await;
@@ -2001,7 +2143,11 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let digest = Digest::from([1u8; 32]);
             let blob = subduction.get_local_blob(digest).await.unwrap();
@@ -2014,11 +2160,528 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(storage, depth_metric);
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
 
             let id = SedimentreeId::new([1u8; 32]);
             let blobs = subduction.get_local_blobs(id).await.unwrap();
             assert!(blobs.is_none());
+        }
+    }
+
+    mod connection_cleanup_on_send_failure {
+        use super::*;
+        use crate::connection::test_utils::FailingSendMockConnection;
+        use crate::peer::id::PeerId;
+        use sedimentree_core::{
+            blob::{Blob, BlobMeta, Digest},
+            fragment::Fragment,
+            loose_commit::LooseCommit,
+        };
+
+        fn make_test_commit() -> (LooseCommit, Blob) {
+            let contents = vec![0u8; 32];
+            let blob = Blob::new(contents.clone());
+            let blob_meta = BlobMeta::new(&contents);
+            let digest = Digest::from([0u8; 32]);
+            let commit = LooseCommit::new(digest, vec![], blob_meta);
+            (commit, blob)
+        }
+
+        fn make_test_fragment() -> (Fragment, Blob) {
+            let contents = vec![0u8; 32];
+            let blob = Blob::new(contents.clone());
+            let blob_meta = BlobMeta::new(&contents);
+            let head = Digest::from([1u8; 32]);
+            let boundary = vec![Digest::from([2u8; 32])];
+            let checkpoints = vec![Digest::from([3u8; 32])];
+            let fragment = Fragment::new(head, boundary, checkpoints, blob_meta);
+            (fragment, blob)
+        }
+
+        #[tokio::test]
+        async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            // Register a failing connection
+            let peer_id = PeerId::new([1u8; 32]);
+            let conn = FailingSendMockConnection::with_peer_id(peer_id);
+            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            // Add a commit - the send will fail
+            let id = SedimentreeId::new([1u8; 32]);
+            let (commit, blob) = make_test_commit();
+
+            let _ = subduction.add_commit(id, &commit, blob).await;
+
+            // Connection should be unregistered after send failure
+            assert_eq!(
+                subduction.peer_ids().await.len(),
+                0,
+                "Connection should be unregistered after send failure"
+            );
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            // Register a failing connection
+            let peer_id = PeerId::new([1u8; 32]);
+            let conn = FailingSendMockConnection::with_peer_id(peer_id);
+            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            // Add a fragment - the send will fail
+            let id = SedimentreeId::new([1u8; 32]);
+            let (fragment, blob) = make_test_fragment();
+
+            let _ = subduction.add_fragment(id, &fragment, blob).await;
+
+            // Connection should be unregistered after send failure
+            assert_eq!(
+                subduction.peer_ids().await.len(),
+                0,
+                "Connection should be unregistered after send failure"
+            );
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            // Register a failing connection with a different peer ID than the sender
+            let sender_peer_id = PeerId::new([1u8; 32]);
+            let other_peer_id = PeerId::new([2u8; 32]);
+            let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
+            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            // Receive a commit from a different peer - the propagation send will fail
+            let id = SedimentreeId::new([1u8; 32]);
+            let (commit, blob) = make_test_commit();
+
+            let _ = subduction.recv_commit(&sender_peer_id, id, &commit, blob).await;
+
+            // Connection should be unregistered after send failure during propagation
+            assert_eq!(
+                subduction.peer_ids().await.len(),
+                0,
+                "Connection should be unregistered after send failure"
+            );
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            // Register a failing connection with a different peer ID than the sender
+            let sender_peer_id = PeerId::new([1u8; 32]);
+            let other_peer_id = PeerId::new([2u8; 32]);
+            let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
+            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            // Receive a fragment from a different peer - the propagation send will fail
+            let id = SedimentreeId::new([1u8; 32]);
+            let (fragment, blob) = make_test_fragment();
+
+            let _ = subduction
+                .recv_fragment(&sender_peer_id, id, &fragment, blob)
+                .await;
+
+            // Connection should be unregistered after send failure during propagation
+            assert_eq!(
+                subduction.peer_ids().await.len(),
+                0,
+                "Connection should be unregistered after send failure"
+            );
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            // Register a failing connection
+            let peer_id = PeerId::new([1u8; 32]);
+            let conn = FailingSendMockConnection::with_peer_id(peer_id);
+            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 1);
+
+            // Request blobs - the send will fail
+            let digests = vec![Digest::from([1u8; 32])];
+            subduction.request_blobs(digests).await;
+
+            // Connection should be unregistered after send failure
+            assert_eq!(
+                subduction.peer_ids().await.len(),
+                0,
+                "Connection should be unregistered after send failure"
+            );
+
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
+            let storage = MemoryStorage::new();
+            let depth_metric = CountLeadingZeroBytes;
+
+            let (subduction, _listener_fut, _actor_fut) =
+                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                    storage,
+                    depth_metric,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            // Register two connections that will succeed
+            let peer_id1 = PeerId::new([1u8; 32]);
+            let peer_id2 = PeerId::new([2u8; 32]);
+            let conn1 = MockConnection::with_peer_id(peer_id1);
+            let conn2 = MockConnection::with_peer_id(peer_id2);
+
+            subduction.register(conn1).await?;
+            subduction.register(conn2).await?;
+            assert_eq!(subduction.peer_ids().await.len(), 2);
+
+            // Add a commit - sends will succeed
+            let id = SedimentreeId::new([1u8; 32]);
+            let (commit, blob) = make_test_commit();
+
+            let _ = subduction.add_commit(id, &commit, blob).await;
+
+            // Both connections should still be registered (sends succeeded)
+            assert_eq!(
+                subduction.peer_ids().await.len(),
+                2,
+                "Both connections should remain registered when sends succeed"
+            );
+
+            Ok(())
+        }
+    }
+
+    mod message_flow_diagnostics {
+        //! Diagnostic tests to investigate the "one behind" issue.
+        //!
+        //! The "one behind" bug manifests as: new sedimentrees don't appear until
+        //! the NEXT one is created. These tests inject messages through channels
+        //! to observe timing and storage behavior.
+        //!
+        //! Tests run for both `Sendable` and `Local` future kinds to ensure
+        //! behavior is consistent across native and WASM-like environments.
+
+        use super::*;
+        use crate::connection::test_utils::ChannelMockConnection;
+        use crate::peer::id::PeerId;
+        use core::time::Duration;
+        use futures_kind::Local;
+        use sedimentree_core::{
+            blob::{Blob, BlobMeta, Digest},
+            loose_commit::LooseCommit,
+        };
+
+        fn make_test_commit_with_data(data: &[u8]) -> (LooseCommit, Blob) {
+            let blob = Blob::new(data.to_vec());
+            let blob_meta = BlobMeta::new(data);
+            let digest = Digest::hash(data);
+            let commit = LooseCommit::new(digest, vec![], blob_meta);
+            (commit, blob)
+        }
+
+        // ==========================================
+        // SENDABLE TESTS (native threaded)
+        // ==========================================
+
+        #[tokio::test]
+        async fn test_sendable_single_commit() -> TestResult {
+            let storage = MemoryStorage::new();
+            let (subduction, listener_fut, actor_fut) =
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                    storage,
+                    CountLeadingZeroBytes,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            subduction.register(conn).await?;
+
+            let actor_task = tokio::spawn(actor_fut);
+            let listener_task = tokio::spawn(listener_fut);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            let sedimentree_id = SedimentreeId::new([42u8; 32]);
+            let (commit, blob) = make_test_commit_with_data(b"test commit");
+
+            handle.inbound_tx.send(Message::LooseCommit {
+                id: sedimentree_id, commit, blob,
+            }).await?;
+
+            tokio::time::sleep(Duration::from_millis(50)).await;
+
+            let ids = subduction.sedimentree_ids().await;
+            assert!(ids.contains(&sedimentree_id), "[SENDABLE] Sedimentree should be visible. Found: {ids:?}");
+            assert_eq!(subduction.get_commits(sedimentree_id).await.map(|c| c.len()), Some(1));
+
+            actor_task.abort();
+            listener_task.abort();
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sendable_multiple_sequential() -> TestResult {
+            let storage = MemoryStorage::new();
+            let (subduction, listener_fut, actor_fut) =
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                    storage,
+                    CountLeadingZeroBytes,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            subduction.register(conn).await?;
+
+            let actor_task = tokio::spawn(actor_fut);
+            let listener_task = tokio::spawn(listener_fut);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            for i in 0..3u8 {
+                let sedimentree_id = SedimentreeId::new([i; 32]);
+                let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes());
+
+                handle.inbound_tx.send(Message::LooseCommit {
+                    id: sedimentree_id, commit, blob,
+                }).await?;
+
+                tokio::time::sleep(Duration::from_millis(20)).await;
+
+                let ids = subduction.sedimentree_ids().await;
+                assert_eq!(ids.len(), (i + 1) as usize,
+                    "[SENDABLE] After commit {i}: expected {} sedimentrees, found {}. ONE BEHIND BUG!",
+                    i + 1, ids.len());
+                assert!(ids.contains(&sedimentree_id));
+            }
+
+            actor_task.abort();
+            listener_task.abort();
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_sendable_same_sedimentree() -> TestResult {
+            let storage = MemoryStorage::new();
+            let (subduction, listener_fut, actor_fut) =
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                    storage,
+                    CountLeadingZeroBytes,
+                    ShardedMap::with_key(0, 0),
+                );
+
+            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            subduction.register(conn).await?;
+
+            let actor_task = tokio::spawn(actor_fut);
+            let listener_task = tokio::spawn(listener_fut);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+
+            let sedimentree_id = SedimentreeId::new([99u8; 32]);
+
+            for i in 0..3usize {
+                let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes());
+
+                handle.inbound_tx.send(Message::LooseCommit {
+                    id: sedimentree_id, commit, blob,
+                }).await?;
+
+                tokio::time::sleep(Duration::from_millis(20)).await;
+
+                let count = subduction.get_commits(sedimentree_id).await.map_or(0, |c| c.len());
+                assert_eq!(count, i + 1,
+                    "[SENDABLE] After commit {i}, expected {} commits but found {}. DELAYED!",
+                    i + 1, count);
+            }
+
+            actor_task.abort();
+            listener_task.abort();
+            Ok(())
+        }
+
+        // ==========================================
+        // LOCAL TESTS (WASM-like single-threaded)
+        // ==========================================
+
+        #[tokio::test]
+        async fn test_local_single_commit() -> TestResult {
+            tokio::task::LocalSet::new().run_until(async {
+                let storage = MemoryStorage::new();
+                let (subduction, listener_fut, actor_fut) =
+                    Subduction::<'_, Local, _, ChannelMockConnection, _>::new(
+                        storage,
+                        CountLeadingZeroBytes,
+                        ShardedMap::with_key(0, 0),
+                    );
+
+                let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+                subduction.register(conn).await?;
+
+                let actor_task = tokio::task::spawn_local(actor_fut);
+                let listener_task = tokio::task::spawn_local(listener_fut);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+
+                let sedimentree_id = SedimentreeId::new([42u8; 32]);
+                let (commit, blob) = make_test_commit_with_data(b"test commit");
+
+                handle.inbound_tx.send(Message::LooseCommit {
+                    id: sedimentree_id, commit, blob,
+                }).await?;
+
+                tokio::time::sleep(Duration::from_millis(50)).await;
+
+                let ids = subduction.sedimentree_ids().await;
+                assert!(ids.contains(&sedimentree_id), "[LOCAL] Sedimentree should be visible. Found: {ids:?}");
+                assert_eq!(subduction.get_commits(sedimentree_id).await.map(|c| c.len()), Some(1));
+
+                actor_task.abort();
+                listener_task.abort();
+                Ok::<_, Box<dyn std::error::Error>>(())
+            }).await?;
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_local_multiple_sequential() -> TestResult {
+            tokio::task::LocalSet::new().run_until(async {
+                let storage = MemoryStorage::new();
+                let (subduction, listener_fut, actor_fut) =
+                    Subduction::<'_, Local, _, ChannelMockConnection, _>::new(
+                        storage,
+                        CountLeadingZeroBytes,
+                        ShardedMap::with_key(0, 0),
+                    );
+
+                let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+                subduction.register(conn).await?;
+
+                let actor_task = tokio::task::spawn_local(actor_fut);
+                let listener_task = tokio::task::spawn_local(listener_fut);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+
+                for i in 0..3u8 {
+                    let sedimentree_id = SedimentreeId::new([i; 32]);
+                    let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes());
+
+                    handle.inbound_tx.send(Message::LooseCommit {
+                        id: sedimentree_id, commit, blob,
+                    }).await?;
+
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+
+                    let ids = subduction.sedimentree_ids().await;
+                    assert_eq!(ids.len(), (i + 1) as usize,
+                        "[LOCAL] After commit {i}: expected {} sedimentrees, found {}. ONE BEHIND BUG!",
+                        i + 1, ids.len());
+                    assert!(ids.contains(&sedimentree_id));
+                }
+
+                actor_task.abort();
+                listener_task.abort();
+                Ok::<_, Box<dyn std::error::Error>>(())
+            }).await?;
+            Ok(())
+        }
+
+        #[tokio::test]
+        async fn test_local_same_sedimentree() -> TestResult {
+            tokio::task::LocalSet::new().run_until(async {
+                let storage = MemoryStorage::new();
+                let (subduction, listener_fut, actor_fut) =
+                    Subduction::<'_, Local, _, ChannelMockConnection, _>::new(
+                        storage,
+                        CountLeadingZeroBytes,
+                        ShardedMap::with_key(0, 0),
+                    );
+
+                let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+                subduction.register(conn).await?;
+
+                let actor_task = tokio::task::spawn_local(actor_fut);
+                let listener_task = tokio::task::spawn_local(listener_fut);
+                tokio::time::sleep(Duration::from_millis(10)).await;
+
+                let sedimentree_id = SedimentreeId::new([99u8; 32]);
+
+                for i in 0..3usize {
+                    let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes());
+
+                    handle.inbound_tx.send(Message::LooseCommit {
+                        id: sedimentree_id, commit, blob,
+                    }).await?;
+
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+
+                    let count = subduction.get_commits(sedimentree_id).await.map_or(0, |c| c.len());
+                    assert_eq!(count, i + 1,
+                        "[LOCAL] After commit {i}, expected {} commits but found {}. DELAYED!",
+                        i + 1, count);
+                }
+
+                actor_task.abort();
+                listener_task.abort();
+                Ok::<_, Box<dyn std::error::Error>>(())
+            }).await?;
+            Ok(())
         }
     }
 }

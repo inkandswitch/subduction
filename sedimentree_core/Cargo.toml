@@ -19,7 +19,7 @@ blake3 = { workspace = true }
 futures = { workspace = true }
 futures_kind = { workspace = true }
 futures-util = { workspace = true }
-num = { workspace = true }
+num-bigint = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -27,8 +27,13 @@ tracing = { workspace = true }
 [dev-dependencies]
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
 bolero = { workspace = true, features = ["arbitrary"] }
+criterion = { workspace = true }
 rand = { workspace = true }
 tracing-subscriber = { workspace = true }
+
+[[bench]]
+name = "sedimentree"
+harness = false
 
 [features]
 default = []
@@ -39,7 +44,7 @@ std = [
   "blake3/std",
   "futures/std",
   "futures-util/std",
-  "num/std",
+  "num-bigint/std",
   "serde/std",
   "thiserror/std",
   "tracing/std"

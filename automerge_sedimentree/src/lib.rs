@@ -8,7 +8,8 @@ extern crate std;
 
 extern crate alloc;
 
-use alloc::{collections::BTreeSet, rc::Rc};
+use alloc::rc::Rc;
+use sedimentree_core::collections::Set;
 use core::{cell::RefCell, convert::Infallible};
 
 use automerge::{AutoCommit, Automerge, ChangeHash, ChangeMetadata};
@@ -89,7 +90,7 @@ impl<'a> From<SedimentreeChangeMetadata<'a>> for ChangeMetadata<'a> {
 }
 
 impl Parents for SedimentreeChangeMetadata<'_> {
-    fn parents(&self) -> BTreeSet<Digest> {
+    fn parents(&self) -> Set<Digest> {
         self.0
             .deps
             .iter()

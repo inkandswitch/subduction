@@ -1,7 +1,7 @@
 //! Sedimentree [`Fragment`](sedimentree_core::Fragment).
 
 use alloc::{string::ToString, vec::Vec};
-use sedimentree_core::Fragment;
+use sedimentree_core::fragment::Fragment;
 use subduction_core::subduction::request::FragmentRequested;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -70,6 +70,13 @@ impl WasmFragment {
             .copied()
             .map(Into::into)
             .collect()
+    }
+
+    /// Get the blob metadata of the fragment.
+    #[must_use]
+    #[wasm_bindgen(getter, js_name = blobMeta)]
+    pub fn blob_meta(&self) -> WasmBlobMeta {
+        self.0.summary().blob_meta().into()
     }
 }
 

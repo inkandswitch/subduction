@@ -4,13 +4,17 @@ use alloc::vec::Vec;
 
 use sedimentree_core::{
     blob::{Blob, Digest},
-    Fragment, LooseCommit, SedimentreeId, SedimentreeSummary,
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+    sedimentree::SedimentreeSummary,
 };
 
 use crate::peer::id::PeerId;
 
 /// The API contact messages to be sent over a [`Connection`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Message {
@@ -64,10 +68,36 @@ impl Message {
             | Message::BlobsResponse(_) => None,
         }
     }
+
+    /// Get the variant name of this message for logging purposes.
+    #[must_use]
+    pub const fn variant_name(&self) -> &'static str {
+        match self {
+            Message::LooseCommit { .. } => "LooseCommit",
+            Message::Fragment { .. } => "Fragment",
+            Message::BlobsRequest(_) => "BlobsRequest",
+            Message::BlobsResponse(_) => "BlobsResponse",
+            Message::BatchSyncRequest(_) => "BatchSyncRequest",
+            Message::BatchSyncResponse(_) => "BatchSyncResponse",
+        }
+    }
+
+    /// Get the sedimentree ID associated with this message, if any.
+    #[must_use]
+    pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
+        match self {
+            Message::LooseCommit { id, .. }
+            | Message::Fragment { id, .. }
+            | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
+            | Message::BatchSyncResponse(BatchSyncResponse { id, .. }) => Some(*id),
+            Message::BlobsRequest(_) | Message::BlobsResponse(_) => None,
+        }
+    }
 }
 
 /// A request to sync a sedimentree in batch.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncRequest {
@@ -88,7 +118,8 @@ impl From<BatchSyncRequest> for Message {
 }
 
 /// A response to a [`BatchSyncRequest`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncResponse {

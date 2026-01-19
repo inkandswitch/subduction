@@ -28,7 +28,7 @@ sedimentree_core = { path = "../sedimentree_core", default-features = false, fea
 subduction_core = { path = "../subduction_core", default-features = false, features = ["serde"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true, features = ["time"] }
 tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
 tungstenite = { workspace = true }

@@ -1,11 +1,12 @@
 //! Storage abstraction for `Sedimentree` data.
 
 use alloc::{
-    collections::{BTreeMap, BTreeSet},
     string::String,
     sync::Arc,
     vec::Vec,
 };
+
+use crate::collections::{Map, Set};
 
 use async_lock::Mutex;
 use futures::{
@@ -14,9 +15,12 @@ use futures::{
 };
 use futures_kind::{FutureKind, Local, Sendable};
 
-use crate::{blob::Blob, Digest, SedimentreeId};
-
-use super::{Fragment, LooseCommit};
+use crate::{
+    blob::{Blob, Digest},
+    fragment::Fragment,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+};
 
 /// Abstraction over storage for `Sedimentree` data.
 pub trait Storage<K: FutureKind + ?Sized> {
@@ -38,7 +42,7 @@ pub trait Storage<K: FutureKind + ?Sized> {
     /// Get all sedimentree IDs that have loose commits stored.
     fn load_all_sedimentree_ids(
         &self,
-    ) -> K::Future<'_, Result<BTreeSet<SedimentreeId>, Self::Error>>;
+    ) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
 
     /// Save a loose commit to storage.
     fn save_loose_commit(
@@ -103,10 +107,10 @@ pub enum LoadTreeData {
 /// An in-memory storage backend.
 #[derive(Debug, Clone, Default)]
 pub struct MemoryStorage {
-    ids: Arc<Mutex<BTreeSet<SedimentreeId>>>,
-    fragments: Arc<Mutex<BTreeMap<SedimentreeId, BTreeSet<Fragment>>>>,
-    commits: Arc<Mutex<BTreeMap<SedimentreeId, BTreeSet<LooseCommit>>>>,
-    blobs: Arc<Mutex<BTreeMap<Digest, Blob>>>,
+    ids: Arc<Mutex<Set<SedimentreeId>>>,
+    fragments: Arc<Mutex<Map<SedimentreeId, Set<Fragment>>>>,
+    commits: Arc<Mutex<Map<SedimentreeId, Set<LooseCommit>>>>,
+    blobs: Arc<Mutex<Map<Digest, Blob>>>,
 }
 
 impl MemoryStorage {
@@ -115,10 +119,10 @@ impl MemoryStorage {
     pub fn new() -> Self {
         tracing::debug!("creating new in-memory storage");
         Self {
-            ids: Arc::new(Mutex::new(BTreeSet::new())),
-            fragments: Arc::new(Mutex::new(BTreeMap::new())),
-            commits: Arc::new(Mutex::new(BTreeMap::new())),
-            blobs: Arc::new(Mutex::new(BTreeMap::new())),
+            ids: Arc::new(Mutex::new(Set::new())),
+            fragments: Arc::new(Mutex::new(Map::new())),
+            commits: Arc::new(Mutex::new(Map::new())),
+            blobs: Arc::new(Mutex::new(Map::new())),
         }
     }
 }
@@ -158,7 +162,7 @@ impl Storage<Local> for MemoryStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> LocalBoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         tracing::debug!("[local] MemoryStorage: getting sedimentree_ids");
         async move {
             let ids = self.ids.lock().await.iter().copied().collect();
@@ -360,7 +364,7 @@ impl Storage<Sendable> for MemoryStorage {
 
     fn load_all_sedimentree_ids(
         &self,
-    ) -> BoxFuture<'_, Result<BTreeSet<SedimentreeId>, Self::Error>> {
+    ) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         tracing::debug!("[sendable] MemoryStorage: getting sedimentree_ids");
         async move { Ok(self.ids.lock().await.iter().copied().collect()) }.boxed()
     }

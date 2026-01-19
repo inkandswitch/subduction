@@ -63,7 +63,7 @@ jobs:
       - name: Test on Wasm (Node)
         run: wasm-pack test --node subduction_wasm
 
-      - name: Build WASM packages
+      - name: Build Wasm packages
         run: cd ./subduction_wasm && pnpm build
 
       - name: Test in browsers

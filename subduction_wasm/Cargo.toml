@@ -2,7 +2,6 @@
 name = "subduction_wasm"
 version = "0.1.0"
 description = "Wasm bindings for Sedimentree Sync"
-
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
 readme = "./README.md"
@@ -31,7 +30,7 @@ getrandom = { workspace = true, features = ["wasm_js"] }
 js-sys = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false, features = ["serde"] }
-subduction_core = { path = "../subduction_core", default-features = false, features = ["serde"] }
+subduction_core = { path = "../subduction_core", default-features = false, features = ["getrandom", "serde"] }
 serde = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -45,18 +44,6 @@ default-features = false
 features = [
   "BinaryType",
   "DomException",
-  "DomStringList",
-  "IdbCursorWithValue",
-  "IdbDatabase",
-  "IdbFactory",
-  "IdbIndex",
-  "IdbKeyRange",
-  "IdbObjectStore",
-  "IdbObjectStoreParameters",
-  "IdbOpenDbRequest",
-  "IdbTransaction",
-  "IdbTransactionMode",
-  "IdbVersionChangeEvent",
   "MessageEvent",
   "ServiceWorkerGlobalScope",
   "Url",
@@ -68,8 +55,24 @@ features = [
 wasm-bindgen-test = "0.2"
 
 [features]
-default = ["console_error_panic_hook"]
+default = []
+# Enable for better panic messages in dev builds (adds ~30KB due to std)
 console_error_panic_hook = ["dep:console_error_panic_hook"]
+# IndexedDB storage backend
+idb = [
+  "web-sys/DomStringList",
+  "web-sys/IdbCursorWithValue",
+  "web-sys/IdbDatabase",
+  "web-sys/IdbFactory",
+  "web-sys/IdbIndex",
+  "web-sys/IdbKeyRange",
+  "web-sys/IdbObjectStore",
+  "web-sys/IdbObjectStoreParameters",
+  "web-sys/IdbOpenDbRequest",
+  "web-sys/IdbTransaction",
+  "web-sys/IdbTransactionMode",
+  "web-sys/IdbVersionChangeEvent"
+]
 std = [
   "async-channel/std",
   "async-lock/std",

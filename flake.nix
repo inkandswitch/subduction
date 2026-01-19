@@ -85,10 +85,14 @@
         ];
 
         cargo = "${pkgs.cargo}/bin/cargo";
+        grafana = "${pkgs.grafana}/bin/grafana";
+        grafana-server = "${pkgs.grafana}/bin/grafana-server";
+        grafana-homepath = "${pkgs.grafana}/share/grafana";
         gzip = "${pkgs.gzip}/bin/gzip";
         node = "${pkgs.nodejs_22}/bin/node";
         pnpm = "${pkgs.pnpm}/bin/pnpm";
         playwright = "${pnpm} --dir=./subduction_wasm exec playwright";
+        prometheus = "${pkgs.prometheus}/bin/prometheus";
         wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
         wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
 
@@ -100,6 +104,7 @@
 
           "release:wasm" = cmd "Build all JS-wrapped wasm libraries for release"
             ''
+            set -e
             export INITIAL_DIR="$(pwd)"
             ${cargo} build --release
 
@@ -297,8 +302,56 @@
             "${cargo} doc --open --target=wasm32-unknown-unknown";
         };
 
+        monitoring = {
+          "monitoring:start" = cmd "Start Prometheus and Grafana for metrics" ''
+            set -e
+
+            echo "Starting monitoring stack..."
+            echo "  Prometheus: http://localhost:9092"
+            echo "  Grafana:    http://localhost:3939"
+            echo ""
+
+            # Create temp directories for Grafana
+            mkdir -p /tmp/grafana-data /tmp/grafana-dashboards
+            cp "$WORKSPACE_ROOT/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
+
+            # Start Prometheus in background
+            ${prometheus} \
+              --config.file="$WORKSPACE_ROOT/monitoring/prometheus.yml" \
+              --web.listen-address=":9092" \
+              --storage.tsdb.path="/tmp/prometheus-data" \
+              &
+            PROM_PID=$!
+            echo "Prometheus started (PID: $PROM_PID)"
+
+            # Start Grafana in background
+            ${grafana-server} \
+              --homepath="${grafana-homepath}" \
+              --config="$WORKSPACE_ROOT/monitoring/grafana/grafana.ini" \
+              cfg:paths.data=/tmp/grafana-data \
+              cfg:paths.provisioning="$WORKSPACE_ROOT/monitoring/grafana/provisioning" \
+              &
+            GRAF_PID=$!
+            echo "Grafana started (PID: $GRAF_PID)"
+
+            echo ""
+            echo "Monitoring stack running. Press Ctrl+C to stop."
+
+            cleanup() {
+              echo ""
+              echo "Stopping monitoring stack..."
+              kill $PROM_PID 2>/dev/null || true
+              kill $GRAF_PID 2>/dev/null || true
+              echo "Done."
+            }
+            trap cleanup EXIT INT TERM
+
+            wait
+          '';
+        };
+
         command_menu = command-utils.commands.${system}
-          (release // build // bench // lint // watch // test // docs);
+          (release // build // bench // lint // watch // test // docs // monitoring);
 
       in rec {
         packages = {
@@ -359,14 +412,16 @@
               command_menu
               rust-toolchain
 
-              pkgs.http-server
               pkgs.binaryen
               pkgs.chromedriver
+              pkgs.grafana
+              pkgs.http-server
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
               pkgs.nodejs_22
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
+              pkgs.prometheus
               pkgs.rust-analyzer
               pkgs.tokio-console
               pkgs.typescript

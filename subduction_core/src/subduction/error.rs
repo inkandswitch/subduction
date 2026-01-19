@@ -99,7 +99,6 @@ pub enum RegistrationError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::format;
 
     mod registration_error {
         use super::*;
@@ -117,6 +116,8 @@ mod tests {
 
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
+        use alloc::format;
+
         use super::*;
 
         #[test]

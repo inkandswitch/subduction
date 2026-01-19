@@ -1,5 +1,7 @@
 //! Binary objects.
 
+use core::cmp::min;
+
 use alloc::{format, str::FromStr, vec::Vec};
 
 use crate::hex::decode_hex;
@@ -7,10 +9,70 @@ use crate::hex::decode_hex;
 /// A binary object.
 ///
 /// Just a wrapper around a `Vec<u8>`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Blob(Vec<u8>);
+
+impl core::fmt::Debug for Blob {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let preview_byte_count = {
+            const MAX_PREVIEW_BYTES: usize = 32;
+            min(MAX_PREVIEW_BYTES, self.0.len())
+        };
+
+        write!(f, "Blob({} bytes, ", self.0.len())?;
+
+        if self.0.len() <= preview_byte_count {
+            for byte in &self.0 {
+                write!(f, "{byte:02x}")?;
+            }
+        } else {
+            #[allow(clippy::expect_used)]
+            let preview_bytes = self
+                .0
+                .get(..preview_byte_count)
+                .expect("sliced out of bounds");
+
+            for byte in preview_bytes {
+                write!(f, "{byte:02x}")?;
+            }
+
+            write!(f, "...")?;
+        }
+
+        write!(f, " ({} bytes total)", self.0.len())?;
+        Ok(())
+    }
+}
+
+impl core::fmt::Display for Blob {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let preview_byte_count = {
+            const MAX_PREVIEW_BYTES: usize = 32;
+            min(MAX_PREVIEW_BYTES, self.0.len())
+        };
+
+        if self.0.len() <= preview_byte_count {
+            for byte in &self.0 {
+                write!(f, "{byte:02x}")?;
+            }
+        } else {
+            #[allow(clippy::expect_used)]
+            let preview_bytes = self
+                .0
+                .get(..preview_byte_count)
+                .expect("sliced out of bounds");
+
+            for byte in preview_bytes {
+                write!(f, "{byte:02x}")?;
+            }
+
+            write!(f, "..({} bytes total)", self.0.len())?;
+        }
+        Ok(())
+    }
+}
 
 impl Blob {
     /// Create a new blob from the given contents.

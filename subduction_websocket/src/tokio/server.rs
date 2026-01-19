@@ -9,10 +9,13 @@ use alloc::{string::ToString, sync::Arc};
 use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
 use core::{net::SocketAddr, time::Duration};
 use futures_kind::Sendable;
-use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric, storage::Storage};
+use sedimentree_core::{
+    commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId,
+    sedimentree::Sedimentree, storage::Storage,
+};
 use subduction_core::{
-    connection::id::ConnectionId, peer::id::PeerId, subduction::error::RegistrationError,
-    Subduction,
+    connection::id::ConnectionId, peer::id::PeerId, sharded_map::ShardedMap,
+    subduction::error::RegistrationError, Subduction,
 };
 use tokio::{
     net::{TcpListener, TcpStream},
@@ -152,7 +155,9 @@ where
         storage: S,
         depth_metric: M,
     ) -> Result<Self, tungstenite::Error> {
-        let (subduction, listener_fut, actor_fut) = Subduction::new(storage, depth_metric);
+        let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
+        let (subduction, listener_fut, actor_fut) =
+            Subduction::new(storage, depth_metric, sedimentrees);
 
         let server = Self::new(
             address,

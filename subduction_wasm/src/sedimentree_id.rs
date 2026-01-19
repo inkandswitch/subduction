@@ -4,7 +4,7 @@ use alloc::{
     string::{String, ToString},
     vec::Vec,
 };
-use sedimentree_core::SedimentreeId;
+use sedimentree_core::id::SedimentreeId;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
@@ -34,6 +34,13 @@ impl WasmSedimentreeId {
     #[wasm_bindgen(js_name = toString)]
     pub fn js_to_string(&self) -> String {
         self.0.to_string()
+    }
+
+    /// Returns the raw bytes of this ID.
+    #[must_use]
+    #[wasm_bindgen(js_name = toBytes)]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.as_bytes().to_vec()
     }
 }
 
