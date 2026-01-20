@@ -50,6 +50,43 @@ Sedimentree uses a depth-based partitioning scheme where fragments are organized
 
 ## Quick Start
 
+### Using Nix ❄️ 
+
+If you use Nix, the Subduction server is wrapped in a flake:
+
+```bash
+# Run the server directly
+nix run github:inkandswitch/subduction -- server --socket 0.0.0.0:8080
+
+# Run the ephemeral relay
+nix run github:inkandswitch/subduction -- relay --socket 0.0.0.0:8081
+
+# Install to your profile
+nix profile install github:inkandswitch/subduction
+```
+
+The flake also provides NixOS and Home Manager modules for running Subduction as a system service:
+
+```nix
+{
+  inputs.subduction.url = "github:inkandswitch/subduction";
+
+  outputs = { nixpkgs, subduction, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [
+        subduction.nixosModules.default
+        {
+          services.subduction.server.enable = true;
+          services.subduction.relay.enable = true;
+        }
+      ];
+    };
+  };
+}
+```
+
+See the [CLI README] for full configuration options including Home Manager and reverse proxy setup.
+
 ### Prerequisites
 
 - Rust 1.90 or later
@@ -165,12 +202,13 @@ The project uses several testing strategies:
 
 <!-- Internal Links -->
 
+[CLI README]: ./subduction_cli/README.md#running-as-a-system-service
 [Sedimentree]: ./sedimentree_core
 
 <!-- External Links -->
 
 [Automerge]: https://automerge.org/
-[bolero]: https://github.com/camshaft/bolero
+[`bolero`]: https://github.com/camshaft/bolero
 [CRDTs]: https://crdt.tech/
 [Ink & Switch]: https://www.inkandswitch.com/
 [sedimentree-design]: https://github.com/inkandswitch/keyhive/blob/main/design/sedimentree.md

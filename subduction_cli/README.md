@@ -12,17 +12,45 @@ The Subduction CLI provides multiple server modes:
 
 ## Installation
 
-### Using Nix (Recommended)
+### Using Nix
 
 ```bash
-# Run directly from the repository
-nix run .#subduction_cli -- --help
+# Run directly without installing
+nix run github:inkandswitch/subduction -- --help
 
-# Start Subduction server
-nix run .#subduction_cli -- server --socket 0.0.0.0:8080
+# Install to your profile
+nix profile install github:inkandswitch/subduction
 
-# Start ephemeral relay server
-nix run .#subduction_cli -- ephemeral-relay --socket 0.0.0.0:8081
+# Then run
+subduction_cli server --socket 0.0.0.0:8080
+```
+
+#### Adding to a Flake
+
+```nix
+{
+  inputs.subduction.url = "github:inkandswitch/subduction";
+
+  outputs = { nixpkgs, subduction, ... }: {
+    # NixOS
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      modules = [{
+        environment.systemPackages = [
+          subduction.packages.x86_64-linux.default
+        ];
+      }];
+    };
+
+    # Home Manager
+    homeConfigurations.myuser = home-manager.lib.homeManagerConfiguration {
+      modules = [{
+        home.packages = [
+          subduction.packages.x86_64-linux.default
+        ];
+      }];
+    };
+  };
+}
 ```
 
 ### Using Cargo
@@ -221,4 +249,136 @@ nix run .#subduction_cli -- relay --socket 0.0.0.0:9000
 # Ephemeral relay with 5 MB message size limit
 nix run .#subduction_cli -- relay --max-message-size 5242880
 ```
+
+## Running as a System Service
+
+The flake provides NixOS and Home Manager modules for running Subduction as a managed service.
+
+### NixOS (systemd)
+
+```nix
+{
+  inputs.subduction.url = "github:inkandswitch/subduction";
+
+  outputs = { nixpkgs, subduction, ... }: {
+    nixosConfigurations.myhost = nixpkgs.lib.nixosSystem {
+      system = "x86_64-linux";
+      modules = [
+        subduction.nixosModules.default
+        {
+          services.subduction = {
+            # Document sync server
+            server = {
+              enable = true;
+              socket = "0.0.0.0:8080";
+              dataDir = "/var/lib/subduction";
+              metricsPort = 9090;
+              enableMetrics = true;
+              timeout = 5;
+              # peerId = "...";  # optional: 64 hex chars
+            };
+
+            # Ephemeral message relay
+            relay = {
+              enable = true;
+              socket = "0.0.0.0:8081";
+              maxMessageSize = 1048576;  # 1 MB
+            };
+
+            # Shared settings
+            user = "subduction";
+            group = "subduction";
+            openFirewall = true;  # opens server + relay ports
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+This creates two systemd services:
+- `subduction.service` - Document sync server
+- `subduction-relay.service` - Ephemeral message relay
+
+Manage with:
+```bash
+systemctl status subduction
+systemctl status subduction-relay
+journalctl -u subduction -f
+```
+
+### Home Manager (user service)
+
+Works on both Linux (systemd user service) and macOS (launchd agent):
+
+```nix
+{
+  inputs.subduction.url = "github:inkandswitch/subduction";
+
+  outputs = { home-manager, subduction, ... }: {
+    homeConfigurations.myuser = home-manager.lib.homeManagerConfiguration {
+      modules = [
+        subduction.homeManagerModules.default
+        {
+          services.subduction = {
+            server = {
+              enable = true;
+              socket = "127.0.0.1:8080";
+              # dataDir defaults to ~/.local/share/subduction
+            };
+
+            relay = {
+              enable = true;
+              socket = "127.0.0.1:8081";
+            };
+          };
+        }
+      ];
+    };
+  };
+}
+```
+
+On Linux, manage with:
+```bash
+systemctl --user status subduction
+systemctl --user status subduction-relay
+```
+
+On macOS, manage with:
+```bash
+launchctl list | grep subduction
+tail -f ~/.cache/subduction/server.log
+```
+
+### Behind a Reverse Proxy (Caddy)
+
+When running behind Caddy or another reverse proxy, bind to localhost:
+
+```nix
+services.subduction = {
+  server = {
+    enable = true;
+    socket = "127.0.0.1:8080";
+  };
+  relay = {
+    enable = true;
+    socket = "127.0.0.1:8081";
+  };
+  openFirewall = false;  # Caddy handles external access
+};
+
+services.caddy = {
+  enable = true;
+  virtualHosts."sync.example.com".extraConfig = ''
+    reverse_proxy localhost:8080
+  '';
+  virtualHosts."relay.example.com".extraConfig = ''
+    reverse_proxy localhost:8081
+  '';
+};
+```
+
+Caddy automatically handles WebSocket upgrades and TLS certificates.
 
