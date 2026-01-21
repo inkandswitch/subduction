@@ -53,6 +53,7 @@ fn sanitize_for_log(s: &str, max_len: usize) -> String {
         .collect()
 }
 
+// FIXME
 /// Peer identifier (newtype for type safety)
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 struct PeerId(String);

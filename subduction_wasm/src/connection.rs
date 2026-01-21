@@ -22,7 +22,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::peer_id::WasmPeerId;
+use crate::{peer_id::WasmPeerId, sedimentree_id::WasmSedimentreeId};
 
 pub use message::{JsMessage, WasmMessage};
 pub use nonce::{WasmNonce, WasmNonceError};
@@ -247,6 +247,19 @@ impl From<WasmRequestId> for RequestId {
 #[derive(Debug, Clone)]
 pub struct WasmBatchSyncRequest(BatchSyncRequest);
 
+#[wasm_bindgen(js_class = BatchSyncRequest)]
+impl WasmBatchSyncRequest {
+    /// The sedimentree ID this request corresponds to.
+    pub fn id(&self) -> WasmSedimentreeId {
+        self.0.id.into()
+    }
+
+    /// The request ID for this request.
+    pub fn request_id(&self) -> WasmRequestId {
+        self.0.req_id.into()
+    }
+}
+
 impl From<BatchSyncRequest> for WasmBatchSyncRequest {
     fn from(req: BatchSyncRequest) -> Self {
         Self(req)
@@ -263,6 +276,19 @@ impl From<WasmBatchSyncRequest> for BatchSyncRequest {
 #[derive(Debug, Clone)]
 #[wasm_bindgen(js_name = BatchSyncResponse)]
 pub struct WasmBatchSyncResponse(BatchSyncResponse);
+
+#[wasm_bindgen(js_class = BatchSyncResponse)]
+impl WasmBatchSyncResponse {
+    /// The sedimentree ID this response corresponds to.
+    pub fn id(&self) -> WasmSedimentreeId {
+        self.0.id.into()
+    }
+
+    /// The request ID this response corresponds to.
+    pub fn request_id(&self) -> WasmRequestId {
+        self.0.req_id.into()
+    }
+}
 
 #[wasm_refgen(js_ref = JsBatchSyncResponse)]
 #[wasm_bindgen(js_class = BatchSyncResponse)]

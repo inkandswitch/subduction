@@ -20,6 +20,7 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
 ciborium = { workspace = true }
+ciborium-io = { workspace = true }
 build_info = { path = "../build_info" }
 console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
@@ -76,6 +77,7 @@ idb = [
 std = [
   "async-channel/std",
   "async-lock/std",
+  "ciborium-io/std",
   "futures/std",
   "futures-util/std",
   "js-sys/std",

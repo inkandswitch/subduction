@@ -1,6 +1,6 @@
 //! Type safe Peer ID.
 
-use alloc::string::ToString;
+use alloc::{string::ToString, vec::Vec};
 use subduction_core::peer::id::PeerId;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -22,6 +22,18 @@ impl WasmPeerId {
     pub fn new(bytes: &[u8]) -> Result<Self, WasmInvalidPeerId> {
         let arr: [u8; 32] = bytes.try_into().map_err(|_| WasmInvalidPeerId)?;
         Ok(Self(PeerId::new(arr)))
+    }
+
+    /// Returns the byte representation of the `PeerId`.
+    #[wasm_bindgen(js_name = toBytes)]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.as_bytes().to_vec()
+    }
+
+    /// Returns the string representation of the `PeerId`.
+    #[wasm_bindgen(js_name = toString)]
+    pub fn to_hex_string(&self) -> String {
+        self.0.to_string()
     }
 }
 

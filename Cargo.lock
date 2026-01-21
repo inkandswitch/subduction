@@ -2507,6 +2507,7 @@ dependencies = [
  "base58",
  "build_info",
  "ciborium",
+ "ciborium-io",
  "console_error_panic_hook",
  "from_js_ref",
  "futures 0.3.31",

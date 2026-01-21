@@ -1,9 +1,13 @@
 //! Wasm wrapper for [`Message`].
 
-use alloc::{string::String, vec::Vec};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use js_sys::Uint8Array;
 use sedimentree_core::blob::Blob;
 use subduction_core::connection::message::Message;
+use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
@@ -22,10 +26,31 @@ pub struct WasmMessage(pub(crate) Message);
 #[wasm_refgen(js_ref = JsMessage)]
 #[wasm_bindgen(js_class = Message)]
 impl WasmMessage {
+    /// Serialize the message to CBOR bytes.
+    #[wasm_bindgen(js_name = toCborBytes)]
+    pub fn to_cbor_bytes(&self) -> Vec<u8> {
+        let mut msg = Vec::new();
+        ciborium::into_writer(&self.0, &mut msg).expect("serialization cannot fail");
+        msg
+    }
+
+    /// Deserialize a message from CBOR bytes.
+    #[wasm_bindgen(js_name = fromCborBytes)]
+    pub fn from_cbor_bytes(bytes: Vec<u8>) -> Result<Self, JsMessageDeserializationError> {
+        let mut scratch = [0u8; 256];
+        let msg: Message = ciborium::de::from_reader_with_buffer(bytes.as_slice(), &mut scratch)
+            .map_err(JsMessageDeserializationError)?;
+        Ok(msg.into())
+    }
+
     /// Create a [`Message::LooseCommit`] message.
     #[wasm_bindgen(js_name = looseCommit)]
     #[must_use]
-    pub fn loose_commit(id: &WasmSedimentreeId, commit: &WasmLooseCommit, blob: &Uint8Array) -> Self {
+    pub fn loose_commit(
+        id: &WasmSedimentreeId,
+        commit: &WasmLooseCommit,
+        blob: &Uint8Array,
+    ) -> Self {
         Message::LooseCommit {
             id: id.clone().into(),
             commit: commit.clone().into(),
@@ -37,7 +62,11 @@ impl WasmMessage {
     /// Create a [`Message::Fragment`] message.
     #[wasm_bindgen(js_name = newFragment)]
     #[must_use]
-    pub fn new_fragment(id: &WasmSedimentreeId, fragment: &WasmFragment, blob: &Uint8Array) -> Self {
+    pub fn new_fragment(
+        id: &WasmSedimentreeId,
+        fragment: &WasmFragment,
+        blob: &Uint8Array,
+    ) -> Self {
         Message::Fragment {
             id: id.clone().into(),
             fragment: fragment.clone().into(),
@@ -154,9 +183,12 @@ impl WasmMessage {
     #[must_use]
     pub fn blobs(&self) -> Option<Vec<Uint8Array>> {
         match &self.0 {
-            Message::BlobsResponse(blobs) => {
-                Some(blobs.iter().map(|b| Uint8Array::from(b.as_slice())).collect())
-            }
+            Message::BlobsResponse(blobs) => Some(
+                blobs
+                    .iter()
+                    .map(|b| Uint8Array::from(b.as_slice()))
+                    .collect(),
+            ),
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
@@ -203,5 +235,25 @@ impl From<Message> for WasmMessage {
 impl From<WasmMessage> for Message {
     fn from(msg: WasmMessage) -> Self {
         msg.0
+    }
+}
+
+/// An error indicating a failure to deserialize a [`Message`] from CBOR.
+#[derive(Debug, Error)]
+#[error("failed to deserialize Message: {0:?}")]
+#[cfg(not(feature = "std"))]
+pub struct JsMessageDeserializationError(ciborium::de::Error<ciborium_io::EndOfFile>);
+
+/// An error indicating a failure to deserialize a [`Message`] from CBOR.
+#[derive(Debug, Error)]
+#[error("failed to deserialize Message: {0:?}")]
+#[cfg(feature = "std")]
+pub struct JsMessageDeserializationError(ciborium::de::Error<std::io::Error>);
+
+impl From<JsMessageDeserializationError> for JsValue {
+    fn from(err: JsMessageDeserializationError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("MessageDeserializationError");
+        js_err.into()
     }
 }
