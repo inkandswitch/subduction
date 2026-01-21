@@ -28,12 +28,14 @@ impl WasmPeerId {
     }
 
     /// Returns the byte representation of the `PeerId`.
+    #[must_use]
     #[wasm_bindgen(js_name = toBytes)]
     pub fn to_bytes(&self) -> Vec<u8> {
         self.0.as_bytes().to_vec()
     }
 
     /// Returns the string representation of the `PeerId`.
+    #[must_use]
     #[wasm_bindgen(js_name = toString)]
     pub fn to_hex_string(&self) -> String {
         self.0.to_string()

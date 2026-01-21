@@ -250,11 +250,13 @@ pub struct WasmBatchSyncRequest(BatchSyncRequest);
 #[wasm_bindgen(js_class = BatchSyncRequest)]
 impl WasmBatchSyncRequest {
     /// The sedimentree ID this request corresponds to.
+    #[must_use]
     pub fn id(&self) -> WasmSedimentreeId {
         self.0.id.into()
     }
 
     /// The request ID for this request.
+    #[must_use]
     pub fn request_id(&self) -> WasmRequestId {
         self.0.req_id.into()
     }
@@ -280,11 +282,13 @@ pub struct WasmBatchSyncResponse(BatchSyncResponse);
 #[wasm_bindgen(js_class = BatchSyncResponse)]
 impl WasmBatchSyncResponse {
     /// The sedimentree ID this response corresponds to.
+    #[must_use]
     pub fn id(&self) -> WasmSedimentreeId {
         self.0.id.into()
     }
 
     /// The request ID this response corresponds to.
+    #[must_use]
     pub fn request_id(&self) -> WasmRequestId {
         self.0.req_id.into()
     }
