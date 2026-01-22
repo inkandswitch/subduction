@@ -178,6 +178,16 @@ impl MessageDeduplicator {
     }
 }
 
+/// Compute shard index from message key.
+///
+/// Uses [Lemire's "fast range" method][post] to map hash to [0, N) without modulo bias.
+///
+/// [post]: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction
+fn get_shard_index<const N: usize>(message_key: MessageKey) -> usize {
+    #[allow(clippy::expect_used)]
+    usize::try_from((u128::from(message_key.0) * (N as u128)) >> 64).expect("N fits in usize")
+}
+
 /// Sharded deduplicator using keyed hashing to distribute load across shards.
 struct ShardedDeduplicator<const N: usize> {
     shards: [Mutex<MessageDeduplicator>; N],
@@ -219,19 +229,9 @@ impl<const N: usize> ShardedDeduplicator<N> {
         MessageKey(hasher.finish())
     }
 
-    /// Compute shard index from message key.
-    ///
-    /// Uses [Lemire's "fast range" method][post] to map hash to [0, N) without modulo bias.
-    ///
-    /// [post]: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction
-    fn get_shard_index(&self, message_key: MessageKey) -> usize {
-        #[allow(clippy::expect_used)]
-        usize::try_from((u128::from(message_key.0) * (N as u128)) >> 64).expect("N fits in usize")
-    }
-
     /// Returns true if this is a new message (not seen before)
     async fn add(&self, message_key: MessageKey) -> bool {
-        let shard_index = self.get_shard_index(message_key);
+        let shard_index = get_shard_index::<N>(message_key);
         #[allow(clippy::indexing_slicing)] // shard_index is always < N
         let mut shard = self.shards[shard_index].lock().await;
         shard.add(message_key)
@@ -349,16 +349,13 @@ async fn handle_connection(
         // Try to parse as a join message
         match ciborium::from_reader::<JoinMessage, _>(data.as_ref()) {
             Ok(join_msg) if join_msg.msg_type == "join" => {
-                let peer_id = match AutomergePeerId::new(join_msg.sender_id.clone()) {
-                    Ok(id) => id,
-                    Err(AutomergePeerIdTooLong) => {
-                        tracing::warn!(
-                            "Peer ID from {} exceeds max length ({} bytes)",
-                            addr,
-                            MAX_PEER_ID_LEN
-                        );
-                        return Ok(());
-                    }
+                let Ok(peer_id) = AutomergePeerId::new(join_msg.sender_id.clone()) else {
+                    tracing::warn!(
+                        "Peer ID from {} exceeds max length ({} bytes)",
+                        addr,
+                        MAX_PEER_ID_LEN
+                    );
+                    return Ok(());
                 };
                 tracing::info!("Peer {} joined from {}", peer_id.0, addr);
 
