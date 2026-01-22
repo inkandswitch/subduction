@@ -14,7 +14,7 @@ pub mod client;
 pub mod server;
 
 #[cfg(feature = "tokio_server_any")]
-pub mod stream;
+pub mod unified;
 
 /// Tokio-backed timeout wrapper.
 #[derive(Debug, Clone, Copy, Default)]

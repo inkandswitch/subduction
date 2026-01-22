@@ -2,7 +2,7 @@
 
 use crate::{
     timeout::{FuturesTimerTimeout, Timeout},
-    tokio::stream::AnyWebSocket,
+    tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
 };
 
@@ -108,7 +108,7 @@ where
                                     async move {
                                         match accept_hdr_async(tcp, NoCallback).await {
                                             Ok(hs) => {
-                                                let ws_conn = AnyWebSocket::Incoming(WebSocket::new(
+                                                let ws_conn = UnifiedWebSocket::Incoming(WebSocket::new(
                                                     hs,
                                                     tout,
                                                     default_time_limit,
@@ -219,7 +219,7 @@ where
     /// Returns an error if the registration message send fails over the internal channel.
     pub async fn register(
         &self,
-        ws: AnyWebSocket<O>,
+        ws: UnifiedWebSocket<O>,
     ) -> Result<(bool, ConnectionId), RegistrationError> {
         self.subduction.register(ws).await
     }
@@ -242,7 +242,7 @@ where
             .await
             .map_err(ConnectToPeerError::WebSocket)?;
 
-        let ws_conn = AnyWebSocket::Outgoing(WebSocket::new(
+        let ws_conn = UnifiedWebSocket::Outgoing(WebSocket::new(
             ws_stream,
             timeout,
             default_time_limit,
@@ -276,4 +276,4 @@ where
     }
 }
 
-type TokioWebSocketSubduction<S, O, M> = Arc<Subduction<'static, Sendable, S, AnyWebSocket<O>, M>>;
+type TokioWebSocketSubduction<S, O, M> = Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, M>>;
