@@ -305,24 +305,18 @@ impl Connection<Local> for WasmWebSocket {
     }
 
     fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
-        tracing::debug!("sending outbound message id {:?}", message.request_id());
+        let request_id = message.request_id();
 
         let mut msg_bytes = Vec::new();
         #[allow(clippy::expect_used)]
         ciborium::ser::into_writer(message, &mut msg_bytes).expect("should be Infallible");
-
-        tracing::debug!(
-            "sending outbound message id {:?} that's {} bytes long",
-            message.request_id(),
-            msg_bytes.len()
-        );
 
         async move {
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
                 .map_err(SendError::SocketSend)?;
 
-            tracing::debug!("sent outbound message");
+            tracing::debug!("sent outbound message id {:?}", request_id);
 
             Ok(())
         }
