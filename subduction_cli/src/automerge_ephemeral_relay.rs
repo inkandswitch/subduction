@@ -21,19 +21,23 @@ use ciborium::value::Value as CborValue;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
+    collections::{HashSet, VecDeque},
     hash::{BuildHasher, Hash, Hasher},
     net::SocketAddr,
     sync::Arc,
 };
+use subduction_core::sharded_map::ShardedMap;
 use tokio::{
     net::{TcpListener, TcpStream},
-    sync::{Mutex, RwLock},
+    sync::Mutex,
 };
 use tokio_util::sync::CancellationToken;
 
 /// Default maximum size for ephemeral messages (1 MB)
 const DEFAULT_MAX_MESSAGE_SIZE: usize = 1024 * 1024;
+
+/// Maximum length for an automerge peer ID string (256 bytes)
+const MAX_PEER_ID_LEN: usize = 256;
 
 /// Sanitize a string for logging by truncating and removing control characters
 fn sanitize_for_log(s: &str, max_len: usize) -> String {
@@ -53,21 +57,33 @@ fn sanitize_for_log(s: &str, max_len: usize) -> String {
         .collect()
 }
 
-// FIXME
-/// Peer identifier (newtype for type safety)
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-struct PeerId(String);
+/// Automerge-repo peer identifier (newtype for type safety).
+///
+/// This is a string-based peer ID as used by the automerge-repo protocol,
+/// distinct from the cryptographic [`subduction_core::peer::id::PeerId`].
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct AutomergePeerId(String);
 
-impl std::ops::Deref for PeerId {
-    type Target = str;
-    fn deref(&self) -> &Self::Target {
-        &self.0
+/// Error returned when an automerge peer ID exceeds the maximum length.
+#[derive(Debug, Clone, Copy)]
+struct AutomergePeerIdTooLong;
+
+impl AutomergePeerId {
+    /// Create a new `AutomergePeerId` from a string.
+    ///
+    /// Returns an error if the string exceeds [`MAX_PEER_ID_LEN`] bytes.
+    fn new(s: String) -> Result<Self, AutomergePeerIdTooLong> {
+        if s.len() > MAX_PEER_ID_LEN {
+            return Err(AutomergePeerIdTooLong);
+        }
+        Ok(Self(s))
     }
 }
 
-impl From<String> for PeerId {
-    fn from(s: String) -> Self {
-        PeerId(s)
+impl std::ops::Deref for AutomergePeerId {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -82,20 +98,39 @@ impl std::ops::Deref for PeerSender {
     }
 }
 
-/// Thread-safe peer connection map
-#[derive(Debug, Clone)]
-struct PeerConnections(Arc<RwLock<HashMap<PeerId, PeerSender>>>);
+/// Sharded peer connection map to reduce lock contention.
+///
+/// Wraps [`ShardedMap`] with peer-specific convenience methods.
+#[derive(Clone)]
+struct PeerConnections(Arc<ShardedMap<AutomergePeerId, PeerSender, 16>>);
 
 impl PeerConnections {
     fn new() -> Self {
-        Self(Arc::new(RwLock::new(HashMap::new())))
+        Self(Arc::new(ShardedMap::new()))
     }
-}
 
-impl std::ops::Deref for PeerConnections {
-    type Target = Arc<RwLock<HashMap<PeerId, PeerSender>>>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
+    async fn insert(&self, peer_id: AutomergePeerId, sender: PeerSender) {
+        self.0.insert(peer_id, sender).await;
+    }
+
+    async fn remove(&self, peer_id: &AutomergePeerId) {
+        self.0.remove(peer_id).await;
+    }
+
+    /// Collect all senders except the given peer, releasing locks quickly.
+    async fn collect_other_senders(&self, exclude: &AutomergePeerId) -> Vec<PeerSender> {
+        let mut senders = Vec::new();
+        for idx in self.0.shard_indices() {
+            #[allow(clippy::expect_used)]
+            let shard = self.0.shard_at(idx).expect("shard index valid");
+            let guard = shard.lock().await;
+            for (id, sender) in guard.iter() {
+                if id != exclude {
+                    senders.push(sender.clone());
+                }
+            }
+        }
+        senders
     }
 }
 
@@ -131,11 +166,9 @@ impl MessageDeduplicator {
             return false;
         }
 
-        // Add to seen set and order queue
         self.seen.insert(message_key);
         self.order.push_back(message_key);
 
-        // Evict oldest if over capacity
         if self.order.len() > self.capacity
             && let Some(old_key) = self.order.pop_front() {
                 self.seen.remove(&old_key);
@@ -145,19 +178,15 @@ impl MessageDeduplicator {
     }
 }
 
-/// Sharded deduplicator using keyed hashing to distribute load across shards
-struct ShardedDeduplicator {
-    shards: Vec<Mutex<MessageDeduplicator>>,
+/// Sharded deduplicator using keyed hashing to distribute load across shards.
+struct ShardedDeduplicator<const N: usize> {
+    shards: [Mutex<MessageDeduplicator>; N],
     hasher_state: RandomState, // Keyed hasher state for AHash
-    shard_mask: usize,         // S - 1 where S is power of 2
 }
 
-impl ShardedDeduplicator {
-    fn new(num_shards: usize, capacity_per_shard: usize) -> Self {
-        assert!(
-            num_shards.is_power_of_two(),
-            "num_shards must be power of 2"
-        );
+impl<const N: usize> ShardedDeduplicator<N> {
+    fn new(capacity_per_shard: usize) -> Self {
+        const { assert!(N > 0, "N must be greater than 0") };
 
         // Generate random 128-bit secret key (as 4 x u64 for ahash RandomState)
         let hasher_state = RandomState::with_seeds(
@@ -167,14 +196,11 @@ impl ShardedDeduplicator {
             rand::random::<u64>(),
         );
 
-        let shards = (0..num_shards)
-            .map(|_| Mutex::new(MessageDeduplicator::new(capacity_per_shard)))
-            .collect();
+        let shards = core::array::from_fn(|_| Mutex::new(MessageDeduplicator::new(capacity_per_shard)));
 
         Self {
             shards,
             hasher_state,
-            shard_mask: num_shards - 1,
         }
     }
 
@@ -193,24 +219,25 @@ impl ShardedDeduplicator {
         MessageKey(hasher.finish())
     }
 
-    /// Compute shard index from message key
-    const fn get_shard_index(&self, message_key: MessageKey) -> usize {
-        #[allow(clippy::cast_possible_truncation)]
-        {
-            (message_key.0 as usize) & self.shard_mask
-        }
+    /// Compute shard index from message key.
+    ///
+    /// Uses [Lemire's "fast range" method][post] to map hash to [0, N) without modulo bias.
+    ///
+    /// [post]: https://lemire.me/blog/2016/06/27/a-fast-alternative-to-the-modulo-reduction
+    fn get_shard_index(&self, message_key: MessageKey) -> usize {
+        #[allow(clippy::expect_used)]
+        usize::try_from((u128::from(message_key.0) * (N as u128)) >> 64).expect("N fits in usize")
     }
 
     /// Returns true if this is a new message (not seen before)
     async fn add(&self, message_key: MessageKey) -> bool {
         let shard_index = self.get_shard_index(message_key);
-        #[allow(clippy::expect_used)]
-        let mut shard = self.shards.get(shard_index).expect("shard index should exist").lock().await;
+        #[allow(clippy::indexing_slicing)] // shard_index is always < N
+        let mut shard = self.shards[shard_index].lock().await;
         shard.add(message_key)
     }
 }
 
-type Deduplicator = Arc<ShardedDeduplicator>;
 
 /// Join message from client (automerge-repo protocol)
 #[derive(Debug, Deserialize)]
@@ -275,8 +302,8 @@ pub(crate) async fn run(args: EphemeralRelayArgs, token: CancellationToken) -> R
     let peers = PeerConnections::new();
 
     // 16 shards, 256 messages per shard = 4096 total message history
-    // 16 is a good balance for typical 4-16 core systems
-    let deduplicator: Deduplicator = Arc::new(ShardedDeduplicator::new(16, 256));
+    // 16 shards, 256 messages per shard = 4096 total message history
+    let deduplicator: Arc<ShardedDeduplicator<16>> = Arc::new(ShardedDeduplicator::new(256));
 
     loop {
         tokio::select! {
@@ -308,7 +335,7 @@ async fn handle_connection(
     stream: TcpStream,
     addr: SocketAddr,
     peers: PeerConnections,
-    deduplicator: Deduplicator,
+    deduplicator: Arc<ShardedDeduplicator<16>>,
     max_message_size: usize,
 ) -> Result<()> {
     let ws_stream = accept_async(stream).await?;
@@ -322,7 +349,17 @@ async fn handle_connection(
         // Try to parse as a join message
         match ciborium::from_reader::<JoinMessage, _>(data.as_ref()) {
             Ok(join_msg) if join_msg.msg_type == "join" => {
-                let peer_id = PeerId::from(join_msg.sender_id.clone());
+                let peer_id = match AutomergePeerId::new(join_msg.sender_id.clone()) {
+                    Ok(id) => id,
+                    Err(AutomergePeerIdTooLong) => {
+                        tracing::warn!(
+                            "Peer ID from {} exceeds max length ({} bytes)",
+                            addr,
+                            MAX_PEER_ID_LEN
+                        );
+                        return Ok(());
+                    }
+                };
                 tracing::info!("Peer {} joined from {}", peer_id.0, addr);
 
                 // Send peer message back
@@ -349,7 +386,7 @@ async fn handle_connection(
     };
 
     // Register this peer
-    peers.write().await.insert(peer_id.clone(), PeerSender(tx));
+    peers.insert(peer_id.clone(), PeerSender(tx)).await;
     tracing::info!("Registered ephemeral peer: {}", peer_id.0);
 
     // Spawn sender task to forward messages to this peer
@@ -417,15 +454,8 @@ async fn handle_connection(
                     // Convert to Arc for zero-copy broadcast
                     let payload: Arc<[u8]> = data.to_vec().into();
 
-                    // Clone senders first, drop lock, then broadcast
-                    let targets: Vec<PeerSender> = {
-                        let peer_map = peers.read().await;
-                        peer_map
-                            .iter()
-                            .filter(|(id, _)| *id != &peer_id)
-                            .map(|(_, sender)| sender.clone())
-                            .collect()
-                    };
+                    // Collect senders from shards, then broadcast
+                    let targets = peers.collect_other_senders(&peer_id).await;
 
                     for sender in targets {
                         // Fire and forget - if channel is full or closed, skip
@@ -454,7 +484,7 @@ async fn handle_connection(
     }
 
     // Cleanup
-    peers.write().await.remove(&peer_id);
+    peers.remove(&peer_id).await;
     sender_task.abort();
     tracing::info!("Peer disconnected: {}", peer_id.0);
 
