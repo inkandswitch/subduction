@@ -16,7 +16,6 @@ CRDTs
 Caddy
 ChaCha
 ChaCha's
-Cohn-Gordon
 Crypto
 Cryptree
 DCGKA
@@ -28,6 +27,7 @@ ECDH
 EE
 EdDSA
 FIXME
+Grafana
 GroupId
 HChaCha
 Invariants
@@ -137,6 +137,7 @@ petnames
 plaintext
 pnpm
 pre-alpha
+pre-configured
 preimage
 prekey
 priori

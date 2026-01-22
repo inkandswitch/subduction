@@ -20,6 +20,21 @@ pub mod names {
     pub const BATCH_SYNC_REQUESTS_TOTAL: &str = "subduction_batch_sync_requests_total";
     /// Total batch sync responses received.
     pub const BATCH_SYNC_RESPONSES_TOTAL: &str = "subduction_batch_sync_responses_total";
+
+    // Storage metrics (gauges - refreshed periodically from actual state)
+    /// Current number of sedimentrees in storage.
+    pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
+    /// Current number of loose commits in storage, labeled by `sedimentree_id`.
+    pub const STORAGE_LOOSE_COMMITS: &str = "subduction_storage_loose_commits";
+    /// Current number of fragments in storage, labeled by `sedimentree_id`.
+    pub const STORAGE_FRAGMENTS: &str = "subduction_storage_fragments";
+    /// Total loose commits across all sedimentrees.
+    pub const STORAGE_LOOSE_COMMITS_TOTAL: &str = "subduction_storage_loose_commits_total";
+    /// Total fragments across all sedimentrees.
+    pub const STORAGE_FRAGMENTS_TOTAL: &str = "subduction_storage_fragments_total";
+    /// Storage operation duration in seconds.
+    pub const STORAGE_OPERATION_DURATION_SECONDS: &str =
+        "subduction_storage_operation_duration_seconds";
 }
 
 /// Record a new connection being established.
@@ -48,6 +63,37 @@ pub fn dispatch_duration(duration_secs: f64) {
     metrics::histogram!(names::DISPATCH_DURATION_SECONDS).record(duration_secs);
 }
 
+/// A scope guard that records dispatch duration on drop.
+///
+/// This ensures the duration is recorded even if the function returns early
+/// via `?` or other control flow, capturing both success and failure latencies.
+#[derive(Debug)]
+pub struct DispatchTimer {
+    start: std::time::Instant,
+}
+
+impl DispatchTimer {
+    /// Create a new dispatch timer, starting the clock now.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Default for DispatchTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for DispatchTimer {
+    fn drop(&mut self) {
+        dispatch_duration(self.start.elapsed().as_secs_f64());
+    }
+}
+
 /// Record a batch sync request.
 #[inline]
 pub fn batch_sync_request() {
@@ -58,4 +104,48 @@ pub fn batch_sync_request() {
 #[inline]
 pub fn batch_sync_response() {
     metrics::counter!(names::BATCH_SYNC_RESPONSES_TOTAL).increment(1);
+}
+
+// Storage metrics (gauges - set from actual state)
+
+/// Set the current number of sedimentrees in storage.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_sedimentrees(count: usize) {
+    metrics::gauge!(names::STORAGE_SEDIMENTREES).set(count as f64);
+}
+
+/// Set the current number of loose commits for a sedimentree.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_loose_commits(sedimentree_id: String, count: usize) {
+    metrics::gauge!(names::STORAGE_LOOSE_COMMITS, "sedimentree_id" => sedimentree_id).set(count as f64);
+}
+
+/// Set the current number of fragments for a sedimentree.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_fragments(sedimentree_id: String, count: usize) {
+    metrics::gauge!(names::STORAGE_FRAGMENTS, "sedimentree_id" => sedimentree_id).set(count as f64);
+}
+
+/// Set the total number of loose commits across all sedimentrees.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_loose_commits_total(count: usize) {
+    metrics::gauge!(names::STORAGE_LOOSE_COMMITS_TOTAL).set(count as f64);
+}
+
+/// Set the total number of fragments across all sedimentrees.
+#[inline]
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_fragments_total(count: usize) {
+    metrics::gauge!(names::STORAGE_FRAGMENTS_TOTAL).set(count as f64);
+}
+
+/// Record the duration of a storage operation.
+#[inline]
+pub fn storage_operation_duration(operation: &'static str, duration_secs: f64) {
+    metrics::histogram!(names::STORAGE_OPERATION_DURATION_SECONDS, "operation" => operation)
+        .record(duration_secs);
 }

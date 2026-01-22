@@ -13,7 +13,8 @@ The Subduction CLI provides multiple server modes:
 
 ## Installation
 
-### Using Nix
+<details>
+<summary><h3>Using Nix ❄️</h3></summary>
 
 ```bash
 # Run directly without installing
@@ -54,7 +55,9 @@ subduction_cli server --socket 0.0.0.0:8080
 }
 ```
 
-### Using Cargo
+</details>
+
+### Using Cargo 🦀
 
 ```bash
 # Build from source
@@ -251,7 +254,8 @@ nix run .#subduction_cli -- relay --socket 0.0.0.0:9000
 nix run .#subduction_cli -- relay --max-message-size 5242880
 ```
 
-## Running as a System Service
+<details>
+<summary><h2>Running as a System Service ❄️</h2></summary>
 
 The flake provides NixOS and Home Manager modules for running Subduction as a managed service.
 
@@ -382,4 +386,52 @@ services.caddy = {
 ```
 
 Caddy automatically handles WebSocket upgrades and TLS certificates.
+
+</details>
+
+## Monitoring
+
+The Subduction server exposes Prometheus metrics on a configurable port (default: `9090`).
+
+### Server Metrics Options
+
+```bash
+# Enable metrics (default)
+subduction_cli server --metrics --metrics-port 9090
+
+# Disable metrics
+subduction_cli server --metrics=false
+```
+
+### Development Monitoring Stack
+
+When developing locally with Nix, use the `monitoring:start` command to launch Prometheus and Grafana with pre-configured dashboards:
+
+```bash
+# Enter the dev shell
+nix develop
+
+# Start the monitoring stack
+monitoring:start
+```
+
+This starts:
+- **Prometheus** at `http://localhost:9092` - scrapes metrics from the server
+- **Grafana** at `http://localhost:3939` - pre-configured dashboards
+
+The Grafana dashboard includes panels for connections, messages, sync operations, and storage.
+
+### Production Monitoring
+
+For production, configure your Prometheus instance to scrape the metrics endpoint:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'subduction'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+
+Import the Grafana dashboard from `subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json`.
 

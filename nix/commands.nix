@@ -226,11 +226,11 @@
 
       # Create temp directories for Grafana
       mkdir -p /tmp/grafana-data /tmp/grafana-dashboards
-      cp "$WORKSPACE_ROOT/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
+      cp "$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
 
       # Start Prometheus in background
       ${prometheus} \
-        --config.file="$WORKSPACE_ROOT/monitoring/prometheus.yml" \
+        --config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/prometheus.yml" \
         --web.listen-address=":9092" \
         --storage.tsdb.path="/tmp/prometheus-data" \
         &
@@ -240,9 +240,9 @@
       # Start Grafana in background
       ${grafana-server} \
         --homepath="${grafana-homepath}" \
-        --config="$WORKSPACE_ROOT/monitoring/grafana/grafana.ini" \
+        --config="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/grafana.ini" \
         cfg:paths.data=/tmp/grafana-data \
-        cfg:paths.provisioning="$WORKSPACE_ROOT/monitoring/grafana/provisioning" \
+        cfg:paths.provisioning="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning" \
         &
       GRAF_PID=$!
       echo "Grafana started (PID: $GRAF_PID)"

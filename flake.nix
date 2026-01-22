@@ -95,6 +95,24 @@
 
         command_menu = command-utils.commands.${system} commands;
 
+        grafana =
+          let
+            pluginsDir = pkgs.linkFarm "grafana-plugins" [
+              {
+                name = "grafana-pyroscope-app";
+                path = pkgs.grafanaPlugins.grafana-pyroscope-app;
+              }
+            ];
+          in pkgs.symlinkJoin {
+            name = "grafana-with-plugins";
+            paths = [ pkgs.grafana ];
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postBuild = ''
+              wrapProgram $out/bin/grafana --set GF_PATHS_PLUGINS ${pluginsDir}
+              wrapProgram $out/bin/grafana-server --set GF_PATHS_PLUGINS ${pluginsDir}
+            '';
+          };
+
       in rec {
         packages = {
           subduction_cli = pkgs.rustPlatform.buildRustPackage {
@@ -156,7 +174,7 @@
 
               pkgs.binaryen
               pkgs.chromedriver
-              pkgs.grafana
+              grafana
               pkgs.http-server
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
