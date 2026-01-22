@@ -104,11 +104,8 @@ in {
                     (toString cfg.server.dataDir)
                     "--timeout"
                     (toString cfg.server.timeout)
-                    "--metrics"
-                    (lib.boolToString cfg.server.enableMetrics)
-                    "--metrics-port"
-                    (toString cfg.server.metricsPort)
                   ]
+                  ++ lib.optionals cfg.server.enableMetrics ["--metrics" "--metrics-port" (toString cfg.server.metricsPort)]
                   ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
                   ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
               in
@@ -166,11 +163,8 @@ in {
                   (toString cfg.server.dataDir)
                   "--timeout"
                   (toString cfg.server.timeout)
-                  "--metrics"
-                  (lib.boolToString cfg.server.enableMetrics)
-                  "--metrics-port"
-                  (toString cfg.server.metricsPort)
                 ]
+                ++ lib.optionals cfg.server.enableMetrics ["--metrics" "--metrics-port" (toString cfg.server.metricsPort)]
                 ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
                 ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
               RunAtLoad = true;
