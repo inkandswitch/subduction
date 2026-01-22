@@ -1,4 +1,4 @@
-//! Unified WebSocket connection type for both incoming and outgoing connections.
+//! Unified WebSocket connection type for both accepted and dialed connections.
 
 use crate::{
     error::{CallError, DisconnectionError, RecvError, SendError},
@@ -19,17 +19,17 @@ use subduction_core::{
 };
 use tokio::net::TcpStream;
 
-/// A unified WebSocket connection that can hold either an incoming TCP connection
-/// or an outgoing WebSocket connection.
+/// A unified WebSocket connection that can hold either an accepted or dialed connection.
 ///
 /// This allows the server to use the same `Subduction` instance for both
-/// accepting incoming connections and initiating outgoing connections to peers.
+/// accepting incoming connections and dialing outgoing connections to peers.
 #[derive(Debug, Clone)]
 pub enum UnifiedWebSocket<O: Timeout<Sendable> + Clone + Send + Sync> {
-    /// An incoming TCP connection (from `accept`).
-    Incoming(WebSocket<TokioAdapter<TcpStream>, Sendable, O>),
-    /// An outgoing WebSocket connection (from `connect_async`).
-    Outgoing(WebSocket<ConnectStream, Sendable, O>),
+    /// A connection we accepted (peer connected to us).
+    Accepted(WebSocket<TokioAdapter<TcpStream>, Sendable, O>),
+
+    /// A connection we dialed (we connected to peer).
+    Dialed(WebSocket<ConnectStream, Sendable, O>),
 }
 
 impl<O: Timeout<Sendable> + Clone + Send + Sync> UnifiedWebSocket<O> {
@@ -40,8 +40,8 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> UnifiedWebSocket<O> {
     /// Returns an error if the WebSocket connection fails.
     pub async fn listen(&self) -> Result<(), crate::error::RunError> {
         match self {
-            UnifiedWebSocket::Incoming(ws) => ws.listen().await,
-            UnifiedWebSocket::Outgoing(ws) => ws.listen().await,
+            UnifiedWebSocket::Accepted(in_ws) => in_ws.listen().await,
+            UnifiedWebSocket::Dialed(out_ws) => out_ws.listen().await,
         }
     }
 }
@@ -54,36 +54,36 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for Unifie
 
     fn peer_id(&self) -> PeerId {
         match self {
-            UnifiedWebSocket::Incoming(ws) => Connection::<Sendable>::peer_id(ws),
-            UnifiedWebSocket::Outgoing(ws) => Connection::<Sendable>::peer_id(ws),
+            UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::peer_id(in_ws),
+            UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::peer_id(out_ws),
         }
     }
 
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         match self {
-            UnifiedWebSocket::Incoming(ws) => Connection::<Sendable>::next_request_id(ws),
-            UnifiedWebSocket::Outgoing(ws) => Connection::<Sendable>::next_request_id(ws),
+            UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::next_request_id(in_ws),
+            UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::next_request_id(out_ws),
         }
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         match self {
-            UnifiedWebSocket::Incoming(ws) => Connection::<Sendable>::disconnect(ws),
-            UnifiedWebSocket::Outgoing(ws) => Connection::<Sendable>::disconnect(ws),
+            UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::disconnect(in_ws),
+            UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::disconnect(out_ws),
         }
     }
 
     fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
         match self {
-            UnifiedWebSocket::Incoming(ws) => Connection::<Sendable>::send(ws, message),
-            UnifiedWebSocket::Outgoing(ws) => Connection::<Sendable>::send(ws, message),
+            UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::send(in_ws, message),
+            UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::send(out_ws, message),
         }
     }
 
     fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
         match self {
-            UnifiedWebSocket::Incoming(ws) => Connection::<Sendable>::recv(ws),
-            UnifiedWebSocket::Outgoing(ws) => Connection::<Sendable>::recv(ws),
+            UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::recv(in_ws),
+            UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::recv(out_ws),
         }
     }
 
@@ -93,8 +93,8 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for Unifie
         timeout: Option<Duration>,
     ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         match self {
-            UnifiedWebSocket::Incoming(ws) => Connection::<Sendable>::call(ws, req, timeout),
-            UnifiedWebSocket::Outgoing(ws) => Connection::<Sendable>::call(ws, req, timeout),
+            UnifiedWebSocket::Accepted(ws) => Connection::<Sendable>::call(ws, req, timeout),
+            UnifiedWebSocket::Dialed(ws) => Connection::<Sendable>::call(ws, req, timeout),
         }
     }
 }
@@ -102,8 +102,8 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for Unifie
 impl<O: Timeout<Sendable> + Clone + Send + Sync> PartialEq for UnifiedWebSocket<O> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (UnifiedWebSocket::Incoming(a), UnifiedWebSocket::Incoming(b)) => a == b,
-            (UnifiedWebSocket::Outgoing(a), UnifiedWebSocket::Outgoing(b)) => a == b,
+            (UnifiedWebSocket::Accepted(a), UnifiedWebSocket::Accepted(b)) => a == b,
+            (UnifiedWebSocket::Dialed(a), UnifiedWebSocket::Dialed(b)) => a == b,
             _ => false,
         }
     }

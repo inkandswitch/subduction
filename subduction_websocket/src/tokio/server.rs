@@ -109,7 +109,7 @@ where
                                     async move {
                                         match accept_hdr_async(tcp, NoCallback).await {
                                             Ok(hs) => {
-                                                let ws_conn = UnifiedWebSocket::Incoming(WebSocket::new(
+                                                let ws_conn = UnifiedWebSocket::Accepted(WebSocket::new(
                                                     hs,
                                                     tout,
                                                     default_time_limit,
@@ -243,7 +243,7 @@ where
             .await
             .map_err(ConnectToPeerError::WebSocket)?;
 
-        let ws_conn = UnifiedWebSocket::Outgoing(WebSocket::new(
+        let ws_conn = UnifiedWebSocket::Dialed(WebSocket::new(
             ws_stream,
             timeout,
             default_time_limit,
