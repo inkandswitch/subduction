@@ -2,8 +2,8 @@
 
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
+mod automerge_ephemeral_relay;
 mod client;
-mod ephemeral_relay;
 mod fs_storage;
 pub mod metrics;
 mod server;
@@ -27,7 +27,7 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Server(server_args) => server::run(server_args, token).await?,
         Command::Client(client_args) => client::run(client_args, token).await?,
-        Command::EphemeralRelay(relay_args) => ephemeral_relay::run(relay_args, token).await?,
+        Command::EphemeralRelay(relay_args) => automerge_ephemeral_relay::run(relay_args, token).await?,
     }
 
     Ok(())
@@ -119,7 +119,7 @@ enum Command {
     #[command(name = "client", alias = "connect")]
     Client(client::ClientArgs),
 
-    /// Start an ephemeral message relay server for presence/awareness
+    /// Start an ephemeral message relay server for presence/awareness (automerge-repo protocol)
     #[command(name = "ephemeral-relay", alias = "relay")]
-    EphemeralRelay(ephemeral_relay::EphemeralRelayArgs),
+    EphemeralRelay(automerge_ephemeral_relay::EphemeralRelayArgs),
 }

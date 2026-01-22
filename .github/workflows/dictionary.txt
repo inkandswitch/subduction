@@ -13,6 +13,7 @@ CGKA
 CLI
 CRDT
 CRDTs
+Caddy
 ChaCha
 ChaCha's
 Cohn-Gordon
@@ -37,6 +38,7 @@ MLS
 Memoization
 MiCKey
 NetworkSubsystem
+NixOS
 Nonces
 OCAP's
 OCap
@@ -115,8 +117,10 @@ invariant
 invariants
 js
 keyhive
+launchd
 lifecycle
 linearizability
+localhost
 lookups
 mTLS
 macOS
@@ -155,6 +159,7 @@ subsumptions
 subtype
 subtyping
 symlink
+systemd
 targetId
 tokio
 tombstoned

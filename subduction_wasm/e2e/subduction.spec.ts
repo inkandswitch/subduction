@@ -3,7 +3,6 @@ import { URL } from "./config";
 
 test.beforeEach(async ({ page }) => {
   await page.goto(URL);
-  // Increase timeout for CI environments where Wasm loading can be slower
   const wasmTimeout = process.env.CI ? 30000 : 10000;
   await page.waitForFunction(() => window.subductionReady === true, { timeout: wasmTimeout });
 });
@@ -30,11 +29,9 @@ test.describe("Subduction", () => {
         const { Subduction, MemoryStorage } = window.subduction;
         const storage = new MemoryStorage();
 
-        // Create initial instance and add data
         const syncer1 = new Subduction(storage);
         const ids1 = await syncer1.sedimentreeIds();
 
-        // Hydrate from same storage
         const syncer2 = await Subduction.hydrate(storage);
         const ids2 = await syncer2.sedimentreeIds();
 
@@ -155,7 +152,6 @@ test.describe("Subduction", () => {
         const storage = new MemoryStorage();
         const syncer = new Subduction(storage);
 
-        // Create a test sedimentree ID
         const testId = new Uint8Array(32);
         testId[0] = 1;
         const sedimentreeId = SedimentreeId.fromBytes(testId);
@@ -177,7 +173,6 @@ test.describe("Subduction", () => {
         const storage = new MemoryStorage();
         const syncer = new Subduction(storage);
 
-        // Create a test sedimentree ID
         const testId = new Uint8Array(32);
         testId[0] = 1;
         const sedimentreeId = SedimentreeId.fromBytes(testId);
@@ -199,7 +194,6 @@ test.describe("Subduction", () => {
         const storage = new MemoryStorage();
         const syncer = new Subduction(storage);
 
-        // Create a test digest
         const testDigest = new Uint8Array(32);
         testDigest[0] = 255;
         const digest = new Digest(testDigest);
@@ -221,7 +215,6 @@ test.describe("Subduction", () => {
         const storage = new MemoryStorage();
         const syncer = new Subduction(storage);
 
-        // Create a test sedimentree ID
         const testId = new Uint8Array(32);
         testId[0] = 1;
         const sedimentreeId = SedimentreeId.fromBytes(testId);
@@ -289,6 +282,60 @@ test.describe("Subduction", () => {
       expect(result.type).toBe("PeerId");
     });
 
+    test("should convert PeerId to bytes matching input", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { PeerId } = window.subduction;
+
+        const inputBytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          inputBytes[i] = i;
+        }
+
+        const peerId = new PeerId(inputBytes);
+        const outputBytes = peerId.toBytes();
+
+        return {
+          isUint8Array: outputBytes instanceof Uint8Array,
+          length: outputBytes.length,
+          matchesInput: inputBytes.every((b, i) => b === outputBytes[i]),
+        };
+      });
+
+      expect(result.isUint8Array).toBe(true);
+      expect(result.length).toBe(32);
+      expect(result.matchesInput).toBe(true);
+    });
+
+    test("should convert PeerId to 64-char hex string", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { PeerId } = window.subduction;
+
+        const bytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          bytes[i] = i;
+        }
+
+        const peerId = new PeerId(bytes);
+        const hexString = peerId.toString();
+
+        const expectedHex = Array.from(bytes)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+
+        return {
+          isString: typeof hexString === "string",
+          length: hexString.length,
+          isLowercase: hexString === hexString.toLowerCase(),
+          matchesExpected: hexString === expectedHex,
+        };
+      });
+
+      expect(result.isString).toBe(true);
+      expect(result.length).toBe(64);
+      expect(result.isLowercase).toBe(true);
+      expect(result.matchesExpected).toBe(true);
+    });
+
     test("should create SedimentreeId from bytes", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { SedimentreeId } = window.subduction;
@@ -335,6 +382,58 @@ test.describe("Subduction", () => {
     });
   });
 
+  test.describe("Message Serialization", () => {
+    test("should round-trip Message through CBOR", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { Message, SedimentreeId, Digest } = window.subduction;
+
+        const digestBytes = new Uint8Array(32);
+        digestBytes[0] = 42;
+        const digest = new Digest(digestBytes);
+        const original = Message.blobsRequest([digest]);
+
+        const cborBytes = original.toCborBytes();
+
+        const restored = Message.fromCborBytes(cborBytes);
+
+        return {
+          hasCborBytes: cborBytes instanceof Uint8Array,
+          cborBytesLength: cborBytes.length,
+          hasRestored: !!restored,
+          typeMatches: original.type === restored.type,
+          originalType: original.type,
+          restoredType: restored.type,
+        };
+      });
+
+      expect(result.hasCborBytes).toBe(true);
+      expect(result.cborBytesLength).toBeGreaterThan(0);
+      expect(result.hasRestored).toBe(true);
+      expect(result.typeMatches).toBe(true);
+    });
+
+    test("should throw MessageDeserializationError for invalid CBOR bytes", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { Message } = window.subduction;
+
+        try {
+          const invalidBytes = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);
+          Message.fromCborBytes(invalidBytes);
+          return { threw: false, errorName: null };
+        } catch (error) {
+          return {
+            threw: true,
+            errorName: error.name,
+            hasMessage: !!error.message,
+          };
+        }
+      });
+
+      expect(result.threw).toBe(true);
+      expect(result.errorName).toBe("MessageDeserializationError");
+    });
+  });
+
   test.describe("Error Handling", () => {
     test("should handle invalid digest size", async ({ page }) => {
       const result = await page.evaluate(async () => {
@@ -346,7 +445,7 @@ test.describe("Subduction", () => {
           return { error: null };
         } catch (error) {
           return {
-            error: error.message || "Error occurred",
+            error: error.message ,
             hasError: true,
           };
         }
@@ -365,7 +464,7 @@ test.describe("Subduction", () => {
           return { error: null };
         } catch (error) {
           return {
-            error: error.message || "Error occurred",
+            error: error.message ,
             hasError: true,
           };
         }

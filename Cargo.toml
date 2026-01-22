@@ -31,9 +31,10 @@ async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
 base58 = "0.2.0"
 blake3 = { version = "1.8", default-features = false }
-ciborium = { version = "0.2.2", default-features = false }
-console_error_panic_hook = { version = "0.1.7" }
 bolero = "0.13.4"
+ciborium = { version = "0.2.2", default-features = false }
+ciborium-io = { version = "0.2.2", default-features = false }
+console_error_panic_hook = { version = "0.1.7" }
 from_js_ref = "0.1.3" # no_std by default
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 futures_kind = "0.1.0"
