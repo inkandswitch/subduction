@@ -73,7 +73,7 @@ where
                 start.elapsed().as_secs_f64(),
             );
             if result.is_ok() {
-                metrics::storage_sedimentree_added();
+                metrics::storage_sedimentree_saved();
             }
             result
         }
@@ -92,7 +92,7 @@ where
                 start.elapsed().as_secs_f64(),
             );
             if result.is_ok() {
-                metrics::storage_sedimentree_removed();
+                metrics::storage_sedimentree_deleted();
             }
             result
         }
@@ -128,7 +128,7 @@ where
                 .await;
             metrics::storage_operation_duration("save_loose_commit", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_loose_commit_saved(&label);
+                metrics::storage_loose_commit_saved(label);
             }
             result
         }
@@ -178,7 +178,7 @@ where
             let result = self.inner.save_fragment(sedimentree_id, fragment).await;
             metrics::storage_operation_duration("save_fragment", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_fragment_saved(&label);
+                metrics::storage_fragment_saved(label);
             }
             result
         }
@@ -217,7 +217,7 @@ where
             let result = self.inner.save_blob(blob).await;
             metrics::storage_operation_duration("save_blob", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_blob_added();
+                metrics::storage_blob_saved();
             }
             result
         }
@@ -243,7 +243,7 @@ where
             let result = self.inner.delete_blob(blob_digest).await;
             metrics::storage_operation_duration("delete_blob", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_blob_removed();
+                metrics::storage_blob_deleted();
             }
             result
         }
@@ -269,7 +269,7 @@ where
                 start.elapsed().as_secs_f64(),
             );
             if result.is_ok() {
-                metrics::storage_sedimentree_added();
+                metrics::storage_sedimentree_saved();
             }
             result
         }
@@ -288,7 +288,7 @@ where
                 start.elapsed().as_secs_f64(),
             );
             if result.is_ok() {
-                metrics::storage_sedimentree_removed();
+                metrics::storage_sedimentree_deleted();
             }
             result
         }
@@ -322,7 +322,7 @@ where
                 .await;
             metrics::storage_operation_duration("save_loose_commit", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_loose_commit_saved(&label);
+                metrics::storage_loose_commit_saved(label);
             }
             result
         }
@@ -372,7 +372,7 @@ where
             let result = self.inner.save_fragment(sedimentree_id, fragment).await;
             metrics::storage_operation_duration("save_fragment", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_fragment_saved(&label);
+                metrics::storage_fragment_saved(label);
             }
             result
         }
@@ -411,7 +411,7 @@ where
             let result = self.inner.save_blob(blob).await;
             metrics::storage_operation_duration("save_blob", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_blob_added();
+                metrics::storage_blob_saved();
             }
             result
         }
@@ -434,7 +434,7 @@ where
             let result = self.inner.delete_blob(blob_digest).await;
             metrics::storage_operation_duration("delete_blob", start.elapsed().as_secs_f64());
             if result.is_ok() {
-                metrics::storage_blob_removed();
+                metrics::storage_blob_deleted();
             }
             result
         }

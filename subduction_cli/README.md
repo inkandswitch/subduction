@@ -419,10 +419,12 @@ subduction_cli server --metrics=false
 - `subduction_batch_sync_responses_total` - Batch sync responses sent
 
 **Storage Metrics:**
-- `subduction_storage_sedimentrees` - Number of sedimentrees stored
-- `subduction_storage_blobs` - Number of blobs stored
-- `subduction_storage_loose_commits_saved` - Loose commits saved (labeled by `sedimentree_id`)
-- `subduction_storage_fragments_saved` - Fragments saved (labeled by `sedimentree_id`)
+- `subduction_storage_sedimentree_saves_total` - Total sedimentree save operations
+- `subduction_storage_sedimentree_deletes_total` - Total sedimentree delete operations
+- `subduction_storage_blob_saves_total` - Total blob save operations
+- `subduction_storage_blob_deletes_total` - Total blob delete operations
+- `subduction_storage_loose_commits_saved_total` - Loose commits saved (labeled by `sedimentree_id`)
+- `subduction_storage_fragments_saved_total` - Fragments saved (labeled by `sedimentree_id`)
 - `subduction_storage_operation_duration_seconds` - Storage operation latency histogram
 
 ### Development Monitoring Stack

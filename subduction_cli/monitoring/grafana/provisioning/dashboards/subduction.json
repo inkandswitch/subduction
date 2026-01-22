@@ -532,11 +532,11 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_storage_sedimentrees",
+          "expr": "subduction_storage_sedimentree_saves_total",
           "refId": "A"
         }
       ],
-      "title": "Sedimentrees",
+      "title": "Sedimentree Saves",
       "type": "stat"
     },
     {
@@ -574,11 +574,11 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_storage_blobs",
+          "expr": "subduction_storage_blob_saves_total",
           "refId": "A"
         }
       ],
-      "title": "Blobs",
+      "title": "Blob Saves",
       "type": "stat"
     },
     {
@@ -616,7 +616,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(subduction_storage_loose_commits_saved)",
+          "expr": "sum(subduction_storage_loose_commits_saved_total)",
           "refId": "A"
         }
       ],
@@ -658,7 +658,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(subduction_storage_fragments_saved)",
+          "expr": "sum(subduction_storage_fragments_saved_total)",
           "refId": "A"
         }
       ],
@@ -718,7 +718,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_storage_loose_commits_saved[1m])",
+          "expr": "rate(subduction_storage_loose_commits_saved_total[1m])",
           "legendFormat": "{{sedimentree_id}}",
           "refId": "A"
         }
@@ -779,7 +779,7 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_storage_fragments_saved[1m])",
+          "expr": "rate(subduction_storage_fragments_saved_total[1m])",
           "legendFormat": "{{sedimentree_id}}",
           "refId": "A"
         }
