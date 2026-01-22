@@ -237,9 +237,10 @@ where
         default_time_limit: Duration,
         peer_id: PeerId,
     ) -> Result<ConnectionId, ConnectToPeerError> {
-        tracing::info!("Connecting to peer at {uri}");
+        let uri_str = uri.to_string();
+        tracing::info!("Connecting to peer at {uri_str}");
 
-        let (ws_stream, _resp) = connect_async(uri.clone())
+        let (ws_stream, _resp) = connect_async(uri)
             .await
             .map_err(ConnectToPeerError::WebSocket)?;
 
@@ -251,10 +252,18 @@ where
         ));
 
         let listen_ws = ws_conn.clone();
-        let listen_uri = uri.clone();
+        let listen_uri_str = uri_str.clone();
+        let cancel_token = self.cancellation_token.clone();
         tokio::spawn(async move {
-            if let Err(e) = listen_ws.listen().await {
-                tracing::error!("WebSocket listen error for peer {}: {}", listen_uri, e);
+            tokio::select! {
+                () = cancel_token.cancelled() => {
+                    tracing::debug!("Shutting down listener for peer {listen_uri_str}");
+                }
+                result = listen_ws.listen() => {
+                    if let Err(e) = result {
+                        tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                    }
+                }
             }
         });
 
@@ -264,7 +273,7 @@ where
             .await
             .map_err(ConnectToPeerError::Registration)?;
 
-        tracing::info!("Connected to peer at {uri} with connection ID {conn_id:?}",);
+        tracing::info!("Connected to peer at {uri_str} with connection ID {conn_id:?}");
         Ok(conn_id)
     }
 

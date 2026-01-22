@@ -115,7 +115,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     tracing::info!("WebSocket server started on {}", addr);
     tracing::info!("Peer ID: {}", peer_id);
 
-    // Connect to configured peers for bidirectional sync
+    // Connect to configured peers for bidirectional sync (in background)
     for peer_url in &args.peers {
         let uri: Uri = match peer_url.parse() {
             Ok(uri) => uri,
@@ -133,15 +133,22 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         };
 
         let timeout_duration = Duration::from_secs(args.timeout);
+        let peer_server = server.clone();
 
-        match server.connect_to_peer(uri.clone(), FuturesTimerTimeout, timeout_duration, remote_peer_id).await {
-            Ok(conn_id) => {
-                tracing::info!("Connected to peer at {} (connection ID: {:?})", uri, conn_id);
+        // Spawn connection attempt in background to avoid blocking startup
+        tokio::spawn(async move {
+            match peer_server
+                .connect_to_peer(uri.clone(), FuturesTimerTimeout, timeout_duration, remote_peer_id)
+                .await
+            {
+                Ok(conn_id) => {
+                    tracing::info!("Connected to peer at {} (connection ID: {:?})", uri, conn_id);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to connect to peer at {}: {}", uri, e);
+                }
             }
-            Err(e) => {
-                tracing::error!("Failed to connect to peer at {}: {}", uri, e);
-            }
-        }
+        });
     }
 
     // Wait for cancellation signal
