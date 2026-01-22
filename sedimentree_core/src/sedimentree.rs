@@ -156,21 +156,25 @@ impl Sedimentree {
     /// Compute the difference between two local [`Sedimentree`]s.
     #[must_use]
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
-        let our_fragments = self.fragments.iter().collect::<Set<_>>();
-        let their_fragments = other.fragments.iter().collect();
-        let left_missing_fragments = our_fragments.difference(&their_fragments);
-        let right_missing_fragments = their_fragments.difference(&our_fragments);
+        let left_fragments = self.fragments.iter().collect::<Set<_>>();
+        let right_fragments = other.fragments.iter().collect::<Set<_>>();
 
-        let our_commits = self.commits.iter().collect::<Set<_>>();
-        let their_commits = other.commits.iter().collect();
-        let left_missing_commits = our_commits.difference(&their_commits);
-        let right_missing_commits = their_commits.difference(&our_commits);
+        let left_commits = self.commits.iter().collect::<Set<_>>();
+        let right_commits = other.commits.iter().collect::<Set<_>>();
 
         Diff {
-            left_missing_fragments: left_missing_fragments.into_iter().copied().collect(),
-            left_missing_commits: left_missing_commits.into_iter().copied().collect(),
-            right_missing_fragments: right_missing_fragments.into_iter().copied().collect(),
-            right_missing_commits: right_missing_commits.into_iter().copied().collect(),
+            // Items in right but not left = what left is missing
+            left_missing_fragments: right_fragments
+                .difference(&left_fragments)
+                .copied()
+                .collect(),
+            left_missing_commits: right_commits.difference(&left_commits).copied().collect(),
+            // Items in left but not right = what right is missing
+            right_missing_fragments: left_fragments
+                .difference(&right_fragments)
+                .copied()
+                .collect(),
+            right_missing_commits: left_commits.difference(&right_commits).copied().collect(),
         }
     }
 
@@ -549,5 +553,292 @@ mod tests {
                 let minimized = tree.minimize(&CountLeadingZeroBytes);
                 assert_eq!(tree, minimized);
             });
+    }
+
+    #[test]
+    fn diff_self_is_empty() {
+        bolero::check!()
+            .with_arbitrary::<Sedimentree>()
+            .for_each(|tree| {
+                let diff = tree.diff(tree);
+                assert!(
+                    diff.left_missing_fragments.is_empty(),
+                    "self-diff should have no left missing fragments"
+                );
+                assert!(
+                    diff.left_missing_commits.is_empty(),
+                    "self-diff should have no left missing commits"
+                );
+                assert!(
+                    diff.right_missing_fragments.is_empty(),
+                    "self-diff should have no right missing fragments"
+                );
+                assert!(
+                    diff.right_missing_commits.is_empty(),
+                    "self-diff should have no right missing commits"
+                );
+            });
+    }
+
+    #[test]
+    fn diff_is_symmetric() {
+        bolero::check!()
+            .with_arbitrary::<(Sedimentree, Sedimentree)>()
+            .for_each(|(a, b)| {
+                let ab = a.diff(&b);
+                let ba = b.diff(&a);
+
+                // What a is missing from b == what b has that a doesn't
+                assert_eq!(
+                    ab.left_missing_fragments.len(),
+                    ba.right_missing_fragments.len(),
+                    "left_missing in a.diff(b) should equal right_missing in b.diff(a)"
+                );
+                assert_eq!(
+                    ab.right_missing_fragments.len(),
+                    ba.left_missing_fragments.len(),
+                    "right_missing in a.diff(b) should equal left_missing in b.diff(a)"
+                );
+                assert_eq!(
+                    ab.left_missing_commits.len(),
+                    ba.right_missing_commits.len(),
+                    "left_missing commits in a.diff(b) should equal right_missing in b.diff(a)"
+                );
+                assert_eq!(
+                    ab.right_missing_commits.len(),
+                    ba.left_missing_commits.len(),
+                    "right_missing commits in a.diff(b) should equal left_missing in b.diff(a)"
+                );
+            });
+    }
+
+    #[test]
+    fn diff_remote_matches_diff_for_local_items() {
+        bolero::check!()
+            .with_arbitrary::<(Sedimentree, Sedimentree)>()
+            .for_each(|(local, remote)| {
+                let remote_summary = remote.summarize();
+                let remote_diff = local.diff_remote(&remote_summary);
+                let local_diff = local.diff(&remote);
+
+                // local_fragments in diff_remote should match right_missing_fragments in diff
+                // (what we have that they don't)
+                assert_eq!(
+                    remote_diff.local_fragments.len(),
+                    local_diff.right_missing_fragments.len(),
+                    "diff_remote local_fragments should match diff right_missing_fragments"
+                );
+
+                // local_commits should match right_missing_commits
+                assert_eq!(
+                    remote_diff.local_commits.len(),
+                    local_diff.right_missing_commits.len(),
+                    "diff_remote local_commits should match diff right_missing_commits"
+                );
+
+                // remote items should match left_missing (what they have that we don't)
+                // Note: remote_fragment_summaries vs left_missing_fragments - summaries don't have checkpoints
+                assert_eq!(
+                    remote_diff.remote_fragment_summaries.len(),
+                    local_diff.left_missing_fragments.len(),
+                    "diff_remote remote_fragment_summaries count should match diff left_missing_fragments"
+                );
+                assert_eq!(
+                    remote_diff.remote_commits.len(),
+                    local_diff.left_missing_commits.len(),
+                    "diff_remote remote_commits should match diff left_missing_commits"
+                );
+            });
+    }
+
+    #[test]
+    fn diff_merge_produces_equal_trees() {
+        bolero::check!()
+            .with_arbitrary::<(Sedimentree, Sedimentree)>()
+            .for_each(|(a, b)| {
+                let diff = a.diff(&b);
+
+                // Apply diff to make copies equal
+                let mut a_updated = a.clone();
+                let mut b_updated = b.clone();
+
+                // Add what a is missing (from b)
+                for fragment in diff.left_missing_fragments {
+                    a_updated.add_fragment(fragment.clone());
+                }
+                for commit in diff.left_missing_commits {
+                    a_updated.add_commit(commit.clone());
+                }
+
+                // Add what b is missing (from a)
+                for fragment in diff.right_missing_fragments {
+                    b_updated.add_fragment(fragment.clone());
+                }
+                for commit in diff.right_missing_commits {
+                    b_updated.add_commit(commit.clone());
+                }
+
+                assert_eq!(a_updated, b_updated, "after applying diff, trees should be equal");
+            });
+    }
+
+    // Helper to create a commit with a specific seed
+    fn make_commit(seed: u8) -> LooseCommit {
+        let mut bytes = [0u8; 32];
+        bytes[0] = seed;
+        let digest = Digest::from(bytes);
+        let blob_meta = BlobMeta::new(&[seed]);
+        LooseCommit::new(digest, vec![], blob_meta)
+    }
+
+    // Helper to create a fragment with a specific seed
+    fn make_fragment(seed: u8) -> Fragment {
+        let mut head_bytes = [0u8; 32];
+        head_bytes[0] = seed;
+        let mut boundary_bytes = [0u8; 32];
+        boundary_bytes[0] = seed;
+        boundary_bytes[1] = 1;
+        let blob_meta = BlobMeta::new(&[seed]);
+        Fragment::new(
+            Digest::from(head_bytes),
+            vec![Digest::from(boundary_bytes)],
+            vec![],
+            blob_meta,
+        )
+    }
+
+    #[test]
+    fn diff_identical_non_empty_trees() {
+        // Two separate trees with identical content
+        let commits = vec![make_commit(1), make_commit(2), make_commit(3)];
+        let fragments = vec![make_fragment(1), make_fragment(2)];
+
+        let a = Sedimentree::new(fragments.clone(), commits.clone());
+        let b = Sedimentree::new(fragments, commits);
+
+        let diff = a.diff(&b);
+
+        assert!(diff.left_missing_commits.is_empty(), "identical trees have no left missing commits");
+        assert!(diff.right_missing_commits.is_empty(), "identical trees have no right missing commits");
+        assert!(diff.left_missing_fragments.is_empty(), "identical trees have no left missing fragments");
+        assert!(diff.right_missing_fragments.is_empty(), "identical trees have no right missing fragments");
+
+        // Also test diff_remote
+        let b_summary = b.summarize();
+        let remote_diff = a.diff_remote(&b_summary);
+
+        assert!(remote_diff.local_commits.is_empty(), "identical trees have no local-only commits");
+        assert!(remote_diff.remote_commits.is_empty(), "identical trees have no remote-only commits");
+        assert!(remote_diff.local_fragments.is_empty(), "identical trees have no local-only fragments");
+        assert!(remote_diff.remote_fragment_summaries.is_empty(), "identical trees have no remote-only fragments");
+    }
+
+    #[test]
+    fn diff_one_ahead_commits() {
+        // Scenario: B has everything A has, plus more
+        let shared = vec![make_commit(1), make_commit(2)];
+        let extra = vec![make_commit(3), make_commit(4)];
+
+        let a = Sedimentree::new(vec![], shared.clone());
+        let b = Sedimentree::new(vec![], [shared, extra.clone()].concat());
+
+        let diff = a.diff(&b);
+
+        // A is missing the extra commits (what B has that A doesn't)
+        assert_eq!(diff.left_missing_commits.len(), 2);
+        // B is missing nothing
+        assert!(diff.right_missing_commits.is_empty());
+        assert!(diff.left_missing_fragments.is_empty());
+        assert!(diff.right_missing_fragments.is_empty());
+    }
+
+    #[test]
+    fn diff_one_ahead_fragments() {
+        // Scenario: B has everything A has, plus more
+        let shared = vec![make_fragment(1), make_fragment(2)];
+        let extra = vec![make_fragment(3)];
+
+        let a = Sedimentree::new(shared.clone(), vec![]);
+        let b = Sedimentree::new([shared, extra].concat(), vec![]);
+
+        let diff = a.diff(&b);
+
+        // A is missing the extra fragment
+        assert_eq!(diff.left_missing_fragments.len(), 1);
+        // B is missing nothing
+        assert!(diff.right_missing_fragments.is_empty());
+        assert!(diff.left_missing_commits.is_empty());
+        assert!(diff.right_missing_commits.is_empty());
+    }
+
+    #[test]
+    fn diff_diverged_with_overlap() {
+        // Scenario: A and B share some history but have diverged
+        let shared_commits = vec![make_commit(1), make_commit(2)];
+        let a_only_commits = vec![make_commit(10), make_commit(11)];
+        let b_only_commits = vec![make_commit(20), make_commit(21), make_commit(22)];
+
+        let shared_fragments = vec![make_fragment(1)];
+        let a_only_fragments = vec![make_fragment(10)];
+        let b_only_fragments = vec![make_fragment(20), make_fragment(21)];
+
+        let a = Sedimentree::new(
+            [shared_fragments.clone(), a_only_fragments.clone()].concat(),
+            [shared_commits.clone(), a_only_commits.clone()].concat(),
+        );
+        let b = Sedimentree::new(
+            [shared_fragments, b_only_fragments].concat(),
+            [shared_commits, b_only_commits].concat(),
+        );
+
+        let diff = a.diff(&b);
+
+        // A is missing B's unique items
+        assert_eq!(diff.left_missing_commits.len(), 3); // b_only_commits
+        assert_eq!(diff.left_missing_fragments.len(), 2); // b_only_fragments
+
+        // B is missing A's unique items
+        assert_eq!(diff.right_missing_commits.len(), 2); // a_only_commits
+        assert_eq!(diff.right_missing_fragments.len(), 1); // a_only_fragments
+    }
+
+    #[test]
+    fn diff_remote_one_ahead() {
+        // Scenario: remote has everything local has, plus more
+        let shared = vec![make_commit(1), make_commit(2)];
+        let remote_extra = vec![make_commit(3)];
+
+        let local = Sedimentree::new(vec![], shared.clone());
+        let remote = Sedimentree::new(vec![], [shared, remote_extra].concat());
+        let remote_summary = remote.summarize();
+
+        let diff = local.diff_remote(&remote_summary);
+
+        // Local has nothing unique
+        assert!(diff.local_commits.is_empty());
+        assert!(diff.local_fragments.is_empty());
+
+        // Remote has 1 commit local doesn't have
+        assert_eq!(diff.remote_commits.len(), 1);
+        assert!(diff.remote_fragment_summaries.is_empty());
+    }
+
+    #[test]
+    fn diff_remote_diverged_with_overlap() {
+        // Scenario: local and remote share history but diverged
+        let shared = vec![make_commit(1)];
+        let local_only = vec![make_commit(10)];
+        let remote_only = vec![make_commit(20), make_commit(21)];
+
+        let local = Sedimentree::new(vec![], [shared.clone(), local_only].concat());
+        let remote = Sedimentree::new(vec![], [shared, remote_only].concat());
+        let remote_summary = remote.summarize();
+
+        let diff = local.diff_remote(&remote_summary);
+
+        // Local has 1 unique commit
+        assert_eq!(diff.local_commits.len(), 1);
+        // Remote has 2 unique commits
+        assert_eq!(diff.remote_commits.len(), 2);
     }
 }
