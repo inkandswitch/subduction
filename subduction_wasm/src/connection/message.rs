@@ -27,18 +27,30 @@ pub struct WasmMessage(pub(crate) Message);
 #[wasm_bindgen(js_class = Message)]
 impl WasmMessage {
     /// Serialize the message to CBOR bytes.
+    ///
+    /// # Panics
+    ///
+    /// Panics if serialization of the Subduction protocol message fails.
+    #[must_use]
     #[wasm_bindgen(js_name = toCborBytes)]
     pub fn to_cbor_bytes(&self) -> Vec<u8> {
         let mut msg = Vec::new();
+
+        #[allow(clippy::expect_used)]
         ciborium::into_writer(&self.0, &mut msg).expect("serialization cannot fail");
+
         msg
     }
 
     /// Deserialize a message from CBOR bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`JsMessageDeserializationError`] if deserialization fails.
     #[wasm_bindgen(js_name = fromCborBytes)]
-    pub fn from_cbor_bytes(bytes: Vec<u8>) -> Result<Self, JsMessageDeserializationError> {
+    pub fn from_cbor_bytes(bytes: &[u8]) -> Result<Self, JsMessageDeserializationError> {
         let mut scratch = [0u8; 256];
-        let msg: Message = ciborium::de::from_reader_with_buffer(bytes.as_slice(), &mut scratch)
+        let msg: Message = ciborium::from_reader_with_buffer(bytes, &mut scratch)
             .map_err(JsMessageDeserializationError)?;
         Ok(msg.into())
     }

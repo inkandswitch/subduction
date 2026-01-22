@@ -289,6 +289,61 @@ test.describe("Subduction", () => {
       expect(result.type).toBe("PeerId");
     });
 
+    test("should convert PeerId to bytes matching input", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { PeerId } = window.subduction;
+
+        const inputBytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          inputBytes[i] = i;
+        }
+
+        const peerId = new PeerId(inputBytes);
+        const outputBytes = peerId.toBytes();
+
+        return {
+          isUint8Array: outputBytes instanceof Uint8Array,
+          length: outputBytes.length,
+          matchesInput: inputBytes.every((b, i) => b === outputBytes[i]),
+        };
+      });
+
+      expect(result.isUint8Array).toBe(true);
+      expect(result.length).toBe(32);
+      expect(result.matchesInput).toBe(true);
+    });
+
+    test("should convert PeerId to 64-char hex string", async ({ page }) => {
+      const result = await page.evaluate(async () => {
+        const { PeerId } = window.subduction;
+
+        const bytes = new Uint8Array(32);
+        for (let i = 0; i < 32; i++) {
+          bytes[i] = i;
+        }
+
+        const peerId = new PeerId(bytes);
+        const hexString = peerId.toString();
+
+        // Expected hex: 000102...1e1f (each byte as 2 hex chars)
+        const expectedHex = Array.from(bytes)
+          .map((b) => b.toString(16).padStart(2, "0"))
+          .join("");
+
+        return {
+          isString: typeof hexString === "string",
+          length: hexString.length,
+          isLowercase: hexString === hexString.toLowerCase(),
+          matchesExpected: hexString === expectedHex,
+        };
+      });
+
+      expect(result.isString).toBe(true);
+      expect(result.length).toBe(64);
+      expect(result.isLowercase).toBe(true);
+      expect(result.matchesExpected).toBe(true);
+    });
+
     test("should create SedimentreeId from bytes", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { SedimentreeId } = window.subduction;

@@ -175,7 +175,7 @@
       ${pkgs.http-server}/bin/http-server --silent &
       bg_pid=$!
 
-      build:wasm:web
+      build:wasm
       ${playwright} test ./subduction_wasm
 
       cleanup() {

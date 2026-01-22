@@ -122,7 +122,7 @@ in {
                 "--socket"
                 cfg.server.socket
                 "--data-dir"
-                cfg.server.dataDir
+                (toString cfg.server.dataDir)
                 "--timeout"
                 (toString cfg.server.timeout)
                 "--metrics"
@@ -177,8 +177,14 @@ in {
 
       networking.firewall = lib.mkIf cfg.openFirewall {
         allowedTCPPorts = let
-          serverPort = lib.toInt (lib.last (lib.splitString ":" cfg.server.socket));
-          relayPort = lib.toInt (lib.last (lib.splitString ":" cfg.relay.socket));
+          # Match the port after the last colon (handles IPv6 bracket notation)
+          getPort = socket:
+            let
+              matched = builtins.match ".*:([0-9]+)$" socket;
+            in
+              lib.toInt (lib.head matched);
+          serverPort = getPort cfg.server.socket;
+          relayPort = getPort cfg.relay.socket;
         in
           (lib.optional cfg.server.enable serverPort)
           ++ (lib.optional cfg.relay.enable relayPort);
