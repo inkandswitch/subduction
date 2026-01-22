@@ -200,25 +200,27 @@
     "test:docs" = cmd "Run Cargo doctests"
       "${cargo} test --doc";
 
-    "test:fuzz" = cmd "Run bolero property tests with extended fuzzing (1 min per test)" ''
+    "test:props" = cmd "Run proptests with many iterations (stable Rust)" ''
       set -e
-      echo "Running extended property tests with bolero..."
-      echo "Each test will run for 60 seconds."
+      echo "Running property tests with 100,000 iterations each..."
       echo ""
-      ${cargo} bolero test --all-features --timeout 60
+      export BOLERO_RANDOM_ITERATIONS=100000
+      ${cargo} test --all-features proptests -- --nocapture
+      echo ""
+      echo "✓ All property tests passed"
     '';
 
-    "test:fuzz:quick" = cmd "Run bolero property tests (10 sec per test)" ''
-      set -e
-      ${cargo} bolero test --all-features --timeout 10
-    '';
+    "test:props:quick" = cmd "Run proptests with default iterations (stable Rust)"
+      "${cargo} test --all-features proptests -- --nocapture";
 
-    "test:fuzz:thorough" = cmd "Run bolero property tests thoroughly (5 min per test)" ''
+    "test:props:intense" = cmd "Run proptests with 10M iterations (stable Rust)" ''
       set -e
-      echo "Running thorough property tests with bolero..."
-      echo "Each test will run for 5 minutes. This may take a while."
+      echo "Running property tests with 10,000,000 iterations each..."
       echo ""
-      ${cargo} bolero test --all-features --timeout 300
+      export BOLERO_RANDOM_ITERATIONS=10000000
+      ${cargo} test --all-features proptests -- --nocapture
+      echo ""
+      echo "✓ All property tests passed"
     '';
   };
 
