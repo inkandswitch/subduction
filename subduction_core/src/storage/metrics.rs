@@ -3,10 +3,11 @@
 //! This module is only available when the `metrics` feature is enabled.
 
 use core::future::Future;
-use std::time::Instant;
+use std::{sync::Arc, time::Instant};
 
 use alloc::vec::Vec;
 
+use async_lock::Mutex;
 use futures::{
     future::{BoxFuture, LocalBoxFuture},
     FutureExt,
@@ -30,13 +31,18 @@ use crate::metrics;
 #[derive(Debug, Clone)]
 pub struct MetricsStorage<S> {
     inner: S,
+    /// Track previously-seen sedimentree IDs to clean up stale gauges on refresh.
+    previous_ids: Arc<Mutex<Set<SedimentreeId>>>,
 }
 
 impl<S> MetricsStorage<S> {
     /// Create a new `MetricsStorage` wrapper around the given storage.
     #[must_use]
-    pub const fn new(inner: S) -> Self {
-        Self { inner }
+    pub fn new(inner: S) -> Self {
+        Self {
+            inner,
+            previous_ids: Arc::new(Mutex::new(Set::new())),
+        }
     }
 
     /// Get a reference to the inner storage.
@@ -96,20 +102,35 @@ where
 
         metrics::set_storage_sedimentrees(sedimentree_count);
 
+        // Clean up gauges for deleted sedimentrees
+        {
+            let previous = self.previous_ids.lock().await;
+            for old_id in previous.iter() {
+                if !sedimentree_ids.contains(old_id) {
+                    let label = old_id.to_string();
+                    metrics::set_storage_loose_commits(label.clone(), 0);
+                    metrics::set_storage_fragments(label, 0);
+                }
+            }
+        }
+
         let mut total_loose_commits = 0;
         let mut total_fragments = 0;
 
-        for sedimentree_id in sedimentree_ids {
+        for sedimentree_id in &sedimentree_ids {
             let loose_commits =
-                Storage::<Sendable>::load_loose_commits(&self.inner, sedimentree_id).await?;
+                Storage::<Sendable>::load_loose_commits(&self.inner, *sedimentree_id).await?;
             let fragments =
-                Storage::<Sendable>::load_fragments(&self.inner, sedimentree_id).await?;
+                Storage::<Sendable>::load_fragments(&self.inner, *sedimentree_id).await?;
 
             total_loose_commits += loose_commits.len();
             total_fragments += fragments.len();
 
-            record_sedimentree_metrics(sedimentree_id, &loose_commits, &fragments);
+            record_sedimentree_metrics(*sedimentree_id, &loose_commits, &fragments);
         }
+
+        // Update previous IDs for next refresh
+        *self.previous_ids.lock().await = sedimentree_ids;
 
         metrics::set_storage_loose_commits_total(total_loose_commits);
         metrics::set_storage_fragments_total(total_fragments);

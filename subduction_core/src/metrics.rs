@@ -63,6 +63,37 @@ pub fn dispatch_duration(duration_secs: f64) {
     metrics::histogram!(names::DISPATCH_DURATION_SECONDS).record(duration_secs);
 }
 
+/// A scope guard that records dispatch duration on drop.
+///
+/// This ensures the duration is recorded even if the function returns early
+/// via `?` or other control flow, capturing both success and failure latencies.
+#[derive(Debug)]
+pub struct DispatchTimer {
+    start: std::time::Instant,
+}
+
+impl DispatchTimer {
+    /// Create a new dispatch timer, starting the clock now.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            start: std::time::Instant::now(),
+        }
+    }
+}
+
+impl Default for DispatchTimer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for DispatchTimer {
+    fn drop(&mut self) {
+        dispatch_duration(self.start.elapsed().as_secs_f64());
+    }
+}
+
 /// Record a batch sync request.
 #[inline]
 pub fn batch_sync_request() {

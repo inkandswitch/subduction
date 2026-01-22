@@ -247,7 +247,7 @@ where
         crate::metrics::message_dispatched(message.variant_name());
 
         #[cfg(feature = "metrics")]
-        let start = std::time::Instant::now();
+        let _timer = crate::metrics::DispatchTimer::new();
 
         match message {
             Message::LooseCommit { id, commit, blob } => {
@@ -320,9 +320,6 @@ where
                 );
             }
         }
-
-        #[cfg(feature = "metrics")]
-        crate::metrics::dispatch_duration(start.elapsed().as_secs_f64());
 
         Ok(())
     }

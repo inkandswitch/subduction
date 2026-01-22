@@ -156,7 +156,7 @@
 
               pkgs.binaryen
               pkgs.chromedriver
-              (pkgs.grafana.withPlugins (ps: [ ps.grafana-pyroscope-app ]))
+              (pkgs.grafana.override { plugins = [ pkgs.grafanaPlugins.grafana-pyroscope-app ]; })
               pkgs.http-server
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
