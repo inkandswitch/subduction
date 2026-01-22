@@ -13,7 +13,8 @@ The Subduction CLI provides multiple server modes:
 
 ## Installation
 
-### Using Nix
+<details>
+<summary><h3>Using Nix ❄️</h3></summary>
 
 ```bash
 # Run directly without installing
@@ -54,7 +55,9 @@ subduction_cli server --socket 0.0.0.0:8080
 }
 ```
 
-### Using Cargo
+</details>
+
+### Using Cargo 🦀
 
 ```bash
 # Build from source
@@ -251,7 +254,8 @@ nix run .#subduction_cli -- relay --socket 0.0.0.0:9000
 nix run .#subduction_cli -- relay --max-message-size 5242880
 ```
 
-## Running as a System Service
+<details>
+<summary><h2>Running as a System Service ❄️</h2></summary>
 
 The flake provides NixOS and Home Manager modules for running Subduction as a managed service.
 
@@ -382,4 +386,80 @@ services.caddy = {
 ```
 
 Caddy automatically handles WebSocket upgrades and TLS certificates.
+
+</details>
+
+## Monitoring
+
+The Subduction server exposes Prometheus metrics on a configurable port (default: `9090`).
+
+### Server Metrics Options
+
+```bash
+# Enable metrics (default)
+subduction_cli server --metrics --metrics-port 9090
+
+# Disable metrics
+subduction_cli server --metrics=false
+```
+
+### Available Metrics
+
+**Connection Metrics:**
+- `subduction_connections_active` - Current active connections
+- `subduction_connections_total` - Total connections established
+- `subduction_connections_closed` - Total connections closed
+
+**Message Metrics:**
+- `subduction_messages_total` - Messages processed (labeled by type)
+- `subduction_dispatch_duration_seconds` - Message dispatch latency histogram
+
+**Sync Metrics:**
+- `subduction_batch_sync_requests_total` - Batch sync requests received
+- `subduction_batch_sync_responses_total` - Batch sync responses sent
+
+**Storage Metrics:**
+- `subduction_storage_sedimentrees` - Number of sedimentrees stored
+- `subduction_storage_blobs` - Number of blobs stored
+- `subduction_storage_loose_commits_saved` - Loose commits saved (labeled by `sedimentree_id`)
+- `subduction_storage_fragments_saved` - Fragments saved (labeled by `sedimentree_id`)
+- `subduction_storage_operation_duration_seconds` - Storage operation latency histogram
+
+### Development Monitoring Stack
+
+When developing locally with Nix, use the `monitoring:start` command to launch Prometheus and Grafana with pre-configured dashboards:
+
+```bash
+# Enter the dev shell
+nix develop
+
+# Start the monitoring stack
+monitoring:start
+```
+
+This starts:
+- **Prometheus** at `http://localhost:9092` - scrapes metrics from the server
+- **Grafana** at `http://localhost:3939` - pre-configured dashboards
+
+The Grafana dashboard includes panels for:
+- Active/total/closed connections
+- Messages per second by type
+- Dispatch latency (p50/p95/p99)
+- Batch sync request/response rates
+- Storage metrics (sedimentrees, blobs, commits, fragments)
+- Storage operation latency
+
+### Production Monitoring
+
+For production, configure your Prometheus instance to scrape the metrics endpoint:
+
+```yaml
+# prometheus.yml
+scrape_configs:
+  - job_name: 'subduction'
+    static_configs:
+      - targets: ['localhost:9090']
+```
+
+Import the Grafana dashboard from `subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json`.
 
