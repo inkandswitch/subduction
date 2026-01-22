@@ -236,7 +236,7 @@ where
         default_time_limit: Duration,
         peer_id: PeerId,
     ) -> Result<ConnectionId, ConnectToPeerError> {
-        tracing::info!("Connecting to peer at {}", uri);
+        tracing::info!("Connecting to peer at {uri}");
 
         let (ws_stream, _resp) = connect_async(uri.clone())
             .await
@@ -265,7 +265,7 @@ where
             .await
             .map_err(ConnectToPeerError::Registration)?;
 
-        tracing::info!("Connected to peer at {} with connection ID {:?}", uri, conn_id);
+        tracing::info!("Connected to peer at {uri} with connection ID {conn_id:?}",);
         Ok(conn_id)
     }
 
