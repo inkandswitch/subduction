@@ -41,7 +41,7 @@ pub trait Connection<K: FutureKind + ?Sized>: Clone {
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
 
     /// Send a message.
-    fn send(&self, message: Message) -> K::Future<'_, Result<(), Self::SendError>>;
+    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>>;
 
     /// Receive a message.
     fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>>;
@@ -71,7 +71,7 @@ impl<T: Connection<K>, K: FutureKind> Connection<K> for Arc<T> {
         T::disconnect(self)
     }
 
-    fn send(&self, message: Message) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
         T::send(self, message)
     }
 

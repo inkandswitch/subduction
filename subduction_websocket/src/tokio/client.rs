@@ -82,12 +82,9 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for TokioW
         async { Ok(()) }.boxed()
     }
 
-    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        async {
-            tracing::debug!("client sending message: {:?}", message);
-            Connection::<Sendable>::send(&self.socket, message).await
-        }
-        .boxed()
+    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        tracing::debug!("client sending message: {:?}", message);
+        Connection::<Sendable>::send(&self.socket, message)
     }
 
     fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {

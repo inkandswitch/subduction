@@ -85,7 +85,7 @@ async fn rend_receive() -> TestResult {
     });
 
     let expected = Message::BlobsRequest(Vec::new());
-    client_ws.send(expected).await?;
+    client_ws.send(&expected).await?;
 
     Ok(())
 }

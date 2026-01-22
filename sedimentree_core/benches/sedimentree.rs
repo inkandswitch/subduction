@@ -492,7 +492,6 @@ mod sedimentree {
     /// data against the summary.
     pub fn bench_diff_remote(c: &mut Criterion) {
         let mut group = c.benchmark_group("sedimentree_diff_remote");
-        let metric = CountLeadingZeroBytes;
 
         for size in [10, 100, 500, 2000, 5000] {
             group.throughput(Throughput::Elements(size as u64));
@@ -505,7 +504,7 @@ mod sedimentree {
                 BenchmarkId::new("overlapping_50pct", size),
                 &(local, remote_summary),
                 |b, (local, summary)| {
-                    b.iter(|| local.diff_remote(black_box(summary), &metric));
+                    b.iter(|| local.diff_remote(black_box(summary)));
                 },
             );
         }
@@ -522,7 +521,7 @@ mod sedimentree {
                 BenchmarkId::new("vs_empty_remote", size),
                 &(local, empty_summary),
                 |b, (local, summary)| {
-                    b.iter(|| local.diff_remote(black_box(summary), &metric));
+                    b.iter(|| local.diff_remote(black_box(summary)));
                 },
             );
         }

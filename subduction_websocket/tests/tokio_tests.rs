@@ -99,7 +99,7 @@ async fn client_reconnect() -> TestResult {
 
     // Send a message to verify connection works
     let test_msg = Message::BlobsRequest(vec![]);
-    client_ws.send(test_msg.clone()).await?;
+    client_ws.send(&test_msg).await?;
 
     // Trigger reconnect
     client_ws.reconnect().await?;
@@ -108,7 +108,7 @@ async fn client_reconnect() -> TestResult {
     assert_eq!(client_ws.peer_id(), initial_peer_id);
 
     // Verify connection still works after reconnect
-    client_ws.send(test_msg).await?;
+    client_ws.send(&test_msg).await?;
 
     Ok(())
 }

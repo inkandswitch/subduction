@@ -67,7 +67,7 @@ impl Connection<Sendable> for MockConnection {
 
     fn send(
         &self,
-        _message: Message,
+        _message: &Message,
     ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
         Box::pin(async { Ok(()) })
     }
@@ -143,7 +143,7 @@ impl Connection<Sendable> for FailingSendMockConnection {
 
     fn send(
         &self,
-        _message: Message,
+        _message: &Message,
     ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
@@ -256,9 +256,10 @@ impl Connection<Sendable> for ChannelMockConnection {
 
     fn send(
         &self,
-        message: Message,
+        message: &Message,
     ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
+        let message = message.clone();
         Box::pin(async move { tx.send(message).await })
     }
 
@@ -308,9 +309,10 @@ impl Connection<Local> for ChannelMockConnection {
 
     fn send(
         &self,
-        message: Message,
+        message: &Message,
     ) -> <Local as FutureKind>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
+        let message = message.clone();
         async move { tx.send(message).await }.boxed_local()
     }
 
@@ -421,7 +423,7 @@ where
 
     fn send(
         &self,
-        message: Message,
+        message: &Message,
     ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
@@ -464,7 +466,7 @@ impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
 
     fn send(
         &self,
-        message: Message,
+        message: &Message,
     ) -> <Local as FutureKind>::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
@@ -526,7 +528,7 @@ mod tests {
         let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
 
         let msg = Message::BlobsRequest(vec![]);
-        Connection::<Sendable>::send(&conn, msg.clone()).await?;
+        Connection::<Sendable>::send(&conn, &msg).await?;
         let received = handle.outbound_rx.recv().await?;
         assert!(matches!(received, Message::BlobsRequest(_)));
 

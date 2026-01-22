@@ -112,9 +112,9 @@ impl Connection<Local> for JsConnection {
         .boxed_local()
     }
 
-    fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        let wasm_msg = WasmMessage::from(message.clone());
         async move {
-            let wasm_msg = WasmMessage::from(message);
             JsFuture::from(self.js_send(wasm_msg))
                 .await
                 .map_err(JsConnectionError::Send)?;

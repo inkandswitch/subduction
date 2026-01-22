@@ -624,7 +624,7 @@ where
             }
         }
 
-        conn.send(Message::BlobsResponse(blobs))
+        conn.send(&Message::BlobsResponse(blobs))
             .await
             .map_err(IoError::ConnSend)?;
 
@@ -698,10 +698,11 @@ where
             id
         );
 
-        self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO lots of cloning
+        self.insert_commit_locally(id, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
+        let msg = Message::LooseCommit { id, commit: commit.clone(), blob };
         {
             let conns_with_ids: Vec<(ConnectionId, C)> = {
                 self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
@@ -709,16 +710,12 @@ where
             for (conn_id, conn) in conns_with_ids {
                 tracing::debug!(
                     "Propagating commit {:?} for sedimentree {:?} to peer {:?}",
-                    commit.digest(),
+                    msg.request_id(),
                     id,
                     conn.peer_id()
                 );
 
-                if let Err(e) = conn.send(Message::LooseCommit {
-                    id,
-                    commit: commit.clone(),
-                    blob: blob.clone(),
-                }).await {
+                if let Err(e) = conn.send(&msg).await {
                     tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
                     self.unregister(&conn_id).await;
                     tracing::info!("unregistered failed connection {:?}", conn_id);
@@ -761,10 +758,15 @@ where
             .await;
 
         self.storage
-            .save_blob(blob.clone()) // TODO lots of cloning
+            .save_blob(blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
+        let msg = Message::Fragment {
+            id,
+            fragment: fragment.clone(),
+            blob,
+        };
         let conns_with_ids: Vec<(ConnectionId, C)> = {
             self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
         };
@@ -775,11 +777,7 @@ where
                 id,
                 conn.peer_id()
             );
-            if let Err(e) = conn.send(Message::Fragment {
-                id,
-                fragment: fragment.clone(),
-                blob: blob.clone(),
-            }).await {
+            if let Err(e) = conn.send(&msg).await {
                 tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
                 self.unregister(&conn_id).await;
                 tracing::info!("unregistered failed connection {:?}", conn_id);
@@ -820,21 +818,22 @@ where
             .map_err(IoError::Storage)?;
 
         if was_new {
+            let msg = Message::LooseCommit {
+                id,
+                commit: commit.clone(),
+                blob,
+            };
             let conns_with_ids: Vec<(ConnectionId, C)> = {
                 self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
             };
             for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
-                    && let Err(e) = conn.send(Message::LooseCommit {
-                        id,
-                        commit: commit.clone(),
-                        blob: blob.clone(),
-                    })
-                    .await {
-                        tracing::error!("{e}");
-                        self.unregister(&conn_id).await;
-                        tracing::info!("unregistered failed connection {:?}", conn_id);
-                    }
+                    && let Err(e) = conn.send(&msg).await
+                {
+                    tracing::error!("{e}");
+                    self.unregister(&conn_id).await;
+                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                }
             }
         }
 
@@ -863,26 +862,27 @@ where
         );
 
         let was_new = self
-            .insert_fragment_locally(id, fragment.clone(), blob.clone()) // TODO lots of cloning
+            .insert_fragment_locally(id, fragment.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
         if was_new {
+            let msg = Message::Fragment {
+                id,
+                fragment: fragment.clone(),
+                blob,
+            };
             let conns_with_ids: Vec<(ConnectionId, C)> = {
                 self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
             };
             for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
-                    && let Err(e) = conn.send(Message::Fragment {
-                        id,
-                        fragment: fragment.clone(),
-                        blob: blob.clone(),
-                    })
-                    .await {
-                        tracing::error!("{e}");
-                        self.unregister(&conn_id).await;
-                        tracing::info!("unregistered failed connection {:?}", conn_id);
-                    }
+                    && let Err(e) = conn.send(&msg).await
+                {
+                    tracing::error!("{e}");
+                    self.unregister(&conn_id).await;
+                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                }
             }
         }
 
@@ -914,42 +914,47 @@ where
         let sync_diff = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
             let sedimentree = locked.entry(id).or_default();
-            let local_sedimentree = sedimentree.clone();
             tracing::debug!(
                 "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commits and {} fragments",
                 their_summary.loose_commits().len(),
                 their_summary.fragment_summaries().len()
             );
 
-            let diff: RemoteDiff<'_> =
-                local_sedimentree.diff_remote(their_summary, &self.depth_metric);
+            let (commits_to_add, local_commits, local_fragments) = {
+                let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
+                (
+                    diff.remote_commits.iter().map(|c| (*c).clone()).collect::<Vec<LooseCommit>>(),
+                    diff.local_commits.iter().map(|c| (*c).clone()).collect::<Vec<LooseCommit>>(),
+                    diff.local_fragments.iter().map(|f| (*f).clone()).collect::<Vec<Fragment>>(),
+                )
+            };
 
-            for commit in diff.remote_commits {
-                sedimentree.add_commit(commit.clone());
+            for commit in commits_to_add {
+                sedimentree.add_commit(commit);
             }
 
-            for commit in diff.local_commits {
+            for commit in local_commits {
                 if let Some(blob) = self
                     .storage
                     .load_blob(commit.blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?
                 {
-                    their_missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
+                    their_missing_commits.push((commit, blob));
                 } else {
                     tracing::warn!("missing blob for commit {:?}", commit.digest(),);
                     our_missing_blobs.push(commit.blob_meta().digest());
                 }
             }
 
-            for fragment in diff.local_fragments {
+            for fragment in local_fragments {
                 if let Some(blob) = self
                     .storage
                     .load_blob(fragment.summary().blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?
                 {
-                    their_missing_fragments.push((fragment.clone(), blob)); // TODO lots of cloning
+                    their_missing_fragments.push((fragment, blob));
                 } else {
                     tracing::warn!("missing blob for fragment {:?} ", fragment.digest(),);
                     our_missing_blobs.push(fragment.summary().blob_meta().digest());
@@ -968,14 +973,13 @@ where
             }
         };
 
-        if let Err(e) = conn.send(
-            BatchSyncResponse {
-                id,
-                req_id,
-                diff: sync_diff
-            }
-            .into(),
-        ).await {
+        let msg: Message = BatchSyncResponse {
+            id,
+            req_id,
+            diff: sync_diff
+        }
+        .into();
+        if let Err(e) = conn.send(&msg).await {
             tracing::error!("{e}");
         }
 
@@ -1022,14 +1026,15 @@ where
 
     /// Find blobs from connected peers.
     pub async fn request_blobs(&self, digests: Vec<Digest>) {
+        let msg = Message::BlobsRequest(digests);
         let conns_with_ids: Vec<(ConnectionId, C)> = {
             self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
         };
         for (conn_id, conn) in conns_with_ids {
-            if let Err(e) = conn.send(Message::BlobsRequest(digests.clone())).await {
+            if let Err(e) = conn.send(&msg).await {
                 tracing::error!(
                     "Error requesting blobs {:?} from peer {:?}: {:?}",
-                    digests,
+                    msg,
                     conn.peer_id(),
                     e
                 );

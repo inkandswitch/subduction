@@ -230,7 +230,8 @@ impl WasmWebSocket {
     /// Returns [`WasmSendError`] if the message could not be sent over the WebSocket.
     #[wasm_bindgen(js_name = send)]
     pub async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
-        self.send(wasm_message.into()).await?;
+        let msg: Message = wasm_message.into();
+        self.send(&msg).await?;
         Ok(())
     }
 
@@ -303,25 +304,19 @@ impl Connection<Local> for WasmWebSocket {
         async { Ok(()) }.boxed_local()
     }
 
-    fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        let request_id = message.request_id();
+
+        let mut msg_bytes = Vec::new();
+        #[allow(clippy::expect_used)]
+        ciborium::ser::into_writer(message, &mut msg_bytes).expect("should be Infallible");
+
         async move {
-            tracing::debug!("sending outbound message id {:?}", message.request_id());
-            
-            let mut msg_bytes = Vec::new();
-            #[allow(clippy::expect_used)]
-            ciborium::ser::into_writer(&message, &mut msg_bytes).expect("should be Infallible");
-
-            tracing::debug!(
-                "sending outbound message id {:?} that's {} bytes long",
-                message.request_id(),
-                msg_bytes.len()
-            );
-
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
                 .map_err(SendError::SocketSend)?;
 
-            tracing::debug!("sent outbound message id {:?}", message.request_id());
+            tracing::debug!("sent outbound message id {:?}", request_id);
 
             Ok(())
         }

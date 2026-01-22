@@ -73,7 +73,7 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for Unifie
         }
     }
 
-    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
         match self {
             UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::send(in_ws, message),
             UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::send(out_ws, message),

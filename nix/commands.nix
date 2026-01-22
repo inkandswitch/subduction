@@ -64,6 +64,13 @@
 
     "bench:host:open" = cmd "Open host Criterion benchmarks in browser"
       "${pkgs.xdg-utils}/bin/xdg-open ./target/criterion/report/index.html";
+
+    "bench:heap" = cmd "Run heap allocation profiling" ''
+      ${cargo} test --package sedimentree_core --test heap_profile -- --nocapture
+      ${pkgs.jq}/bin/jq '.' sedimentree_core/dhat-heap.json | ${pkgs.moreutils}/bin/sponge sedimentree_core/dhat-heap.json
+      echo ""
+      echo "Heap profile saved to sedimentree_core/dhat-heap.json"
+    '';
   };
 
   lint = {
@@ -199,6 +206,29 @@
 
     "test:docs" = cmd "Run Cargo doctests"
       "${cargo} test --doc";
+
+    "test:props" = cmd "Run proptests with many iterations" ''
+      set -e
+      echo "Running property tests with 100,000 iterations each..."
+      echo ""
+      export BOLERO_RANDOM_ITERATIONS=100000
+      ${cargo} test --all-features proptests -- --nocapture
+      echo ""
+      echo "✓ All property tests passed"
+    '';
+
+    "test:props:quick" = cmd "Run proptests with default iterations"
+      "${cargo} test --all-features proptests -- --nocapture";
+
+    "test:props:intense" = cmd "Run proptests with 1M iterations" ''
+      set -e
+      echo "Running property tests with 1,000,000 iterations each..."
+      echo ""
+      export BOLERO_RANDOM_ITERATIONS=1000000
+      ${cargo} test --all-features proptests -- --nocapture
+      echo ""
+      echo "✓ All property tests passed"
+    '';
   };
 
   docs = {
