@@ -914,41 +914,48 @@ where
         let sync_diff = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
             let sedimentree = locked.entry(id).or_default();
-            let local_sedimentree = sedimentree.clone();
             tracing::debug!(
                 "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commits and {} fragments",
                 their_summary.loose_commits().len(),
                 their_summary.fragment_summaries().len()
             );
 
-            let diff: RemoteDiff<'_> = local_sedimentree.diff_remote(their_summary);
+            // Extract diff items in a scope to release borrow before mutating tree
+            let (commits_to_add, local_commits, local_fragments) = {
+                let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
+                (
+                    diff.remote_commits.iter().map(|c| (*c).clone()).collect::<Vec<LooseCommit>>(),
+                    diff.local_commits.iter().map(|c| (*c).clone()).collect::<Vec<LooseCommit>>(),
+                    diff.local_fragments.iter().map(|f| (*f).clone()).collect::<Vec<Fragment>>(),
+                )
+            };
 
-            for commit in diff.remote_commits {
-                sedimentree.add_commit(commit.clone());
+            for commit in commits_to_add {
+                sedimentree.add_commit(commit);
             }
 
-            for commit in diff.local_commits {
+            for commit in local_commits {
                 if let Some(blob) = self
                     .storage
                     .load_blob(commit.blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?
                 {
-                    their_missing_commits.push((commit.clone(), blob)); // TODO lots of cloning
+                    their_missing_commits.push((commit, blob));
                 } else {
                     tracing::warn!("missing blob for commit {:?}", commit.digest(),);
                     our_missing_blobs.push(commit.blob_meta().digest());
                 }
             }
 
-            for fragment in diff.local_fragments {
+            for fragment in local_fragments {
                 if let Some(blob) = self
                     .storage
                     .load_blob(fragment.summary().blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?
                 {
-                    their_missing_fragments.push((fragment.clone(), blob)); // TODO lots of cloning
+                    their_missing_fragments.push((fragment, blob));
                 } else {
                     tracing::warn!("missing blob for fragment {:?} ", fragment.digest(),);
                     our_missing_blobs.push(fragment.summary().blob_meta().digest());
