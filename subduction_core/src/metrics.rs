@@ -21,19 +21,17 @@ pub mod names {
     /// Total batch sync responses received.
     pub const BATCH_SYNC_RESPONSES_TOTAL: &str = "subduction_batch_sync_responses_total";
 
-    // Storage metrics
-    /// Total sedimentree save operations.
-    pub const STORAGE_SEDIMENTREE_SAVES: &str = "subduction_storage_sedimentree_saves_total";
-    /// Total sedimentree delete operations.
-    pub const STORAGE_SEDIMENTREE_DELETES: &str = "subduction_storage_sedimentree_deletes_total";
-    /// Total loose commits saved, labeled by `sedimentree_id`.
-    pub const STORAGE_LOOSE_COMMITS_SAVED: &str = "subduction_storage_loose_commits_saved_total";
-    /// Total fragments saved, labeled by `sedimentree_id`.
-    pub const STORAGE_FRAGMENTS_SAVED: &str = "subduction_storage_fragments_saved_total";
-    /// Total blob save operations.
-    pub const STORAGE_BLOB_SAVES: &str = "subduction_storage_blob_saves_total";
-    /// Total blob delete operations.
-    pub const STORAGE_BLOB_DELETES: &str = "subduction_storage_blob_deletes_total";
+    // Storage metrics (gauges - refreshed periodically from actual state)
+    /// Current number of sedimentrees in storage.
+    pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
+    /// Current number of loose commits in storage, labeled by `sedimentree_id`.
+    pub const STORAGE_LOOSE_COMMITS: &str = "subduction_storage_loose_commits";
+    /// Current number of fragments in storage, labeled by `sedimentree_id`.
+    pub const STORAGE_FRAGMENTS: &str = "subduction_storage_fragments";
+    /// Total loose commits across all sedimentrees.
+    pub const STORAGE_LOOSE_COMMITS_TOTAL: &str = "subduction_storage_loose_commits_total";
+    /// Total fragments across all sedimentrees.
+    pub const STORAGE_FRAGMENTS_TOTAL: &str = "subduction_storage_fragments_total";
     /// Storage operation duration in seconds.
     pub const STORAGE_OPERATION_DURATION_SECONDS: &str =
         "subduction_storage_operation_duration_seconds";
@@ -77,42 +75,41 @@ pub fn batch_sync_response() {
     metrics::counter!(names::BATCH_SYNC_RESPONSES_TOTAL).increment(1);
 }
 
-// Storage metrics
+// Storage metrics (gauges - set from actual state)
 
-/// Record a sedimentree save operation.
+/// Set the current number of sedimentrees in storage.
 #[inline]
-pub fn storage_sedimentree_saved() {
-    metrics::counter!(names::STORAGE_SEDIMENTREE_SAVES).increment(1);
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_sedimentrees(count: usize) {
+    metrics::gauge!(names::STORAGE_SEDIMENTREES).set(count as f64);
 }
 
-/// Record a sedimentree delete operation.
+/// Set the current number of loose commits for a sedimentree.
 #[inline]
-pub fn storage_sedimentree_deleted() {
-    metrics::counter!(names::STORAGE_SEDIMENTREE_DELETES).increment(1);
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_loose_commits(sedimentree_id: String, count: usize) {
+    metrics::gauge!(names::STORAGE_LOOSE_COMMITS, "sedimentree_id" => sedimentree_id).set(count as f64);
 }
 
-/// Record a loose commit being saved.
+/// Set the current number of fragments for a sedimentree.
 #[inline]
-pub fn storage_loose_commit_saved(sedimentree_id: String) {
-    metrics::counter!(names::STORAGE_LOOSE_COMMITS_SAVED, "sedimentree_id" => sedimentree_id).increment(1);
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_fragments(sedimentree_id: String, count: usize) {
+    metrics::gauge!(names::STORAGE_FRAGMENTS, "sedimentree_id" => sedimentree_id).set(count as f64);
 }
 
-/// Record a fragment being saved.
+/// Set the total number of loose commits across all sedimentrees.
 #[inline]
-pub fn storage_fragment_saved(sedimentree_id: String) {
-    metrics::counter!(names::STORAGE_FRAGMENTS_SAVED, "sedimentree_id" => sedimentree_id).increment(1);
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_loose_commits_total(count: usize) {
+    metrics::gauge!(names::STORAGE_LOOSE_COMMITS_TOTAL).set(count as f64);
 }
 
-/// Record a blob save operation.
+/// Set the total number of fragments across all sedimentrees.
 #[inline]
-pub fn storage_blob_saved() {
-    metrics::counter!(names::STORAGE_BLOB_SAVES).increment(1);
-}
-
-/// Record a blob delete operation.
-#[inline]
-pub fn storage_blob_deleted() {
-    metrics::counter!(names::STORAGE_BLOB_DELETES).increment(1);
+#[allow(clippy::cast_precision_loss)]
+pub fn set_storage_fragments_total(count: usize) {
+    metrics::gauge!(names::STORAGE_FRAGMENTS_TOTAL).set(count as f64);
 }
 
 /// Record the duration of a storage operation.

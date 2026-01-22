@@ -8,4 +8,4 @@ pub mod key;
 pub mod metrics;
 
 #[cfg(feature = "metrics")]
-pub use metrics::MetricsStorage;
+pub use metrics::{MetricsStorage, RefreshMetrics};

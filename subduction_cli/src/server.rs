@@ -5,7 +5,10 @@ use crate::metrics;
 use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
-use subduction_core::{peer::id::PeerId, MetricsStorage};
+use subduction_core::{
+    peer::id::PeerId,
+    storage::{MetricsStorage, RefreshMetrics},
+};
 use subduction_websocket::{
     timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer,
 };
@@ -37,7 +40,14 @@ pub(crate) struct ServerArgs {
     /// Enable the Prometheus metrics server (use --metrics=false to disable)
     #[arg(long, default_value_t = true)]
     pub(crate) metrics: bool,
+
+    /// Interval in seconds for refreshing storage metrics from disk
+    #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
+    pub(crate) metrics_refresh_interval: u64,
 }
+
+/// Default interval for refreshing storage metrics (1 minute).
+const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
 
 /// Run the WebSocket server.
 pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()> {
@@ -54,6 +64,34 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
     let fs_storage = FsStorage::new(data_dir)?;
     let storage = MetricsStorage::new(fs_storage);
+
+    // Initial metrics refresh and start background refresh task
+    if args.metrics {
+        storage.refresh_metrics().await?;
+
+        // Spawn background task to periodically refresh metrics
+        let metrics_storage = storage.clone();
+        let metrics_token = token.clone();
+        let refresh_interval = Duration::from_secs(args.metrics_refresh_interval);
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(refresh_interval);
+            interval.tick().await; // Skip immediate tick (already did initial refresh)
+
+            loop {
+                tokio::select! {
+                    _ = interval.tick() => {
+                        if let Err(e) = metrics_storage.refresh_metrics().await {
+                            tracing::warn!("Failed to refresh storage metrics: {}", e);
+                        }
+                    }
+                    () = metrics_token.cancelled() => {
+                        tracing::debug!("Stopping metrics refresh task");
+                        break;
+                    }
+                }
+            }
+        });
+    }
 
     let peer_id = args
         .peer_id

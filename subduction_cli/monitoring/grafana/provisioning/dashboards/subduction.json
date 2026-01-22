@@ -532,11 +532,11 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_storage_sedimentree_saves_total",
+          "expr": "subduction_storage_sedimentrees",
           "refId": "A"
         }
       ],
-      "title": "Sedimentree Saves",
+      "title": "Sedimentrees",
       "type": "stat"
     },
     {
@@ -574,11 +574,11 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "subduction_storage_blob_saves_total",
+          "expr": "subduction_storage_loose_commits_total",
           "refId": "A"
         }
       ],
-      "title": "Blob Saves",
+      "title": "Loose Commits",
       "type": "stat"
     },
     {
@@ -616,11 +616,11 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(subduction_storage_loose_commits_saved_total)",
+          "expr": "subduction_storage_fragments_total",
           "refId": "A"
         }
       ],
-      "title": "Total Loose Commits Saved",
+      "title": "Fragments",
       "type": "stat"
     },
     {
@@ -658,11 +658,11 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "sum(subduction_storage_fragments_saved_total)",
+          "expr": "subduction_batch_sync_responses_total",
           "refId": "A"
         }
       ],
-      "title": "Total Fragments Saved",
+      "title": "Batch Sync Responses",
       "type": "stat"
     },
     {
@@ -699,7 +699,7 @@
             "mode": "absolute",
             "steps": [{ "color": "green", "value": null }]
           },
-          "unit": "ops"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -707,7 +707,7 @@
       "id": 15,
       "options": {
         "legend": {
-          "calcs": ["mean", "max"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -718,12 +718,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_storage_loose_commits_saved_total[1m])",
+          "expr": "subduction_storage_loose_commits",
           "legendFormat": "{{sedimentree_id}}",
           "refId": "A"
         }
       ],
-      "title": "Loose Commits Saved/s (by Sedimentree)",
+      "title": "Loose Commits (by Sedimentree)",
       "type": "timeseries"
     },
     {
@@ -760,7 +760,7 @@
             "mode": "absolute",
             "steps": [{ "color": "green", "value": null }]
           },
-          "unit": "ops"
+          "unit": "short"
         },
         "overrides": []
       },
@@ -768,7 +768,7 @@
       "id": 16,
       "options": {
         "legend": {
-          "calcs": ["mean", "max"],
+          "calcs": ["lastNotNull", "max"],
           "displayMode": "table",
           "placement": "bottom",
           "showLegend": true
@@ -779,12 +779,12 @@
       "targets": [
         {
           "datasource": { "type": "prometheus", "uid": "prometheus" },
-          "expr": "rate(subduction_storage_fragments_saved_total[1m])",
+          "expr": "subduction_storage_fragments",
           "legendFormat": "{{sedimentree_id}}",
           "refId": "A"
         }
       ],
-      "title": "Fragments Saved/s (by Sedimentree)",
+      "title": "Fragments (by Sedimentree)",
       "type": "timeseries"
     },
     {

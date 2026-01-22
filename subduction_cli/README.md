@@ -403,30 +403,6 @@ subduction_cli server --metrics --metrics-port 9090
 subduction_cli server --metrics=false
 ```
 
-### Available Metrics
-
-**Connection Metrics:**
-- `subduction_connections_active` - Current active connections
-- `subduction_connections_total` - Total connections established
-- `subduction_connections_closed` - Total connections closed
-
-**Message Metrics:**
-- `subduction_messages_total` - Messages processed (labeled by type)
-- `subduction_dispatch_duration_seconds` - Message dispatch latency histogram
-
-**Sync Metrics:**
-- `subduction_batch_sync_requests_total` - Batch sync requests received
-- `subduction_batch_sync_responses_total` - Batch sync responses sent
-
-**Storage Metrics:**
-- `subduction_storage_sedimentree_saves_total` - Total sedimentree save operations
-- `subduction_storage_sedimentree_deletes_total` - Total sedimentree delete operations
-- `subduction_storage_blob_saves_total` - Total blob save operations
-- `subduction_storage_blob_deletes_total` - Total blob delete operations
-- `subduction_storage_loose_commits_saved_total` - Loose commits saved (labeled by `sedimentree_id`)
-- `subduction_storage_fragments_saved_total` - Fragments saved (labeled by `sedimentree_id`)
-- `subduction_storage_operation_duration_seconds` - Storage operation latency histogram
-
 ### Development Monitoring Stack
 
 When developing locally with Nix, use the `monitoring:start` command to launch Prometheus and Grafana with pre-configured dashboards:
@@ -443,13 +419,7 @@ This starts:
 - **Prometheus** at `http://localhost:9092` - scrapes metrics from the server
 - **Grafana** at `http://localhost:3939` - pre-configured dashboards
 
-The Grafana dashboard includes panels for:
-- Active/total/closed connections
-- Messages per second by type
-- Dispatch latency (p50/p95/p99)
-- Batch sync request/response rates
-- Storage metrics (sedimentrees, blobs, commits, fragments)
-- Storage operation latency
+The Grafana dashboard includes panels for connections, messages, sync operations, and storage.
 
 ### Production Monitoring
 
