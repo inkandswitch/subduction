@@ -1,5 +1,10 @@
 # Subduction
 
+[![Build](https://github.com/inkandswitch/subduction/actions/workflows/build.yml/badge.svg)](https://github.com/inkandswitch/subduction/actions/workflows/build.yml)
+[![Tests](https://github.com/inkandswitch/subduction/actions/workflows/test-host.yml/badge.svg)](https://github.com/inkandswitch/subduction/actions/workflows/test-host.yml)
+[![Wasm Tests](https://github.com/inkandswitch/subduction/actions/workflows/test-wasm.yml/badge.svg)](https://github.com/inkandswitch/subduction/actions/workflows/test-wasm.yml)
+[![License](https://img.shields.io/badge/License-MIT_OR_Apache_2.0-blue.svg)](LICENSE-APACHE)
+
 > [!CAUTION]
 > This is an early release preview. It has a very unstable API. No guarantees are given. DO NOT use for production use cases at this time. USE AT YOUR OWN RISK.
 
