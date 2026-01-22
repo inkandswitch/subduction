@@ -250,7 +250,6 @@ where
             peer_id,
         ));
 
-        // Start the listener for this connection
         let listen_ws = ws_conn.clone();
         let listen_uri = uri.clone();
         tokio::spawn(async move {
@@ -259,7 +258,6 @@ where
             }
         });
 
-        // Register with Subduction for sync
         let (_is_new, conn_id) = self
             .subduction
             .register(ws_conn)
