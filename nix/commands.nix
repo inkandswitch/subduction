@@ -205,12 +205,12 @@
       echo "Running extended property tests with bolero..."
       echo "Each test will run for 60 seconds."
       echo ""
-      ${cargo} bolero test --all-features --time 60
+      ${cargo} bolero test --all-features --timeout 60
     '';
 
     "test:fuzz:quick" = cmd "Run bolero property tests (10 sec per test)" ''
       set -e
-      ${cargo} bolero test --all-features --time 10
+      ${cargo} bolero test --all-features --timeout 10
     '';
 
     "test:fuzz:thorough" = cmd "Run bolero property tests thoroughly (5 min per test)" ''
@@ -218,7 +218,7 @@
       echo "Running thorough property tests with bolero..."
       echo "Each test will run for 5 minutes. This may take a while."
       echo ""
-      ${cargo} bolero test --all-features --time 300
+      ${cargo} bolero test --all-features --timeout 300
     '';
   };
 
