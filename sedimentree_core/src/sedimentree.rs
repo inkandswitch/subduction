@@ -156,25 +156,13 @@ impl Sedimentree {
     /// Compute the difference between two local [`Sedimentree`]s.
     #[must_use]
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
-        let left_fragments = self.fragments.iter().collect::<Set<_>>();
-        let right_fragments = other.fragments.iter().collect::<Set<_>>();
-
-        let left_commits = self.commits.iter().collect::<Set<_>>();
-        let right_commits = other.commits.iter().collect::<Set<_>>();
-
         Diff {
             // Items in right but not left = what left is missing
-            left_missing_fragments: right_fragments
-                .difference(&left_fragments)
-                .copied()
-                .collect(),
-            left_missing_commits: right_commits.difference(&left_commits).copied().collect(),
+            left_missing_fragments: other.fragments.difference(&self.fragments).collect(),
+            left_missing_commits: other.commits.difference(&self.commits).collect(),
             // Items in left but not right = what right is missing
-            right_missing_fragments: left_fragments
-                .difference(&right_fragments)
-                .copied()
-                .collect(),
-            right_missing_commits: left_commits.difference(&right_commits).copied().collect(),
+            right_missing_fragments: self.fragments.difference(&other.fragments).collect(),
+            right_missing_commits: self.commits.difference(&other.commits).collect(),
         }
     }
 
