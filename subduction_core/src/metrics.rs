@@ -24,9 +24,9 @@ pub mod names {
     // Storage metrics
     /// Number of sedimentrees currently stored.
     pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
-    /// Total loose commits saved, labeled by sedimentree_id.
+    /// Total loose commits saved, labeled by `sedimentree_id`.
     pub const STORAGE_LOOSE_COMMITS_SAVED: &str = "subduction_storage_loose_commits_saved";
-    /// Total fragments saved, labeled by sedimentree_id.
+    /// Total fragments saved, labeled by `sedimentree_id`.
     pub const STORAGE_FRAGMENTS_SAVED: &str = "subduction_storage_fragments_saved";
     /// Total blobs currently stored.
     pub const STORAGE_BLOBS: &str = "subduction_storage_blobs";

@@ -32,19 +32,19 @@ pub struct MetricsStorage<S> {
 impl<S> MetricsStorage<S> {
     /// Create a new `MetricsStorage` wrapper around the given storage.
     #[must_use]
-    pub fn new(inner: S) -> Self {
+    pub const fn new(inner: S) -> Self {
         Self { inner }
     }
 
     /// Get a reference to the inner storage.
     #[must_use]
-    pub fn inner(&self) -> &S {
+    pub const fn inner(&self) -> &S {
         &self.inner
     }
 
     /// Get a mutable reference to the inner storage.
     #[must_use]
-    pub fn inner_mut(&mut self) -> &mut S {
+    pub const fn inner_mut(&mut self) -> &mut S {
         &mut self.inner
     }
 
