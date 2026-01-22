@@ -36,8 +36,8 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value = "9090")]
     pub(crate) metrics_port: u16,
 
-    /// Enable the Prometheus metrics server (use --metrics=false to disable)
-    #[arg(long, default_value_t = true)]
+    /// Enable the Prometheus metrics server
+    #[arg(long, default_value_t = false)]
     pub(crate) metrics: bool,
 
     /// Interval in seconds for refreshing storage metrics from disk
