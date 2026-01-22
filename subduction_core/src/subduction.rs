@@ -698,13 +698,10 @@ where
             id
         );
 
-        // Clone for storage
         self.insert_commit_locally(id, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
-        // Build message once, send by reference to all peers
-        // (clone commit once for message; avoids N-1 additional clones)
         let msg = Message::LooseCommit { id, commit: commit.clone(), blob };
         {
             let conns_with_ids: Vec<(ConnectionId, C)> = {
@@ -760,13 +757,11 @@ where
             .with_entry_or_default(id, |tree| tree.add_fragment(fragment.clone()))
             .await;
 
-        // Clone blob for storage, move original to message
         self.storage
             .save_blob(blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
-        // Build message once, send by reference to all peers (avoids N clones)
         let msg = Message::Fragment {
             id,
             fragment: fragment.clone(),
@@ -817,14 +812,12 @@ where
             from
         );
 
-        // Clone once for storage
         let was_new = self
             .insert_commit_locally(id, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
         if was_new {
-            // Build message once, send by reference to all peers (avoids N clones)
             let msg = Message::LooseCommit {
                 id,
                 commit: commit.clone(),
@@ -868,14 +861,12 @@ where
             from
         );
 
-        // Clone once for storage
         let was_new = self
             .insert_fragment_locally(id, fragment.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
         if was_new {
-            // Build message once, send by reference to all peers (avoids N clones)
             let msg = Message::Fragment {
                 id,
                 fragment: fragment.clone(),
@@ -929,7 +920,6 @@ where
                 their_summary.fragment_summaries().len()
             );
 
-            // Extract diff items in a scope to release borrow before mutating tree
             let (commits_to_add, local_commits, local_fragments) = {
                 let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
                 (
@@ -1036,7 +1026,6 @@ where
 
     /// Find blobs from connected peers.
     pub async fn request_blobs(&self, digests: Vec<Digest>) {
-        // Build message once, send by reference to all peers (avoids N clones of digests)
         let msg = Message::BlobsRequest(digests);
         let conns_with_ids: Vec<(ConnectionId, C)> = {
             self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()

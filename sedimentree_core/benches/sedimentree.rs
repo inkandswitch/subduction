@@ -492,7 +492,6 @@ mod sedimentree {
     /// data against the summary.
     pub fn bench_diff_remote(c: &mut Criterion) {
         let mut group = c.benchmark_group("sedimentree_diff_remote");
-        let metric = CountLeadingZeroBytes;
 
         for size in [10, 100, 500, 2000, 5000] {
             group.throughput(Throughput::Elements(size as u64));

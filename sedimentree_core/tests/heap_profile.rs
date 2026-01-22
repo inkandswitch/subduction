@@ -18,122 +18,125 @@ use sedimentree_core::{
 
 use rand::{rngs::StdRng, Rng, SeedableRng};
 
-// ============================================================================
-// Test data generators
-// ============================================================================
+mod generators {
+    use super::*;
 
-fn digest_from_seed(seed: u64) -> Digest {
-    let mut bytes = [0u8; 32];
-    let mut rng = StdRng::seed_from_u64(seed);
-    rng.fill(&mut bytes);
-    Digest::from(bytes)
-}
-
-fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest {
-    let mut bytes = [0u8; 32];
-    let mut rng = StdRng::seed_from_u64(seed);
-    rng.fill(&mut bytes[zeros..]);
-    if zeros < 32 && bytes[zeros] == 0 {
-        bytes[zeros] = 1;
+    pub(crate) fn digest_from_seed(seed: u64) -> Digest {
+        let mut bytes = [0u8; 32];
+        let mut rng = StdRng::seed_from_u64(seed);
+        rng.fill(&mut bytes);
+        Digest::from(bytes)
     }
-    Digest::from(bytes)
-}
 
-fn synthetic_blob_meta(seed: u64, size: u64) -> BlobMeta {
-    BlobMeta::from_digest_size(digest_from_seed(seed), size)
-}
-
-fn synthetic_commit(seed: u64, parents: Vec<Digest>) -> LooseCommit {
-    let digest = digest_from_seed(seed);
-    let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
-    LooseCommit::new(digest, parents, blob_meta)
-}
-
-fn synthetic_fragment(
-    head_seed: u64,
-    boundary_count: usize,
-    checkpoint_count: usize,
-    leading_zeros: usize,
-) -> Fragment {
-    let head = digest_with_leading_zeros(leading_zeros, head_seed);
-    let boundary: Vec<Digest> = (0..boundary_count)
-        .map(|i| digest_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
-        .collect();
-    let checkpoints: Vec<Digest> = (0..checkpoint_count)
-        .map(|i| digest_from_seed(head_seed + 200 + i as u64))
-        .collect();
-    let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
-    Fragment::new(head, boundary, checkpoints, blob_meta)
-}
-
-fn linear_commit_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {
-    let mut commits = Vec::with_capacity(count);
-    let mut prev_digest = None;
-
-    for i in 0..count {
-        let parents = prev_digest.map(|d| vec![d]).unwrap_or_default();
-        let commit = synthetic_commit(base_seed + i as u64, parents);
-        prev_digest = Some(commit.digest());
-        commits.push(commit);
+    fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest {
+        let mut bytes = [0u8; 32];
+        let mut rng = StdRng::seed_from_u64(seed);
+        #[allow(clippy::indexing_slicing)]
+        rng.fill(&mut bytes[zeros..]);
+        #[allow(clippy::indexing_slicing)]
+        if zeros < 32 && bytes[zeros] == 0 {
+            bytes[zeros] = 1;
+        }
+        Digest::from(bytes)
     }
-    commits
+
+    fn synthetic_blob_meta(seed: u64, size: u64) -> BlobMeta {
+        BlobMeta::from_digest_size(digest_from_seed(seed), size)
+    }
+
+    fn synthetic_commit(seed: u64, parents: Vec<Digest>) -> LooseCommit {
+        let digest = digest_from_seed(seed);
+        let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
+        LooseCommit::new(digest, parents, blob_meta)
+    }
+
+    fn synthetic_fragment(
+        head_seed: u64,
+        boundary_count: usize,
+        checkpoint_count: usize,
+        leading_zeros: usize,
+    ) -> Fragment {
+        let head = digest_with_leading_zeros(leading_zeros, head_seed);
+        let boundary: Vec<Digest> = (0..boundary_count)
+            .map(|i| digest_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
+            .collect();
+        let checkpoints: Vec<Digest> = (0..checkpoint_count)
+            .map(|i| digest_from_seed(head_seed + 200 + i as u64))
+            .collect();
+        let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
+        Fragment::new(head, boundary, checkpoints, blob_meta)
+    }
+
+    fn linear_commit_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {
+        let mut commits = Vec::with_capacity(count);
+        let mut prev_digest = None;
+
+        for i in 0..count {
+            let parents = prev_digest.map(|d| vec![d]).unwrap_or_default();
+            let commit = synthetic_commit(base_seed + i as u64, parents);
+            prev_digest = Some(commit.digest());
+            commits.push(commit);
+        }
+        commits
+    }
+
+    pub(crate) fn synthetic_sedimentree(
+        fragment_count: usize,
+        commit_count: usize,
+        base_seed: u64,
+    ) -> Sedimentree {
+        let fragments: Vec<Fragment> = (0..fragment_count)
+            .map(|i| {
+                let leading_zeros = (i % 3).min(2);
+                synthetic_fragment(base_seed + i as u64 * 1000, 2, 5, leading_zeros)
+            })
+            .collect();
+
+        let commits = linear_commit_chain(commit_count, base_seed + 500_000);
+        Sedimentree::new(fragments, commits)
+    }
+
+    pub(crate) fn overlapping_sedimentrees(
+        shared_fragments: usize,
+        unique_fragments_each: usize,
+        shared_commits: usize,
+        unique_commits_each: usize,
+        base_seed: u64,
+    ) -> (Sedimentree, Sedimentree) {
+        let shared_frags: Vec<Fragment> = (0..shared_fragments)
+            .map(|i| synthetic_fragment(base_seed + i as u64 * 1000, 2, 5, i % 3))
+            .collect();
+        let shared_commits_vec = linear_commit_chain(shared_commits, base_seed + 100_000);
+
+        let a_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
+            .map(|i| synthetic_fragment(base_seed + 200_000 + i as u64 * 1000, 2, 5, i % 3))
+            .collect();
+        let a_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 300_000);
+
+        let b_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
+            .map(|i| synthetic_fragment(base_seed + 400_000 + i as u64 * 1000, 2, 5, i % 3))
+            .collect();
+        let b_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 500_000);
+
+        let mut a_frags = shared_frags.clone();
+        a_frags.extend(a_unique_frags);
+        let mut a_commits = shared_commits_vec.clone();
+        a_commits.extend(a_unique_commits);
+
+        let mut b_frags = shared_frags;
+        b_frags.extend(b_unique_frags);
+        let mut b_commits = shared_commits_vec;
+        b_commits.extend(b_unique_commits);
+
+        (
+            Sedimentree::new(a_frags, a_commits),
+            Sedimentree::new(b_frags, b_commits),
+        )
+    }
 }
 
-fn synthetic_sedimentree(fragment_count: usize, commit_count: usize, base_seed: u64) -> Sedimentree {
-    let fragments: Vec<Fragment> = (0..fragment_count)
-        .map(|i| {
-            let leading_zeros = (i % 3).min(2);
-            synthetic_fragment(base_seed + i as u64 * 1000, 2, 5, leading_zeros)
-        })
-        .collect();
+use generators::{overlapping_sedimentrees, synthetic_sedimentree};
 
-    let commits = linear_commit_chain(commit_count, base_seed + 500_000);
-    Sedimentree::new(fragments, commits)
-}
-
-fn overlapping_sedimentrees(
-    shared_fragments: usize,
-    unique_fragments_each: usize,
-    shared_commits: usize,
-    unique_commits_each: usize,
-    base_seed: u64,
-) -> (Sedimentree, Sedimentree) {
-    let shared_frags: Vec<Fragment> = (0..shared_fragments)
-        .map(|i| synthetic_fragment(base_seed + i as u64 * 1000, 2, 5, i % 3))
-        .collect();
-    let shared_commits_vec = linear_commit_chain(shared_commits, base_seed + 100_000);
-
-    let a_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
-        .map(|i| synthetic_fragment(base_seed + 200_000 + i as u64 * 1000, 2, 5, i % 3))
-        .collect();
-    let a_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 300_000);
-
-    let b_unique_frags: Vec<Fragment> = (0..unique_fragments_each)
-        .map(|i| synthetic_fragment(base_seed + 400_000 + i as u64 * 1000, 2, 5, i % 3))
-        .collect();
-    let b_unique_commits = linear_commit_chain(unique_commits_each, base_seed + 500_000);
-
-    let mut a_frags = shared_frags.clone();
-    a_frags.extend(a_unique_frags);
-    let mut a_commits = shared_commits_vec.clone();
-    a_commits.extend(a_unique_commits);
-
-    let mut b_frags = shared_frags;
-    b_frags.extend(b_unique_frags);
-    let mut b_commits = shared_commits_vec;
-    b_commits.extend(b_unique_commits);
-
-    (
-        Sedimentree::new(a_frags, a_commits),
-        Sedimentree::new(b_frags, b_commits),
-    )
-}
-
-// ============================================================================
-// Heap profiling - single test to avoid profiler conflicts
-// ============================================================================
-
-/// Measure allocations for a closure, returning (blocks, bytes)
 fn measure_allocs<F, R>(f: F) -> (u64, u64, R)
 where
     F: FnOnce() -> R,
@@ -150,7 +153,6 @@ where
 
 #[test]
 fn heap_profile_all() {
-    // Output to workspace root (cargo test runs from workspace root)
     let output_path = "dhat-heap.json";
 
     let _profiler = dhat::Profiler::builder()
@@ -162,39 +164,33 @@ fn heap_profile_all() {
     println!("                         HEAP ALLOCATION PROFILE");
     println!("================================================================================\n");
 
-    // -------------------------------------------------------------------------
     // diff() scenarios
-    // -------------------------------------------------------------------------
 
     println!("--- diff() on disjoint trees (100 fragments, 100 commits each) ---");
     let tree1 = synthetic_sedimentree(100, 100, 1);
     let tree2 = synthetic_sedimentree(100, 100, 1_000_000);
     let (blocks, bytes, _) = measure_allocs(|| tree1.diff(&tree2));
-    println!("  Allocations: {} blocks, {} bytes\n", blocks, bytes);
+    println!("  Allocations: {blocks} blocks, {bytes} bytes\n");
 
     println!("--- diff() on 50% overlapping trees (100 fragments, 100 commits each) ---");
     let (tree1, tree2) = overlapping_sedimentrees(50, 50, 50, 50, 42);
     let (blocks, bytes, _) = measure_allocs(|| tree1.diff(&tree2));
-    println!("  Allocations: {} blocks, {} bytes\n", blocks, bytes);
+    println!("  Allocations: {blocks} blocks, {bytes} bytes\n");
 
     println!("--- diff() on identical trees (100 fragments, 100 commits) ---");
     let tree = synthetic_sedimentree(100, 100, 1);
     let (blocks, bytes, _) = measure_allocs(|| tree.diff(&tree));
-    println!("  Allocations: {} blocks, {} bytes\n", blocks, bytes);
+    println!("  Allocations: {blocks} blocks, {bytes} bytes\n");
 
-    // -------------------------------------------------------------------------
     // diff_remote() scenarios
-    // -------------------------------------------------------------------------
 
     println!("--- diff_remote() on 50% overlapping (100 fragments, 100 commits) ---");
     let (local, remote) = overlapping_sedimentrees(50, 50, 50, 50, 42);
     let remote_summary = remote.summarize();
     let (blocks, bytes, _) = measure_allocs(|| local.diff_remote(&remote_summary));
-    println!("  Allocations: {} blocks, {} bytes\n", blocks, bytes);
+    println!("  Allocations: {blocks} blocks, {bytes} bytes\n");
 
-    // -------------------------------------------------------------------------
     // Scaling analysis
-    // -------------------------------------------------------------------------
 
     println!("--- diff() allocation scaling (disjoint trees) ---");
     println!("  {:>6}  {:>8}  {:>10}", "Size", "Blocks", "Bytes");
@@ -204,7 +200,7 @@ fn heap_profile_all() {
         let t1 = synthetic_sedimentree(size, size, 1);
         let t2 = synthetic_sedimentree(size, size, 1_000_000);
         let (blocks, bytes, _) = measure_allocs(|| t1.diff(&t2));
-        println!("  {:>6}  {:>8}  {:>10}", size, blocks, bytes);
+        println!("  {size:>6}  {blocks:>8}  {bytes:>10}");
     }
 
     println!("\n--- diff_remote() allocation scaling (50% overlap) ---");
@@ -215,11 +211,11 @@ fn heap_profile_all() {
         let (local, remote) = overlapping_sedimentrees(size / 2, size / 2, size / 2, size / 2, 42);
         let summary = remote.summarize();
         let (blocks, bytes, _) = measure_allocs(|| local.diff_remote(&summary));
-        println!("  {:>6}  {:>8}  {:>10}", size, blocks, bytes);
+        println!("  {size:>6}  {blocks:>8}  {bytes:>10}");
     }
 
     println!("\n================================================================================");
-    println!("  Heap profile saved to: sedimentree_core/{}", output_path);
+    println!("  Heap profile saved to: sedimentree_core/{output_path}");
     println!("  View with: https://nnethercote.github.io/dh_view/dh_view.html");
     println!("================================================================================\n");
 }

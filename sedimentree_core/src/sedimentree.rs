@@ -169,7 +169,6 @@ impl Sedimentree {
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
     pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
-        // Build lookup map for O(1) fragment retrieval by summary
         let fragment_by_summary: Map<&FragmentSummary, &Fragment> = self
             .fragments
             .iter()
@@ -181,7 +180,6 @@ impl Sedimentree {
         let their_fragments: Set<&FragmentSummary> =
             remote.fragment_summaries.iter().collect();
 
-        // O(1) lookup for each item in difference (was O(n) linear scan)
         let local_fragments: Vec<&Fragment> = our_fragments_meta
             .difference(&their_fragments)
             .filter_map(|summary| fragment_by_summary.get(summary).copied())
@@ -413,11 +411,12 @@ pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthM
 
 #[cfg(test)]
 mod tests {
+    use alloc::vec;
+
     use crate::blob::BlobMeta;
 
     use super::*;
 
-    // Helper to create a commit with a specific seed
     fn make_commit(seed: u8) -> LooseCommit {
         let mut bytes = [0u8; 32];
         bytes[0] = seed;
@@ -426,7 +425,6 @@ mod tests {
         LooseCommit::new(digest, vec![], blob_meta)
     }
 
-    // Helper to create a fragment with a specific seed
     fn make_fragment(seed: u8) -> Fragment {
         let mut head_bytes = [0u8; 32];
         head_bytes[0] = seed;
@@ -601,8 +599,9 @@ mod tests {
         assert_eq!(diff.remote_commits.len(), 2);
     }
 
-    /// Property-based tests using bolero for fuzzing
     mod proptests {
+        use alloc::vec;
+
         use rand::Rng;
 
         use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes};

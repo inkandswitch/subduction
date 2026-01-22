@@ -87,7 +87,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             self.peer_id
         );
 
-        // Serialize before the async block to avoid cloning the message
         let mut msg_bytes = Vec::new();
         #[allow(clippy::expect_used)]
         ciborium::ser::into_writer(message, &mut msg_bytes)
@@ -386,7 +385,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             message.request_id()
         );
 
-        // Serialize before the async block to avoid cloning the message
         let mut msg_bytes = Vec::new();
         #[allow(clippy::expect_used)]
         ciborium::ser::into_writer(message, &mut msg_bytes)

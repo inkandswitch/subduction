@@ -307,7 +307,6 @@ impl Connection<Local> for WasmWebSocket {
     fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!("sending outbound message id {:?}", message.request_id());
 
-        // Serialize before the async block to avoid cloning the message
         let mut msg_bytes = Vec::new();
         #[allow(clippy::expect_used)]
         ciborium::ser::into_writer(message, &mut msg_bytes).expect("should be Infallible");
