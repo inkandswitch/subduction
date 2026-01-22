@@ -31,6 +31,7 @@ pub enum ConnectToPeerError {
     /// WebSocket connection error.
     #[error("WebSocket connection error: {0}")]
     WebSocket(#[from] tungstenite::Error),
+
     /// Registration error.
     #[error("Registration error: {0}")]
     Registration(#[from] RegistrationError),
@@ -276,4 +277,5 @@ where
     }
 }
 
-type TokioWebSocketSubduction<S, O, M> = Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, M>>;
+type TokioWebSocketSubduction<S, O, M> =
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, M>>;
