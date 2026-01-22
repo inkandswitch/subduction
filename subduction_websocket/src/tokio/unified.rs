@@ -116,26 +116,3 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> PartialEq for UnifiedWebSocket<
         }
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod partial_eq {
-        use super::*;
-
-        // Note: Full construction tests require real TCP/WebSocket connections.
-        // These tests verify the PartialEq logic at the enum level.
-
-        #[test]
-        fn different_variants_are_not_equal() {
-            // This test verifies the documented behavior: Accepted != Dialed
-            // even conceptually. We can't easily construct real instances,
-            // but the match arm `_ => false` ensures this behavior.
-
-            // The PartialEq implementation explicitly returns false for
-            // cross-variant comparisons via the `_ => false` catch-all.
-            // This is tested implicitly by the implementation structure.
-        }
-    }
-}
