@@ -76,6 +76,7 @@
         ];
 
         cargo-installs = with pkgs; [
+          cargo-bolero
           cargo-criterion
           cargo-deny
           cargo-expand

@@ -425,262 +425,9 @@ pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthM
 
 #[cfg(test)]
 mod tests {
-    use rand::Rng;
-
-    use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes};
+    use crate::blob::BlobMeta;
 
     use super::*;
-
-    fn hash_with_leading_zeros(zeros_count: u32) -> Digest {
-        let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
-        for slot in byte_arr.iter_mut().take(zeros_count as usize) {
-            *slot = 0;
-        }
-        // Ensure the byte after the zeros is non-zero to prevent accidentally
-        // having more leading zeros than intended
-        if (zeros_count as usize) < 32 {
-            let idx = zeros_count as usize;
-            #[allow(clippy::indexing_slicing)]
-            if byte_arr[idx] == 0 {
-                byte_arr[idx] = 1; // Make it non-zero
-            }
-        }
-        Digest::from(byte_arr)
-    }
-
-    #[test]
-    fn fragment_supports_higher_levels() {
-        #[derive(Debug)]
-        struct Scenario {
-            deeper: Fragment,
-            shallower: FragmentSummary,
-        }
-        impl<'a> arbitrary::Arbitrary<'a> for Scenario {
-            fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-                #[allow(clippy::enum_variant_names)]
-                #[derive(arbitrary::Arbitrary)]
-                enum ShallowerDepthType {
-                    StartsAtStartBoundaryAtCheckpoint,
-                    StartsAtCheckpointBoundaryAtCheckpoint,
-                    StartsAtCheckpointBoundaryAtBoundary,
-                }
-
-                let start_hash = hash_with_leading_zeros(10);
-                let deeper_boundary_hash = hash_with_leading_zeros(10);
-
-                let shallower_start_hash: Digest;
-                let shallower_boundary_hash: Digest;
-                let mut checkpoints = Vec::<Digest>::arbitrary(u)?;
-                let lower_level_type = ShallowerDepthType::arbitrary(u)?;
-                match lower_level_type {
-                    ShallowerDepthType::StartsAtStartBoundaryAtCheckpoint => {
-                        shallower_start_hash = start_hash;
-                        shallower_boundary_hash = hash_with_leading_zeros(9);
-                        checkpoints.push(shallower_boundary_hash);
-                    }
-                    ShallowerDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
-                        shallower_start_hash = hash_with_leading_zeros(9);
-                        shallower_boundary_hash = hash_with_leading_zeros(9);
-                        checkpoints.push(shallower_start_hash);
-                        checkpoints.push(shallower_boundary_hash);
-                    }
-                    ShallowerDepthType::StartsAtCheckpointBoundaryAtBoundary => {
-                        shallower_start_hash = hash_with_leading_zeros(9);
-                        checkpoints.push(shallower_start_hash);
-                        shallower_boundary_hash = deeper_boundary_hash;
-                    }
-                }
-
-                let deeper = Fragment::new(
-                    start_hash,
-                    vec![deeper_boundary_hash],
-                    checkpoints,
-                    BlobMeta::arbitrary(u)?,
-                );
-                let shallower = FragmentSummary::new(
-                    shallower_start_hash,
-                    vec![shallower_boundary_hash],
-                    BlobMeta::arbitrary(u)?,
-                );
-
-                Ok(Self { deeper, shallower })
-            }
-        }
-        bolero::check!()
-            .with_arbitrary::<Scenario>()
-            .for_each(|Scenario { deeper, shallower }| {
-                assert!(deeper.supports(shallower, &CountLeadingZeroBytes));
-            });
-    }
-
-    #[test]
-    fn minimized_loose_commit_dag_doesnt_change() {
-        #[derive(Debug)]
-        struct Scenario {
-            commits: Vec<LooseCommit>,
-        }
-        impl<'a> arbitrary::Arbitrary<'a> for Scenario {
-            fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-                let mut frontier: Vec<Digest> = Vec::new();
-                let num_commits: u32 = u.int_in_range(1..=20)?;
-                let mut result = Vec::with_capacity(num_commits as usize);
-                for _ in 0..num_commits {
-                    let contents = Vec::<u8>::arbitrary(u)?;
-                    let blob_meta = BlobMeta::new(&contents);
-                    let hash = Digest::arbitrary(u)?;
-                    let mut parents = Vec::new();
-                    let mut num_parents = u.int_in_range(0..=frontier.len())?;
-                    let mut parent_choices = frontier.iter().collect::<Vec<_>>();
-                    while num_parents > 0 {
-                        let parent = u.choose(&parent_choices)?;
-                        parents.push(**parent);
-                        #[allow(clippy::unwrap_used)]
-                        parent_choices
-                            .remove(parent_choices.iter().position(|p| p == parent).unwrap());
-                        num_parents -= 1;
-                    }
-                    frontier.retain(|p| !parents.contains(p));
-                    frontier.push(hash);
-                    result.push(LooseCommit::new(hash, parents, blob_meta));
-                }
-                Ok(Scenario { commits: result })
-            }
-        }
-        bolero::check!()
-            .with_arbitrary::<Scenario>()
-            .for_each(|Scenario { commits }| {
-                let tree = Sedimentree::new(vec![], commits.clone());
-                let minimized = tree.minimize(&CountLeadingZeroBytes);
-                assert_eq!(tree, minimized);
-            });
-    }
-
-    #[test]
-    fn diff_self_is_empty() {
-        bolero::check!()
-            .with_arbitrary::<Sedimentree>()
-            .for_each(|tree| {
-                let diff = tree.diff(tree);
-                assert!(
-                    diff.left_missing_fragments.is_empty(),
-                    "self-diff should have no left missing fragments"
-                );
-                assert!(
-                    diff.left_missing_commits.is_empty(),
-                    "self-diff should have no left missing commits"
-                );
-                assert!(
-                    diff.right_missing_fragments.is_empty(),
-                    "self-diff should have no right missing fragments"
-                );
-                assert!(
-                    diff.right_missing_commits.is_empty(),
-                    "self-diff should have no right missing commits"
-                );
-            });
-    }
-
-    #[test]
-    fn diff_is_symmetric() {
-        bolero::check!()
-            .with_arbitrary::<(Sedimentree, Sedimentree)>()
-            .for_each(|(a, b)| {
-                let ab = a.diff(&b);
-                let ba = b.diff(&a);
-
-                // What a is missing from b == what b has that a doesn't
-                assert_eq!(
-                    ab.left_missing_fragments.len(),
-                    ba.right_missing_fragments.len(),
-                    "left_missing in a.diff(b) should equal right_missing in b.diff(a)"
-                );
-                assert_eq!(
-                    ab.right_missing_fragments.len(),
-                    ba.left_missing_fragments.len(),
-                    "right_missing in a.diff(b) should equal left_missing in b.diff(a)"
-                );
-                assert_eq!(
-                    ab.left_missing_commits.len(),
-                    ba.right_missing_commits.len(),
-                    "left_missing commits in a.diff(b) should equal right_missing in b.diff(a)"
-                );
-                assert_eq!(
-                    ab.right_missing_commits.len(),
-                    ba.left_missing_commits.len(),
-                    "right_missing commits in a.diff(b) should equal left_missing in b.diff(a)"
-                );
-            });
-    }
-
-    #[test]
-    fn diff_remote_matches_diff_for_local_items() {
-        bolero::check!()
-            .with_arbitrary::<(Sedimentree, Sedimentree)>()
-            .for_each(|(local, remote)| {
-                let remote_summary = remote.summarize();
-                let remote_diff = local.diff_remote(&remote_summary);
-                let local_diff = local.diff(&remote);
-
-                // local_fragments in diff_remote should match right_missing_fragments in diff
-                // (what we have that they don't)
-                assert_eq!(
-                    remote_diff.local_fragments.len(),
-                    local_diff.right_missing_fragments.len(),
-                    "diff_remote local_fragments should match diff right_missing_fragments"
-                );
-
-                // local_commits should match right_missing_commits
-                assert_eq!(
-                    remote_diff.local_commits.len(),
-                    local_diff.right_missing_commits.len(),
-                    "diff_remote local_commits should match diff right_missing_commits"
-                );
-
-                // remote items should match left_missing (what they have that we don't)
-                // Note: remote_fragment_summaries vs left_missing_fragments - summaries don't have checkpoints
-                assert_eq!(
-                    remote_diff.remote_fragment_summaries.len(),
-                    local_diff.left_missing_fragments.len(),
-                    "diff_remote remote_fragment_summaries count should match diff left_missing_fragments"
-                );
-                assert_eq!(
-                    remote_diff.remote_commits.len(),
-                    local_diff.left_missing_commits.len(),
-                    "diff_remote remote_commits should match diff left_missing_commits"
-                );
-            });
-    }
-
-    #[test]
-    fn diff_merge_produces_equal_trees() {
-        bolero::check!()
-            .with_arbitrary::<(Sedimentree, Sedimentree)>()
-            .for_each(|(a, b)| {
-                let diff = a.diff(&b);
-
-                // Apply diff to make copies equal
-                let mut a_updated = a.clone();
-                let mut b_updated = b.clone();
-
-                // Add what a is missing (from b)
-                for fragment in diff.left_missing_fragments {
-                    a_updated.add_fragment(fragment.clone());
-                }
-                for commit in diff.left_missing_commits {
-                    a_updated.add_commit(commit.clone());
-                }
-
-                // Add what b is missing (from a)
-                for fragment in diff.right_missing_fragments {
-                    b_updated.add_fragment(fragment.clone());
-                }
-                for commit in diff.right_missing_commits {
-                    b_updated.add_commit(commit.clone());
-                }
-
-                assert_eq!(a_updated, b_updated, "after applying diff, trees should be equal");
-            });
-    }
 
     // Helper to create a commit with a specific seed
     fn make_commit(seed: u8) -> LooseCommit {
@@ -718,24 +465,48 @@ mod tests {
 
         let diff = a.diff(&b);
 
-        assert!(diff.left_missing_commits.is_empty(), "identical trees have no left missing commits");
-        assert!(diff.right_missing_commits.is_empty(), "identical trees have no right missing commits");
-        assert!(diff.left_missing_fragments.is_empty(), "identical trees have no left missing fragments");
-        assert!(diff.right_missing_fragments.is_empty(), "identical trees have no right missing fragments");
+        assert!(
+            diff.left_missing_commits.is_empty(),
+            "identical trees have no left missing commits"
+        );
+        assert!(
+            diff.right_missing_commits.is_empty(),
+            "identical trees have no right missing commits"
+        );
+        assert!(
+            diff.left_missing_fragments.is_empty(),
+            "identical trees have no left missing fragments"
+        );
+        assert!(
+            diff.right_missing_fragments.is_empty(),
+            "identical trees have no right missing fragments"
+        );
 
         // Also test diff_remote
         let b_summary = b.summarize();
         let remote_diff = a.diff_remote(&b_summary);
 
-        assert!(remote_diff.local_commits.is_empty(), "identical trees have no local-only commits");
-        assert!(remote_diff.remote_commits.is_empty(), "identical trees have no remote-only commits");
-        assert!(remote_diff.local_fragments.is_empty(), "identical trees have no local-only fragments");
-        assert!(remote_diff.remote_fragment_summaries.is_empty(), "identical trees have no remote-only fragments");
+        assert!(
+            remote_diff.local_commits.is_empty(),
+            "identical trees have no local-only commits"
+        );
+        assert!(
+            remote_diff.remote_commits.is_empty(),
+            "identical trees have no remote-only commits"
+        );
+        assert!(
+            remote_diff.local_fragments.is_empty(),
+            "identical trees have no local-only fragments"
+        );
+        assert!(
+            remote_diff.remote_fragment_summaries.is_empty(),
+            "identical trees have no remote-only fragments"
+        );
     }
 
     #[test]
-    fn diff_one_ahead_commits() {
-        // Scenario: B has everything A has, plus more
+    fn diff_superset_commits() {
+        // Scenario: B is a superset of A
         let shared = vec![make_commit(1), make_commit(2)];
         let extra = vec![make_commit(3), make_commit(4)];
 
@@ -753,8 +524,8 @@ mod tests {
     }
 
     #[test]
-    fn diff_one_ahead_fragments() {
-        // Scenario: B has everything A has, plus more
+    fn diff_superset_fragments() {
+        // Scenario: B is a superset of A
         let shared = vec![make_fragment(1), make_fragment(2)];
         let extra = vec![make_fragment(3)];
 
@@ -803,8 +574,8 @@ mod tests {
     }
 
     #[test]
-    fn diff_remote_one_ahead() {
-        // Scenario: remote has everything local has, plus more
+    fn diff_remote_superset() {
+        // Scenario: remote is a superset of local
         let shared = vec![make_commit(1), make_commit(2)];
         let remote_extra = vec![make_commit(3)];
 
@@ -840,5 +611,265 @@ mod tests {
         assert_eq!(diff.local_commits.len(), 1);
         // Remote has 2 unique commits
         assert_eq!(diff.remote_commits.len(), 2);
+    }
+
+    /// Property-based tests using bolero for fuzzing
+    mod proptests {
+        use rand::Rng;
+
+        use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes};
+
+        use super::super::*;
+
+        fn hash_with_leading_zeros(zeros_count: u32) -> Digest {
+            let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
+            for slot in byte_arr.iter_mut().take(zeros_count as usize) {
+                *slot = 0;
+            }
+            // Ensure the byte after the zeros is non-zero to prevent accidentally
+            // having more leading zeros than intended
+            if (zeros_count as usize) < 32 {
+                let idx = zeros_count as usize;
+                #[allow(clippy::indexing_slicing)]
+                if byte_arr[idx] == 0 {
+                    byte_arr[idx] = 1; // Make it non-zero
+                }
+            }
+            Digest::from(byte_arr)
+        }
+
+        #[test]
+        fn fragment_supports_higher_levels() {
+            #[derive(Debug)]
+            struct Scenario {
+                deeper: Fragment,
+                shallower: FragmentSummary,
+            }
+            impl<'a> arbitrary::Arbitrary<'a> for Scenario {
+                fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                    #[allow(clippy::enum_variant_names)]
+                    #[derive(arbitrary::Arbitrary)]
+                    enum ShallowerDepthType {
+                        StartsAtStartBoundaryAtCheckpoint,
+                        StartsAtCheckpointBoundaryAtCheckpoint,
+                        StartsAtCheckpointBoundaryAtBoundary,
+                    }
+
+                    let start_hash = hash_with_leading_zeros(10);
+                    let deeper_boundary_hash = hash_with_leading_zeros(10);
+
+                    let shallower_start_hash: Digest;
+                    let shallower_boundary_hash: Digest;
+                    let mut checkpoints = Vec::<Digest>::arbitrary(u)?;
+                    let lower_level_type = ShallowerDepthType::arbitrary(u)?;
+                    match lower_level_type {
+                        ShallowerDepthType::StartsAtStartBoundaryAtCheckpoint => {
+                            shallower_start_hash = start_hash;
+                            shallower_boundary_hash = hash_with_leading_zeros(9);
+                            checkpoints.push(shallower_boundary_hash);
+                        }
+                        ShallowerDepthType::StartsAtCheckpointBoundaryAtCheckpoint => {
+                            shallower_start_hash = hash_with_leading_zeros(9);
+                            shallower_boundary_hash = hash_with_leading_zeros(9);
+                            checkpoints.push(shallower_start_hash);
+                            checkpoints.push(shallower_boundary_hash);
+                        }
+                        ShallowerDepthType::StartsAtCheckpointBoundaryAtBoundary => {
+                            shallower_start_hash = hash_with_leading_zeros(9);
+                            checkpoints.push(shallower_start_hash);
+                            shallower_boundary_hash = deeper_boundary_hash;
+                        }
+                    }
+
+                    let deeper = Fragment::new(
+                        start_hash,
+                        vec![deeper_boundary_hash],
+                        checkpoints,
+                        BlobMeta::arbitrary(u)?,
+                    );
+                    let shallower = FragmentSummary::new(
+                        shallower_start_hash,
+                        vec![shallower_boundary_hash],
+                        BlobMeta::arbitrary(u)?,
+                    );
+
+                    Ok(Self { deeper, shallower })
+                }
+            }
+            bolero::check!()
+                .with_arbitrary::<Scenario>()
+                .for_each(|Scenario { deeper, shallower }| {
+                    assert!(deeper.supports(shallower, &CountLeadingZeroBytes));
+                });
+        }
+
+        #[test]
+        fn minimized_loose_commit_dag_doesnt_change() {
+            #[derive(Debug)]
+            struct Scenario {
+                commits: Vec<LooseCommit>,
+            }
+            impl<'a> arbitrary::Arbitrary<'a> for Scenario {
+                fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                    let mut frontier: Vec<Digest> = Vec::new();
+                    let num_commits: u32 = u.int_in_range(1..=20)?;
+                    let mut result = Vec::with_capacity(num_commits as usize);
+                    for _ in 0..num_commits {
+                        let contents = Vec::<u8>::arbitrary(u)?;
+                        let blob_meta = BlobMeta::new(&contents);
+                        let hash = Digest::arbitrary(u)?;
+                        let mut parents = Vec::new();
+                        let mut num_parents = u.int_in_range(0..=frontier.len())?;
+                        let mut parent_choices = frontier.iter().collect::<Vec<_>>();
+                        while num_parents > 0 {
+                            let parent = u.choose(&parent_choices)?;
+                            parents.push(**parent);
+                            #[allow(clippy::unwrap_used)]
+                            parent_choices
+                                .remove(parent_choices.iter().position(|p| p == parent).unwrap());
+                            num_parents -= 1;
+                        }
+                        frontier.retain(|p| !parents.contains(p));
+                        frontier.push(hash);
+                        result.push(LooseCommit::new(hash, parents, blob_meta));
+                    }
+                    Ok(Scenario { commits: result })
+                }
+            }
+            bolero::check!()
+                .with_arbitrary::<Scenario>()
+                .for_each(|Scenario { commits }| {
+                    let tree = Sedimentree::new(vec![], commits.clone());
+                    let minimized = tree.minimize(&CountLeadingZeroBytes);
+                    assert_eq!(tree, minimized);
+                });
+        }
+
+        #[test]
+        fn diff_self_is_empty() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let diff = tree.diff(tree);
+                    assert!(
+                        diff.left_missing_fragments.is_empty(),
+                        "self-diff should have no left missing fragments"
+                    );
+                    assert!(
+                        diff.left_missing_commits.is_empty(),
+                        "self-diff should have no left missing commits"
+                    );
+                    assert!(
+                        diff.right_missing_fragments.is_empty(),
+                        "self-diff should have no right missing fragments"
+                    );
+                    assert!(
+                        diff.right_missing_commits.is_empty(),
+                        "self-diff should have no right missing commits"
+                    );
+                });
+        }
+
+        #[test]
+        fn diff_is_symmetric() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(a, b)| {
+                    let ab = a.diff(&b);
+                    let ba = b.diff(&a);
+
+                    // What a is missing from b == what b has that a doesn't
+                    assert_eq!(
+                        ab.left_missing_fragments.len(),
+                        ba.right_missing_fragments.len(),
+                        "left_missing in a.diff(b) should equal right_missing in b.diff(a)"
+                    );
+                    assert_eq!(
+                        ab.right_missing_fragments.len(),
+                        ba.left_missing_fragments.len(),
+                        "right_missing in a.diff(b) should equal left_missing in b.diff(a)"
+                    );
+                    assert_eq!(
+                        ab.left_missing_commits.len(),
+                        ba.right_missing_commits.len(),
+                        "left_missing commits in a.diff(b) should equal right_missing in b.diff(a)"
+                    );
+                    assert_eq!(
+                        ab.right_missing_commits.len(),
+                        ba.left_missing_commits.len(),
+                        "right_missing commits in a.diff(b) should equal left_missing in b.diff(a)"
+                    );
+                });
+        }
+
+        #[test]
+        fn diff_remote_matches_diff_for_local_items() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(local, remote)| {
+                    let remote_summary = remote.summarize();
+                    let remote_diff = local.diff_remote(&remote_summary);
+                    let local_diff = local.diff(&remote);
+
+                    // local_fragments in diff_remote should match right_missing_fragments in diff
+                    // (what we have that they don't)
+                    assert_eq!(
+                        remote_diff.local_fragments.len(),
+                        local_diff.right_missing_fragments.len(),
+                        "diff_remote local_fragments should match diff right_missing_fragments"
+                    );
+
+                    // local_commits should match right_missing_commits
+                    assert_eq!(
+                        remote_diff.local_commits.len(),
+                        local_diff.right_missing_commits.len(),
+                        "diff_remote local_commits should match diff right_missing_commits"
+                    );
+
+                    // remote items should match left_missing (what they have that we don't)
+                    // Note: remote_fragment_summaries vs left_missing_fragments - summaries don't have checkpoints
+                    assert_eq!(
+                        remote_diff.remote_fragment_summaries.len(),
+                        local_diff.left_missing_fragments.len(),
+                        "diff_remote remote_fragment_summaries count should match diff left_missing_fragments"
+                    );
+                    assert_eq!(
+                        remote_diff.remote_commits.len(),
+                        local_diff.left_missing_commits.len(),
+                        "diff_remote remote_commits should match diff left_missing_commits"
+                    );
+                });
+        }
+
+        #[test]
+        fn diff_merge_produces_equal_trees() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(a, b)| {
+                    let diff = a.diff(&b);
+
+                    // Apply diff to make copies equal
+                    let mut a_updated = a.clone();
+                    let mut b_updated = b.clone();
+
+                    // Add what a is missing (from b)
+                    for fragment in diff.left_missing_fragments {
+                        a_updated.add_fragment(fragment.clone());
+                    }
+                    for commit in diff.left_missing_commits {
+                        a_updated.add_commit(commit.clone());
+                    }
+
+                    // Add what b is missing (from a)
+                    for fragment in diff.right_missing_fragments {
+                        b_updated.add_fragment(fragment.clone());
+                    }
+                    for commit in diff.right_missing_commits {
+                        b_updated.add_commit(commit.clone());
+                    }
+
+                    assert_eq!(a_updated, b_updated, "after applying diff, trees should be equal");
+                });
+        }
     }
 }

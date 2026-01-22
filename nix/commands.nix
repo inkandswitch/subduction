@@ -199,6 +199,27 @@
 
     "test:docs" = cmd "Run Cargo doctests"
       "${cargo} test --doc";
+
+    "test:fuzz" = cmd "Run bolero property tests with extended fuzzing (1 min per test)" ''
+      set -e
+      echo "Running extended property tests with bolero..."
+      echo "Each test will run for 60 seconds."
+      echo ""
+      ${cargo} bolero test --all-features --time 60
+    '';
+
+    "test:fuzz:quick" = cmd "Run bolero property tests (10 sec per test)" ''
+      set -e
+      ${cargo} bolero test --all-features --time 10
+    '';
+
+    "test:fuzz:thorough" = cmd "Run bolero property tests thoroughly (5 min per test)" ''
+      set -e
+      echo "Running thorough property tests with bolero..."
+      echo "Each test will run for 5 minutes. This may take a while."
+      echo ""
+      ${cargo} bolero test --all-features --time 300
+    '';
   };
 
   docs = {
