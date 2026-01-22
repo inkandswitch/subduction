@@ -20,6 +20,19 @@ pub mod names {
     pub const BATCH_SYNC_REQUESTS_TOTAL: &str = "subduction_batch_sync_requests_total";
     /// Total batch sync responses received.
     pub const BATCH_SYNC_RESPONSES_TOTAL: &str = "subduction_batch_sync_responses_total";
+
+    // Storage metrics
+    /// Number of sedimentrees currently stored.
+    pub const STORAGE_SEDIMENTREES: &str = "subduction_storage_sedimentrees";
+    /// Total loose commits saved, labeled by sedimentree_id.
+    pub const STORAGE_LOOSE_COMMITS_SAVED: &str = "subduction_storage_loose_commits_saved";
+    /// Total fragments saved, labeled by sedimentree_id.
+    pub const STORAGE_FRAGMENTS_SAVED: &str = "subduction_storage_fragments_saved";
+    /// Total blobs currently stored.
+    pub const STORAGE_BLOBS: &str = "subduction_storage_blobs";
+    /// Storage operation duration in seconds.
+    pub const STORAGE_OPERATION_DURATION_SECONDS: &str =
+        "subduction_storage_operation_duration_seconds";
 }
 
 /// Record a new connection being established.
@@ -58,4 +71,49 @@ pub fn batch_sync_request() {
 #[inline]
 pub fn batch_sync_response() {
     metrics::counter!(names::BATCH_SYNC_RESPONSES_TOTAL).increment(1);
+}
+
+// Storage metrics
+
+/// Record a sedimentree being added to storage.
+#[inline]
+pub fn storage_sedimentree_added() {
+    metrics::gauge!(names::STORAGE_SEDIMENTREES).increment(1);
+}
+
+/// Record a sedimentree being removed from storage.
+#[inline]
+pub fn storage_sedimentree_removed() {
+    metrics::gauge!(names::STORAGE_SEDIMENTREES).decrement(1);
+}
+
+/// Record a loose commit being saved.
+#[inline]
+pub fn storage_loose_commit_saved(sedimentree_id: &str) {
+    metrics::counter!(names::STORAGE_LOOSE_COMMITS_SAVED, "sedimentree_id" => sedimentree_id.to_owned()).increment(1);
+}
+
+/// Record a fragment being saved.
+#[inline]
+pub fn storage_fragment_saved(sedimentree_id: &str) {
+    metrics::counter!(names::STORAGE_FRAGMENTS_SAVED, "sedimentree_id" => sedimentree_id.to_owned()).increment(1);
+}
+
+/// Record a blob being added to storage.
+#[inline]
+pub fn storage_blob_added() {
+    metrics::gauge!(names::STORAGE_BLOBS).increment(1);
+}
+
+/// Record a blob being removed from storage.
+#[inline]
+pub fn storage_blob_removed() {
+    metrics::gauge!(names::STORAGE_BLOBS).decrement(1);
+}
+
+/// Record the duration of a storage operation.
+#[inline]
+pub fn storage_operation_duration(operation: &'static str, duration_secs: f64) {
+    metrics::histogram!(names::STORAGE_OPERATION_DURATION_SECONDS, "operation" => operation)
+        .record(duration_secs);
 }

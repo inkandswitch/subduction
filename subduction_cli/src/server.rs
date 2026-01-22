@@ -5,7 +5,7 @@ use crate::metrics;
 use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
-use subduction_core::peer::id::PeerId;
+use subduction_core::{peer::id::PeerId, MetricsStorage};
 use subduction_websocket::{
     timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer,
 };
@@ -52,7 +52,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     }
 
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
-    let storage = FsStorage::new(data_dir)?;
+    let fs_storage = FsStorage::new(data_dir)?;
+    let storage = MetricsStorage::new(fs_storage);
 
     let peer_id = args
         .peer_id
@@ -60,7 +61,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .transpose()?
         .unwrap_or_else(|| PeerId::new([0; 32]));
 
-    let _server: TokioWebSocketServer<FsStorage> = TokioWebSocketServer::setup(
+    let _server: TokioWebSocketServer<MetricsStorage<FsStorage>> = TokioWebSocketServer::setup(
         addr,
         FuturesTimerTimeout,
         Duration::from_secs(args.timeout),
