@@ -1,0 +1,23 @@
+[package]
+name = "keyhive_subduction_policy"
+version = "0.1.0"
+description = "Connection policy for Subduction based on Keyhive authorization."
+
+authors.workspace = true
+categories = ["authentication", "cryptography"]
+edition.workspace = true
+keywords = ["authorization", "policy", "sync"]
+license.workspace = true
+readme = "./README.md"
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+keyhive_core = { path = "../../keyhive/keyhive_core" }
+subduction_core = { path = "../subduction_core", default-features = false }
+
+[features]
+default = []
+
+[lints]
+workspace = true
