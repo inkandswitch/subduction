@@ -2,7 +2,7 @@
 //!
 //! This module is only available when the `metrics` feature is enabled.
 
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
 
 use futures::{
     future::{BoxFuture, LocalBoxFuture},
@@ -55,15 +55,6 @@ impl<S> MetricsStorage<S> {
     }
 }
 
-fn sedimentree_id_label(id: &SedimentreeId) -> String {
-    // Use first 8 hex chars to keep cardinality manageable
-    let bytes = id.as_bytes();
-    format!(
-        "{:02x}{:02x}{:02x}{:02x}",
-        bytes[0], bytes[1], bytes[2], bytes[3]
-    )
-}
-
 impl<S> Storage<Local> for MetricsStorage<S>
 where
     S: Storage<Local>,
@@ -77,7 +68,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.save_sedimentree_id(sedimentree_id).await;
-            metrics::storage_operation_duration("save_sedimentree_id", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "save_sedimentree_id",
+                start.elapsed().as_secs_f64(),
+            );
             if result.is_ok() {
                 metrics::storage_sedimentree_added();
             }
@@ -93,7 +87,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.delete_sedimentree_id(sedimentree_id).await;
-            metrics::storage_operation_duration("delete_sedimentree_id", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "delete_sedimentree_id",
+                start.elapsed().as_secs_f64(),
+            );
             if result.is_ok() {
                 metrics::storage_sedimentree_removed();
             }
@@ -108,7 +105,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.load_all_sedimentree_ids().await;
-            metrics::storage_operation_duration("load_all_sedimentree_ids", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "load_all_sedimentree_ids",
+                start.elapsed().as_secs_f64(),
+            );
             result
         }
         .boxed_local()
@@ -119,7 +119,7 @@ where
         sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let label = sedimentree_id_label(&sedimentree_id);
+        let label = sedimentree_id.to_string();
         async move {
             let start = std::time::Instant::now();
             let result = self
@@ -142,7 +142,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.load_loose_commits(sedimentree_id).await;
-            metrics::storage_operation_duration("load_loose_commits", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "load_loose_commits",
+                start.elapsed().as_secs_f64(),
+            );
             result
         }
         .boxed_local()
@@ -155,7 +158,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.delete_loose_commits(sedimentree_id).await;
-            metrics::storage_operation_duration("delete_loose_commits", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "delete_loose_commits",
+                start.elapsed().as_secs_f64(),
+            );
             result
         }
         .boxed_local()
@@ -166,7 +172,7 @@ where
         sedimentree_id: SedimentreeId,
         fragment: Fragment,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        let label = sedimentree_id_label(&sedimentree_id);
+        let label = sedimentree_id.to_string();
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.save_fragment(sedimentree_id, fragment).await;
@@ -218,7 +224,10 @@ where
         .boxed_local()
     }
 
-    fn load_blob(&self, blob_digest: Digest) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
+    fn load_blob(
+        &self,
+        blob_digest: Digest,
+    ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.load_blob(blob_digest).await;
@@ -255,7 +264,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.save_sedimentree_id(sedimentree_id).await;
-            metrics::storage_operation_duration("save_sedimentree_id", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "save_sedimentree_id",
+                start.elapsed().as_secs_f64(),
+            );
             if result.is_ok() {
                 metrics::storage_sedimentree_added();
             }
@@ -271,7 +283,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.delete_sedimentree_id(sedimentree_id).await;
-            metrics::storage_operation_duration("delete_sedimentree_id", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "delete_sedimentree_id",
+                start.elapsed().as_secs_f64(),
+            );
             if result.is_ok() {
                 metrics::storage_sedimentree_removed();
             }
@@ -284,7 +299,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.load_all_sedimentree_ids().await;
-            metrics::storage_operation_duration("load_all_sedimentree_ids", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "load_all_sedimentree_ids",
+                start.elapsed().as_secs_f64(),
+            );
             result
         }
         .boxed()
@@ -295,7 +313,7 @@ where
         sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        let label = sedimentree_id_label(&sedimentree_id);
+        let label = sedimentree_id.to_string();
         async move {
             let start = std::time::Instant::now();
             let result = self
@@ -318,7 +336,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.load_loose_commits(sedimentree_id).await;
-            metrics::storage_operation_duration("load_loose_commits", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "load_loose_commits",
+                start.elapsed().as_secs_f64(),
+            );
             result
         }
         .boxed()
@@ -331,7 +352,10 @@ where
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.delete_loose_commits(sedimentree_id).await;
-            metrics::storage_operation_duration("delete_loose_commits", start.elapsed().as_secs_f64());
+            metrics::storage_operation_duration(
+                "delete_loose_commits",
+                start.elapsed().as_secs_f64(),
+            );
             result
         }
         .boxed()
@@ -342,7 +366,7 @@ where
         sedimentree_id: SedimentreeId,
         fragment: Fragment,
     ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        let label = sedimentree_id_label(&sedimentree_id);
+        let label = sedimentree_id.to_string();
         async move {
             let start = std::time::Instant::now();
             let result = self.inner.save_fragment(sedimentree_id, fragment).await;
