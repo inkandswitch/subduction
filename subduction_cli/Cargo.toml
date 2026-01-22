@@ -16,6 +16,7 @@ rust-version.workspace = true
 [dependencies]
 ahash = "0.8"
 anyhow = "1.0"
+blake3 = "1"
 async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 axum = "0.8"

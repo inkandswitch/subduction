@@ -13,6 +13,14 @@ pub mod client;
 #[cfg(any(feature = "tokio_server", feature = "tokio_server_rustls"))]
 pub mod server;
 
+#[cfg(any(
+    feature = "tokio_client",
+    feature = "tokio_client_rustls",
+    feature = "tokio_server",
+    feature = "tokio_server_rustls"
+))]
+pub mod stream;
+
 /// Tokio-backed timeout wrapper.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct TimeoutTokio;

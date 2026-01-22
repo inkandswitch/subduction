@@ -9,9 +9,8 @@ use subduction_core::{
     peer::id::PeerId,
     storage::{MetricsStorage, RefreshMetrics},
 };
-use subduction_websocket::{
-    timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer,
-};
+use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
+use tungstenite::http::Uri;
 use tokio_util::sync::CancellationToken;
 
 /// Arguments for the server command.
@@ -44,6 +43,10 @@ pub(crate) struct ServerArgs {
     /// Interval in seconds for refreshing storage metrics from disk
     #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
     pub(crate) metrics_refresh_interval: u64,
+
+    /// Peer WebSocket URLs to connect to on startup
+    #[arg(long = "peer", value_name = "URL")]
+    pub(crate) peers: Vec<String>,
 }
 
 /// Default interval for refreshing storage metrics (1 minute).
@@ -99,7 +102,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .transpose()?
         .unwrap_or_else(|| PeerId::new([0; 32]));
 
-    let _server: TokioWebSocketServer<MetricsStorage<FsStorage>> = TokioWebSocketServer::setup(
+    let server: TokioWebSocketServer<MetricsStorage<FsStorage>> = TokioWebSocketServer::setup(
         addr,
         FuturesTimerTimeout,
         Duration::from_secs(args.timeout),
@@ -111,6 +114,35 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
     tracing::info!("WebSocket server started on {}", addr);
     tracing::info!("Peer ID: {}", peer_id);
+
+    // Connect to configured peers for bidirectional sync
+    for peer_url in &args.peers {
+        let uri: Uri = match peer_url.parse() {
+            Ok(uri) => uri,
+            Err(e) => {
+                tracing::error!("Invalid peer URL '{}': {}", peer_url, e);
+                continue;
+            }
+        };
+
+        // Generate a peer ID from the URI (temporary until proper peer authentication)
+        let remote_peer_id = {
+            let mut hasher = blake3::Hasher::new();
+            hasher.update(uri.to_string().as_bytes());
+            PeerId::new(*hasher.finalize().as_bytes())
+        };
+
+        let timeout_duration = Duration::from_secs(args.timeout);
+
+        match server.connect_to_peer(uri.clone(), FuturesTimerTimeout, timeout_duration, remote_peer_id).await {
+            Ok(conn_id) => {
+                tracing::info!("Connected to peer at {} (connection ID: {:?})", uri, conn_id);
+            }
+            Err(e) => {
+                tracing::error!("Failed to connect to peer at {}: {}", uri, e);
+            }
+        }
+    }
 
     // Wait for cancellation signal
     token.cancelled().await;
