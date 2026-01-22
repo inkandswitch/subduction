@@ -246,6 +246,9 @@ where
         #[cfg(feature = "metrics")]
         crate::metrics::message_dispatched(message.variant_name());
 
+        #[cfg(feature = "metrics")]
+        let start = std::time::Instant::now();
+
         match message {
             Message::LooseCommit { id, commit, blob } => {
                 self.recv_commit(&from, id, &commit, blob).await?;
@@ -258,6 +261,9 @@ where
                 sedimentree_summary,
                 req_id,
             }) => {
+                #[cfg(feature = "metrics")]
+                crate::metrics::batch_sync_request();
+
                 if let Err(ListenError::MissingBlobs(missing)) = self
                     .recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
                     .await
@@ -273,6 +279,9 @@ where
                 }
             }
             Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
+                #[cfg(feature = "metrics")]
+                crate::metrics::batch_sync_response();
+
                 self.recv_batch_sync_response(&from, id, &diff).await?;
             }
             Message::BlobsRequest(digests) => {
@@ -311,6 +320,10 @@ where
                 );
             }
         }
+
+        #[cfg(feature = "metrics")]
+        crate::metrics::dispatch_duration(start.elapsed().as_secs_f64());
+
         Ok(())
     }
 
