@@ -176,29 +176,25 @@ impl Sedimentree {
 
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
-    pub fn diff_remote<'a, M: DepthMetric>(
-        &'a self,
-        remote: &'a SedimentreeSummary,
-        hash_metric: &M,
-    ) -> RemoteDiff<'a> {
-        let our_fragments_meta = self
+    pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
+        // Build lookup map for O(1) fragment retrieval by summary
+        let fragment_by_summary: Map<&FragmentSummary, &Fragment> = self
             .fragments
             .iter()
-            .map(Fragment::summary)
-            .collect::<Set<&FragmentSummary>>();
-        let their_fragments = remote.fragment_summaries.iter().collect::<Set<_>>();
-        let mut local_fragments = Vec::new();
-        for m in our_fragments_meta.difference(&their_fragments) {
-            for s in &self.fragments {
-                if s.head() == m.head()
-                    && s.boundary() == m.boundary()
-                    && s.depth(hash_metric) == m.depth(hash_metric)
-                {
-                    local_fragments.push(s);
-                    break;
-                }
-            }
-        }
+            .map(|f| (f.summary(), f))
+            .collect();
+
+        let our_fragments_meta: Set<&FragmentSummary> =
+            fragment_by_summary.keys().copied().collect();
+        let their_fragments: Set<&FragmentSummary> =
+            remote.fragment_summaries.iter().collect();
+
+        // O(1) lookup for each item in difference (was O(n) linear scan)
+        let local_fragments: Vec<&Fragment> = our_fragments_meta
+            .difference(&their_fragments)
+            .filter_map(|summary| fragment_by_summary.get(summary).copied())
+            .collect();
+
         let remote_fragments = their_fragments.difference(&our_fragments_meta);
 
         let our_commits = self.commits.iter().collect::<Set<&LooseCommit>>();

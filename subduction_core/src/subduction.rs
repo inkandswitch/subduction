@@ -921,8 +921,7 @@ where
                 their_summary.fragment_summaries().len()
             );
 
-            let diff: RemoteDiff<'_> =
-                local_sedimentree.diff_remote(their_summary, &self.depth_metric);
+            let diff: RemoteDiff<'_> = local_sedimentree.diff_remote(their_summary);
 
             for commit in diff.remote_commits {
                 sedimentree.add_commit(commit.clone());

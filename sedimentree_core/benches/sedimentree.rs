@@ -505,7 +505,7 @@ mod sedimentree {
                 BenchmarkId::new("overlapping_50pct", size),
                 &(local, remote_summary),
                 |b, (local, summary)| {
-                    b.iter(|| local.diff_remote(black_box(summary), &metric));
+                    b.iter(|| local.diff_remote(black_box(summary)));
                 },
             );
         }
@@ -522,7 +522,7 @@ mod sedimentree {
                 BenchmarkId::new("vs_empty_remote", size),
                 &(local, empty_summary),
                 |b, (local, summary)| {
-                    b.iter(|| local.diff_remote(black_box(summary), &metric));
+                    b.iter(|| local.diff_remote(black_box(summary)));
                 },
             );
         }
