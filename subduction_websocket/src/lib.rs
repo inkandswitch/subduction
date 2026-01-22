@@ -13,5 +13,5 @@ pub mod error;
 pub mod timeout;
 pub mod websocket;
 
-#[cfg(any(feature = "tokio", feature = "tokio-rustls"))]
+#[cfg(feature = "tokio_base")]
 pub mod tokio;
