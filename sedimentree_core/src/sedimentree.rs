@@ -762,8 +762,8 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<(Sedimentree, Sedimentree)>()
                 .for_each(|(a, b)| {
-                    let ab = a.diff(&b);
-                    let ba = b.diff(&a);
+                    let ab = a.diff(b);
+                    let ba = b.diff(a);
 
                     // What a is missing from b == what b has that a doesn't
                     assert_eq!(
@@ -796,7 +796,7 @@ mod tests {
                 .for_each(|(local, remote)| {
                     let remote_summary = remote.summarize();
                     let remote_diff = local.diff_remote(&remote_summary);
-                    let local_diff = local.diff(&remote);
+                    let local_diff = local.diff(remote);
 
                     // local_fragments in diff_remote should match right_missing_fragments in diff
                     // (what we have that they don't)
@@ -833,7 +833,7 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<(Sedimentree, Sedimentree)>()
                 .for_each(|(a, b)| {
-                    let diff = a.diff(&b);
+                    let diff = a.diff(b);
 
                     // Apply diff to make copies equal
                     let mut a_updated = a.clone();
