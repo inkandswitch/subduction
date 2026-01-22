@@ -19,11 +19,7 @@ pub mod subduction;
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub mod metrics;
 
-#[cfg(feature = "metrics")]
-#[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
-pub mod metrics_storage;
-
 pub use subduction::Subduction;
 
 #[cfg(feature = "metrics")]
-pub use metrics_storage::MetricsStorage;
+pub use storage::MetricsStorage;
