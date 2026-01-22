@@ -14,7 +14,6 @@ in {
       description = "The Subduction CLI package to use.";
     };
 
-    # Sync server options
     server = {
       enable = lib.mkEnableOption "Subduction sync server";
 
@@ -39,7 +38,7 @@ in {
 
       enableMetrics = lib.mkOption {
         type = lib.types.bool;
-        default = true;
+        default = false;
         description = "Whether to enable the Prometheus metrics server.";
       };
 
@@ -54,9 +53,15 @@ in {
         default = null;
         description = "Peer ID as 64 hex characters. If null, one will be generated.";
       };
+
+      peers = lib.mkOption {
+        type = lib.types.listOf lib.types.str;
+        default = [];
+        example = ["ws://192.168.1.100:8080" "ws://192.168.1.101:8080"];
+        description = "List of peer WebSocket URLs to connect to on startup for bidirectional sync.";
+      };
     };
 
-    # Ephemeral relay options
     relay = {
       enable = lib.mkEnableOption "Subduction ephemeral message relay";
 
@@ -78,7 +83,6 @@ in {
     anyEnabled = cfg.server.enable || cfg.relay.enable;
   in
     lib.mkIf anyEnabled {
-      # Linux: systemd user services
       systemd.user.services = lib.mkIf pkgs.stdenv.isLinux (
         lib.optionalAttrs cfg.server.enable {
           subduction = {
@@ -105,7 +109,8 @@ in {
                     "--metrics-port"
                     (toString cfg.server.metricsPort)
                   ]
-                  ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId];
+                  ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
+                  ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
               in
                 lib.escapeShellArgs args;
               Restart = "on-failure";
@@ -145,7 +150,6 @@ in {
         }
       );
 
-      # macOS: launchd user agents
       launchd.agents = lib.mkIf pkgs.stdenv.isDarwin (
         lib.optionalAttrs cfg.server.enable {
           subduction = {
@@ -167,7 +171,8 @@ in {
                   "--metrics-port"
                   (toString cfg.server.metricsPort)
                 ]
-                ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId];
+                ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
+                ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
               RunAtLoad = true;
               KeepAlive = true;
               StandardOutPath = "${config.xdg.cacheHome}/subduction/server.log";

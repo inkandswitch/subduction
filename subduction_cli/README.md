@@ -86,6 +86,9 @@ Options:
 - `--data-dir <PATH>` - Data directory for storage (default: `./data`)
 - `--peer-id <ID>` - Peer ID as 64 hex characters (default: auto-generated)
 - `--timeout <SECS>` - Request timeout in seconds (default: `5`)
+- `--peer <URL>` - Peer WebSocket URL to connect to on startup (can be specified multiple times)
+- `--metrics` - Enable Prometheus metrics server (disabled by default)
+- `--metrics-port <PORT>` - Port for Prometheus metrics endpoint (default: `9090`, only used if `--metrics` is enabled)
 
 ### Client Mode
 
@@ -244,6 +247,12 @@ Your clients can then connect to:
 # Server with debug logging
 RUST_LOG=debug nix run .#subduction_cli -- server
 
+# Server connecting to peers on startup for bidirectional sync
+nix run .#subduction_cli -- server --peer ws://192.168.1.100:8080 --peer ws://192.168.1.101:8080
+
+# Server with metrics enabled
+nix run .#subduction_cli -- server --metrics --metrics-port 9090
+
 # Client connecting to remote server
 nix run .#subduction_cli -- client --server ws://sync.example.com:8080
 
@@ -277,10 +286,18 @@ The flake provides NixOS and Home Manager modules for running Subduction as a ma
               enable = true;
               socket = "0.0.0.0:8080";
               dataDir = "/var/lib/subduction";
-              metricsPort = 9090;
-              enableMetrics = true;
               timeout = 5;
               # peerId = "...";  # optional: 64 hex chars
+
+              # Connect to other peers on startup for bidirectional sync
+              peers = [
+                "ws://192.168.1.100:8080"
+                "ws://192.168.1.101:8080"
+              ];
+
+              # Prometheus metrics (disabled by default)
+              enableMetrics = true;
+              metricsPort = 9090;
             };
 
             # Ephemeral message relay
@@ -331,6 +348,9 @@ Works on both Linux (systemd user service) and macOS (launchd agent):
               enable = true;
               socket = "127.0.0.1:8080";
               # dataDir defaults to ~/.local/share/subduction
+
+              # Connect to other peers on startup
+              peers = ["ws://sync.example.com:8080"];
             };
 
             relay = {
@@ -396,11 +416,11 @@ The Subduction server exposes Prometheus metrics on a configurable port (default
 ### Server Metrics Options
 
 ```bash
-# Enable metrics (default)
+# Enable metrics
 subduction_cli server --metrics --metrics-port 9090
 
-# Disable metrics
-subduction_cli server --metrics=false
+# Metrics are disabled by default
+subduction_cli server
 ```
 
 ### Development Monitoring Stack

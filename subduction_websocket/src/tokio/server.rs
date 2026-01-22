@@ -2,11 +2,12 @@
 
 use crate::{
     timeout::{FuturesTimerTimeout, Timeout},
+    tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
 };
 
 use alloc::{string::ToString, sync::Arc};
-use async_tungstenite::tokio::{accept_hdr_async, TokioAdapter};
+use async_tungstenite::tokio::{accept_hdr_async, connect_async};
 use core::{net::SocketAddr, time::Duration};
 use futures_kind::Sendable;
 use sedimentree_core::{
@@ -18,11 +19,23 @@ use subduction_core::{
     subduction::error::RegistrationError, Subduction,
 };
 use tokio::{
-    net::{TcpListener, TcpStream},
+    net::TcpListener,
     task::{JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
-use tungstenite::handshake::server::NoCallback;
+use tungstenite::{handshake::server::NoCallback, http::Uri};
+
+/// Error type for connecting to a peer.
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectToPeerError {
+    /// WebSocket connection error.
+    #[error("WebSocket connection error: {0}")]
+    WebSocket(#[from] tungstenite::Error),
+
+    /// Registration error.
+    #[error("Registration error: {0}")]
+    Registration(#[from] RegistrationError),
+}
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug, Clone)]
@@ -96,12 +109,12 @@ where
                                     async move {
                                         match accept_hdr_async(tcp, NoCallback).await {
                                             Ok(hs) => {
-                                                let ws_conn = WebSocket::<TokioAdapter<TcpStream>, Sendable, O>::new(
+                                                let ws_conn = UnifiedWebSocket::Accepted(WebSocket::new(
                                                     hs,
                                                     tout,
                                                     default_time_limit,
                                                     client_id,
-                                                );
+                                                ));
 
                                                 tracing::info!("WebSocket handshake upgraded {addr}");
 
@@ -207,9 +220,61 @@ where
     /// Returns an error if the registration message send fails over the internal channel.
     pub async fn register(
         &self,
-        ws: WebSocket<TokioAdapter<TcpStream>, Sendable, O>,
+        ws: UnifiedWebSocket<O>,
     ) -> Result<(bool, ConnectionId), RegistrationError> {
         self.subduction.register(ws).await
+    }
+
+    /// Connect to a peer and register the connection for bidirectional sync.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection could not be established or registered.
+    pub async fn connect_to_peer(
+        &self,
+        uri: Uri,
+        timeout: O,
+        default_time_limit: Duration,
+        peer_id: PeerId,
+    ) -> Result<ConnectionId, ConnectToPeerError> {
+        let uri_str = uri.to_string();
+        tracing::info!("Connecting to peer at {uri_str}");
+
+        let (ws_stream, _resp) = connect_async(uri)
+            .await
+            .map_err(ConnectToPeerError::WebSocket)?;
+
+        let ws_conn = UnifiedWebSocket::Dialed(WebSocket::new(
+            ws_stream,
+            timeout,
+            default_time_limit,
+            peer_id,
+        ));
+
+        let listen_ws = ws_conn.clone();
+        let listen_uri_str = uri_str.clone();
+        let cancel_token = self.cancellation_token.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                () = cancel_token.cancelled() => {
+                    tracing::debug!("Shutting down listener for peer {listen_uri_str}");
+                }
+                result = listen_ws.listen() => {
+                    if let Err(e) = result {
+                        tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                    }
+                }
+            }
+        });
+
+        let (_is_new, conn_id) = self
+            .subduction
+            .register(ws_conn)
+            .await
+            .map_err(ConnectToPeerError::Registration)?;
+
+        tracing::info!("Connected to peer at {uri_str} with connection ID {conn_id:?}");
+        Ok(conn_id)
     }
 
     /// Graceful shutdown: cancel and await tasks.
@@ -220,4 +285,4 @@ where
 }
 
 type TokioWebSocketSubduction<S, O, M> =
-    Arc<Subduction<'static, Sendable, S, WebSocket<TokioAdapter<TcpStream>, Sendable, O>, M>>;
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, M>>;

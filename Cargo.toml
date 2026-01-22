@@ -23,14 +23,19 @@ authors = [
 ]
 
 [workspace.dependencies]
+ahash = "0.8"
+anyhow = "1.0"
 automerge = "0.7.0"
 arbitrary = "1.4"
+axum = "0.8"
 criterion = { version = "0.5", default-features = false }
 async-channel = { version = "2.5", default-features = false }
 async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
 base58 = "0.2.0"
 blake3 = { version = "1.8", default-features = false }
+clap = { version = "4.5", features = ["derive"] }
+console-subscriber = "0.5.0"
 bolero = "0.13.4"
 ciborium = { version = "0.2.2", default-features = false }
 ciborium-io = { version = "0.2.2", default-features = false }
@@ -41,6 +46,7 @@ futures_kind = "0.1.0"
 futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 getrandom = "0.3.3" # no_std by default
+hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"

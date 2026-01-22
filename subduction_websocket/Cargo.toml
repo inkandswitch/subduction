@@ -60,24 +60,18 @@ std = [
   "thiserror/std",
   "tracing/std",
 ]
-tokio = [
-  "async-tungstenite/tokio-native-tls",
+tokio_base = [
   "dep:tokio",
   "dep:tokio-util",
   "futures-timer",
   "std"
 ]
-tokio-rustls = [
-  "async-tungstenite/tokio-rustls-native-certs",
-  "dep:tokio",
-  "dep:tokio-util",
-  "futures-timer",
-  "std"
-]
-tokio_client = ["tokio"]
-tokio_server = ["tokio"]
-tokio_client_rustls = ["tokio-rustls"]
-tokio_server_rustls = ["tokio-rustls"]
+tokio_client_any = ["tokio_base"]
+tokio_server_any = ["tokio_base"]
+tokio_client = ["tokio_client_any", "async-tungstenite/tokio-native-tls"]
+tokio_server = ["tokio_server_any", "async-tungstenite/tokio-native-tls"]
+tokio_client_rustls = ["tokio_client_any", "async-tungstenite/tokio-rustls-native-certs"]
+tokio_server_rustls = ["tokio_server_any", "async-tungstenite/tokio-rustls-native-certs"]
 
 [lints]
 workspace = true
