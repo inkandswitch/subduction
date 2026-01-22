@@ -94,99 +94,124 @@ in {
         description = "Maximum message size in bytes.";
       };
     };
+
+    grafana = {
+      provisionDashboard = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Whether to provision the Subduction dashboard in Grafana.
+          Requires services.grafana.enable to be true.
+          The dashboard expects a Prometheus datasource with UID "prometheus".
+        '';
+      };
+    };
   };
 
   config = let
     anyEnabled = cfg.server.enable || cfg.relay.enable;
   in
-    lib.mkIf anyEnabled {
-      users.users.${cfg.user} = {
-        isSystemUser = true;
-        group = cfg.group;
-        home = cfg.server.dataDir;
-        createHome = true;
-      };
-
-      users.groups.${cfg.group} = {};
-
-      systemd.services.subduction = lib.mkIf cfg.server.enable {
-        description = "Subduction Sync Server";
-        wantedBy = ["multi-user.target"];
-        after = ["network.target"];
-
-        serviceConfig = {
-          Type = "simple";
-          User = cfg.user;
-          Group = cfg.group;
-          ExecStart = let
-            args =
-              [
-                "${cfg.package}/bin/subduction_cli"
-                "server"
-                "--socket"
-                cfg.server.socket
-                "--data-dir"
-                (toString cfg.server.dataDir)
-                "--timeout"
-                (toString cfg.server.timeout)
-              ]
-              ++ lib.optionals cfg.server.enableMetrics ["--metrics" "--metrics-port" (toString cfg.server.metricsPort)]
-              ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
-              ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
-          in
-            lib.escapeShellArgs args;
-          Restart = "on-failure";
-          RestartSec = 5;
-
-          NoNewPrivileges = true;
-          ProtectSystem = "strict";
-          ProtectHome = true;
-          PrivateTmp = true;
-          ReadWritePaths = [cfg.server.dataDir];
+    lib.mkMerge [
+      # Service configuration
+      (lib.mkIf anyEnabled {
+        users.users.${cfg.user} = {
+          isSystemUser = true;
+          group = cfg.group;
+          home = cfg.server.dataDir;
+          createHome = true;
         };
-      };
 
-      systemd.services.subduction-relay = lib.mkIf cfg.relay.enable {
-        description = "Subduction Ephemeral Message Relay";
-        wantedBy = ["multi-user.target"];
-        after = ["network.target"];
+        users.groups.${cfg.group} = {};
 
-        serviceConfig = {
-          Type = "simple";
-          User = cfg.user;
-          Group = cfg.group;
-          ExecStart = lib.escapeShellArgs [
-            "${cfg.package}/bin/subduction_cli"
-            "ephemeral-relay"
-            "--socket"
-            cfg.relay.socket
-            "--max-message-size"
-            (toString cfg.relay.maxMessageSize)
-          ];
-          Restart = "on-failure";
-          RestartSec = 5;
+        systemd.services.subduction = lib.mkIf cfg.server.enable {
+          description = "Subduction Sync Server";
+          wantedBy = ["multi-user.target"];
+          after = ["network.target"];
 
-          NoNewPrivileges = true;
-          ProtectSystem = "strict";
-          ProtectHome = true;
-          PrivateTmp = true;
-          ReadOnlyPaths = ["/"];
-        };
-      };
-
-      networking.firewall = lib.mkIf cfg.openFirewall {
-        allowedTCPPorts = let
-          # Match the port after the last colon (handles IPv6 bracket notation)
-          getPort = socket:
-            let
-              matched = builtins.match ".*:([0-9]+)$" socket;
+          serviceConfig = {
+            Type = "simple";
+            User = cfg.user;
+            Group = cfg.group;
+            ExecStart = let
+              args =
+                [
+                  "${cfg.package}/bin/subduction_cli"
+                  "server"
+                  "--socket"
+                  cfg.server.socket
+                  "--data-dir"
+                  (toString cfg.server.dataDir)
+                  "--timeout"
+                  (toString cfg.server.timeout)
+                ]
+                ++ lib.optionals cfg.server.enableMetrics ["--metrics" "--metrics-port" (toString cfg.server.metricsPort)]
+                ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
+                ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
             in
-              lib.toInt (lib.head matched);
-          serverPort = getPort cfg.server.socket;
-          relayPort = getPort cfg.relay.socket;
-        in
-          (lib.optional cfg.server.enable serverPort)
-          ++ (lib.optional cfg.relay.enable relayPort);
-      };
-    };
+              lib.escapeShellArgs args;
+            Restart = "on-failure";
+            RestartSec = 5;
+
+            NoNewPrivileges = true;
+            ProtectSystem = "strict";
+            ProtectHome = true;
+            PrivateTmp = true;
+            ReadWritePaths = [cfg.server.dataDir];
+          };
+        };
+
+        systemd.services.subduction-relay = lib.mkIf cfg.relay.enable {
+          description = "Subduction Ephemeral Message Relay";
+          wantedBy = ["multi-user.target"];
+          after = ["network.target"];
+
+          serviceConfig = {
+            Type = "simple";
+            User = cfg.user;
+            Group = cfg.group;
+            ExecStart = lib.escapeShellArgs [
+              "${cfg.package}/bin/subduction_cli"
+              "ephemeral-relay"
+              "--socket"
+              cfg.relay.socket
+              "--max-message-size"
+              (toString cfg.relay.maxMessageSize)
+            ];
+            Restart = "on-failure";
+            RestartSec = 5;
+
+            NoNewPrivileges = true;
+            ProtectSystem = "strict";
+            ProtectHome = true;
+            PrivateTmp = true;
+            ReadOnlyPaths = ["/"];
+          };
+        };
+
+        networking.firewall = lib.mkIf cfg.openFirewall {
+          allowedTCPPorts = let
+            # Match the port after the last colon (handles IPv6 bracket notation)
+            getPort = socket:
+              let
+                matched = builtins.match ".*:([0-9]+)$" socket;
+              in
+                lib.toInt (lib.head matched);
+            serverPort = getPort cfg.server.socket;
+            relayPort = getPort cfg.relay.socket;
+          in
+            (lib.optional cfg.server.enable serverPort)
+            ++ (lib.optional cfg.relay.enable relayPort);
+        };
+      })
+
+      # Grafana dashboard provisioning
+      (lib.mkIf cfg.grafana.provisionDashboard {
+        services.grafana.provision.dashboards.settings.providers = [
+          {
+            name = "subduction";
+            options.path = "${self.grafanaDashboardsPath}";
+          }
+        ];
+      })
+    ];
 }

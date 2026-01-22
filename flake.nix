@@ -25,6 +25,9 @@
     {
       nixosModules.default = import ./nix/nixos-module.nix {inherit self;};
       homeManagerModules.default = import ./nix/home-manager-module.nix {inherit self;};
+
+      # Grafana dashboard for monitoring Subduction metrics
+      grafanaDashboardsPath = ./subduction_cli/monitoring/grafana/provisioning/dashboards;
     }
     // flake-utils.lib.eachDefaultSystem (
       system: let
