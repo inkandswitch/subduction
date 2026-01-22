@@ -624,7 +624,7 @@ where
             }
         }
 
-        conn.send(Message::BlobsResponse(blobs))
+        conn.send(&Message::BlobsResponse(blobs))
             .await
             .map_err(IoError::ConnSend)?;
 
@@ -698,10 +698,14 @@ where
             id
         );
 
-        self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO lots of cloning
+        // Clone for storage
+        self.insert_commit_locally(id, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
+        // Build message once, send by reference to all peers
+        // (clone commit once for message; avoids N-1 additional clones)
+        let msg = Message::LooseCommit { id, commit: commit.clone(), blob };
         {
             let conns_with_ids: Vec<(ConnectionId, C)> = {
                 self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
@@ -709,16 +713,12 @@ where
             for (conn_id, conn) in conns_with_ids {
                 tracing::debug!(
                     "Propagating commit {:?} for sedimentree {:?} to peer {:?}",
-                    commit.digest(),
+                    msg.request_id(),
                     id,
                     conn.peer_id()
                 );
 
-                if let Err(e) = conn.send(Message::LooseCommit {
-                    id,
-                    commit: commit.clone(),
-                    blob: blob.clone(),
-                }).await {
+                if let Err(e) = conn.send(&msg).await {
                     tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
                     self.unregister(&conn_id).await;
                     tracing::info!("unregistered failed connection {:?}", conn_id);
@@ -760,11 +760,18 @@ where
             .with_entry_or_default(id, |tree| tree.add_fragment(fragment.clone()))
             .await;
 
+        // Clone blob for storage, move original to message
         self.storage
-            .save_blob(blob.clone()) // TODO lots of cloning
+            .save_blob(blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
+        // Build message once, send by reference to all peers (avoids N clones)
+        let msg = Message::Fragment {
+            id,
+            fragment: fragment.clone(),
+            blob,
+        };
         let conns_with_ids: Vec<(ConnectionId, C)> = {
             self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
         };
@@ -775,11 +782,7 @@ where
                 id,
                 conn.peer_id()
             );
-            if let Err(e) = conn.send(Message::Fragment {
-                id,
-                fragment: fragment.clone(),
-                blob: blob.clone(),
-            }).await {
+            if let Err(e) = conn.send(&msg).await {
                 tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
                 self.unregister(&conn_id).await;
                 tracing::info!("unregistered failed connection {:?}", conn_id);
@@ -814,27 +817,30 @@ where
             from
         );
 
+        // Clone once for storage
         let was_new = self
             .insert_commit_locally(id, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
         if was_new {
+            // Build message once, send by reference to all peers (avoids N clones)
+            let msg = Message::LooseCommit {
+                id,
+                commit: commit.clone(),
+                blob,
+            };
             let conns_with_ids: Vec<(ConnectionId, C)> = {
                 self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
             };
             for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
-                    && let Err(e) = conn.send(Message::LooseCommit {
-                        id,
-                        commit: commit.clone(),
-                        blob: blob.clone(),
-                    })
-                    .await {
-                        tracing::error!("{e}");
-                        self.unregister(&conn_id).await;
-                        tracing::info!("unregistered failed connection {:?}", conn_id);
-                    }
+                    && let Err(e) = conn.send(&msg).await
+                {
+                    tracing::error!("{e}");
+                    self.unregister(&conn_id).await;
+                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                }
             }
         }
 
@@ -862,27 +868,30 @@ where
             from
         );
 
+        // Clone once for storage
         let was_new = self
-            .insert_fragment_locally(id, fragment.clone(), blob.clone()) // TODO lots of cloning
+            .insert_fragment_locally(id, fragment.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
         if was_new {
+            // Build message once, send by reference to all peers (avoids N clones)
+            let msg = Message::Fragment {
+                id,
+                fragment: fragment.clone(),
+                blob,
+            };
             let conns_with_ids: Vec<(ConnectionId, C)> = {
                 self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
             };
             for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
-                    && let Err(e) = conn.send(Message::Fragment {
-                        id,
-                        fragment: fragment.clone(),
-                        blob: blob.clone(),
-                    })
-                    .await {
-                        tracing::error!("{e}");
-                        self.unregister(&conn_id).await;
-                        tracing::info!("unregistered failed connection {:?}", conn_id);
-                    }
+                    && let Err(e) = conn.send(&msg).await
+                {
+                    tracing::error!("{e}");
+                    self.unregister(&conn_id).await;
+                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                }
             }
         }
 
@@ -974,14 +983,13 @@ where
             }
         };
 
-        if let Err(e) = conn.send(
-            BatchSyncResponse {
-                id,
-                req_id,
-                diff: sync_diff
-            }
-            .into(),
-        ).await {
+        let msg: Message = BatchSyncResponse {
+            id,
+            req_id,
+            diff: sync_diff
+        }
+        .into();
+        if let Err(e) = conn.send(&msg).await {
             tracing::error!("{e}");
         }
 
@@ -1028,14 +1036,16 @@ where
 
     /// Find blobs from connected peers.
     pub async fn request_blobs(&self, digests: Vec<Digest>) {
+        // Build message once, send by reference to all peers (avoids N clones of digests)
+        let msg = Message::BlobsRequest(digests);
         let conns_with_ids: Vec<(ConnectionId, C)> = {
             self.conns.lock().await.iter().map(|(id, c)| (*id, c.clone())).collect()
         };
         for (conn_id, conn) in conns_with_ids {
-            if let Err(e) = conn.send(Message::BlobsRequest(digests.clone())).await {
+            if let Err(e) = conn.send(&msg).await {
                 tracing::error!(
                     "Error requesting blobs {:?} from peer {:?}: {:?}",
-                    digests,
+                    msg,
                     conn.peer_id(),
                     e
                 );

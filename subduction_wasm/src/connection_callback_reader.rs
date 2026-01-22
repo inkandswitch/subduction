@@ -47,7 +47,7 @@ impl<T: Connection<Local>> Connection<Local> for WasmConnectionCallbackReader<T>
         self.conn.disconnect()
     }
 
-    fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         self.conn.send(message)
     }
 

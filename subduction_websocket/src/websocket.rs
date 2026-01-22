@@ -80,19 +80,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
         async { Ok(()) }.boxed_local()
     }
 
-    fn send(&self, message: Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        tracing::debug!(
+            "ws: sending outbound with message id {:?} to peer_id {}",
+            message.request_id(),
+            self.peer_id
+        );
+
+        // Serialize before the async block to avoid cloning the message
+        let mut msg_bytes = Vec::new();
+        #[allow(clippy::expect_used)]
+        ciborium::ser::into_writer(message, &mut msg_bytes)
+            .expect("serialization to vec should be infallible");
+
         async move {
-            tracing::debug!(
-                "ws: sending outbound with message id {:?} to peer_id {}",
-                message.request_id(),
-                self.peer_id
-            );
-
-            let mut msg_bytes = Vec::new();
-            #[allow(clippy::expect_used)]
-            ciborium::ser::into_writer(&message, &mut msg_bytes)
-                .expect("serialization to vec should be infallible");
-
             self.outbound
                 .lock()
                 .await
@@ -379,18 +380,19 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
         async { Ok(()) }.boxed()
     }
 
-    fn send(&self, message: Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        tracing::debug!(
+            "sending outbound message id {:?} / {message:?}",
+            message.request_id()
+        );
+
+        // Serialize before the async block to avoid cloning the message
+        let mut msg_bytes = Vec::new();
+        #[allow(clippy::expect_used)]
+        ciborium::ser::into_writer(message, &mut msg_bytes)
+            .expect("serialization to vec should be infallible");
+
         async move {
-            tracing::debug!(
-                "sending outbound message id {:?} / {message:?}",
-                message.request_id()
-            );
-
-            let mut msg_bytes = Vec::new();
-            #[allow(clippy::expect_used)]
-            ciborium::ser::into_writer(&message, &mut msg_bytes)
-                .expect("serialization to vec should be infallible");
-
             self.outbound
                 .lock()
                 .await
