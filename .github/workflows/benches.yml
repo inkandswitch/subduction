@@ -27,9 +27,19 @@ jobs:
       - name: Run subduction_core benchmarks
         run: cargo bench --package subduction_core --features std --bench subduction -- --noplot
 
+      - name: Run heap allocation profiling
+        run: cargo test --package sedimentree_core --test heap_profile -- --nocapture
+
       - name: Upload benchmark results
         uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
           path: target/criterion/
+          retention-days: 90
+
+      - name: Upload heap profile
+        uses: actions/upload-artifact@v4
+        with:
+          name: heap-profile
+          path: sedimentree_core/dhat-heap.json
           retention-days: 90

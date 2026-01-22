@@ -64,6 +64,13 @@
 
     "bench:host:open" = cmd "Open host Criterion benchmarks in browser"
       "${pkgs.xdg-utils}/bin/xdg-open ./target/criterion/report/index.html";
+
+    "bench:heap" = cmd "Run heap allocation profiling" ''
+      ${cargo} test --package sedimentree_core --test heap_profile -- --nocapture
+      ${pkgs.jq}/bin/jq '.' sedimentree_core/dhat-heap.json | ${pkgs.moreutils}/bin/sponge sedimentree_core/dhat-heap.json
+      echo ""
+      echo "Heap profile saved to sedimentree_core/dhat-heap.json"
+    '';
   };
 
   lint = {

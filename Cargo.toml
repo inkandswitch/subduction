@@ -29,6 +29,7 @@ automerge = "0.7.0"
 arbitrary = "1.4"
 axum = "0.8"
 criterion = { version = "0.5", default-features = false }
+dhat = "0.3"
 async-channel = { version = "2.5", default-features = false }
 async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
