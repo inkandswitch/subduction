@@ -1,3 +1,5 @@
+//! Signed payloads.
+
 pub mod encoded_payload;
 pub mod envelope;
 pub mod magic;
@@ -9,6 +11,7 @@ use thiserror::Error;
 use self::{encoded_payload::EncodedPayload, envelope::Envelope};
 use super::verified::Verified;
 
+/// A signed payload with its issuer and signature.
 #[derive(Clone, Debug, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
@@ -27,6 +30,22 @@ pub struct Signed<T: for<'de> minicbor::Decode<'de, ()>> {
 }
 
 impl<T: for<'de> minicbor::Decode<'de, ()>> Signed<T> {
+    /// Create a new [`Signed`] instance.
+    #[must_use]
+    pub fn new(
+        issuer: ed25519_dalek::VerifyingKey,
+        signature: ed25519_dalek::Signature,
+        encoded_payload: EncodedPayload<T>,
+    ) -> Self {
+        Self {
+            issuer,
+            signature,
+            encoded_payload,
+        }
+    }
+
+    /// Verify the signature and decode the payload.
+    #[must_use]
     pub fn try_verify(&self) -> Result<Verified<T>, VerificationError> {
         self.issuer
             .verify_strict(self.encoded_payload.as_slice(), &self.signature)?;
@@ -105,11 +124,14 @@ impl<T: for<'de> minicbor::Decode<'de, ()>> Ord for Signed<T> {
     }
 }
 
+/// Errors that can occur during signature verification.
 #[derive(Debug, Error)]
 pub enum VerificationError {
+    /// Invalid signature error.
     #[error("invalid signature: {0}")]
     InvalidSignature(#[from] ed25519_dalek::SignatureError),
 
+    /// CBOR decoding error.
     #[error("CBOR decode error: {0}")]
     DecodeError(#[from] minicbor::decode::Error),
 }

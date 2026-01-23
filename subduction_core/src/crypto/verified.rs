@@ -1,9 +1,11 @@
+//! A payload that has been verified.
+
 use core::cmp::Ordering;
 
-/// A payload that has been verified against a signing key.
+/// A payload that has been verified.
 ///
 /// This type is used internally after signature verification.
-/// It should not be sent over the wire directly.
+/// It should NEVER be sent over the wire directly.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
@@ -28,6 +30,12 @@ impl<T> Verified<T> {
     #[must_use]
     pub fn payload(&self) -> &T {
         &self.payload
+    }
+
+    /// Consumes the `Verified` and returns the payload.
+    #[must_use]
+    pub fn into_payload(self) -> T {
+        self.payload
     }
 }
 

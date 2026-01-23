@@ -10,6 +10,7 @@ pub mod test_utils;
 
 use alloc::sync::Arc;
 use core::time::Duration;
+use sedimentree_core::id::SedimentreeId;
 
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use crate::peer::id::PeerId;
@@ -102,16 +103,38 @@ pub trait Reconnect<K: FutureKind>: Connection<K> {
 }
 
 /// A policy for allowing or disallowing connections from peers.
-pub trait ConnectionPolicy {
+pub trait ConnectionPolicy<K: FutureKind> {
     /// Check if a connection from the given peer is allowed.
     ///
     /// # Errors
     ///
     /// * Returns [`ConnectionDisallowed`] if the connection is not allowed.
-    fn allowed_to_connect(
+    fn check_connect(&self, peer: &PeerId) -> K::Future<'_, bool>;
+
+    fn check_fetch(&self, peer: PeerId, sedimentree_id: SedimentreeId) -> K::Future<'_, bool>;
+
+    fn check_put(
         &self,
-        peer: &PeerId,
-    ) -> impl Future<Output = Result<(), ConnectionDisallowed>>;
+        putter: &PeerId,
+        issuer: &PeerId,
+        sedimentree_id: &SedimentreeId,
+    ) -> K::Future<'_, bool>;
+}
+
+// FIXME rename "connecter" / "puller" / etc?
+// FIXME rename "connecthandle" / "pull handle" / etc?
+pub trait ConnectHandle {
+    fn connect(&self, peer_id: PeerId) -> FIXME;
+}
+
+pub trait FetchHandle {
+    fn pull(&self) -> FIXME;
+    fn sedimentree_id(&self) -> &SedimentreeId;
+}
+
+pub trait PutHandle {
+    fn put(&self) -> FIXME;
+    fn sedimentree_id(&self) -> &SedimentreeId;
 }
 
 /// An error indicating that a connection is disallowed.
@@ -120,3 +143,10 @@ pub trait ConnectionPolicy {
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[error("Connection disallowed")]
 pub struct ConnectionDisallowed;
+
+pub struct FIXME;
+
+// FIXME something something
+mod policy_seal {
+    pub struct PolicySeal;
+}
