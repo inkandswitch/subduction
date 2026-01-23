@@ -9,7 +9,6 @@ extern crate std;
 extern crate alloc;
 
 pub mod connection;
-pub mod crypto;
 pub mod peer;
 pub mod run;
 pub mod sharded_map;
