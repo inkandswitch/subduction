@@ -35,7 +35,7 @@ impl WasmMessage {
     #[wasm_bindgen(js_name = toCborBytes)]
     pub fn to_cbor_bytes(&self) -> Vec<u8> {
         #[allow(clippy::expect_used)]
-        minicbor::to_vec(&self.0).expect("serialization cannot fail")
+        minicbor::to_vec(&self.0).expect("serialization should be infallible")
     }
 
     /// Deserialize a message from CBOR bytes.
