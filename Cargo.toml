@@ -5,7 +5,6 @@ members = [
   "automerge_sedimentree_wasm",
   "automerge_subduction_wasm",
   "build_info",
-  "keyhive_subduction_policy",
   "sedimentree_core",
   "subduction_cli",
   "subduction_core",
