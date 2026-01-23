@@ -32,8 +32,9 @@ graph TD
     automerge_sedimentree
     subduction_websocket
     subduction_cli
+    subduction_keyhive_policy
 
-    subgraph Wasm 
+    subgraph Wasm
         subduction_wasm
         automerge_sedimentree_wasm
         automerge_subduction_wasm
@@ -44,6 +45,7 @@ graph TD
 
     subduction_core --> subduction_websocket
     subduction_core --> subduction_wasm
+    subduction_core --> subduction_keyhive_policy
 
     subduction_websocket --> subduction_cli
 
@@ -68,6 +70,12 @@ graph TD
 | `automerge_sedimentree`      | Sedimentree adapter for Automerge documents                |
 | `automerge_sedimentree_wasm` | Wasm bindings for Automerge + Sedimentree                  |
 | `automerge_subduction_wasm`  | Wasm bindings for Automerge + Subduction (full sync stack) |
+
+### Integrations
+
+| Crate                       | Description                                            |
+|-----------------------------|--------------------------------------------------------|
+| `subduction_keyhive_policy` | Keyhive-based authorization policy for connections     |
 
 ### Tools
 
