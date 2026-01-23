@@ -4,10 +4,11 @@ use crate::{
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
+    MAX_MESSAGE_SIZE,
 };
 
 use alloc::{string::ToString, sync::Arc};
-use async_tungstenite::tokio::{accept_hdr_async, connect_async};
+use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use futures_kind::Sendable;
 use sedimentree_core::{
@@ -23,7 +24,7 @@ use tokio::{
     task::{JoinHandle, JoinSet},
 };
 use tokio_util::sync::CancellationToken;
-use tungstenite::{handshake::server::NoCallback, http::Uri};
+use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]
@@ -107,7 +108,9 @@ where
                                 conns.spawn({
                                     let tout = timeout.clone();
                                     async move {
-                                        match accept_hdr_async(tcp, NoCallback).await {
+                                        let mut ws_config = WebSocketConfig::default();
+                                        ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
+                                        match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
                                             Ok(hs) => {
                                                 let ws_conn = UnifiedWebSocket::Accepted(WebSocket::new(
                                                     hs,
@@ -240,7 +243,9 @@ where
         let uri_str = uri.to_string();
         tracing::info!("Connecting to peer at {uri_str}");
 
-        let (ws_stream, _resp) = connect_async(uri)
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
+        let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(ConnectToPeerError::WebSocket)?;
 

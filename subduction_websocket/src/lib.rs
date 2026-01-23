@@ -15,3 +15,6 @@ pub mod websocket;
 
 #[cfg(feature = "tokio_base")]
 pub mod tokio;
+
+/// Maximum WebSocket message size (5 MB).
+pub const MAX_MESSAGE_SIZE: usize = 5 * 1024 * 1024;

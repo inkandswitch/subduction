@@ -4,8 +4,9 @@ use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     timeout::Timeout,
     websocket::WebSocket,
+    MAX_MESSAGE_SIZE,
 };
-use async_tungstenite::tokio::{connect_async, ConnectStream};
+use async_tungstenite::tokio::{connect_async_with_config, ConnectStream};
 use core::time::Duration;
 use futures::{future::BoxFuture, FutureExt};
 use futures_kind::Sendable;
@@ -16,7 +17,7 @@ use subduction_core::{
     },
     peer::id::PeerId,
 };
-use tungstenite::http::Uri;
+use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug, Clone)]
@@ -41,7 +42,9 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> TokioWebSocketClient<O> {
         O: 'a,
     {
         tracing::info!("Connecting to WebSocket server at {address}");
-        let (ws_stream, _resp) = connect_async(address.clone()).await?;
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
+        let (ws_stream, _resp) = connect_async_with_config(address.clone(), Some(ws_config)).await?;
 
         let socket = WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, peer_id);
         let fut_socket = socket.clone();

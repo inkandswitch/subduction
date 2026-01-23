@@ -16,7 +16,10 @@
 
 use ahash::RandomState;
 use anyhow::Result;
-use async_tungstenite::{tokio::accept_async, tungstenite::Message as WsMessage};
+use async_tungstenite::{
+    tokio::accept_async_with_config,
+    tungstenite::{protocol::WebSocketConfig, Message as WsMessage},
+};
 use ciborium::value::Value as CborValue;
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -338,7 +341,9 @@ async fn handle_connection(
     deduplicator: Arc<ShardedDeduplicator<16>>,
     max_message_size: usize,
 ) -> Result<()> {
-    let ws_stream = accept_async(stream).await?;
+    let mut config = WebSocketConfig::default();
+    config.max_message_size = Some(max_message_size);
+    let ws_stream = accept_async_with_config(stream, Some(config)).await?;
     let (mut ws_sender, mut ws_receiver) = ws_stream.split();
 
     // Create a channel for sending messages to this peer (uses Arc for zero-copy broadcast)
@@ -404,17 +409,6 @@ async fn handle_connection(
     while let Some(result) = ws_receiver.next().await {
         match result {
             Ok(WsMessage::Binary(data)) => {
-                // Reject messages that are too large
-                if data.len() > max_message_size {
-                    tracing::warn!(
-                        "Dropping oversized message from {}: {} bytes (max: {} bytes)",
-                        peer_id.0,
-                        data.len(),
-                        max_message_size
-                    );
-                    continue;
-                }
-
                 // Try to parse message header for deduplication
                 let should_relay = if let Ok(header) =
                     ciborium::from_reader::<EphemeralMessageHeader, _>(data.as_ref())
