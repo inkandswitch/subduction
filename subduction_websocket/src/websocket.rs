@@ -76,7 +76,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!("[local] disconnect called for peer {}", self.peer_id);
+        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
         async { Ok(()) }.boxed_local()
     }
 
@@ -371,7 +371,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!("[sendable] disconnect called for peer {}", self.peer_id);
+        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
         async { Ok(()) }.boxed()
     }
 

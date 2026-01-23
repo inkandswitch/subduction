@@ -18,7 +18,7 @@ use futures::{
     stream::{AbortRegistration, Abortable, Aborted, SelectAll, StreamExt},
     FutureExt,
 };
-use futures_kind::{Local, Sendable};
+use futures_kind::{kinds, FutureKind, Local, Sendable};
 
 use super::{id::ConnectionId, message::Message, stream::IntoConnectionStream, Connection};
 
@@ -174,36 +174,20 @@ pub trait StartConnectionActor<'a, C: Connection<Self> + 'a>:
     ) -> Abortable<Self::Future<'a, ()>>;
 }
 
-impl<'a, C: Connection<Sendable> + Send + 'static> StartConnectionActor<'a, C> for Sendable
+#[kinds(Sendable where C: Connection<Sendable> + Send + 'static, C::RecvError: Send, Local where C: Connection<Local> + 'a)]
+impl<'a, K: FutureKind, C> StartConnectionActor<'a, C> for K
 where
-    C::RecvError: Send,
+    K: IntoConnectionStream<'a, C>,
 {
     fn start_actor(
         actor: ConnectionActor<'a, Self, C>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
-            async move {
+            K::into_kind(async move {
                 let mut inner = actor;
                 ConnectionActor::listen(&mut inner).await;
-            }
-            .boxed(),
-            abort_reg,
-        )
-    }
-}
-
-impl<'a, C: Connection<Local> + 'a> StartConnectionActor<'a, C> for Local {
-    fn start_actor(
-        actor: ConnectionActor<'a, Self, C>,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>> {
-        Abortable::new(
-            async move {
-                let mut inner = actor;
-                ConnectionActor::listen(&mut inner).await;
-            }
-            .boxed_local(),
+            }),
             abort_reg,
         )
     }

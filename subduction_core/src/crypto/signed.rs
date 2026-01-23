@@ -128,10 +128,16 @@ impl<T: for<'de> minicbor::Decode<'de, ()>> Ord for Signed<T> {
 #[derive(Debug, Error)]
 pub enum VerificationError {
     /// Invalid signature error.
-    #[error("invalid signature: {0}")]
-    InvalidSignature(#[from] ed25519_dalek::SignatureError),
+    #[error("invalid signature")]
+    InvalidSignature,
 
     /// CBOR decoding error.
     #[error("CBOR decode error: {0}")]
     DecodeError(#[from] minicbor::decode::Error),
+}
+
+impl From<ed25519_dalek::SignatureError> for VerificationError {
+    fn from(_: ed25519_dalek::SignatureError) -> Self {
+        Self::InvalidSignature
+    }
 }

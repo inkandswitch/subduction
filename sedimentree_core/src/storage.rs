@@ -5,11 +5,7 @@ use alloc::{string::String, sync::Arc, vec::Vec};
 use crate::collections::{Map, Set};
 
 use async_lock::Mutex;
-use futures::{
-    future::{BoxFuture, LocalBoxFuture},
-    FutureExt,
-};
-use futures_kind::{FutureKind, Local, Sendable};
+use futures_kind::{kinds, FutureKind};
 
 use crate::{
     blob::{Blob, Digest},
@@ -122,61 +118,46 @@ impl MemoryStorage {
     }
 }
 
-impl Storage<Local> for MemoryStorage {
+#[kinds]
+impl<K: FutureKind> Storage<K> for MemoryStorage {
     type Error = core::convert::Infallible;
 
     fn save_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: inserting sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, "MemoryStorage::save_sedimentree_id");
             self.ids.lock().await.insert(sedimentree_id);
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
     fn delete_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: deleting sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, "MemoryStorage::delete_sedimentree_id");
             self.ids.lock().await.remove(&sedimentree_id);
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
-    fn load_all_sedimentree_ids(
-        &self,
-    ) -> LocalBoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        tracing::debug!("[local] MemoryStorage: getting sedimentree_ids");
-        async move {
-            let ids = self.ids.lock().await.iter().copied().collect();
-            Ok(ids)
-        }
-        .boxed_local()
+    fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!("MemoryStorage::load_all_sedimentree_ids");
+            Ok(self.ids.lock().await.iter().copied().collect())
+        })
     }
 
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: saving loose commit {:?} for sedimentree_id {:?}",
-            loose_commit,
-            sedimentree_id
-        );
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, ?loose_commit, "MemoryStorage::save_loose_commit");
             self.commits
                 .lock()
                 .await
@@ -184,19 +165,15 @@ impl Storage<Local> for MemoryStorage {
                 .or_default()
                 .insert(loose_commit);
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: loading loose commits for sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
+    ) -> K::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, "MemoryStorage::load_loose_commits");
             let stored = {
                 let locked = self.commits.lock().await;
                 locked.get(&sedimentree_id).cloned()
@@ -206,36 +183,27 @@ impl Storage<Local> for MemoryStorage {
             } else {
                 Ok(Vec::new())
             }
-        }
-        .boxed_local()
+        })
     }
 
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: deleting loose commits for sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, "MemoryStorage::delete_loose_commits");
             self.commits.lock().await.remove(&sedimentree_id);
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
     fn save_fragment(
         &self,
         sedimentree_id: SedimentreeId,
         fragment: Fragment,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: saving fragment {:?} for sedimentree_id {:?}",
-            fragment,
-            sedimentree_id
-        );
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, ?fragment, "MemoryStorage::save_fragment");
             self.fragments
                 .lock()
                 .await
@@ -243,19 +211,15 @@ impl Storage<Local> for MemoryStorage {
                 .or_default()
                 .insert(fragment);
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: loading fragments for sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
+    ) -> K::Future<'_, Result<Vec<Fragment>, Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, "MemoryStorage::load_fragments");
             let stored = {
                 let locked = self.fragments.lock().await;
                 locked.get(&sedimentree_id).cloned()
@@ -265,251 +229,41 @@ impl Storage<Local> for MemoryStorage {
             } else {
                 Ok(Vec::new())
             }
-        }
-        .boxed_local()
+        })
     }
 
     fn delete_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            tracing::debug!(
-                "[local] MemoryStorage: deleting fragments for sedimentree_id {:?}",
-                sedimentree_id
-            );
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?sedimentree_id, "MemoryStorage::delete_fragments");
             self.fragments.lock().await.remove(&sedimentree_id);
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
-    fn save_blob(&self, blob: Blob) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
-        tracing::debug!(
-            "[local] MemoryStorage: saving blob with contents {:?}",
-            blob.contents()
-        );
-        async move {
+    fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest, Self::Error>> {
+        K::into_kind(async move {
             let digest = Digest::hash(blob.contents());
+            tracing::debug!(?digest, "MemoryStorage::save_blob");
             self.blobs.lock().await.entry(digest).or_insert(blob);
             Ok(digest)
-        }
-        .boxed_local()
+        })
     }
 
-    fn load_blob(
-        &self,
-        blob_digest: Digest,
-    ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
-        async move {
-            tracing::debug!(
-                "[local] MemoryStorage: loading blob with digest {:?}",
-                blob_digest
-            );
+    fn load_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?blob_digest, "MemoryStorage::load_blob");
             Ok(self.blobs.lock().await.get(&blob_digest).cloned())
-        }
-        .boxed_local()
+        })
     }
 
-    fn delete_blob(&self, blob_digest: Digest) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            tracing::debug!(
-                "[local] MemoryStorage: deleting blob with digest {:?}",
-                blob_digest
-            );
+    fn delete_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<(), Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(?blob_digest, "MemoryStorage::delete_blob");
             self.blobs.lock().await.remove(&blob_digest);
             Ok(())
-        }
-        .boxed_local()
-    }
-}
-
-impl Storage<Sendable> for MemoryStorage {
-    type Error = core::convert::Infallible;
-
-    fn save_sedimentree_id(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: inserting sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
-            self.ids.lock().await.insert(sedimentree_id);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn delete_sedimentree_id(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: deleting sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
-            self.ids.lock().await.remove(&sedimentree_id);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn load_all_sedimentree_ids(&self) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        tracing::debug!("[sendable] MemoryStorage: getting sedimentree_ids");
-        async move { Ok(self.ids.lock().await.iter().copied().collect()) }.boxed()
-    }
-
-    fn delete_loose_commits(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: deleting loose commits for sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
-            self.commits.lock().await.remove(&sedimentree_id);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn save_loose_commit(
-        &self,
-        sedimentree_id: SedimentreeId,
-        loose_commit: LooseCommit,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: saving loose commit {:?} for sedimentree_id {:?}",
-            loose_commit,
-            sedimentree_id
-        );
-        async move {
-            self.commits
-                .lock()
-                .await
-                .entry(sedimentree_id)
-                .or_default()
-                .insert(loose_commit);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn load_loose_commits(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: loading loose commits for sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
-            let stored = {
-                let locked = self.commits.lock().await;
-                locked.get(&sedimentree_id).cloned()
-            };
-            if let Some(set) = stored {
-                Ok(set.into_iter().collect())
-            } else {
-                Ok(Vec::new())
-            }
-        }
-        .boxed()
-    }
-
-    fn delete_fragments(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            tracing::debug!(
-                "[sendable] MemoryStorage: deleting fragments for sedimentree_id {:?}",
-                sedimentree_id
-            );
-            self.fragments.lock().await.remove(&sedimentree_id);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn save_fragment(
-        &self,
-        sedimentree_id: SedimentreeId,
-        fragment: Fragment,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: saving fragment {:?} for sedimentree_id {:?}",
-            fragment,
-            sedimentree_id
-        );
-        async move {
-            self.fragments
-                .lock()
-                .await
-                .entry(sedimentree_id)
-                .or_default()
-                .insert(fragment);
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn load_fragments(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: loading fragments for sedimentree_id {:?}",
-            sedimentree_id
-        );
-        async move {
-            let stored = {
-                let locked = self.fragments.lock().await;
-                locked.get(&sedimentree_id).cloned()
-            };
-            if let Some(set) = stored {
-                Ok(set.into_iter().collect())
-            } else {
-                Ok(Vec::new())
-            }
-        }
-        .boxed()
-    }
-
-    fn save_blob(&self, blob: Blob) -> BoxFuture<'_, Result<Digest, Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: saving blob with contents {:?}",
-            blob.contents()
-        );
-        async move {
-            let digest = Digest::hash(blob.contents());
-            self.blobs.lock().await.entry(digest).or_insert(blob);
-            Ok(digest)
-        }
-        .boxed()
-    }
-
-    fn load_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<Option<Blob>, Self::Error>> {
-        tracing::debug!(
-            "[sendable] MemoryStorage: loading blob with digest {:?}",
-            blob_digest
-        );
-        async move { Ok(self.blobs.lock().await.get(&blob_digest).cloned()) }.boxed()
-    }
-
-    fn delete_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            tracing::debug!(
-                "[sendable] MemoryStorage: deleting blob with digest {:?}",
-                blob_digest
-            );
-            self.blobs.lock().await.remove(&blob_digest);
-            Ok(())
-        }
-        .boxed()
+        })
     }
 }
