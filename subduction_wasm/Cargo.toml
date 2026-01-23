@@ -1,7 +1,7 @@
 [package]
 name = "subduction_wasm"
 version = "0.1.0"
-description = "Wasm bindings for Sedimentree Sync"
+description = "Wasm/JavaScript bindings for Subduction (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
 readme = "./README.md"

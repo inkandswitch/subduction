@@ -1,7 +1,7 @@
 [package]
 name = "automerge_sedimentree_wasm"
 version = "0.1.0"
-description = "Wasm bindings for automerge_sedimentree"
+description = "Wasm bindings for storing Automerge documents in Sedimentree"
 categories = ["web-programming"]
 keywords = ["automerge", "sedimentree", "wasm"]
 readme = "./README.md"

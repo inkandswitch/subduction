@@ -1,7 +1,7 @@
 [package]
 name = "subduction_cli"
 version = "0.1.0"
-description = "CLI tool for running Subduction with WebSockets"
+description = "CLI server and client for Subduction sync over WebSockets"
 
 categories = ["command-line-utilities", "web-programming"]
 keywords = ["subduction"]
