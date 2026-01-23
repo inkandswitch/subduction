@@ -20,8 +20,10 @@ use crate::{
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SedimentreeSummary {
     #[n(0)]
+    #[cbor(with = "crate::cbor::set")]
     fragment_summaries: Set<FragmentSummary>,
     #[n(1)]
+    #[cbor(with = "crate::cbor::set")]
     commits: Set<LooseCommit>,
 }
 

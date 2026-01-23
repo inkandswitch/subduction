@@ -21,6 +21,7 @@ extern crate std;
 extern crate alloc;
 
 pub mod blob;
+pub mod cbor;
 pub mod collections;
 pub mod commit;
 pub mod depth;
