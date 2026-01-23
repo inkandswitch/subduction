@@ -127,12 +127,15 @@ impl From<Blob> for Vec<u8> {
 }
 
 /// Metadata for the underlying payload data itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlobMeta {
     #[n(0)]
     digest: Digest,
+
     #[n(1)]
     size_bytes: u64,
 }
@@ -172,7 +175,11 @@ impl BlobMeta {
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cbor(transparent)]
-pub struct Digest(#[n(0)] #[cbor(with = "minicbor::bytes")] [u8; 32]);
+pub struct Digest(
+    #[n(0)]
+    #[cbor(with = "minicbor::bytes")]
+    [u8; 32],
+);
 
 impl core::fmt::Debug for Digest {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

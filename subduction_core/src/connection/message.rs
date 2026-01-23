@@ -158,14 +158,16 @@ impl From<BatchSyncResponse> for Message {
 }
 
 /// A unique identifier for a particular request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestId {
     /// ID for the peer that initiated the request.
     #[n(0)]
-    pub requestor: PeerId,
+    pub requestor: PeerId, // FIXME may be handled on Signed/Verified now?
 
     /// A nonce unique to this user and connection.
     #[n(1)]

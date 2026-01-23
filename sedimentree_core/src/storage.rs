@@ -1,10 +1,6 @@
 //! Storage abstraction for `Sedimentree` data.
 
-use alloc::{
-    string::String,
-    sync::Arc,
-    vec::Vec,
-};
+use alloc::{string::String, sync::Arc, vec::Vec};
 
 use crate::collections::{Map, Set};
 
@@ -40,11 +36,10 @@ pub trait Storage<K: FutureKind + ?Sized> {
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
     /// Get all sedimentree IDs that have loose commits stored.
-    fn load_all_sedimentree_ids(
-        &self,
-    ) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
+    fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
 
     /// Save a loose commit to storage.
+    // FIXME also include the blob so this can be done transactionsally
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -362,9 +357,7 @@ impl Storage<Sendable> for MemoryStorage {
         .boxed()
     }
 
-    fn load_all_sedimentree_ids(
-        &self,
-    ) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
+    fn load_all_sedimentree_ids(&self) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         tracing::debug!("[sendable] MemoryStorage: getting sedimentree_ids");
         async move { Ok(self.ids.lock().await.iter().copied().collect()) }.boxed()
     }
