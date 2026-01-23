@@ -280,9 +280,8 @@ impl WasmIndexedDbStorage {
         let core_commit = LooseCommit::from(loose_commit.clone());
         let digest = core_commit.digest();
 
-        let mut bytes = Vec::new();
         #[allow(clippy::expect_used)]
-        ciborium::ser::into_writer(&core_commit, &mut bytes).expect("CBOR serialization should be Infallible");
+        let bytes = minicbor::to_vec(&core_commit).expect("CBOR serialization should be infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -323,7 +322,7 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadLooseCommitsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let commit: LooseCommit = ciborium::de::from_reader::<LooseCommit, &[u8]>(&bytes)
+            let commit: LooseCommit = minicbor::decode(&bytes)
                 .map_err(|_| WasmLoadLooseCommitsError::DecodeError)?;
             out.push(commit.into());
         }
@@ -394,9 +393,8 @@ impl WasmIndexedDbStorage {
         let core_fragment = Fragment::from(fragment.clone());
         let digest = core_fragment.digest();
 
-       let mut bytes = Vec::new();
        #[allow(clippy::expect_used)]
-       ciborium::ser::into_writer(&core_fragment, &mut bytes).expect("CBOR serialization should be Infallible");
+       let bytes = minicbor::to_vec(&core_fragment).expect("CBOR serialization should be infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -437,7 +435,7 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadFragmentsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let commit: Fragment = ciborium::de::from_reader::<Fragment, &[u8]>(&bytes)
+            let commit: Fragment = minicbor::decode(&bytes)
                 .map_err(|_| WasmLoadFragmentsError::DecodeError)?;
             out.push(commit.into());
         }

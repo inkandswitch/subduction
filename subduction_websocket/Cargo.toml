@@ -1,7 +1,7 @@
 [package]
 name = "subduction_websocket"
 version = "0.1.0"
-description = "WebSocket implementation for Subduction"
+description = "WebSocket transport layer for the Subduction sync protocol"
 
 categories = ["web-programming"]
 keywords = ["websocket", "sync", "subduction"]
@@ -18,15 +18,14 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 blake3 = { workspace = true }
-ciborium = { workspace = true }
+minicbor = { workspace = true }
 futures = { workspace = true }
 futures_kind = { workspace = true }
 futures-timer = { workspace = true, optional = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false, features = ["serde"] }
-subduction_core = { path = "../subduction_core", default-features = false, features = ["serde"] }
-serde = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core", default-features = false }
+subduction_core = { path = "../subduction_core", default-features = false }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["time"] }
 tokio-util = { workspace = true, optional = true }
@@ -49,14 +48,13 @@ std = [
   "async-channel/std",
   "async-lock/std",
   "blake3/std",
-  "ciborium/std",
+  "minicbor/std",
   "futures/std",
   "futures-util/io",
   "futures-util/std",
   "rand/std",
   "sedimentree_core/std",
   "subduction_core/std",
-  "serde/std",
   "thiserror/std",
   "tracing/std",
 ]

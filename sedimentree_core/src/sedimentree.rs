@@ -14,12 +14,16 @@ use crate::{
 };
 
 /// A less detailed representation of a Sedimentree that omits strata checkpoints.
-#[derive(Clone, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Debug, PartialEq, Eq, Default, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SedimentreeSummary {
+    #[n(0)]
+    #[cbor(with = "crate::cbor::set")]
     fragment_summaries: Set<FragmentSummary>,
+    #[n(1)]
+    #[cbor(with = "crate::cbor::set")]
     commits: Set<LooseCommit>,
 }
 

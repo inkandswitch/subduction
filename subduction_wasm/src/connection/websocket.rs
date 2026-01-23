@@ -75,7 +75,7 @@ impl WasmWebSocket {
             tracing::debug!("WS message event received");
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
-                if let Ok(msg) = ciborium::de::from_reader::<Message, &[u8]>(&bytes) {
+                if let Ok(msg) = minicbor::decode::<Message>(&bytes) {
                     tracing::info!("WS message received that's {} bytes long", bytes.len());
                     let inner_pending = closure_pending.clone();
                     let inner_inbound_writer = inbound_writer.clone();
@@ -307,9 +307,8 @@ impl Connection<Local> for WasmWebSocket {
     fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let request_id = message.request_id();
 
-        let mut msg_bytes = Vec::new();
         #[allow(clippy::expect_used)]
-        ciborium::ser::into_writer(message, &mut msg_bytes).expect("should be Infallible");
+        let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
 
         async move {
             self.socket
@@ -346,9 +345,8 @@ impl Connection<Local> for WasmWebSocket {
             let (tx, rx) = oneshot::channel();
             { self.pending.lock().await.insert(req_id, tx); }
 
-            let mut msg_bytes = Vec::new();
             #[allow(clippy::expect_used)]
-            ciborium::ser::into_writer(&Message::BatchSyncRequest(req), &mut msg_bytes).expect("should be Infallible");
+            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())

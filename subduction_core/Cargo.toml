@@ -1,7 +1,7 @@
 [package]
 name = "subduction_core"
 version = "0.1.0"
-description = "Core implementation and traits for the Subduction protocol"
+description = "Subduction: sync protocol for replicating Sedimentrees between peers"
 
 categories = ["web-programming"]
 keywords = ["sync", "subduction"]
@@ -16,14 +16,16 @@ arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
+ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures = { workspace = true }
 futures_kind = { workspace = true }
 getrandom = { workspace = true, optional = true }
-siphasher = { workspace = true }
 metrics = { workspace = true, optional = true }
+minicbor = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
 serde = { workspace = true, optional = true, features = ["derive"] }
+siphasher = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -49,6 +51,7 @@ serde-std = ["serde/std"]
 std = [
   "async-channel/std",
   "async-lock/std",
+  "ed25519-dalek/std",
   "futures/std",
   "getrandom",
   "nonempty/std",

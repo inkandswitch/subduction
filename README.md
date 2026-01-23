@@ -22,6 +22,38 @@
 
 Subduction is organized as a Rust workspace with multiple crates:
 
+```mermaid
+graph TD
+    subgraph Core
+        sedimentree_core
+        subduction_core
+    end
+
+    automerge_sedimentree
+    subduction_websocket
+    subduction_cli
+
+    subgraph Wasm 
+        subduction_wasm
+        automerge_sedimentree_wasm
+        automerge_subduction_wasm
+    end
+
+    sedimentree_core --> subduction_core
+    sedimentree_core --> automerge_sedimentree
+
+    subduction_core --> subduction_websocket
+    subduction_core --> subduction_wasm
+
+    subduction_websocket --> subduction_cli
+
+    automerge_sedimentree --> automerge_sedimentree_wasm
+    subduction_wasm --> automerge_sedimentree_wasm
+
+    automerge_sedimentree_wasm --> automerge_subduction_wasm
+    subduction_wasm --> automerge_subduction_wasm
+```
+
 | Crate                  | Description                                                                             |
 |------------------------|-----------------------------------------------------------------------------------------|
 | `sedimentree_core`     | The core data partitioning scheme that enables efficient metadata-based synchronization |

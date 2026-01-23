@@ -16,12 +16,15 @@ use crate::{
 /// read the content in a particular fragment (e.g. because it's in
 /// an arbitrary format or is encrypted), it maintains some basic
 /// metadata about the the content to aid in deduplication and synchronization.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fragment {
+    #[n(0)]
     summary: FragmentSummary,
+    #[n(1)]
     checkpoints: Vec<Digest>,
+    #[n(2)]
     digest: Digest,
 }
 
@@ -149,12 +152,15 @@ impl Fragment {
 }
 
 /// The minimal data for a [`Fragment`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FragmentSummary {
+    #[n(0)]
     head: Digest,
+    #[n(1)]
     boundary: Vec<Digest>,
+    #[n(2)]
     blob_meta: BlobMeta,
 }
 

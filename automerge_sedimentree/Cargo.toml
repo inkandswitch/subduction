@@ -1,7 +1,7 @@
 [package]
 name = "automerge_sedimentree"
 version = "0.1.0"
-description = "Automerge integration for Sedimentree"
+description = "Adapter for storing Automerge documents in Sedimentree"
 
 categories = ["web-programming"]
 keywords = ["automerge", "sedimentree"]

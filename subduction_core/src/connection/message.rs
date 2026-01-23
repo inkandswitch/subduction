@@ -13,46 +13,58 @@ use sedimentree_core::{
 use crate::peer::id::PeerId;
 
 /// The API contact messages to be sent over a [`Connection`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Message {
     /// A single loose commit being sent for a particular [`Sedimentree`].
+    #[n(0)]
     LooseCommit {
         /// The ID of the [`Sedimentree`] that this commit belongs to.
+        #[n(0)]
         id: SedimentreeId,
 
         /// The [`LooseCommit`] being sent.
+        #[n(1)]
         commit: LooseCommit,
 
         /// The [`Blob`] containing the commit data.
+        #[n(2)]
         blob: Blob,
     },
 
     /// A single fragment being sent for a particular [`Sedimentree`].
+    #[n(1)]
     Fragment {
         /// The ID of the [`Sedimentree`] that this fragment belongs to.
+        #[n(0)]
         id: SedimentreeId,
 
         /// The [`Fragment`] being sent.
+        #[n(1)]
         fragment: Fragment,
 
         /// The [`Blob`] containing the fragment data.
+        #[n(2)]
         blob: Blob,
     },
 
     /// A request for blobs by their [`Digest`]s.
-    BlobsRequest(Vec<Digest>),
+    #[n(2)]
+    BlobsRequest(#[n(0)] Vec<Digest>),
 
     /// A response to a [`BlobRequest`].
-    BlobsResponse(Vec<Blob>),
+    #[n(3)]
+    BlobsResponse(#[n(0)] Vec<Blob>),
 
     /// A request to "batch sync" an entire [`Sedimentree`].
-    BatchSyncRequest(BatchSyncRequest),
+    #[n(4)]
+    BatchSyncRequest(#[n(0)] BatchSyncRequest),
 
     /// A response to a [`BatchSyncRequest`].
-    BatchSyncResponse(BatchSyncResponse),
+    #[n(5)]
+    BatchSyncResponse(#[n(0)] BatchSyncResponse),
 }
 
 impl Message {
@@ -96,18 +108,21 @@ impl Message {
 }
 
 /// A request to sync a sedimentree in batch.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncRequest {
     /// The ID of the sedimentree to sync.
+    #[n(0)]
     pub id: SedimentreeId,
 
     /// The unique ID of the request.
+    #[n(1)]
     pub req_id: RequestId,
 
     /// The summary of the sedimentree that the requester has.
+    #[n(2)]
     pub sedimentree_summary: SedimentreeSummary,
 }
 
@@ -118,18 +133,21 @@ impl From<BatchSyncRequest> for Message {
 }
 
 /// A response to a [`BatchSyncRequest`].
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncResponse {
     /// The ID of the request that this is a response to.
+    #[n(0)]
     pub req_id: RequestId,
 
     /// The ID of the sedimentree that was synced.
+    #[n(1)]
     pub id: SedimentreeId,
 
     /// The diff for the remote peer.
+    #[n(2)]
     pub diff: SyncDiff,
 }
 
@@ -140,28 +158,32 @@ impl From<BatchSyncResponse> for Message {
 }
 
 /// A unique identifier for a particular request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestId {
     /// ID for the peer that initiated the request.
+    #[n(0)]
     pub requestor: PeerId,
 
     /// A nonce unique to this user and connection.
+    #[n(1)]
     pub nonce: u64,
 }
 
 // TODO also make a version for the sender that is borrowed instead of owned.
 /// The calculated difference for the remote peer.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SyncDiff {
     /// Commits that we are missing and need to request from the peer.
+    #[n(0)]
     pub missing_commits: Vec<(LooseCommit, Blob)>,
 
     /// Fragments that we are missing and need to request from the peer.
+    #[n(1)]
     pub missing_fragments: Vec<(Fragment, Blob)>,
 }
 
