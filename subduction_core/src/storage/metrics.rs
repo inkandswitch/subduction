@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Instant};
 use alloc::vec::Vec;
 
 use async_lock::Mutex;
-use futures_kind::{kinds, FutureKind, Local, Sendable};
+use futures_kind::{FutureKind, Local, Sendable};
 use sedimentree_core::{
     blob::{Blob, Digest},
     collections::Set,
@@ -142,7 +142,7 @@ where
     }
 }
 
-#[kinds(Sendable where S: Storage<Sendable> + Send + Sync, Local where S: Storage<Local>)]
+#[futures_kind::kinds(Sendable where S: Storage<Sendable> + Send + Sync, Local where S: Storage<Local>)]
 impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
     type Error = S::Error;
 

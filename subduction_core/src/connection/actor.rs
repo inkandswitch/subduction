@@ -18,7 +18,7 @@ use futures::{
     stream::{AbortRegistration, Abortable, Aborted, SelectAll, StreamExt},
     FutureExt,
 };
-use futures_kind::{kinds, FutureKind, Local, Sendable};
+use futures_kind::{FutureKind, Local, Sendable};
 
 use super::{id::ConnectionId, message::Message, stream::IntoConnectionStream, Connection};
 
@@ -174,7 +174,7 @@ pub trait StartConnectionActor<'a, C: Connection<Self> + 'a>:
     ) -> Abortable<Self::Future<'a, ()>>;
 }
 
-#[kinds(Sendable where C: Connection<Sendable> + Send + 'static, C::RecvError: Send, Local where C: Connection<Local> + 'a)]
+#[futures_kind::kinds(Sendable where C: Connection<Sendable> + Send + 'static, C::RecvError: Send, Local where C: Connection<Local> + 'a)]
 impl<'a, K: FutureKind, C> StartConnectionActor<'a, C> for K
 where
     K: IntoConnectionStream<'a, C>,

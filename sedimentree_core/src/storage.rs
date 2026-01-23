@@ -5,7 +5,7 @@ use alloc::{string::String, sync::Arc, vec::Vec};
 use crate::collections::{Map, Set};
 
 use async_lock::Mutex;
-use futures_kind::{kinds, FutureKind};
+use futures_kind::FutureKind;
 
 use crate::{
     blob::{Blob, Digest},
@@ -118,7 +118,7 @@ impl MemoryStorage {
     }
 }
 
-#[kinds]
+#[futures_kind::kinds(Sendable, Local)]
 impl<K: FutureKind> Storage<K> for MemoryStorage {
     type Error = core::convert::Infallible;
 
