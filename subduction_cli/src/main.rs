@@ -6,6 +6,7 @@ mod automerge_ephemeral_relay;
 mod client;
 mod fs_storage;
 pub mod metrics;
+mod purge;
 mod server;
 
 use clap::{Parser, Subcommand};
@@ -28,6 +29,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Server(server_args) => server::run(server_args, token).await?,
         Command::Client(client_args) => client::run(client_args, token).await?,
         Command::EphemeralRelay(relay_args) => automerge_ephemeral_relay::run(relay_args, token).await?,
+        Command::Purge(purge_args) => purge::run(purge_args).await?,
     }
 
     Ok(())
@@ -122,4 +124,8 @@ enum Command {
     /// Start an ephemeral message relay server for presence/awareness (automerge-repo protocol)
     #[command(name = "ephemeral-relay", alias = "relay")]
     EphemeralRelay(automerge_ephemeral_relay::EphemeralRelayArgs),
+
+    /// Purge all storage data (destructive)
+    #[command(name = "purge")]
+    Purge(purge::PurgeArgs),
 }
