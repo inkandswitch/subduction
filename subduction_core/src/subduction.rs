@@ -9,8 +9,9 @@ use crate::{
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
         stream::IntoConnectionStream,
-        Connection, ConnectionDisallowed, ConnectionPolicy,
+        Connection, ConnectionDisallowed,
     },
+    policy::Policy,
     peer::id::PeerId,
     sharded_map::ShardedMap,
 };
@@ -438,7 +439,7 @@ where
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
     pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), RegistrationError> {
         tracing::info!("registering connection from peer {:?}", conn.peer_id());
-        self.allowed_to_connect(&conn.peer_id()).await?;
+        self.is_connect_allowed(&conn.peer_id()).await?;
 
         let conns = { self.conns.lock().await.clone() };
 
@@ -1479,15 +1480,31 @@ where
     }
 }
 
-impl<'a, F, S, C, M, const N: usize> ConnectionPolicy for Subduction<'a, F, S, C, M, N>
+// FIXME needs second future parameter?
+impl<'a, F, S, C, M, const N: usize> Policy<F> for Subduction<'a, F, S, C, M, N>
 where
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
 {
-    async fn allowed_to_connect(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
-        Ok(()) // TODO currently allows all
+    // async fn is_connect_allowed(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
+    fn is_connect_allowed(&self, _peer_id: &PeerId) -> F::Future<'_, bool> {
+        // Ok(()) // TODO currently allows all
+        todo!()
+    }
+
+     fn is_fetch_allowed(&self, peer: PeerId, sedimentree_id: SedimentreeId) -> F::Future<'_, bool> {
+        todo!("FIXME")
+    }
+
+     fn is_put_allowed(
+        &self,
+        requestor: PeerId,
+        author: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> F::Future<'_, bool> {
+        todo!("FIXME")
     }
 }
 

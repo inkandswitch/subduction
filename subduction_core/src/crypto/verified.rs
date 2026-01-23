@@ -22,8 +22,8 @@ pub struct Verified<T> {
 impl<T> Verified<T> {
     /// Returns the verifying key of the issuer who signed this payload.
     #[must_use]
-    pub fn issuer(&self) -> &ed25519_dalek::VerifyingKey {
-        &self.issuer
+    pub fn issuer(&self) -> ed25519_dalek::VerifyingKey {
+        self.issuer
     }
 
     /// Returns a reference to the verified payload.

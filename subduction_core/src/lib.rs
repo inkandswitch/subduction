@@ -12,6 +12,7 @@ pub mod cbor;
 pub mod connection;
 pub mod crypto;
 pub mod peer;
+pub mod policy;
 pub mod run;
 pub mod sharded_map;
 pub mod storage;

@@ -10,6 +10,7 @@ pub mod test_utils;
 
 use alloc::sync::Arc;
 use core::{marker::PhantomData, time::Duration};
+use ed25519_dalek::VerifyingKey;
 use sedimentree_core::{
     blob::Blob, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit, storage::Storage,
 };
@@ -102,128 +103,6 @@ pub trait Reconnect<K: FutureKind>: Connection<K> {
 
     /// Setup the connection, but don't run it.
     fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ConnectError>>;
-}
-
-/// A policy for allowing or disallowing connections from peers.
-pub trait ConnectionPolicy<K: FutureKind> {
-    /// Check if a connection from the given peer is allowed.
-    ///
-    /// # Errors
-    ///
-    /// * Returns [`ConnectionDisallowed`] if the connection is not allowed.
-    fn check_connect(&self, peer: &PeerId) -> K::Future<'_, bool>;
-}
-
-pub trait FetchPutPolicy<K: FutureKind> {
-    fn check_fetch(&self, peer: PeerId, sedimentree_id: SedimentreeId) -> K::Future<'_, bool>;
-}
-
-pub trait PutPolicy<K: FutureKind> {
-    fn check_put(
-        &self,
-        putter: PeerId,
-        issuer: PeerId,
-        sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, bool>;
-
-    fn put_loose_commit_cap<F: FutureKind, S: Storage<F>>(
-        &self,
-        storage: S,
-        putter: PeerId,
-        verified: Verified<LooseCommitMessage>,
-        // FIXME needed for blob? sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<PutHandle<S>, FIXME>> {
-        async {
-            if self.check_put(putter, verified.issuer(), verified).await {
-                Ok(PutHandle {
-                    commit: verified.payload,
-                    storage,
-                })
-            } else {
-                // FIXME error type
-                Err(FIXME)
-            }
-        }
-    }
-}
-
-// FIXME rename "connecter" / "puller" / etc?
-// FIXME rename "connecthandle" / "pull handle" / etc?
-pub trait ConnectHandle {
-    fn connect(&self, peer_id: PeerId) -> FIXME;
-}
-
-pub trait FetchHandle {
-    fn pull(&self) -> FIXME;
-    fn sedimentree_id(&self) -> &SedimentreeId;
-}
-
-pub struct PutHandle<F: FutureKind, S: Storage<F>> {
-    item: PutItem,
-    storage: S,
-    _phantom: PhantomData<F>,
-}
-
-impl<F: FutureKind, S: Storage<F>> PutHandle<F, S> {
-    // NOTE: consumes!
-    pub async fn put(&self) -> Result<(), FIXME> {
-        match &self.item {
-            PutItem::LooseCommit { id, commit, blob } => {
-                self.storage.save_blob(blob.clone()).await.expect("FIXME");
-                self.storage
-                    .save_loose_commit(*id, commit.clone())
-                    .await
-                    .expect("FIXME");
-            }
-            PutItem::Fragment { id, fragment, blob } => {
-                self.storage.save_blob(blob.clone()).await.expect("FIXME");
-                self.storage
-                    .save_fragment(*id, fragment.clone())
-                    .await
-                    .expect("FIXME");
-            }
-            PutItem::Blob { id, blob } => {
-                self.storage.save_blob(blob.clone()).await.expect("FIXME");
-            }
-        }
-
-        Ok(())
-    }
-
-    // FIXME other constructors
-}
-
-pub enum PutItem {
-    LooseCommit {
-        /// The ID of the [`Sedimentree`] that this commit belongs to.
-        id: SedimentreeId,
-
-        /// The [`LooseCommit`] being sent.
-        commit: LooseCommit,
-
-        /// The [`Blob`] containing the commit data.
-        blob: Blob,
-    },
-
-    /// A single fragment being sent for a particular [`Sedimentree`].
-    Fragment {
-        /// The ID of the [`Sedimentree`] that this fragment belongs to.
-        id: SedimentreeId,
-
-        /// The [`Fragment`] being sent.
-        fragment: Fragment,
-
-        /// The [`Blob`] containing the fragment data.
-        blob: Blob,
-    },
-
-    Blob {
-        /// The ID of the [`Sedimentree`] that this blob belongs to.
-        id: SedimentreeId,
-
-        /// The [`Blob`] being sent.
-        blob: Blob,
-    },
 }
 
 /// An error indicating that a connection is disallowed.

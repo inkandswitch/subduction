@@ -9,7 +9,11 @@ use core::fmt::Write;
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cbor(transparent)]
-pub struct PeerId(#[n(0)] #[cbor(with = "minicbor::bytes")] [u8; 32]);
+pub struct PeerId(
+    #[n(0)]
+    #[cbor(with = "minicbor::bytes")]
+    [u8; 32],
+);
 
 impl PeerId {
     /// Create a new [`PeerId`].
@@ -50,6 +54,12 @@ fn to_hex(bytes: &[u8]) -> String {
         write!(&mut s, "{b:02x}").expect("preallocated length should be sufficient");
     }
     s
+}
+
+impl From<ed25519_dalek::VerifyingKey> for PeerId {
+    fn from(key: ed25519_dalek::VerifyingKey) -> Self {
+        PeerId::new(key.to_bytes())
+    }
 }
 
 #[cfg(test)]
