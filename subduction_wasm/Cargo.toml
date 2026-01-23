@@ -19,8 +19,7 @@ crate-type = ["cdylib", "rlib"]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
-ciborium = { workspace = true }
-ciborium-io = { workspace = true }
+minicbor = { workspace = true }
 build_info = { path = "../build_info" }
 console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
@@ -30,9 +29,8 @@ futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["wasm_js"] }
 js-sys = { workspace = true }
 rand = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false, features = ["serde"] }
-subduction_core = { path = "../subduction_core", default-features = false, features = ["getrandom", "serde"] }
-serde = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core", default-features = false }
+subduction_core = { path = "../subduction_core", default-features = false, features = ["getrandom"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -77,14 +75,13 @@ idb = [
 std = [
   "async-channel/std",
   "async-lock/std",
-  "ciborium-io/std",
+  "minicbor/std",
   "futures/std",
   "futures-util/std",
   "js-sys/std",
   "rand/std",
   "sedimentree_core/std",
   "subduction_core/std",
-  "serde/std",
   "thiserror/std",
   "wasm-bindgen/std",
   "wasm-bindgen-futures/std"

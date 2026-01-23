@@ -9,10 +9,11 @@ use alloc::{
 use thiserror::Error;
 
 /// A unique identifier for some data managed by Sedimentree.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SedimentreeId([u8; 32]);
+#[cbor(transparent)]
+pub struct SedimentreeId(#[n(0)] #[cbor(with = "minicbor::bytes")] [u8; 32]);
 
 impl SedimentreeId {
     /// Constructor for a [`SedimentreeId`].

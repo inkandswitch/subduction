@@ -7,12 +7,15 @@ use crate::blob::{BlobMeta, Digest};
 /// The smallest unit of metadata in a Sedimentree.
 ///
 /// It includes the digest of the data, plus pointers to any (causal) parents.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
+    #[n(0)]
     digest: Digest,
+    #[n(1)]
     parents: Vec<Digest>,
+    #[n(2)]
     blob_meta: BlobMeta,
 }
 

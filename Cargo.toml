@@ -35,8 +35,6 @@ axum = "0.8"
 base58 = "0.2.0"
 blake3 = { version = "1.8", default-features = false }
 bolero = "0.13.4"
-ciborium = { version = "0.2.2", default-features = false }
-ciborium-io = { version = "0.2.2", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
 console-subscriber = "0.5.0"
 console_error_panic_hook = { version = "0.1.7" }
@@ -52,6 +50,8 @@ getrandom = "0.3.3" # no_std by default
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
 metrics = "0.24"
+minicbor = { version = "2.1", default-features = false, features = ["alloc", "derive"] }
+minicbor-serde = { version = "0.6", default-features = false, features = ["alloc"] }
 metrics-exporter-prometheus = "0.16"
 nonempty = { version = "0.12.0", default-features = false }
 num-bigint = { version = "0.4.6", default-features = false }

@@ -19,6 +19,7 @@ blake3 = { workspace = true }
 futures = { workspace = true }
 futures_kind = { workspace = true }
 futures-util = { workspace = true }
+minicbor = { workspace = true }
 num-bigint = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
 thiserror = { workspace = true }

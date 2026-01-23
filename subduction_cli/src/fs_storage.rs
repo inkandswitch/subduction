@@ -169,7 +169,7 @@ impl Storage<Sendable> for FsStorage {
             // Load existing commits
             let commits_file = self.commits_file(sedimentree_id);
             let mut commits: Vec<LooseCommit> = match tokio::fs::read(&commits_file).await {
-                Ok(data) => ciborium::from_reader(&data[..])
+                Ok(data) => minicbor::decode(&data)
                     .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
                 Err(e) => return Err(e.into()),
@@ -178,8 +178,7 @@ impl Storage<Sendable> for FsStorage {
             // Add new commit if not already present
             if !commits.contains(&loose_commit) {
                 commits.push(loose_commit.clone());
-                let mut data = Vec::new();
-                ciborium::into_writer(&commits, &mut data)
+                let data = minicbor::to_vec(&commits)
                     .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
 
                 // Atomic write: write to temp file, then rename
@@ -217,7 +216,7 @@ impl Storage<Sendable> for FsStorage {
             let commits_file = self.commits_file(sedimentree_id);
             match tokio::fs::read(&commits_file).await {
                 Ok(data) => {
-                    let commits: Vec<LooseCommit> = ciborium::from_reader(&data[..])
+                    let commits: Vec<LooseCommit> = minicbor::decode(&data)
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
                     // Update cache
@@ -269,7 +268,7 @@ impl Storage<Sendable> for FsStorage {
             // Load existing fragments
             let fragments_file = self.fragments_file(sedimentree_id);
             let mut fragments: Vec<Fragment> = match tokio::fs::read(&fragments_file).await {
-                Ok(data) => ciborium::from_reader(&data[..])
+                Ok(data) => minicbor::decode(&data)
                     .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
                 Err(e) => return Err(e.into()),
@@ -278,8 +277,7 @@ impl Storage<Sendable> for FsStorage {
             // Add new fragment if not already present
             if !fragments.contains(&fragment) {
                 fragments.push(fragment.clone());
-                let mut data = Vec::new();
-                ciborium::into_writer(&fragments, &mut data)
+                let data = minicbor::to_vec(&fragments)
                     .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
 
                 // Atomic write: write to temp file, then rename
@@ -317,7 +315,7 @@ impl Storage<Sendable> for FsStorage {
             let fragments_file = self.fragments_file(sedimentree_id);
             match tokio::fs::read(&fragments_file).await {
                 Ok(data) => {
-                    let fragments: Vec<Fragment> = ciborium::from_reader(&data[..])
+                    let fragments: Vec<Fragment> = minicbor::decode(&data)
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
 
                     // Update cache

@@ -34,12 +34,8 @@ impl WasmMessage {
     #[must_use]
     #[wasm_bindgen(js_name = toCborBytes)]
     pub fn to_cbor_bytes(&self) -> Vec<u8> {
-        let mut msg = Vec::new();
-
         #[allow(clippy::expect_used)]
-        ciborium::into_writer(&self.0, &mut msg).expect("serialization cannot fail");
-
-        msg
+        minicbor::to_vec(&self.0).expect("serialization cannot fail")
     }
 
     /// Deserialize a message from CBOR bytes.
@@ -49,9 +45,7 @@ impl WasmMessage {
     /// Returns a [`JsMessageDeserializationError`] if deserialization fails.
     #[wasm_bindgen(js_name = fromCborBytes)]
     pub fn from_cbor_bytes(bytes: &[u8]) -> Result<Self, JsMessageDeserializationError> {
-        let mut scratch = [0u8; 256];
-        let msg: Message = ciborium::from_reader_with_buffer(bytes, &mut scratch)
-            .map_err(JsMessageDeserializationError)?;
+        let msg: Message = minicbor::decode(bytes).map_err(JsMessageDeserializationError)?;
         Ok(msg.into())
     }
 
@@ -252,15 +246,8 @@ impl From<WasmMessage> for Message {
 
 /// An error indicating a failure to deserialize a [`Message`] from CBOR.
 #[derive(Debug, Error)]
-#[error("failed to deserialize Message: {0:?}")]
-#[cfg(not(feature = "std"))]
-pub struct JsMessageDeserializationError(ciborium::de::Error<ciborium_io::EndOfFile>);
-
-/// An error indicating a failure to deserialize a [`Message`] from CBOR.
-#[derive(Debug, Error)]
-#[error("failed to deserialize Message: {0:?}")]
-#[cfg(feature = "std")]
-pub struct JsMessageDeserializationError(ciborium::de::Error<std::io::Error>);
+#[error("failed to deserialize Message: {0}")]
+pub struct JsMessageDeserializationError(minicbor::decode::Error);
 
 impl From<JsMessageDeserializationError> for JsValue {
     fn from(err: JsMessageDeserializationError) -> Self {

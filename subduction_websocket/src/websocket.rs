@@ -1,6 +1,6 @@
 //! # Generic WebSocket connection for Subduction
 
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, sync::Arc};
 use sedimentree_core::collections::Map;
 use core::{
     marker::PhantomData,
@@ -87,10 +87,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             self.peer_id
         );
 
-        let mut msg_bytes = Vec::new();
         #[allow(clippy::expect_used)]
-        ciborium::ser::into_writer(message, &mut msg_bytes)
-            .expect("serialization to vec should be infallible");
+        let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
 
         async move {
             self.outbound
@@ -133,10 +131,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let mut msg_bytes = Vec::new();
             #[allow(clippy::expect_used)]
-            ciborium::ser::into_writer(&Message::BatchSyncRequest(req), &mut msg_bytes)
-                .expect("serialization to vec should be infallible");
+            let msg_bytes =
+                minicbor::to_vec(&Message::BatchSyncRequest(req)).expect("serialization should be infallible");
 
             self.outbound
                 .lock()
@@ -247,15 +244,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> WebSocket<
 
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
-                    let msg: Message = ciborium::de::from_reader::<Message, &[u8]>(&bytes)
-                        .map_err(|e| {
-                            tracing::error!(
-                                "failed to deserialize inbound message from peer {:?}: {}",
-                                self.peer_id,
-                                e
-                            );
-                            RunError::Deserialize
-                        })?;
+                    let msg: Message = minicbor::decode(&bytes).map_err(|e| {
+                        tracing::error!(
+                            "failed to deserialize inbound message from peer {:?}: {}",
+                            self.peer_id,
+                            e
+                        );
+                        RunError::Deserialize
+                    })?;
 
                     tracing::debug!(
                         "decoded inbound message id {:?} from peer {:?}, message: {:?}",
@@ -385,10 +381,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             message.request_id()
         );
 
-        let mut msg_bytes = Vec::new();
         #[allow(clippy::expect_used)]
-        ciborium::ser::into_writer(message, &mut msg_bytes)
-            .expect("serialization to vec should be infallible");
+        let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
 
         async move {
             self.outbound
@@ -431,10 +425,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let mut msg_bytes = Vec::new();
             #[allow(clippy::expect_used)]
-            ciborium::ser::into_writer(&Message::BatchSyncRequest(req), &mut msg_bytes)
-                .expect("serialization to vec should be infallible");
+            let msg_bytes =
+                minicbor::to_vec(&Message::BatchSyncRequest(req)).expect("serialization should be infallible");
 
             self.outbound
                 .lock()

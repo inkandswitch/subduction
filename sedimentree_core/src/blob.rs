@@ -9,10 +9,11 @@ use crate::hex::decode_hex;
 /// A binary object.
 ///
 /// Just a wrapper around a `Vec<u8>`.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Blob(Vec<u8>);
+#[cbor(transparent)]
+pub struct Blob(#[n(0)] Vec<u8>);
 
 impl core::fmt::Debug for Blob {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -126,11 +127,13 @@ impl From<Blob> for Vec<u8> {
 }
 
 /// Metadata for the underlying payload data itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlobMeta {
+    #[n(0)]
     digest: Digest,
+    #[n(1)]
     size_bytes: u64,
 }
 
@@ -165,10 +168,11 @@ impl BlobMeta {
 }
 
 /// A 32-byte digest.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Digest([u8; 32]);
+#[cbor(transparent)]
+pub struct Digest(#[n(0)] #[cbor(with = "minicbor::bytes")] [u8; 32]);
 
 impl core::fmt::Debug for Digest {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

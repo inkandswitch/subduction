@@ -3,11 +3,12 @@
 use alloc::string::String;
 
 /// A simple newtype for storage identifiers.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct StorageId(String);
+#[cbor(transparent)]
+pub struct StorageId(#[n(0)] String);
 
 impl StorageId {
     /// Create a new [`StorageId`].

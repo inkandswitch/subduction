@@ -20,9 +20,7 @@ use async_tungstenite::{
     tokio::accept_async_with_config,
     tungstenite::{protocol::WebSocketConfig, Message as WsMessage},
 };
-use ciborium::value::Value as CborValue;
 use futures_util::StreamExt;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashSet, VecDeque},
     hash::{BuildHasher, Hash, Hasher},
@@ -243,41 +241,99 @@ impl<const N: usize> ShardedDeduplicator<N> {
 
 
 /// Join message from client (automerge-repo protocol)
-#[derive(Debug, Deserialize)]
+#[derive(Debug)]
 struct JoinMessage {
-    #[serde(rename = "type")]
     msg_type: String,
-
-    #[serde(rename = "senderId")]
     sender_id: String,
+    /// Raw CBOR bytes for peer_metadata (passed through without interpretation)
+    peer_metadata_raw: Vec<u8>,
+}
 
-    #[serde(rename = "peerMetadata")]
-    peer_metadata: CborValue,
+impl<'b, C> minicbor::Decode<'b, C> for JoinMessage {
+    fn decode(d: &mut minicbor::Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
+        let len = d.map()?.ok_or_else(|| minicbor::decode::Error::message("expected definite-length map"))?;
+
+        let mut msg_type = None;
+        let mut sender_id = None;
+        let mut peer_metadata_raw = None;
+
+        for _ in 0..len {
+            let key = d.str()?;
+            match key {
+                "type" => msg_type = Some(d.str()?.to_string()),
+                "senderId" => sender_id = Some(d.str()?.to_string()),
+                "peerMetadata" => {
+                    // Capture raw CBOR bytes for passthrough
+                    let start = d.position();
+                    d.skip()?;
+                    let end = d.position();
+                    peer_metadata_raw = Some(d.input()[start..end].to_vec());
+                }
+                _ => d.skip()?,
+            }
+        }
+
+        Ok(JoinMessage {
+            msg_type: msg_type.ok_or_else(|| minicbor::decode::Error::message("missing 'type' field"))?,
+            sender_id: sender_id.ok_or_else(|| minicbor::decode::Error::message("missing 'senderId' field"))?,
+            peer_metadata_raw: peer_metadata_raw.unwrap_or_default(),
+        })
+    }
 }
 
 /// Peer message to send back to client (automerge-repo protocol)
-#[derive(Debug, Serialize)]
+#[derive(Debug)]
 struct PeerMessage {
-    #[serde(rename = "type")]
     msg_type: String,
-
-    #[serde(rename = "senderId")]
     sender_id: String,
-
-    #[serde(rename = "peerMetadata")]
-    peer_metadata: CborValue,
+    /// Raw CBOR bytes for peer_metadata (embedded without interpretation)
+    peer_metadata_raw: Vec<u8>,
 }
 
-/// Ephemeral message for extracting deduplication info
-#[derive(Debug, Deserialize)]
+impl<C> minicbor::Encode<C> for PeerMessage {
+    fn encode<W: minicbor::encode::Write>(&self, e: &mut minicbor::Encoder<W>, _ctx: &mut C) -> Result<(), minicbor::encode::Error<W::Error>> {
+        e.map(3)?;
+        e.str("type")?.str(&self.msg_type)?;
+        e.str("senderId")?.str(&self.sender_id)?;
+        e.str("peerMetadata")?;
+        // Embed raw CBOR bytes directly
+        e.writer_mut().write_all(&self.peer_metadata_raw).map_err(minicbor::encode::Error::write)?;
+        Ok(())
+    }
+}
+
+/// Ephemeral message header for extracting deduplication info
+#[derive(Debug)]
 struct EphemeralMessageHeader {
-    #[serde(rename = "senderId")]
     sender_id: String,
-
-    #[serde(rename = "sessionId")]
     session_id: String,
-
     count: u64,
+}
+
+impl<'b, C> minicbor::Decode<'b, C> for EphemeralMessageHeader {
+    fn decode(d: &mut minicbor::Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
+        let len = d.map()?.ok_or_else(|| minicbor::decode::Error::message("expected definite-length map"))?;
+
+        let mut sender_id = None;
+        let mut session_id = None;
+        let mut count = None;
+
+        for _ in 0..len {
+            let key = d.str()?;
+            match key {
+                "senderId" => sender_id = Some(d.str()?.to_string()),
+                "sessionId" => session_id = Some(d.str()?.to_string()),
+                "count" => count = Some(d.u64()?),
+                _ => d.skip()?,
+            }
+        }
+
+        Ok(EphemeralMessageHeader {
+            sender_id: sender_id.ok_or_else(|| minicbor::decode::Error::message("missing 'senderId' field"))?,
+            session_id: session_id.ok_or_else(|| minicbor::decode::Error::message("missing 'sessionId' field"))?,
+            count: count.ok_or_else(|| minicbor::decode::Error::message("missing 'count' field"))?,
+        })
+    }
 }
 
 /// Arguments for the ephemeral relay server.
@@ -352,7 +408,7 @@ async fn handle_connection(
     // Wait for the first message which should be a join message
     let peer_id = if let Some(Ok(WsMessage::Binary(data))) = ws_receiver.next().await {
         // Try to parse as a join message
-        match ciborium::from_reader::<JoinMessage, _>(data.as_ref()) {
+        match minicbor::decode::<JoinMessage>(&data) {
             Ok(join_msg) if join_msg.msg_type == "join" => {
                 let Ok(peer_id) = AutomergePeerId::new(join_msg.sender_id.clone()) else {
                     tracing::warn!(
@@ -364,15 +420,14 @@ async fn handle_connection(
                 };
                 tracing::info!("Peer {} joined from {}", peer_id.0, addr);
 
-                // Send peer message back
+                // Send peer message back (echo peer_metadata as raw bytes)
                 let peer_msg = PeerMessage {
                     msg_type: "peer".to_string(),
                     sender_id: "ephemeral-relay".to_string(),
-                    peer_metadata: join_msg.peer_metadata,
+                    peer_metadata_raw: join_msg.peer_metadata_raw,
                 };
 
-                let mut response = Vec::new();
-                ciborium::into_writer(&peer_msg, &mut response)?;
+                let response = minicbor::to_vec(&peer_msg).map_err(|e| anyhow::anyhow!("failed to encode peer message: {e}"))?;
                 ws_sender.send(WsMessage::Binary(response.into())).await?;
 
                 peer_id
@@ -411,7 +466,7 @@ async fn handle_connection(
             Ok(WsMessage::Binary(data)) => {
                 // Try to parse message header for deduplication
                 let should_relay = if let Ok(header) =
-                    ciborium::from_reader::<EphemeralMessageHeader, _>(data.as_ref())
+                    minicbor::decode::<EphemeralMessageHeader>(&data)
                 {
                     let message_key =
                         deduplicator.msg_key(&header.sender_id, &header.session_id, header.count);

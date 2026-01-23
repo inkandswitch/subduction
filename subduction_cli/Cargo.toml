@@ -20,8 +20,8 @@ async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
-ciborium = { workspace = true }
 clap = { workspace = true }
+minicbor = { workspace = true }
 console-subscriber = { workspace = true }
 futures = { workspace = true }
 futures_kind = { workspace = true }
@@ -30,9 +30,8 @@ hex = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 rand = { workspace = true }
-serde = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", features = ["std", "serde"] }
-subduction_core = { path = "../subduction_core", features = ["std", "serde-std", "metrics"] }
+sedimentree_core = { path = "../sedimentree_core", features = ["std"] }
+subduction_core = { path = "../subduction_core", features = ["std", "metrics"] }
 subduction_websocket = { path = "../subduction_websocket", default-features = false }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }

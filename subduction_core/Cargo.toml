@@ -21,6 +21,7 @@ futures = { workspace = true }
 futures_kind = { workspace = true }
 getrandom = { workspace = true, optional = true }
 metrics = { workspace = true, optional = true }
+minicbor = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
 serde = { workspace = true, optional = true, features = ["derive"] }
