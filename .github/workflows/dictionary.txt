@@ -30,6 +30,7 @@ FIXME
 Grafana
 GroupId
 HChaCha
+Integrations
 Invariants
 JS
 Keyhive
