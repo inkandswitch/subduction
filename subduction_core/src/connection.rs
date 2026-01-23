@@ -113,8 +113,3 @@ pub trait Reconnect<K: FutureKind>: Connection<K> {
 pub struct ConnectionDisallowed;
 
 pub struct FIXME;
-
-// FIXME something something
-mod policy_seal {
-    pub struct PolicySeal;
-}

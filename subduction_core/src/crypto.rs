@@ -4,7 +4,7 @@ pub mod signed;
 pub mod verified;
 
 // FIXME
-pub struct Challenge(signed::Signed<crate::timestamp::Timestamp>);
+pub struct Challenge(signed::Signed<crate::timestamp::TimestampSeconds>);
 
 // pub struct Witness(PeerId, SediementreeId);
 //

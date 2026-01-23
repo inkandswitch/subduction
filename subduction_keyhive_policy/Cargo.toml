@@ -14,7 +14,12 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+futures = { workspace = true }
+futures_kind = { workspace = true }
 keyhive_core = { path = "../../keyhive/keyhive_core" }
+rand = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core", default-features = false }
+serde = { workspace = true }
 subduction_core = { path = "../subduction_core", default-features = false }
 
 [features]

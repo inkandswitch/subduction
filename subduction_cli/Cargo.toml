@@ -29,7 +29,7 @@ futures-util = { workspace = true }
 hex = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["std", "std_rng"] }
 sedimentree_core = { path = "../sedimentree_core", features = ["std"] }
 subduction_core = { path = "../subduction_core", features = ["std", "metrics"] }
 subduction_websocket = { path = "../subduction_websocket", default-features = false }

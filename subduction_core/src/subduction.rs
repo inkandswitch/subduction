@@ -439,7 +439,7 @@ where
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
     pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), RegistrationError> {
         tracing::info!("registering connection from peer {:?}", conn.peer_id());
-        self.is_connect_allowed(&conn.peer_id()).await?;
+        todo!("self.is_connect_allowed(&conn.peer_id()).await?;");
 
         let conns = { self.conns.lock().await.clone() };
 
@@ -1489,7 +1489,7 @@ where
     M: DepthMetric,
 {
     // async fn is_connect_allowed(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
-    fn is_connect_allowed(&self, _peer_id: &PeerId) -> F::Future<'_, bool> {
+    fn is_connect_allowed(&self, _peer_id: PeerId) -> F::Future<'_, bool> {
         // Ok(()) // TODO currently allows all
         todo!()
     }

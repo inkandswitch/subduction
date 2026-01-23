@@ -662,7 +662,7 @@ mod tests {
     // #[test]
     // fn simplify_basic() {
     //     simplify_test!(
-    //         rng => &mut rand::rng(),
+    //         rng => &mut rand::thread_rng(),
     //         nodes => | node | level |
     //                  |   a  |   2   |
     //                  |   b  |   0   |
@@ -685,7 +685,7 @@ mod tests {
     // #[test]
     // fn simplify_multiple_heads() {
     //     simplify_test!(
-    //         rng => &mut rand::rng(),
+    //         rng => &mut rand::thread_rng(),
     //         nodes => | node | level |
     //                  |   a  |   0   |
     //                  |   b  |   0   |
@@ -706,7 +706,7 @@ mod tests {
     #[test]
     fn simplify_block_boundaries_without_fragments() {
         simplify_test!(
-            rng => &mut rand::rng(),
+            rng => &mut rand::thread_rng(),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   0   |,
@@ -721,7 +721,7 @@ mod tests {
     #[test]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
         simplify_test!(
-            rng => &mut rand::rng(),
+            rng => &mut rand::thread_rng(),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   2   |,
@@ -735,7 +735,7 @@ mod tests {
 
     #[test]
     fn test_parents() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let a = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let c = LooseCommit::new(

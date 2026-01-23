@@ -53,6 +53,7 @@ std = [
   "futures-util/io",
   "futures-util/std",
   "rand/std",
+  "rand/std_rng",
   "sedimentree_core/std",
   "subduction_core/std",
   "thiserror/std",

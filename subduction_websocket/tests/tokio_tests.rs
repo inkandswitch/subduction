@@ -33,13 +33,13 @@ fn init_tracing() {
 
 fn random_blob() -> Blob {
     #[allow(clippy::expect_used)]
-    Blob::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 64]>()))
+    Blob::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 64]>()))
         .expect("arbitrary blob")
 }
 
 fn random_digest() -> Digest {
     #[allow(clippy::expect_used)]
-    Digest::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 32]>()))
+    Digest::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 32]>()))
         .expect("arbitrary digest")
 }
 

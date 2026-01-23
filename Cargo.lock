@@ -2681,7 +2681,7 @@ dependencies = [
  "futures_kind",
  "minicbor",
  "num-bigint",
- "rand 0.9.2",
+ "rand 0.8.5",
  "serde",
  "thiserror 2.0.18",
  "tracing",
@@ -2918,7 +2918,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "minicbor",
- "rand 0.9.2",
+ "rand 0.8.5",
  "sedimentree_core",
  "subduction_core",
  "subduction_websocket",
@@ -2947,7 +2947,7 @@ dependencies = [
  "metrics",
  "minicbor",
  "nonempty 0.12.0",
- "rand 0.9.2",
+ "rand 0.8.5",
  "sedimentree_core",
  "serde",
  "siphasher",
@@ -2961,7 +2961,12 @@ dependencies = [
 name = "subduction_keyhive_policy"
 version = "0.1.0"
 dependencies = [
+ "futures 0.3.31",
+ "futures_kind",
  "keyhive_core",
+ "rand 0.8.5",
+ "sedimentree_core",
+ "serde",
  "subduction_core",
 ]
 
@@ -2981,7 +2986,7 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "minicbor",
- "rand 0.9.2",
+ "rand 0.8.5",
  "sedimentree_core",
  "subduction_core",
  "thiserror 2.0.18",
@@ -3008,7 +3013,7 @@ dependencies = [
  "futures-util",
  "futures_kind",
  "minicbor",
- "rand 0.9.2",
+ "rand 0.8.5",
  "sedimentree_core",
  "subduction_core",
  "testresult",

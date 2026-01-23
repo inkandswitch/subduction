@@ -613,7 +613,7 @@ mod tests {
         use super::super::*;
 
         fn hash_with_leading_zeros(zeros_count: u32) -> Digest {
-            let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
+            let mut byte_arr: [u8; 32] = rand::thread_rng().random::<[u8; 32]>();
             for slot in byte_arr.iter_mut().take(zeros_count as usize) {
                 *slot = 0;
             }

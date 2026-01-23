@@ -10,7 +10,7 @@ pub trait Policy<K: FutureKind> {
     /// # Errors
     ///
     /// * Returns [`ConnectionDisallowed`] if the connection is not allowed.
-    fn is_connect_allowed(&self, peer: &PeerId) -> K::Future<'_, bool>;
+    fn is_connect_allowed(&self, peer: PeerId) -> K::Future<'_, bool>;
 
     fn is_fetch_allowed(&self, peer: PeerId, sedimentree_id: SedimentreeId) -> K::Future<'_, bool>;
 

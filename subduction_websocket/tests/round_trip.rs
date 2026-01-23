@@ -97,20 +97,20 @@ async fn batch_sync() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    let blob1 = Blob::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 64]>()))?;
-    let blob2 = Blob::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 64]>()))?;
-    let blob3 = Blob::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 64]>()))?;
+    let blob1 = Blob::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 64]>()))?;
+    let blob2 = Blob::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 64]>()))?;
+    let blob3 = Blob::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 64]>()))?;
 
     let commit_digest1 =
-        Digest::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 32]>()))?;
+        Digest::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 32]>()))?;
     let commit1 = LooseCommit::new(commit_digest1, vec![], BlobMeta::new(blob1.as_slice()));
 
     let commit_digest2 =
-        Digest::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 32]>()))?;
+        Digest::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 32]>()))?;
     let commit2 = LooseCommit::new(commit_digest2, vec![], BlobMeta::new(blob2.as_slice()));
 
     let commit_digest3 =
-        Digest::arbitrary(&mut Unstructured::new(&rand::rng().random::<[u8; 32]>()))?;
+        Digest::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 32]>()))?;
     let commit3 = LooseCommit::new(commit_digest3, vec![], BlobMeta::new(blob3.as_slice()));
 
     ///////////////////
