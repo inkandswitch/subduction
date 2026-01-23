@@ -2961,6 +2961,7 @@ dependencies = [
 name = "subduction_keyhive_policy"
 version = "0.1.0"
 dependencies = [
+ "ed25519-dalek",
  "futures 0.3.31",
  "futures_kind",
  "keyhive_core",

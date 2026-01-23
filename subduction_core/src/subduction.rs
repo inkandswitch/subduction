@@ -11,7 +11,7 @@ use crate::{
         stream::IntoConnectionStream,
         Connection, ConnectionDisallowed,
     },
-    policy::Policy,
+    policy::{ConnectionPolicy, StoragePolicy},
     peer::id::PeerId,
     sharded_map::ShardedMap,
 };
@@ -1480,31 +1480,36 @@ where
     }
 }
 
-// FIXME needs second future parameter?
-impl<'a, F, S, C, M, const N: usize> Policy<F> for Subduction<'a, F, S, C, M, N>
+impl<'a, F, S, C, M, const N: usize> ConnectionPolicy<F> for Subduction<'a, F, S, C, M, N>
 where
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
 {
-    // async fn is_connect_allowed(&self, _peer_id: &PeerId) -> Result<(), ConnectionDisallowed> {
     fn is_connect_allowed(&self, _peer_id: PeerId) -> F::Future<'_, bool> {
-        // Ok(()) // TODO currently allows all
+        todo!()
+    }
+}
+
+impl<'a, F, S, C, M, const N: usize> StoragePolicy<F> for Subduction<'a, F, S, C, M, N>
+where
+    F: SubductionFutureKind<'a, S, C, M, N>,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    M: DepthMetric,
+{
+    fn is_fetch_allowed(&self, _peer: PeerId, _sedimentree_id: SedimentreeId) -> F::Future<'_, bool> {
         todo!()
     }
 
-     fn is_fetch_allowed(&self, peer: PeerId, sedimentree_id: SedimentreeId) -> F::Future<'_, bool> {
-        todo!("FIXME")
-    }
-
-     fn is_put_allowed(
+    fn is_put_allowed(
         &self,
-        requestor: PeerId,
-        author: PeerId,
-        sedimentree_id: SedimentreeId,
+        _requestor: PeerId,
+        _author: PeerId,
+        _sedimentree_id: SedimentreeId,
     ) -> F::Future<'_, bool> {
-        todo!("FIXME")
+        todo!()
     }
 }
 

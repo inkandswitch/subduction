@@ -14,6 +14,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 futures_kind = { workspace = true }
 keyhive_core = { path = "../../keyhive/keyhive_core" }
