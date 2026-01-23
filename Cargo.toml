@@ -103,6 +103,7 @@ wildcard_enum_match_arm = "warn"
 
 all = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
+multiple_crate_versions = "allow" # getrandom 0.2 vs 0.3 from ed25519-dalek
 pedantic = { level = "deny", priority = -1 }
 
 [profile.release]

@@ -1,7 +1,9 @@
 //! Purge all storage data.
 
-use anyhow::Result;
+use std::io::Write;
 use std::path::PathBuf;
+
+use anyhow::Result;
 
 /// Arguments for the purge command.
 #[derive(Debug, clap::Parser)]
@@ -43,7 +45,6 @@ pub(crate) async fn run(args: PurgeArgs) -> Result<()> {
     if !args.yes {
         println!();
         print!("Are you sure you want to delete all storage? [y/N] ");
-        use std::io::Write;
         std::io::stdout().flush()?;
 
         let mut input = String::new();
@@ -77,6 +78,6 @@ fn count_items(dir: &PathBuf) -> usize {
     }
 
     std::fs::read_dir(dir)
-        .map(|entries| entries.count())
+        .map(Iterator::count)
         .unwrap_or(0)
 }

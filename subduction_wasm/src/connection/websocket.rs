@@ -346,7 +346,7 @@ impl Connection<Local> for WasmWebSocket {
             { self.pending.lock().await.insert(req_id, tx); }
 
             #[allow(clippy::expect_used)]
-            let msg_bytes = minicbor::to_vec(&Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())

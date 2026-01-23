@@ -133,7 +133,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
 
             #[allow(clippy::expect_used)]
             let msg_bytes =
-                minicbor::to_vec(&Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+                minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
 
             self.outbound
                 .lock()
@@ -427,7 +427,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
 
             #[allow(clippy::expect_used)]
             let msg_bytes =
-                minicbor::to_vec(&Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+                minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
 
             self.outbound
                 .lock()

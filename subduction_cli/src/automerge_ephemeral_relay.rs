@@ -245,7 +245,7 @@ impl<const N: usize> ShardedDeduplicator<N> {
 struct JoinMessage {
     msg_type: String,
     sender_id: String,
-    /// Raw CBOR bytes for peer_metadata (passed through without interpretation)
+    /// Raw CBOR bytes for `peer_metadata` (passed through without interpretation).
     peer_metadata_raw: Vec<u8>,
 }
 
@@ -267,7 +267,9 @@ impl<'b, C> minicbor::Decode<'b, C> for JoinMessage {
                     let start = d.position();
                     d.skip()?;
                     let end = d.position();
-                    peer_metadata_raw = Some(d.input()[start..end].to_vec());
+                    #[allow(clippy::indexing_slicing)] // Bounds guaranteed by decoder positions
+                    let slice = &d.input()[start..end];
+                    peer_metadata_raw = Some(slice.to_vec());
                 }
                 _ => d.skip()?,
             }
@@ -286,7 +288,7 @@ impl<'b, C> minicbor::Decode<'b, C> for JoinMessage {
 struct PeerMessage {
     msg_type: String,
     sender_id: String,
-    /// Raw CBOR bytes for peer_metadata (embedded without interpretation)
+    /// Raw CBOR bytes for `peer_metadata` (embedded without interpretation).
     peer_metadata_raw: Vec<u8>,
 }
 
