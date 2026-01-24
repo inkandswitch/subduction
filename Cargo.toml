@@ -45,7 +45,7 @@ from_js_ref = "0.1.3" # no_std by default
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
-futures_kind = { path = "../../../Volunteer/futures_kind/futures_kind" }
+futures_kind = "0.1.1"
 getrandom = "0.3.3" # no_std by default
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }

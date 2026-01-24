@@ -18,7 +18,9 @@ use sedimentree_core::{
     depth::{Depth, DepthMetric},
 };
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
-use subduction_core::{peer::id::PeerId, sharded_map::ShardedMap, Subduction};
+use subduction_core::{
+    connection::manager::Spawner, peer::id::PeerId, sharded_map::ShardedMap, Subduction,
+};
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -37,8 +39,25 @@ use crate::{
 
 use super::depth::WasmDepth;
 
+use futures::future::LocalBoxFuture;
+use futures::stream::{AbortHandle, Abortable};
+
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 const WASM_SHARD_COUNT: usize = 4;
+
+/// A spawner that uses wasm-bindgen-futures to spawn local tasks.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WasmSpawner;
+
+impl Spawner<Local> for WasmSpawner {
+    fn spawn(&self, fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
+        let (handle, reg) = AbortHandle::new_pair();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = Abortable::new(fut, reg).await;
+        });
+        handle
+    }
+}
 
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
@@ -68,17 +87,17 @@ impl WasmSubduction {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let (core, listener_fut, actor_fut) =
-            Subduction::new(storage, WasmHashMetric(raw_fn), sedimentrees);
+        let (core, listener_fut, manager_fut) =
+            Subduction::new(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawner);
 
         wasm_bindgen_futures::spawn_local(async move {
-            let actor = actor_fut.fuse();
+            let manager = manager_fut.fuse();
             let listener = listener_fut.fuse();
 
-            match select(actor, listener).await {
-                Either::Left((actor_result, _pin)) => {
-                    if let Err(Aborted) = actor_result {
-                        tracing::error!("Subduction actor aborted");
+            match select(manager, listener).await {
+                Either::Left((manager_result, _pin)) => {
+                    if let Err(Aborted) = manager_result {
+                        tracing::error!("Subduction manager aborted");
                     }
                 }
                 Either::Right((listener_result, _pin)) => {
@@ -107,17 +126,17 @@ impl WasmSubduction {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let (core, listener_fut, actor_fut) =
-            Subduction::hydrate(storage, WasmHashMetric(raw_fn), sedimentrees).await?;
+        let (core, listener_fut, manager_fut) =
+            Subduction::hydrate(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawner).await?;
 
         wasm_bindgen_futures::spawn_local(async move {
-            let actor = actor_fut.fuse();
+            let manager = manager_fut.fuse();
             let listener = listener_fut.fuse();
 
-            match select(actor, listener).await {
-                Either::Left((actor_result, _pin)) => {
-                    if let Err(Aborted) = actor_result {
-                        tracing::error!("Subduction actor aborted");
+            match select(manager, listener).await {
+                Either::Left((manager_result, _pin)) => {
+                    if let Err(Aborted) = manager_result {
+                        tracing::error!("Subduction manager aborted");
                     }
                 }
                 Either::Right((listener_result, _pin)) => {

@@ -5,7 +5,7 @@ use testresult::TestResult;
 
 use arbitrary::{Arbitrary, Unstructured};
 use futures_kind::Sendable;
-use rand::Rng;
+use rand::RngCore;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
@@ -20,7 +20,7 @@ use subduction_core::{
     Subduction,
 };
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawner,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -37,10 +37,11 @@ async fn rend_receive() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
-    let (suduction, listener_fut, conn_actor_fut) = Subduction::new(
+    let (suduction, listener_fut, manager_fut) = Subduction::new(
         memory_storage.clone(),
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
+        TokioSpawner,
     );
 
     tokio::spawn(async move {
@@ -49,7 +50,7 @@ async fn rend_receive() -> TestResult {
     });
 
     tokio::spawn(async move {
-        conn_actor_fut.await?;
+        manager_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -97,20 +98,31 @@ async fn batch_sync() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
-    let blob1 = Blob::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 64]>()))?;
-    let blob2 = Blob::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 64]>()))?;
-    let blob3 = Blob::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 64]>()))?;
+    let mut blob_bytes1 = [0u8; 64];
+    let mut blob_bytes2 = [0u8; 64];
+    let mut blob_bytes3 = [0u8; 64];
+    let mut digest_bytes1 = [0u8; 32];
+    let mut digest_bytes2 = [0u8; 32];
+    let mut digest_bytes3 = [0u8; 32];
 
-    let commit_digest1 =
-        Digest::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 32]>()))?;
+    rand::thread_rng().fill_bytes(&mut blob_bytes1);
+    rand::thread_rng().fill_bytes(&mut blob_bytes2);
+    rand::thread_rng().fill_bytes(&mut blob_bytes3);
+    rand::thread_rng().fill_bytes(&mut digest_bytes1);
+    rand::thread_rng().fill_bytes(&mut digest_bytes2);
+    rand::thread_rng().fill_bytes(&mut digest_bytes3);
+
+    let blob1 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes1))?;
+    let blob2 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes2))?;
+    let blob3 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes3))?;
+
+    let commit_digest1 = Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
     let commit1 = LooseCommit::new(commit_digest1, vec![], BlobMeta::new(blob1.as_slice()));
 
-    let commit_digest2 =
-        Digest::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 32]>()))?;
+    let commit_digest2 = Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
     let commit2 = LooseCommit::new(commit_digest2, vec![], BlobMeta::new(blob2.as_slice()));
 
-    let commit_digest3 =
-        Digest::arbitrary(&mut Unstructured::new(&rand::thread_rng().random::<[u8; 32]>()))?;
+    let commit_digest3 = Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
     let commit3 = LooseCommit::new(commit_digest3, vec![], BlobMeta::new(blob3.as_slice()));
 
     ///////////////////
@@ -120,10 +132,11 @@ async fn batch_sync() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, conn_actor_fut) = Subduction::new(
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         server_storage.clone(),
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
+        TokioSpawner,
     );
     tokio::spawn(async move {
         listener_fut.await?;
@@ -131,7 +144,7 @@ async fn batch_sync() -> TestResult {
     });
 
     tokio::spawn(async move {
-        conn_actor_fut.await?;
+        manager_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -162,13 +175,13 @@ async fn batch_sync() -> TestResult {
 
     // let client_tree = Sedimentree::new(vec![], vec![commit2.clone(), commit3.clone()]);
     let client_storage = MemoryStorage::default();
-    let (client, listener_fut, actor_fut) = Subduction::<
+    let (client, listener_fut, client_manager_fut) = Subduction::<
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<TimeoutTokio>,
-    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0));
+    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawner);
 
-    tokio::spawn(actor_fut);
+    tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;

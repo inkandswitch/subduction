@@ -1335,6 +1335,8 @@ dependencies = [
 [[package]]
 name = "futures_kind"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "44172f835c355494d01113fb982a58ff3038f340997f3cdfe5dd04bb663ef73e"
 dependencies = [
  "futures 0.3.31",
  "futures_kind_macros",
@@ -1343,6 +1345,8 @@ dependencies = [
 [[package]]
 name = "futures_kind_macros"
 version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "229dfb7d49eca986f87a51e8f1ceb0dca6a57f0b69135da85414c6f678e85b23"
 dependencies = [
  "proc-macro2 1.0.106",
  "quote 1.0.44",

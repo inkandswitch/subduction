@@ -1,23 +1,17 @@
 //! Manage connections to peers in the network.
 
-pub mod actor;
 pub mod id;
+pub mod manager;
 pub mod message;
-pub mod stream;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
 use alloc::sync::Arc;
-use core::{marker::PhantomData, time::Duration};
-use ed25519_dalek::VerifyingKey;
-use sedimentree_core::{
-    blob::Blob, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit, storage::Storage,
-};
+use core::time::Duration;
 
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
-use crate::{crypto::verified::Verified, peer::id::PeerId};
-use futures::Future;
+use crate::peer::id::PeerId;
 use futures_kind::FutureKind;
 use thiserror::Error;
 

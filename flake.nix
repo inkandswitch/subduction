@@ -91,12 +91,18 @@
           wasm-tools
         ];
 
-        commands = import ./nix/commands.nix {
+        # Project-specific commands
+        # Note: nix-command-utils has built-in rust/wasm modules, but they have a bug
+        # where the `packages` field returns binary path strings instead of derivations.
+        # Using project-specific commands from ./nix/commands.nix instead.
+        projectCommands = import ./nix/commands.nix {
           inherit pkgs system;
           cmd = command-utils.cmd.${system};
         };
 
-        command_menu = command-utils.commands.${system} commands;
+        command_menu = command-utils.commands.${system} [
+          { commands = projectCommands; packages = []; }
+        ];
 
         grafana =
           let

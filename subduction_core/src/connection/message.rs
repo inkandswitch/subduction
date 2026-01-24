@@ -192,6 +192,7 @@ pub struct SyncDiff {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     mod message_request_id {
         use super::*;

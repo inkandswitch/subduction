@@ -65,6 +65,7 @@ impl From<ed25519_dalek::VerifyingKey> for PeerId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::format;
 
     mod hex_formatting {
         use super::*;

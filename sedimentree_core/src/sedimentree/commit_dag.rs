@@ -508,7 +508,7 @@ mod tests {
     };
 
     fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest {
-        let mut byte_arr: [u8; 32] = rng.random::<[u8; 32]>();
+        let mut byte_arr: [u8; 32] = rng.r#gen::<[u8; 32]>();
         for slot in byte_arr.iter_mut().take(zeros_count as usize) {
             *slot = 0;
         }

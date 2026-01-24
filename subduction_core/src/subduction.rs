@@ -5,11 +5,10 @@ pub mod request;
 
 use crate::{
     connection::{
-        actor::{ActorCommand, ConnectionActor, ConnectionActorFuture, StartConnectionActor},
+        manager::{RunManager, Command, ConnectionManager, Spawner},
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
-        stream::IntoConnectionStream,
-        Connection, ConnectionDisallowed,
+        Connection,
     },
     policy::{ConnectionPolicy, StoragePolicy},
     peer::id::PeerId,
@@ -21,7 +20,7 @@ use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationEr
 use futures::{
     FutureExt, StreamExt, future::try_join_all, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
 };
-use futures_kind::{Local, Sendable};
+use futures_kind::{FutureKind, Local, Sendable};
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::{
@@ -63,7 +62,7 @@ pub struct Subduction<
 where
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + 'a,
+    C: Connection<F> + PartialEq + Clone + 'static,
     M: DepthMetric, {
     depth_metric: M,
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
@@ -71,11 +70,11 @@ where
     conns: Arc<Mutex<Map<ConnectionId, C>>>,
     storage: S,
 
-    actor_channel: Sender<ActorCommand<C>>,
+    manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(ConnectionId, Message)>,
     connection_closed: async_channel::Receiver<ConnectionId>,
 
-    abort_actor_handle: AbortHandle,
+    abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
 
     _phantom: core::marker::PhantomData<&'a F>,
@@ -88,29 +87,37 @@ where
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
 {
-    /// Initialize a new `Subduction` with the given storage backend, depth metric, and sharded `Sedimentree` map.
+    /// Initialize a new `Subduction` with the given storage backend, depth metric, sharded `Sedimentree` map, and spawner.
+    ///
+    /// The spawner is used to spawn individual connection handler tasks.
     ///
     /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
     /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
     /// or provide secure random keys to [`ShardedMap::with_key`].
     #[allow(clippy::type_complexity)]
-    pub fn new(
+    pub fn new<Sp: Spawner<F> + Send + Sync + 'static>(
         storage: S,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
+        spawner: Sp,
     ) -> (
         Arc<Self>,
         ListenerFuture<'a, F, S, C, M, N>,
-        ConnectionActorFuture<'a, F, C>,
+        crate::connection::manager::ManagerFuture<F>,
     ) {
         tracing::info!("initializing Subduction instance");
 
-        let (actor_sender, actor_receiver) = bounded(256);
+        let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(256);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
-        let actor = ConnectionActor::<'a, F, C>::new(actor_receiver, queue_sender, closed_sender);
+        let manager = ConnectionManager::<F, C, Sp>::new(
+            spawner,
+            manager_receiver,
+            queue_sender,
+            closed_sender,
+        );
 
-        let (abort_actor_handle, abort_actor_reg) = AbortHandle::new_pair();
+        let (abort_manager_handle, abort_manager_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
 
         let sd = Arc::new(Self {
@@ -119,18 +126,21 @@ where
             next_connection_id: Arc::new(AtomicUsize::new(0)),
             conns: Arc::new(Mutex::new(Map::new())),
             storage,
-            actor_channel: actor_sender,
+            manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
-            abort_actor_handle,
+            abort_manager_handle,
             abort_listener_handle,
             _phantom: PhantomData,
         });
 
+        let manager_fut = manager.run();
+        let abortable_manager = Abortable::new(manager_fut, abort_manager_reg);
+
         (
             sd.clone(),
             ListenerFuture::new(F::start_listener(sd, abort_listener_reg)),
-            ConnectionActorFuture::new(F::start_actor(actor, abort_actor_reg)),
+            crate::connection::manager::ManagerFuture::new(abortable_manager),
         )
     }
 
@@ -143,17 +153,18 @@ where
     /// # Errors
     ///
     /// * Returns [`HydrationError`] if loading from storage fails.
-    pub async fn hydrate(
+    pub async fn hydrate<Sp: Spawner<F> + Send + Sync + 'static>(
         storage: S,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
+        spawner: Sp,
     ) -> Result<(
         Arc<Self>,
         ListenerFuture<'a, F, S, C, M, N>,
-        ConnectionActorFuture<'a, F, C>,
+        crate::connection::manager::ManagerFuture<F>,
     ), HydrationError<F, S>> {
         let ids = storage.load_all_sedimentree_ids().await.map_err(HydrationError::LoadAllIdsError)?;
-        let (subduction, fut_listener, conn_actor) = Self::new(storage, depth_metric, sedimentrees);
+        let (subduction, fut_listener, manager_fut) = Self::new(storage, depth_metric, sedimentrees, spawner);
         for id in ids {
             let loose_commits = subduction.storage.load_loose_commits(id).await.map_err(HydrationError::LoadLooseCommitsError)?;
             let fragments = subduction.storage.load_fragments(id).await.map_err(HydrationError::LoadFragmentsError)?;
@@ -164,7 +175,7 @@ where
                 .with_entry_or_default(id, |tree| tree.merge(sedimentree))
                 .await;
         }
-        Ok((subduction, fut_listener, conn_actor))
+        Ok((subduction, fut_listener, manager_fut))
     }
 
     /// Listen for incoming messages from all connections and handle them appropriately.
@@ -450,8 +461,8 @@ where
             let conn_id: ConnectionId = ConnectionId::new(counter);
 
             self.conns.lock().await.insert(conn_id, conn.clone());
-            self.actor_channel
-                .send(ActorCommand::AddConnection(conn_id, conn))
+            self.manager_channel
+                .send(Command::Add(conn_id, conn))
                 .await
                 .map_err(|_| RegistrationError::SendToClosedChannel)?;
 
@@ -1475,7 +1486,7 @@ where
     M: DepthMetric,
 {
     fn drop(&mut self) {
-        self.abort_actor_handle.abort();
+        self.abort_manager_handle.abort();
         self.abort_listener_handle.abort();
     }
 }
@@ -1526,7 +1537,7 @@ pub trait SubductionFutureKind<
     C: Connection<Self> + PartialEq + 'a,
     M: DepthMetric,
     const N: usize,
->: IntoConnectionStream<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M, N>
+>: StartListener<'a, S, C, M, N>
 {
 }
 
@@ -1536,7 +1547,7 @@ impl<
         C: Connection<Self> + PartialEq + 'a,
         M: DepthMetric,
         const N: usize,
-        T: IntoConnectionStream<'a, C> + StartConnectionActor<'a, C> + StartListener<'a, S, C, M, N>,
+        T: StartListener<'a, S, C, M, N>,
     > SubductionFutureKind<'a, S, C, M, N> for T
 {
 }
@@ -1545,59 +1556,43 @@ impl<
 ///
 /// This lets us abstract over `Send` and `!Send` futures
 pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq + 'a, M: DepthMetric, const N: usize>:
-    IntoConnectionStream<'a, C> + StartConnectionActor<'a, C>
+    FutureKind + RunManager<C> + Sized
 {
     /// Start the listener task for Subduction.
     fn start_listener(
         subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
         abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>>;
+    ) -> Abortable<Self::Future<'a, ()>>
+    where
+        Self: Sized;
 }
 
-impl<
-        'a,
-        C: Connection<Self> + PartialEq + Send + Sync + 'static,
-        S: Storage<Self> + Send + Sync + 'a,
+#[futures_kind::kinds(
+    Sendable where
+        C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
+        S: Storage<Sendable> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
-        const N: usize,
-    > StartListener<'a, S, C, M, N> for Sendable
-where
-    S::Error: Send + 'static,
-    C::DisconnectionError: Send + 'static,
-    C::CallError: Send + 'static,
-    C::RecvError: Send + 'static,
-    C::SendError: Send + 'static,
-{
+        S::Error: Send + 'static,
+        C::DisconnectionError: Send + 'static,
+        C::CallError: Send + 'static,
+        C::RecvError: Send + 'static,
+        C::SendError: Send + 'static,
+    Local where
+        C: Connection<Local> + PartialEq + Clone + 'static,
+        S: Storage<Local> + 'a,
+        M: DepthMetric + 'a
+)]
+impl<'a, K: FutureKind, C, S, M, const N: usize> StartListener<'a, S, C, M, N> for K {
     fn start_listener(
         subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
-            async move {
+            K::into_kind(async move {
                 if let Err(e) = subduction.listen().await {
                     tracing::error!("Subduction listen error: {}", e.to_string());
                 }
-            }
-            .boxed(),
-            abort_reg,
-        )
-    }
-}
-
-impl<'a, C: Connection<Self> + PartialEq + 'a, S: Storage<Self> + 'a, M: DepthMetric + 'a, const N: usize>
-    StartListener<'a, S, C, M, N> for Local
-{
-    fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
-        abort_reg: AbortRegistration,
-    ) -> Abortable<Self::Future<'a, ()>> {
-        Abortable::new(
-            async move {
-                if let Err(e) = subduction.listen().await {
-                    tracing::error!("Subduction listen error: {}", e.to_string());
-                }
-            }
-            .boxed_local(),
+            }),
             abort_reg,
         )
     }

@@ -325,6 +325,7 @@ impl<K: Hash + Ord, V, const N: usize> Default for ShardedMap<K, V, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use sedimentree_core::id::SedimentreeId;
     use testresult::TestResult;
 
