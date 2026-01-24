@@ -23,4 +23,5 @@ pub mod signer;
 pub mod storage;
 pub mod subduction;
 
+pub use signer::WebCryptoSigner;
 pub use subduction::WasmSubduction;

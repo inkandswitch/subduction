@@ -85,22 +85,13 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
 }
 
 impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
-    /// Sign a payload using the provided signer.
-    ///
-    /// This wraps the payload in an [`Envelope`] with magic bytes and protocol
-    /// version, encodes it to CBOR, signs the bytes, and returns a [`Signed<T>`].
+    /// Seal a payload with the given signer's cryptographic signature.
     ///
     /// # Panics
     ///
     /// Panics if CBOR encoding fails (should never happen for well-formed types).
     #[allow(clippy::expect_used)]
-    /// Sign a payload with the given signer.
-    ///
-    /// # Panics
-    ///
-    /// Panics if CBOR encoding fails (should never happen for well-formed types).
-    #[allow(clippy::expect_used)]
-    pub async fn sign<K: FutureKind>(signer: &impl Signer<K>, payload: T) -> Self {
+    pub async fn seal<K: FutureKind, S: Signer<K>>(signer: &S, payload: T) -> Self {
         let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
         let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
         let signature = signer.sign(&encoded).await;

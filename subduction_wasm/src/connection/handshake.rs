@@ -77,7 +77,7 @@ pub(super) async fn client_handshake(
     let now = TimestampSeconds::new(now_secs);
     let nonce = Nonce::random();
     let challenge = Challenge::new(audience, now, nonce);
-    let signed_challenge = Signed::sign::<Local>(signer, challenge).await;
+    let signed_challenge = Signed::seal::<Local, _>(signer, challenge).await;
 
     let challenge_msg = HandshakeMessage::SignedChallenge(signed_challenge);
     let challenge_bytes = minicbor::to_vec(&challenge_msg)

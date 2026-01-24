@@ -42,7 +42,7 @@ export interface Connection {
 
 #[wasm_bindgen]
 extern "C" {
-    /// A duck-typed connection interface.
+    /// Connection interface.
     #[wasm_bindgen(js_name = Connection, typescript_type = "Connection")]
     pub type JsConnection;
 

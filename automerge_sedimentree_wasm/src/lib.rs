@@ -181,7 +181,7 @@ pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, WasmFromBase58Er
 
 #[wasm_bindgen]
 extern "C" {
-    /// Duck-typed interface for `Automerge`.
+    /// JS interface for `Automerge`.
     pub type JsAutomerge;
 
     /// Get change metadata by its hash.

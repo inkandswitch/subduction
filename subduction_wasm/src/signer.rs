@@ -1,8 +1,13 @@
-//! Duck-typed signer interface for JavaScript.
+//! Signer implementations for Wasm.
 //!
-//! This module provides a JavaScript-compatible wrapper for the [`Signer`] trait,
-//! allowing JavaScript code to provide signing implementations (e.g., using
-//! Web Crypto API, hardware keys, or remote signing services).
+//! This module provides two signer implementations:
+//!
+//! - [`JsSigner`]: An interface for JavaScript-provided signers
+//! - [`webcrypto::WebCryptoSigner`]: A ready-to-use Ed25519 signer using the browser's `WebCrypto` API
+
+pub mod webcrypto;
+
+pub use webcrypto::WebCryptoSigner;
 
 use alloc::vec::Vec;
 
@@ -16,7 +21,10 @@ use crate::peer_id::WasmPeerId;
 
 #[wasm_bindgen]
 extern "C" {
-    /// Cryptographic signer.
+    /// Cryptographic signer interface.
+    ///
+    /// This allows JavaScript code to provide signing implementations
+    /// (e.g., hardware keys or remote signing services).
     #[wasm_bindgen(js_name = Signer)]
     pub type JsSigner;
 

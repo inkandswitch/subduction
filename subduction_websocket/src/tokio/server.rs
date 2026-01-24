@@ -295,14 +295,14 @@ where
     ///
     /// Returns an error if the connection could not be established,
     /// handshake fails, or registration fails.
-    pub async fn connect_to_peer<R: Signer<Sendable>>(
+    pub async fn try_connect<R: Signer<Sendable>>(
         &self,
         uri: Uri,
         timeout: O,
         default_time_limit: Duration,
         signer: &R,
         expected_peer_id: PeerId,
-    ) -> Result<ConnectionId, ConnectToPeerError<P::ConnectionDisallowed>> {
+    ) -> Result<ConnectionId, TryConnectError<P::ConnectionDisallowed>> {
         use crate::handshake::client_handshake;
         use subduction_core::connection::handshake::Nonce;
 
@@ -313,7 +313,7 @@ where
         ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
         let (mut ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
-            .map_err(ConnectToPeerError::WebSocket)?;
+            .map_err(TryConnectError::WebSocket)?;
 
         // Perform handshake
         let audience = Audience::known(expected_peer_id);
@@ -366,7 +366,7 @@ where
             .subduction
             .register(ws_conn)
             .await
-            .map_err(ConnectToPeerError::Registration)?;
+            .map_err(TryConnectError::Registration)?;
 
         tracing::info!("Connected to peer at {uri_str} with connection ID {conn_id:?}");
         Ok(conn_id)
@@ -384,7 +384,7 @@ type TokioWebSocketSubduction<S, P, O, M> =
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectToPeerError<E: core::error::Error> {
+pub enum TryConnectError<E: core::error::Error> {
     /// WebSocket connection error.
     #[error("WebSocket connection error: {0}")]
     WebSocket(#[from] tungstenite::Error),

@@ -154,7 +154,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         // Spawn connection attempt in background to avoid blocking startup
         tokio::spawn(async move {
             match peer_server
-                .connect_to_peer(
+                .try_connect(
                     uri.clone(),
                     FuturesTimerTimeout,
                     timeout_duration,

@@ -43,9 +43,21 @@ version = "0.3.81"
 default-features = false
 features = [
   "BinaryType",
+  "Crypto",
+  "CryptoKey",
   "DomException",
+  "DomStringList",
+  "IdbDatabase",
+  "IdbFactory",
+  "IdbObjectStore",
+  "IdbOpenDbRequest",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbTransactionMode",
+  "IdbVersionChangeEvent",
   "MessageEvent",
   "ServiceWorkerGlobalScope",
+  "SubtleCrypto",
   "Url",
   "WebSocket",
   "Window"

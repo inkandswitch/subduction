@@ -36,6 +36,8 @@
 
         echo ""
         echo "✓ All wasm packages built"
+
+        wasm:sizes
       '';
   };
 

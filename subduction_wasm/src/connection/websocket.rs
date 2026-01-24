@@ -24,7 +24,7 @@ use futures::{
 use futures_kind::Local;
 use subduction_core::{
     connection::{
-        Connection, Reconnect,
+        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,
@@ -206,25 +206,6 @@ impl WasmWebSocket {
         })
     }
 
-    /// Connect to a WebSocket server at the given address.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WebSocketConnectionError`] if establishing the connection fails.
-    pub async fn connect(
-        address: &Url,
-        peer_id: &WasmPeerId,
-        timeout_milliseconds: u32,
-    ) -> Result<Self, WebSocketConnectionError> {
-        Ok(Self::setup(
-            peer_id,
-            &WebSocket::new(&address.href())
-                .map_err(WebSocketConnectionError::SocketCreationFailed)?,
-            timeout_milliseconds,
-        )
-        .await?)
-    }
-
     /// Connect to a WebSocket server with mutual authentication via handshake.
     ///
     /// This method performs a cryptographic handshake to verify both parties'
@@ -243,8 +224,8 @@ impl WasmWebSocket {
     /// Returns an error if:
     /// - The WebSocket connection could not be established
     /// - The handshake fails (signature invalid, wrong server, clock drift, etc.)
-    #[wasm_bindgen(js_name = connectWithHandshake)]
-    pub async fn connect_with_handshake(
+    #[wasm_bindgen(js_name = tryConnect)]
+    pub async fn try_connect(
         address: &Url,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
@@ -492,25 +473,9 @@ impl Connection<Local> for WasmWebSocket {
     }
 }
 
-impl Reconnect<Local> for WasmWebSocket {
-    type ConnectError = WebSocketConnectionError;
-
-    fn reconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::ConnectError>> {
-        async {
-            let address = self.socket.url();
-            let peer_id = self.peer_id;
-
-            *self = WasmWebSocket::connect(
-                &Url::new(&address).map_err(WebSocketConnectionError::InvalidUrl)?,
-                &peer_id.into(),
-                self.timeout_ms,
-            )
-            .await?;
-            Ok(())
-        }
-        .boxed_local()
-    }
-}
+// NOTE: Reconnect is not implemented for WasmWebSocket because handshake
+// requires the signer, which is not stored in the struct. Applications should
+// handle reconnection by calling connect again.
 
 #[derive(Debug)]
 struct WasmTimeout {
