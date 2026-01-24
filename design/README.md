@@ -4,15 +4,13 @@ This directory contains protocol design documents for Subduction.
 
 ## Documents
 
-| Document | Purpose |
-|----------|---------|
-| [handshake.md](./handshake.md) | Mutual authentication via Ed25519 signatures |
-| [sedimentree.md](./sedimentree.md) | Depth-based data partitioning scheme |
-| [sync/](./sync/) | Sync protocol overview and comparison |
-| [sync/batch.md](./sync/batch.md) | Pull-based full sedimentree reconciliation |
-| [sync/incremental.md](./sync/incremental.md) | Push-based real-time change propagation |
-| [security/](./security/) | Threat model and security rationale |
-| [guidance.md](./guidance.md) | Deployment and development guidance |
+| Document                           | Purpose                                      |
+|------------------------------------|----------------------------------------------|
+| [guidance.md](./guidance.md)       | Deployment and development guidance          |
+| [handshake.md](./handshake.md)     | Mutual authentication via Ed25519 signatures |
+| [security/](./security/)           | Threat model and security rationale          |
+| [sedimentree.md](./sedimentree.md) | Depth-based data partitioning scheme         |
+| [sync/](./sync/)                   | Sync protocol overview and comparison        |
 
 ## Protocol Layers
 
