@@ -1,6 +1,12 @@
+//! CBOR-encoded payload bytes with phantom type tracking.
+
 use alloc::vec::Vec;
 use core::{cmp::Ordering, marker::PhantomData};
 
+/// CBOR-encoded bytes representing a payload of type `T`.
+///
+/// The phantom type parameter tracks what type the bytes decode to,
+/// without actually storing a decoded value.
 #[derive(Clone, Debug)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
@@ -10,7 +16,7 @@ pub struct EncodedPayload<T>(Vec<u8>, PhantomData<T>);
 impl<T> EncodedPayload<T> {
     /// Create a new [`EncodedPayload`].
     #[must_use]
-    pub fn new(bytes: Vec<u8>) -> Self {
+    pub const fn new(bytes: Vec<u8>) -> Self {
         Self(bytes, PhantomData)
     }
 
@@ -48,7 +54,7 @@ impl<T> Eq for EncodedPayload<T> {}
 
 impl<T> PartialOrd for EncodedPayload<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        self.0.partial_cmp(&other.0)
+        Some(self.cmp(other))
     }
 }
 

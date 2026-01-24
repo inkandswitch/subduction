@@ -9,8 +9,8 @@ extern crate std;
 extern crate alloc;
 
 use alloc::rc::Rc;
-use sedimentree_core::collections::Set;
 use core::{cell::RefCell, convert::Infallible};
+use sedimentree_core::collections::Set;
 
 use automerge::{AutoCommit, Automerge, ChangeHash, ChangeMetadata};
 use sedimentree_core::{

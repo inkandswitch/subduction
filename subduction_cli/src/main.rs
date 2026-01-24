@@ -11,12 +11,12 @@ mod server;
 
 use clap::{Parser, Subcommand};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use subduction_core::peer::id::PeerId;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::{prelude::*, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, prelude::*, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -28,7 +28,9 @@ async fn main() -> anyhow::Result<()> {
     match args.command {
         Command::Server(server_args) => server::run(server_args, token).await?,
         Command::Client(client_args) => client::run(client_args, token).await?,
-        Command::EphemeralRelay(relay_args) => automerge_ephemeral_relay::run(relay_args, token).await?,
+        Command::EphemeralRelay(relay_args) => {
+            automerge_ephemeral_relay::run(relay_args, token).await?;
+        }
         Command::Purge(purge_args) => purge::run(purge_args).await?,
     }
 
@@ -80,7 +82,7 @@ fn setup_signal_handlers() -> CancellationToken {
 
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let t = token.clone();
         tokio::spawn(async move {
             if let Ok(mut term) = signal(SignalKind::terminate()) {
@@ -95,13 +97,18 @@ fn setup_signal_handlers() -> CancellationToken {
 }
 
 pub(crate) fn parse_peer_id(s: &str) -> anyhow::Result<PeerId> {
+    let arr = parse_32_bytes(s, "Peer ID")?;
+    Ok(PeerId::new(arr))
+}
+
+pub(crate) fn parse_32_bytes(s: &str, name: &str) -> anyhow::Result<[u8; 32]> {
     let bytes = hex::decode(s)?;
     if bytes.len() != 32 {
-        anyhow::bail!("Peer ID must be 32 bytes (64 hex characters)");
+        anyhow::bail!("{name} must be 32 bytes (64 hex characters)");
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);
-    Ok(PeerId::new(arr))
+    Ok(arr)
 }
 
 #[derive(Debug, Parser)]

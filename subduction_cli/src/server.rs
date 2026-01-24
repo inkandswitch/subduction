@@ -6,13 +6,14 @@ use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
+    crypto::signer::{LocalSigner, Signer},
     peer::id::PeerId,
     policy::OpenPolicy,
     storage::{MetricsStorage, RefreshMetrics},
 };
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
-use tungstenite::http::Uri;
 use tokio_util::sync::CancellationToken;
+use tungstenite::http::Uri;
 
 /// Arguments for the server command.
 #[derive(Debug, clap::Parser)]
@@ -25,9 +26,14 @@ pub(crate) struct ServerArgs {
     #[arg(short, long)]
     pub(crate) data_dir: Option<PathBuf>,
 
-    /// Peer ID (64 hex characters)
+    /// Key seed (64 hex characters) for deterministic key generation.
+    /// If not provided, a random key will be generated.
     #[arg(short, long)]
-    pub(crate) peer_id: Option<String>,
+    pub(crate) key_seed: Option<String>,
+
+    /// Maximum clock drift allowed during handshake (in seconds)
+    #[arg(long, default_value = "60")]
+    pub(crate) handshake_max_drift: u64,
 
     /// Request timeout in seconds
     #[arg(short, long, default_value = "5")]
@@ -97,18 +103,22 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
     }
 
-    let peer_id = args
-        .peer_id
-        .map(|s| crate::parse_peer_id(&s))
-        .transpose()?
-        .unwrap_or_else(|| PeerId::new([0; 32]));
+    let signer = match &args.key_seed {
+        Some(hex_seed) => {
+            let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
+            LocalSigner::from_bytes(&seed_bytes)
+        }
+        None => LocalSigner::generate(),
+    };
+    let peer_id = signer.peer_id();
 
     let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy> =
         TokioWebSocketServer::setup(
             addr,
             FuturesTimerTimeout,
             Duration::from_secs(args.timeout),
-            peer_id,
+            Duration::from_secs(args.handshake_max_drift),
+            signer.clone(),
             storage,
             OpenPolicy,
             CountLeadingZeroBytes,
@@ -128,8 +138,10 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             }
         };
 
-        // Generate a peer ID from the URI (temporary until proper peer authentication)
-        let remote_peer_id = {
+        // Generate a peer ID from the URI hash.
+        // FIXME: This is a placeholder - in production, the expected peer ID
+        // should be known ahead of time (e.g., from a configuration or discovery).
+        let expected_peer_id = {
             let mut hasher = blake3::Hasher::new();
             hasher.update(uri.to_string().as_bytes());
             PeerId::new(*hasher.finalize().as_bytes())
@@ -137,15 +149,26 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
         let timeout_duration = Duration::from_secs(args.timeout);
         let peer_server = server.clone();
+        let peer_signer = signer.clone();
 
         // Spawn connection attempt in background to avoid blocking startup
         tokio::spawn(async move {
             match peer_server
-                .connect_to_peer(uri.clone(), FuturesTimerTimeout, timeout_duration, remote_peer_id)
+                .connect_to_peer(
+                    uri.clone(),
+                    FuturesTimerTimeout,
+                    timeout_duration,
+                    &peer_signer,
+                    expected_peer_id,
+                )
                 .await
             {
                 Ok(conn_id) => {
-                    tracing::info!("Connected to peer at {} (connection ID: {:?})", uri, conn_id);
+                    tracing::info!(
+                        "Connected to peer at {} (connection ID: {:?})",
+                        uri,
+                        conn_id
+                    );
                 }
                 Err(e) => {
                     tracing::error!("Failed to connect to peer at {}: {}", uri, e);

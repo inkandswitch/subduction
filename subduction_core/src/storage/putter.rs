@@ -14,8 +14,8 @@ use sedimentree_core::{
     storage::Storage,
 };
 
-use crate::policy::Generation;
 use super::fetcher::Fetcher;
+use crate::policy::Generation;
 
 /// A capability granting put access to a specific sedimentree's data.
 ///
@@ -38,7 +38,12 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
     /// Create a new putter capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(crate) fn new(storage: Arc<S>, sedimentree_id: SedimentreeId, generation: Generation) -> Self {
+    #[allow(dead_code)]
+    pub(crate) const fn new(
+        storage: Arc<S>,
+        sedimentree_id: SedimentreeId,
+        generation: Generation,
+    ) -> Self {
         Self {
             storage,
             sedimentree_id,
@@ -67,26 +72,26 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
         Fetcher::new(self.storage.clone(), self.sedimentree_id, self.generation)
     }
 
-    // === Fetch operations (put implies fetch) ===
-
     /// Load all loose commits for this sedimentree.
+    #[must_use]
     pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<LooseCommit>, S::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
     /// Load all fragments for this sedimentree.
+    #[must_use]
     pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Fragment>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
 
     /// Load a blob by its digest.
+    #[must_use]
     pub fn load_blob(&self, digest: Digest) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
         self.storage.load_blob(digest)
     }
 
-    // === Put operations ===
-
     /// Save a loose commit to this sedimentree.
+    #[must_use]
     pub fn save_loose_commit(
         &self,
         loose_commit: LooseCommit,
@@ -96,6 +101,7 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
     }
 
     /// Save a fragment to this sedimentree.
+    #[must_use]
     pub fn save_fragment(&self, fragment: Fragment) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.save_fragment(self.sedimentree_id, fragment)
     }
@@ -103,21 +109,25 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
     /// Save a blob and return its digest.
     ///
     /// Note: Blob storage is content-addressed and not per-sedimentree.
+    #[must_use]
     pub fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest, S::Error>> {
         self.storage.save_blob(blob)
     }
 
     /// Delete all loose commits for this sedimentree.
+    #[must_use]
     pub fn delete_loose_commits(&self) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.delete_loose_commits(self.sedimentree_id)
     }
 
     /// Delete all fragments for this sedimentree.
+    #[must_use]
     pub fn delete_fragments(&self) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.delete_fragments(self.sedimentree_id)
     }
 
     /// Delete a blob by its digest.
+    #[must_use]
     pub fn delete_blob(&self, digest: Digest) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.delete_blob(digest)
     }

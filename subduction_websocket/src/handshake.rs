@@ -15,7 +15,7 @@
 //! 3. Subduction handshake (this module)
 //!    - Server: receive Challenge, send Response
 //!    - Client: send Challenge, receive Response
-//! 4. Create WebSocket wrapper with verified PeerId
+//! 4. Create WebSocket wrapper with verified `PeerId`
 //! 5. Register connection with Subduction
 
 use core::time::Duration;
@@ -123,6 +123,11 @@ enum HandshakeMessage {
 /// - The challenge signature is invalid
 /// - The audience doesn't match
 /// - The timestamp is outside the acceptable drift window
+///
+/// # Panics
+///
+/// Panics if CBOR encoding fails (should never happen for well-formed types).
+#[allow(clippy::expect_used)]
 pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
     ws: &mut WebSocketStream<T>,
     signer: &impl Signer,
@@ -139,55 +144,52 @@ pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
     let challenge_bytes = match challenge_msg {
         tungstenite::Message::Binary(bytes) => bytes,
         tungstenite::Message::Text(_) => {
-            return Err(WebSocketHandshakeError::UnexpectedMessageType("text"))
+            return Err(WebSocketHandshakeError::UnexpectedMessageType("text"));
         }
         tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => {
-            return Err(WebSocketHandshakeError::UnexpectedMessageType("ping/pong"))
+            return Err(WebSocketHandshakeError::UnexpectedMessageType("ping/pong"));
         }
-        tungstenite::Message::Close(_) => {
-            return Err(WebSocketHandshakeError::ConnectionClosed)
-        }
+        tungstenite::Message::Close(_) => return Err(WebSocketHandshakeError::ConnectionClosed),
         tungstenite::Message::Frame(_) => {
-            return Err(WebSocketHandshakeError::UnexpectedMessageType("frame"))
+            return Err(WebSocketHandshakeError::UnexpectedMessageType("frame"));
         }
     };
 
     let handshake_msg: HandshakeMessage = minicbor::decode(&challenge_bytes)?;
 
-    let signed_challenge = match handshake_msg {
-        HandshakeMessage::SignedChallenge(c) => c,
-        _ => {
-            return Err(WebSocketHandshakeError::UnexpectedMessageType(
-                "expected SignedChallenge",
-            ))
-        }
+    let HandshakeMessage::SignedChallenge(signed_challenge) = handshake_msg else {
+        return Err(WebSocketHandshakeError::UnexpectedMessageType(
+            "expected SignedChallenge",
+        ));
     };
 
     // Verify the challenge
-    let verified = match handshake::verify_challenge(&signed_challenge, expected_audience, now, max_drift) {
-        Ok(v) => v,
-        Err(e) => {
-            // Send rejection
-            let reason = match &e {
-                HandshakeError::InvalidSignature => RejectionReason::InvalidSignature,
-                HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
-                HandshakeError::ResponseValidation(_) => {
-                    // This shouldn't happen on server side, but handle it
-                    RejectionReason::InvalidSignature
-                }
-            };
-            let rejection = Rejection::new(reason, now);
-            let msg = HandshakeMessage::Rejection(rejection);
-            let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
-            ws.send(tungstenite::Message::Binary(bytes.into())).await?;
-            return Err(e.into());
-        }
-    };
+    let verified =
+        match handshake::verify_challenge(&signed_challenge, expected_audience, now, max_drift) {
+            Ok(v) => v,
+            Err(e) => {
+                // Send rejection
+                let reason = match &e {
+                    HandshakeError::InvalidSignature => RejectionReason::InvalidSignature,
+                    HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
+                    HandshakeError::ResponseValidation(_) => {
+                        // This shouldn't happen on server side, but handle it
+                        RejectionReason::InvalidSignature
+                    }
+                };
+                let rejection = Rejection::new(reason, now);
+                let msg = HandshakeMessage::Rejection(rejection);
+                let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
+                ws.send(tungstenite::Message::Binary(bytes.into())).await?;
+                return Err(e.into());
+            }
+        };
 
     // Create and send response
     let signed_response = handshake::create_response(signer, &verified.challenge, now);
     let response_msg = HandshakeMessage::SignedResponse(signed_response);
-    let response_bytes = minicbor::to_vec(&response_msg).expect("response encoding should not fail");
+    let response_bytes =
+        minicbor::to_vec(&response_msg).expect("response encoding should not fail");
     ws.send(tungstenite::Message::Binary(response_bytes.into()))
         .await?;
 
@@ -217,6 +219,11 @@ pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
 /// - The server rejected the handshake
 /// - The response signature is invalid
 /// - The response doesn't match the challenge
+///
+/// # Panics
+///
+/// Panics if CBOR encoding fails (should never happen for well-formed types).
+#[allow(clippy::expect_used)]
 pub async fn client_handshake<T: AsyncRead + AsyncWrite + Unpin>(
     ws: &mut WebSocketStream<T>,
     signer: &impl Signer,
@@ -242,16 +249,14 @@ pub async fn client_handshake<T: AsyncRead + AsyncWrite + Unpin>(
     let response_bytes = match response_msg {
         tungstenite::Message::Binary(bytes) => bytes,
         tungstenite::Message::Text(_) => {
-            return Err(WebSocketHandshakeError::UnexpectedMessageType("text"))
+            return Err(WebSocketHandshakeError::UnexpectedMessageType("text"));
         }
         tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => {
-            return Err(WebSocketHandshakeError::UnexpectedMessageType("ping/pong"))
+            return Err(WebSocketHandshakeError::UnexpectedMessageType("ping/pong"));
         }
-        tungstenite::Message::Close(_) => {
-            return Err(WebSocketHandshakeError::ConnectionClosed)
-        }
+        tungstenite::Message::Close(_) => return Err(WebSocketHandshakeError::ConnectionClosed),
         tungstenite::Message::Frame(_) => {
-            return Err(WebSocketHandshakeError::UnexpectedMessageType("frame"))
+            return Err(WebSocketHandshakeError::UnexpectedMessageType("frame"));
         }
     };
 
@@ -271,9 +276,9 @@ pub async fn client_handshake<T: AsyncRead + AsyncWrite + Unpin>(
             reason: rejection.reason,
             server_timestamp: rejection.server_timestamp,
         }),
-        HandshakeMessage::SignedChallenge(_) => Err(WebSocketHandshakeError::UnexpectedMessageType(
-            "expected SignedResponse or Rejection",
-        )),
+        HandshakeMessage::SignedChallenge(_) => Err(
+            WebSocketHandshakeError::UnexpectedMessageType("expected SignedResponse or Rejection"),
+        ),
     }
 }
 
@@ -291,41 +296,51 @@ mod tests {
 
         #[test]
         fn signed_challenge_roundtrips() {
-            let signer = test_signer(1);
+            let test_signer = test_signer(1);
             let challenge = Challenge::new(
                 Audience::discovery(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(42),
             );
-            let signed = Signed::sign(&signer, challenge);
-            let msg = HandshakeMessage::SignedChallenge(signed.clone());
+            let signed_challenge = Signed::sign(&test_signer, challenge);
+            let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());
 
-            let bytes = minicbor::to_vec(&msg).expect("encoding should succeed");
-            let decoded: HandshakeMessage = minicbor::decode(&bytes).expect("decoding should succeed");
+            let bytes = minicbor::to_vec(&msg)
+                .unwrap_or_else(|e| unreachable!("encoding should succeed: {e}"));
+            let decoded: HandshakeMessage = minicbor::decode(&bytes)
+                .unwrap_or_else(|e| unreachable!("decoding should succeed: {e}"));
 
-            match decoded {
-                HandshakeMessage::SignedChallenge(decoded_signed) => {
-                    assert_eq!(decoded_signed.issuer(), signed.issuer());
-                }
-                _ => panic!("expected SignedChallenge"),
-            }
+            let HandshakeMessage::SignedChallenge(decoded_signed) = decoded else {
+                unreachable!(
+                    "expected SignedChallenge, got {:?}",
+                    core::mem::discriminant(&decoded)
+                );
+            };
+            assert_eq!(decoded_signed.issuer(), signed_challenge.issuer());
         }
 
         #[test]
         fn rejection_roundtrips() {
-            let rejection = Rejection::new(RejectionReason::ClockDrift, TimestampSeconds::new(1000));
+            let rejection =
+                Rejection::new(RejectionReason::ClockDrift, TimestampSeconds::new(1000));
             let msg = HandshakeMessage::Rejection(rejection);
 
-            let bytes = minicbor::to_vec(&msg).expect("encoding should succeed");
-            let decoded: HandshakeMessage = minicbor::decode(&bytes).expect("decoding should succeed");
+            let bytes = minicbor::to_vec(&msg)
+                .unwrap_or_else(|e| unreachable!("encoding should succeed: {e}"));
+            let decoded: HandshakeMessage = minicbor::decode(&bytes)
+                .unwrap_or_else(|e| unreachable!("decoding should succeed: {e}"));
 
-            match decoded {
-                HandshakeMessage::Rejection(decoded_rejection) => {
-                    assert_eq!(decoded_rejection.reason, rejection.reason);
-                    assert_eq!(decoded_rejection.server_timestamp, rejection.server_timestamp);
-                }
-                _ => panic!("expected Rejection"),
-            }
+            let HandshakeMessage::Rejection(decoded_rejection) = decoded else {
+                unreachable!(
+                    "expected Rejection, got {:?}",
+                    core::mem::discriminant(&decoded)
+                );
+            };
+            assert_eq!(decoded_rejection.reason, rejection.reason);
+            assert_eq!(
+                decoded_rejection.server_timestamp,
+                rejection.server_timestamp
+            );
         }
     }
 }

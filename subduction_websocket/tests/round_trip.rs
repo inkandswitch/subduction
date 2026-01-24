@@ -14,14 +14,14 @@ use sedimentree_core::{
     storage::MemoryStorage,
 };
 use subduction_core::{
-    connection::{message::Message, Connection},
+    Subduction,
+    connection::{Connection, message::Message},
     crypto::signer::{LocalSigner, Signer},
     policy::OpenPolicy,
     sharded_map::ShardedMap,
-    Subduction,
 };
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
+    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -199,7 +199,13 @@ async fn batch_sync() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
-    >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    >::new(
+        client_storage,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);

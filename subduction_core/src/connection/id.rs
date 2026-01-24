@@ -1,7 +1,19 @@
 //! Types for identifying connections.
 
 /// A unique identifier for a particular connection.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug,
+    Default,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    minicbor::Encode,
+    minicbor::Decode,
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -43,8 +55,8 @@ impl core::fmt::Display for ConnectionId {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sedimentree_core::collections::Map;
     use alloc::format;
+    use sedimentree_core::collections::Map;
 
     mod display {
         use super::*;

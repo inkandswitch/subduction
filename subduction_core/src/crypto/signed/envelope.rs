@@ -1,5 +1,11 @@
+//! Envelope wrapper with magic bytes and protocol version.
+
 use super::{magic::Magic, protocol_version::ProtocolVersion};
 
+/// A signed payload envelope containing magic bytes, protocol version, and the payload.
+///
+/// The envelope ensures signed data has identifying markers and version information
+/// for forward compatibility.
 #[derive(Clone, Debug, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
@@ -18,7 +24,7 @@ pub struct Envelope<T> {
 impl<T> Envelope<T> {
     /// Create a new [`Envelope`].
     #[must_use]
-    pub fn new(magic: Magic, protocol: ProtocolVersion, payload: T) -> Self {
+    pub const fn new(magic: Magic, protocol: ProtocolVersion, payload: T) -> Self {
         Self {
             magic,
             protocol,
@@ -28,7 +34,7 @@ impl<T> Envelope<T> {
 
     /// Get a reference to the payload.
     #[must_use]
-    pub fn payload(&self) -> &T {
+    pub const fn payload(&self) -> &T {
         &self.payload
     }
 
@@ -39,13 +45,13 @@ impl<T> Envelope<T> {
 
     /// Get the magic bytes.
     #[must_use]
-    pub fn magic(&self) -> Magic {
+    pub const fn magic(&self) -> Magic {
         self.magic
     }
 
     /// Get the protocol version.
     #[must_use]
-    pub fn protocol(&self) -> ProtocolVersion {
+    pub const fn protocol(&self) -> ProtocolVersion {
         self.protocol
     }
 }

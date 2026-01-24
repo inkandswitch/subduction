@@ -60,8 +60,7 @@ impl WasmFragmentState {
         let mut map = Map::new();
         for (key, value) in boundary {
             let wasm_key: WasmDigest = (*key).into();
-            let wasm_value: Set<WasmDigest> =
-                value.iter().copied().map(WasmDigest::from).collect();
+            let wasm_value: Set<WasmDigest> = value.iter().copied().map(WasmDigest::from).collect();
             map.insert(wasm_key, wasm_value);
         }
         WasmBoundary(map)

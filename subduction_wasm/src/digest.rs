@@ -5,7 +5,7 @@ use alloc::{
     vec::Vec,
 };
 use base58::FromBase58;
-use sedimentree_core::blob::{error::InvalidDigest, Digest};
+use sedimentree_core::blob::{Digest, error::InvalidDigest};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;

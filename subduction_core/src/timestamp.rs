@@ -26,6 +26,7 @@ impl TimestampSeconds {
     /// Panics if the system time is before the Unix epoch.
     #[cfg(feature = "std")]
     #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[allow(clippy::expect_used)]
     #[must_use]
     pub fn now() -> Self {
         let duration = std::time::SystemTime::now()
@@ -42,19 +43,21 @@ impl TimestampSeconds {
 
     /// Compute the absolute difference between two timestamps.
     #[must_use]
-    pub fn abs_diff(&self, other: Self) -> Duration {
+    pub const fn abs_diff(&self, other: Self) -> Duration {
         Duration::from_secs(self.0.abs_diff(other.0))
     }
 
     /// Compute the signed difference (self - other) in seconds.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_lossless)]
     #[must_use]
-    pub fn signed_diff(&self, other: Self) -> i64 {
+    pub const fn signed_diff(&self, other: Self) -> i64 {
         (self.0 as i128 - other.0 as i128) as i64
     }
 
     /// Add a signed offset to this timestamp.
+    #[allow(clippy::cast_sign_loss)]
     #[must_use]
-    pub fn add_signed(&self, offset_secs: i64) -> Self {
+    pub const fn add_signed(&self, offset_secs: i64) -> Self {
         if offset_secs >= 0 {
             Self(self.0.saturating_add(offset_secs as u64))
         } else {

@@ -173,16 +173,12 @@ impl Sedimentree {
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
     pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
-        let fragment_by_summary: Map<&FragmentSummary, &Fragment> = self
-            .fragments
-            .iter()
-            .map(|f| (f.summary(), f))
-            .collect();
+        let fragment_by_summary: Map<&FragmentSummary, &Fragment> =
+            self.fragments.iter().map(|f| (f.summary(), f)).collect();
 
         let our_fragments_meta: Set<&FragmentSummary> =
             fragment_by_summary.keys().copied().collect();
-        let their_fragments: Set<&FragmentSummary> =
-            remote.fragment_summaries.iter().collect();
+        let their_fragments: Set<&FragmentSummary> = remote.fragment_summaries.iter().collect();
 
         let local_fragments: Vec<&Fragment> = our_fragments_meta
             .difference(&their_fragments)
@@ -337,7 +333,9 @@ impl Sedimentree {
                     checkpoints.push(commit_hash);
                 }
             }
-            if level >= MAX_STRATA_DEPTH && let Some((head, checkpoints)) = runs_by_level.remove(&level) {
+            if level >= MAX_STRATA_DEPTH
+                && let Some((head, checkpoints)) = runs_by_level.remove(&level)
+            {
                 if self.fragments.iter().any(|s| s.supports_block(commit_hash)) {
                     runs_by_level.insert(level, (commit_hash, Vec::new()));
                 } else {
@@ -687,11 +685,11 @@ mod tests {
                     Ok(Self { deeper, shallower })
                 }
             }
-            bolero::check!()
-                .with_arbitrary::<Scenario>()
-                .for_each(|Scenario { deeper, shallower }| {
+            bolero::check!().with_arbitrary::<Scenario>().for_each(
+                |Scenario { deeper, shallower }| {
                     assert!(deeper.supports(shallower, &CountLeadingZeroBytes));
-                });
+                },
+            );
         }
 
         #[test]
@@ -859,7 +857,10 @@ mod tests {
                         b_updated.add_commit(commit.clone());
                     }
 
-                    assert_eq!(a_updated, b_updated, "after applying diff, trees should be equal");
+                    assert_eq!(
+                        a_updated, b_updated,
+                        "after applying diff, trees should be equal"
+                    );
                 });
         }
     }

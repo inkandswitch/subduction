@@ -42,8 +42,13 @@ impl LocalSigner {
     }
 
     /// Create a new local signer with a randomly generated key.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the system random number generator fails.
     #[cfg(feature = "getrandom")]
     #[cfg_attr(docsrs, doc(cfg(feature = "getrandom")))]
+    #[allow(clippy::expect_used)]
     #[must_use]
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
@@ -81,6 +86,7 @@ impl core::fmt::Debug for LocalSigner {
 mod tests {
     use super::*;
     use alloc::format;
+    use ed25519_dalek::Verifier;
 
     #[test]
     fn local_signer_sign_and_verify() {
@@ -90,8 +96,6 @@ mod tests {
         let message = b"hello world";
         let signature = signer.sign(message);
 
-        // Verify the signature
-        use ed25519_dalek::Verifier;
         assert!(signer.verifying_key().verify(message, &signature).is_ok());
     }
 

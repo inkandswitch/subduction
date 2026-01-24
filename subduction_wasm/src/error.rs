@@ -1,8 +1,8 @@
 //! Error types.
 
 use alloc::string::{String, ToString};
-use futures_kind::Local;
 use core::convert::Infallible;
+use futures_kind::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
     subduction::error::{AttachError, HydrationError, IoError, ListenError, RegistrationError},
@@ -11,7 +11,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    connection::{websocket::CallError, JsConnection},
+    connection::{JsConnection, websocket::CallError},
     storage::JsSubductionStorage,
 };
 
@@ -50,7 +50,7 @@ impl From<AttachError<Local, JsSubductionStorage, JsConnection, Infallible>> for
             AttachError::Io(io_err) => WasmIoError(io_err),
             AttachError::Registration(reg_err) => match reg_err {
                 RegistrationError::ConnectionDisallowed(infallible) => match infallible {},
-                RegistrationError::SendToClosedChannel => unreachable!()
+                RegistrationError::SendToClosedChannel => unreachable!(),
             },
         }
     }

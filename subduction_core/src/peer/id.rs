@@ -115,9 +115,10 @@ mod tests {
             let hex = format!("{peer_id}");
 
             assert!(hex.starts_with("ab")); // lowercase
-            assert!(hex
-                .chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
+            assert!(
+                hex.chars()
+                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
+            );
         }
 
         #[test]

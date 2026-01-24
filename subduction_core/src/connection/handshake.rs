@@ -82,8 +82,14 @@ impl Nonce {
     }
 
     /// Create a random nonce using `getrandom`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the system random number generator fails.
     #[cfg(feature = "getrandom")]
     #[cfg_attr(docsrs, doc(cfg(feature = "getrandom")))]
+    #[allow(clippy::expect_used)]
+    #[must_use]
     pub fn random() -> Self {
         let mut bytes = [0u8; 16];
         getrandom::fill(&mut bytes).expect("getrandom failed");
@@ -205,6 +211,11 @@ impl Challenge {
     /// Compute the BLAKE3 digest of this challenge.
     ///
     /// This is used in the [`Response`] to bind it to this specific challenge.
+    ///
+    /// # Panics
+    ///
+    /// Panics if CBOR encoding fails (should never happen for this type).
+    #[allow(clippy::expect_used)]
     #[must_use]
     pub fn digest(&self) -> ChallengeDigest {
         let encoded = minicbor::to_vec(self).expect("Challenge encoding should not fail");
@@ -395,7 +406,7 @@ pub enum ResponseValidationError {
 /// then fall back to original") belongs in the caller.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DriftCorrection {
-    /// The computed drift offset (server_time - client_time).
+    /// The computed drift offset (`server_time` - `client_time`).
     offset_secs: i32,
 }
 
@@ -410,6 +421,7 @@ impl DriftCorrection {
     ///
     /// Returns `true` if the drift was plausible and applied.
     /// Returns `false` if the drift exceeds [`MAX_PLAUSIBLE_DRIFT`].
+    #[allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
     pub fn adjust(
         &mut self,
         server_timestamp: TimestampSeconds,
@@ -561,6 +573,7 @@ pub enum HandshakeError {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 
@@ -769,8 +782,12 @@ mod tests {
 
             let signed_challenge = create_challenge(&client_signer, client_audience, now, nonce);
 
-            let result =
-                verify_challenge(&signed_challenge, &server_audience, now, MAX_PLAUSIBLE_DRIFT);
+            let result = verify_challenge(
+                &signed_challenge,
+                &server_audience,
+                now,
+                MAX_PLAUSIBLE_DRIFT,
+            );
 
             assert!(matches!(
                 result,

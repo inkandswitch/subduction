@@ -25,7 +25,7 @@
 use criterion::{criterion_group, criterion_main};
 
 mod generators {
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta, Digest},
         fragment::Fragment,
@@ -82,7 +82,11 @@ mod generators {
 
     /// Generate a fragment from a seed.
     #[allow(clippy::cast_sign_loss)]
-    pub(super) fn fragment_from_seed(seed: u64, num_parents: usize, num_members: usize) -> Fragment {
+    pub(super) fn fragment_from_seed(
+        seed: u64,
+        num_parents: usize,
+        num_members: usize,
+    ) -> Fragment {
         let digest = digest_from_seed(seed);
         let parents: Vec<Digest> = (0..num_parents)
             .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
@@ -163,7 +167,7 @@ mod generators {
 }
 
 mod id {
-    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::{id::ConnectionId, message::RequestId},
@@ -297,7 +301,7 @@ mod id {
 }
 
 mod message {
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use subduction_core::connection::message::Message;
 
     use super::generators::{
@@ -430,7 +434,7 @@ mod message {
 }
 
 mod sync {
-    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::sedimentree::SedimentreeSummary;
     use subduction_core::connection::message::{BatchSyncRequest, BatchSyncResponse, Message};
 
@@ -576,7 +580,7 @@ mod sync {
 mod collections {
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{connection::id::ConnectionId, peer::id::PeerId};
 
@@ -761,7 +765,7 @@ mod collections {
 }
 
 mod cloning {
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use subduction_core::connection::{id::ConnectionId, message::Message};
 
     use super::generators::{
@@ -864,7 +868,7 @@ mod cloning {
 }
 
 mod display {
-    use criterion::{black_box, Criterion};
+    use criterion::{Criterion, black_box};
     use subduction_core::storage::id::StorageId;
 
     use super::generators::{digest_from_seed, peer_id_from_seed, sedimentree_id_from_seed};

@@ -43,6 +43,7 @@ pub struct CachedPolicy<P> {
 
 impl<P> CachedPolicy<P> {
     /// Create a new caching policy wrapping the given inner policy.
+    #[allow(clippy::missing_const_for_fn)]
     pub fn new(inner: P) -> Self {
         Self {
             inner,
@@ -52,7 +53,8 @@ impl<P> CachedPolicy<P> {
     }
 
     /// Get a reference to the inner policy.
-    pub fn inner(&self) -> &P {
+    #[must_use]
+    pub const fn inner(&self) -> &P {
         &self.inner
     }
 

@@ -81,9 +81,7 @@ pub trait RefreshMetrics {
     /// This queries storage to count existing sedimentrees, loose commits,
     /// and fragments, then sets the gauge values accordingly. Call this
     /// periodically to ensure metrics reflect the actual storage state.
-    fn refresh_metrics(
-        &self,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn refresh_metrics(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 impl<S> RefreshMetrics for MetricsStorage<S>

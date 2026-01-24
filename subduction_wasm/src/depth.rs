@@ -51,7 +51,7 @@ impl WasmDepth {
     #[wasm_bindgen(getter)]
     #[allow(clippy::missing_const_for_fn)]
     pub fn value(&self) -> u32 {
-        self.0 .0
+        self.0.0
     }
 
     /// Internal method for a hack crossing the JS boundary.

@@ -3,7 +3,9 @@
 use alloc::string::String;
 
 /// A simple newtype for storage identifiers.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -125,22 +127,18 @@ mod tests {
 
         #[test]
         fn prop_display_matches_inner_string() {
-            bolero::check!()
-                .with_type::<String>()
-                .for_each(|s| {
-                    let id = StorageId::new(s.clone());
-                    assert_eq!(format!("{id}"), *s);
-                });
+            bolero::check!().with_type::<String>().for_each(|s| {
+                let id = StorageId::new(s.clone());
+                assert_eq!(format!("{id}"), *s);
+            });
         }
 
         #[test]
         fn prop_as_str_matches_inner() {
-            bolero::check!()
-                .with_type::<String>()
-                .for_each(|s| {
-                    let id = StorageId::new(s.clone());
-                    assert_eq!(id.as_str(), s.as_str());
-                });
+            bolero::check!().with_type::<String>().for_each(|s| {
+                let id = StorageId::new(s.clone());
+                assert_eq!(id.as_str(), s.as_str());
+            });
         }
 
         #[test]
@@ -156,11 +154,9 @@ mod tests {
 
         #[test]
         fn prop_equality_is_reflexive() {
-            bolero::check!()
-                .with_type::<StorageId>()
-                .for_each(|id| {
-                    assert_eq!(id, id);
-                });
+            bolero::check!().with_type::<StorageId>().for_each(|id| {
+                assert_eq!(id, id);
+            });
         }
 
         #[test]

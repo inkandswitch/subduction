@@ -1,26 +1,26 @@
 //! # Generic WebSocket connection for Subduction
 
 use alloc::{boxed::Box, sync::Arc};
-use sedimentree_core::collections::Map;
 use core::{
     marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
+use sedimentree_core::collections::Map;
 
 use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use futures::{
+    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
-    FutureExt,
 };
 use futures_kind::{FutureKind, Local, Sendable};
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,
 };
@@ -132,8 +132,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             self.pending.lock().await.insert(req_id, tx);
 
             #[allow(clippy::expect_used)]
-            let msg_bytes =
-                minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
+                .expect("serialization should be infallible");
 
             self.outbound
                 .lock()
@@ -426,8 +426,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             self.pending.lock().await.insert(req_id, tx);
 
             #[allow(clippy::expect_used)]
-            let msg_bytes =
-                minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
+                .expect("serialization should be infallible");
 
             self.outbound
                 .lock()

@@ -7,7 +7,7 @@ pub mod memory;
 use alloc::{string::ToString, vec::Vec};
 use sedimentree_core::collections::Set;
 
-use futures::{future::LocalBoxFuture, FutureExt};
+use futures::{FutureExt, future::LocalBoxFuture};
 use futures_kind::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
@@ -123,7 +123,7 @@ extern "C" {
     /// Delete all fragments from storage.
     #[wasm_bindgen(method, js_name = deleteFragments)]
     fn js_delete_fragments(this: &JsSubductionStorage, sedimentree_id: &JsSedimentreeId)
-        -> Promise;
+    -> Promise;
 
     /// Delete a blob from storage.
     #[wasm_bindgen(method, js_name = deleteBlob)]

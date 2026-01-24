@@ -157,7 +157,11 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         loose_commit: LooseCommit,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::into_kind(async move {
-            tracing::debug!(?sedimentree_id, ?loose_commit, "MemoryStorage::save_loose_commit");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?loose_commit,
+                "MemoryStorage::save_loose_commit"
+            );
             self.commits
                 .lock()
                 .await

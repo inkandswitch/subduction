@@ -1,11 +1,11 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    handshake::{server_handshake, WebSocketHandshakeError},
+    MAX_MESSAGE_SIZE,
+    handshake::{WebSocketHandshakeError, server_handshake},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
-    MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
@@ -17,6 +17,7 @@ use sedimentree_core::{
     storage::Storage,
 };
 use subduction_core::{
+    Subduction,
     connection::{handshake::Audience, id::ConnectionId},
     crypto::signer::Signer,
     peer::id::PeerId,
@@ -24,7 +25,6 @@ use subduction_core::{
     sharded_map::ShardedMap,
     subduction::error::RegistrationError,
     timestamp::TimestampSeconds,
-    Subduction,
 };
 
 use crate::tokio::TokioSpawn;
@@ -53,11 +53,11 @@ pub struct TokioWebSocketServer<
 }
 
 impl<
-        S: 'static + Send + Sync + Storage<Sendable>,
-        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-        M: 'static + Send + Sync + DepthMetric,
-        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-    > TokioWebSocketServer<S, P, M, O>
+    S: 'static + Send + Sync + Storage<Sendable>,
+    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+    M: 'static + Send + Sync + DepthMetric,
+    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+> TokioWebSocketServer<S, P, M, O>
 where
     S::Error: 'static + Send + Sync,
 {
@@ -88,7 +88,11 @@ where
         subduction: TokioWebSocketSubduction<S, P, O, M>,
     ) -> Result<Self, tungstenite::Error> {
         let server_peer_id = signer.peer_id();
-        tracing::info!("Starting WebSocket server on {} as {}", address, server_peer_id);
+        tracing::info!(
+            "Starting WebSocket server on {} as {}",
+            address,
+            server_peer_id
+        );
         let tcp_listener = TcpListener::bind(address).await?;
         let assigned_address = tcp_listener.local_addr()?;
 
@@ -205,6 +209,7 @@ where
     /// # Errors
     ///
     /// Returns an error if the socket could not be bound.
+    #[allow(clippy::too_many_arguments)]
     pub async fn setup<R: 'static + Send + Sync + Signer + Clone>(
         address: SocketAddr,
         timeout: O,
@@ -315,7 +320,8 @@ where
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let handshake_result = client_handshake(&mut ws_stream, signer, audience, now, nonce).await?;
+        let handshake_result =
+            client_handshake(&mut ws_stream, signer, audience, now, nonce).await?;
 
         // Verify we connected to the expected peer
         if handshake_result.server_id != expected_peer_id {

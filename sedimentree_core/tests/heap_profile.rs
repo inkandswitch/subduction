@@ -16,7 +16,7 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 mod generators {
     use super::*;
@@ -155,9 +155,7 @@ where
 fn heap_profile_all() {
     let output_path = "dhat-heap.json";
 
-    let _profiler = dhat::Profiler::builder()
-        .file_name(output_path)
-        .build();
+    let _profiler = dhat::Profiler::builder().file_name(output_path).build();
 
     println!("\n");
     println!("================================================================================");

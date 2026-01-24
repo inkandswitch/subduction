@@ -13,7 +13,7 @@ use futures::stream::AbortHandle;
 use futures_kind::{FutureKind, Local, Sendable};
 use sedimentree_core::collections::Map;
 
-use super::{id::ConnectionId, message::Message, Connection};
+use super::{Connection, id::ConnectionId, message::Message};
 
 /// Commands that can be sent to the [`ConnectionManager`].
 #[derive(Debug)]
@@ -104,7 +104,9 @@ pub trait RunManager<C>: FutureKind + Sized {
         C: Connection<Self> + Clone + 'static;
 }
 
-impl<K: FutureKind + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static> ConnectionManager<K, C, S> {
+impl<K: FutureKind + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
+    ConnectionManager<K, C, S>
+{
     /// Run the manager, processing commands to add/remove connections.
     pub fn run(self) -> K::Future<'static, ()>
     where

@@ -6,9 +6,9 @@ use sedimentree_core::collections::Map;
 
 use from_js_ref::FromJsRef;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use futures_kind::Local;
 use js_sys::Uint8Array;
@@ -19,11 +19,8 @@ use sedimentree_core::{
 };
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
-    connection::manager::Spawn,
-    peer::id::PeerId,
-    policy::OpenPolicy,
+    Subduction, connection::manager::Spawn, peer::id::PeerId, policy::OpenPolicy,
     sharded_map::ShardedMap,
-    Subduction,
 };
 use wasm_bindgen::prelude::*;
 
@@ -92,8 +89,13 @@ impl WasmSubduction {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let (core, listener_fut, manager_fut) =
-            Subduction::new(storage, OpenPolicy, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn);
+        let (core, listener_fut, manager_fut) = Subduction::new(
+            storage,
+            OpenPolicy,
+            WasmHashMetric(raw_fn),
+            sedimentrees,
+            WasmSpawn,
+        );
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -131,8 +133,14 @@ impl WasmSubduction {
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let (core, listener_fut, manager_fut) =
-            Subduction::hydrate(storage, OpenPolicy, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn).await?;
+        let (core, listener_fut, manager_fut) = Subduction::hydrate(
+            storage,
+            OpenPolicy,
+            WasmHashMetric(raw_fn),
+            sedimentrees,
+            WasmSpawn,
+        )
+        .await?;
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();

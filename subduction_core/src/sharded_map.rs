@@ -365,8 +365,7 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<(u64, u64, [u8; 32], [u8; 32], [u8; 32], [u8; 32])>()
                 .for_each(|(key0, key1, id0, id1, id2, id3)| {
-                    let map: ShardedMap<SedimentreeId, (), 16> =
-                        ShardedMap::with_key(*key0, *key1);
+                    let map: ShardedMap<SedimentreeId, (), 16> = ShardedMap::with_key(*key0, *key1);
 
                     // With 4 random IDs into 16 shards, we should usually see multiple shards used
                     let ids = [

@@ -12,14 +12,14 @@ use sedimentree_core::{
 };
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
-    connection::{message::Message, Connection, Reconnect},
+    Subduction,
+    connection::{Connection, Reconnect, message::Message},
     crypto::signer::{LocalSigner, Signer},
     policy::OpenPolicy,
     sharded_map::ShardedMap,
-    Subduction,
 };
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
+    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -70,8 +70,13 @@ async fn client_reconnect() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
-    let (server_subduction, listener_fut, manager_fut) =
-        Subduction::new(server_storage.clone(), OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        server_storage.clone(),
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -139,8 +144,13 @@ async fn server_graceful_shutdown() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
-    let (server_subduction, listener_fut, manager_fut) =
-        Subduction::new(server_storage.clone(), OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        server_storage.clone(),
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -205,6 +215,7 @@ async fn server_graceful_shutdown() -> TestResult {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)] // Integration test with multiple clients requires setup/teardown
 async fn multiple_concurrent_clients() -> TestResult {
     init_tracing();
 
@@ -215,8 +226,13 @@ async fn multiple_concurrent_clients() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) =
-        Subduction::new(server_storage.clone(), OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        server_storage.clone(),
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -254,14 +270,18 @@ async fn multiple_concurrent_clients() -> TestResult {
     for i in 0..num_clients {
         let client_signer = test_signer(u8::try_from(i)? + 10);
         let client_storage = MemoryStorage::default();
-        let (client, listener_fut, actor_fut) =
-            Subduction::<Sendable, MemoryStorage, TokioWebSocketClient<LocalSigner, TimeoutTokio>, OpenPolicy>::new(
-                client_storage,
-                OpenPolicy,
-                CountLeadingZeroBytes,
-                ShardedMap::with_key(0, 0),
-                TokioSpawn,
-            );
+        let (client, listener_fut, actor_fut) = Subduction::<
+            Sendable,
+            MemoryStorage,
+            TokioWebSocketClient<LocalSigner, TimeoutTokio>,
+            OpenPolicy,
+        >::new(
+            client_storage,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+            ShardedMap::with_key(0, 0),
+            TokioSpawn,
+        );
 
         tokio::spawn(actor_fut);
         tokio::spawn(listener_fut);
@@ -356,8 +376,13 @@ async fn request_with_delayed_response() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) =
-        Subduction::new(server_storage.clone(), OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        server_storage.clone(),
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -391,7 +416,13 @@ async fn request_with_delayed_response() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
-    >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    >::new(
+        client_storage,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -476,8 +507,13 @@ async fn large_message_handling() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) =
-        Subduction::new(server_storage.clone(), OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        server_storage.clone(),
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -507,7 +543,13 @@ async fn large_message_handling() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
-    >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    >::new(
+        client_storage,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -582,8 +624,13 @@ async fn message_ordering() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) =
-        Subduction::new(server_storage.clone(), OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        server_storage.clone(),
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -613,7 +660,13 @@ async fn message_ordering() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
-    >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+    >::new(
+        client_storage,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+    );
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);

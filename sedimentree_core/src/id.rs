@@ -13,7 +13,11 @@ use thiserror::Error;
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cbor(transparent)]
-pub struct SedimentreeId(#[n(0)] #[cbor(with = "minicbor::bytes")] [u8; 32]);
+pub struct SedimentreeId(
+    #[n(0)]
+    #[cbor(with = "minicbor::bytes")]
+    [u8; 32],
+);
 
 impl SedimentreeId {
     /// Constructor for a [`SedimentreeId`].
@@ -61,7 +65,10 @@ impl FromStr for SedimentreeId {
 
         let bytes = (0..s.len())
             .step_by(2)
-            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).map_err(|_| BadSedimentreeId::InvalidHex(s.to_string())))
+            .map(|i| {
+                u8::from_str_radix(&s[i..i + 2], 16)
+                    .map_err(|_| BadSedimentreeId::InvalidHex(s.to_string()))
+            })
             .collect::<Result<Vec<u8>, BadSedimentreeId>>()?;
 
         if bytes.len() == 32 {

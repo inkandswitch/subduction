@@ -2,10 +2,11 @@
 
 use async_lock::Mutex;
 use futures::{
-    future::{BoxFuture, LocalBoxFuture},
     FutureExt,
+    future::{BoxFuture, LocalBoxFuture},
 };
 use futures_kind::{Local, Sendable};
+use sedimentree_core::collections::{Map, Set};
 use sedimentree_core::{
     blob::{Blob, Digest},
     fragment::Fragment,
@@ -15,7 +16,6 @@ use sedimentree_core::{
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use sedimentree_core::collections::{Map, Set};
 use thiserror::Error;
 
 /// Errors that can occur during filesystem storage operations.
@@ -74,11 +74,12 @@ impl FsStorage {
             for entry in entries.flatten() {
                 if let Ok(name) = entry.file_name().into_string()
                     && let Ok(bytes) = hex::decode(&name)
-                        && bytes.len() == 32 {
-                            let mut arr = [0u8; 32];
-                            arr.copy_from_slice(&bytes);
-                            ids.insert(SedimentreeId::new(arr));
-                        }
+                    && bytes.len() == 32
+                {
+                    let mut arr = [0u8; 32];
+                    arr.copy_from_slice(&bytes);
+                    ids.insert(SedimentreeId::new(arr));
+                }
             }
         }
 
@@ -139,18 +140,17 @@ impl Storage<Sendable> for FsStorage {
             // Remove directory (ignore if it does not exist)
             let tree_dir = self.tree_path(sedimentree_id);
             if let Err(e) = tokio::fs::remove_dir_all(&tree_dir).await
-                && e.kind() != std::io::ErrorKind::NotFound {
-                    return Err(e.into());
-                }
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e.into());
+            }
 
             Ok(())
         }
         .boxed()
     }
 
-    fn load_all_sedimentree_ids(
-        &self,
-    ) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
+    fn load_all_sedimentree_ids(&self) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
         async move {
             tracing::debug!("FsStorage: loading all sedimentree_ids");
             Ok(self.ids_cache.lock().await.clone())
@@ -248,9 +248,10 @@ impl Storage<Sendable> for FsStorage {
             // Delete file (ignore if it does not exist)
             let commits_file = self.commits_file(sedimentree_id);
             if let Err(e) = tokio::fs::remove_file(&commits_file).await
-                && e.kind() != std::io::ErrorKind::NotFound {
-                    return Err(e.into());
-                }
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e.into());
+            }
 
             Ok(())
         }
@@ -347,9 +348,10 @@ impl Storage<Sendable> for FsStorage {
             // Delete file (ignore if it does not exist)
             let fragments_file = self.fragments_file(sedimentree_id);
             if let Err(e) = tokio::fs::remove_file(&fragments_file).await
-                && e.kind() != std::io::ErrorKind::NotFound {
-                    return Err(e.into());
-                }
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e.into());
+            }
 
             Ok(())
         }
@@ -394,9 +396,10 @@ impl Storage<Sendable> for FsStorage {
             // Delete file (ignore if it does not exist)
             let blob_path = self.blob_path(blob_digest);
             if let Err(e) = tokio::fs::remove_file(&blob_path).await
-                && e.kind() != std::io::ErrorKind::NotFound {
-                    return Err(e.into());
-                }
+                && e.kind() != std::io::ErrorKind::NotFound
+            {
+                return Err(e.into());
+            }
 
             Ok(())
         }

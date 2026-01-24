@@ -50,12 +50,8 @@ pub enum IoError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
 ///
 /// This combines I/O errors with policy-based connection rejection.
 #[derive(Debug, Error)]
-pub enum AttachError<
-    F: FutureKind + ?Sized,
-    S: Storage<F>,
-    C: Connection<F>,
-    E: core::error::Error,
-> {
+pub enum AttachError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>, E: core::error::Error>
+{
     /// An I/O error occurred during attachment.
     #[error(transparent)]
     Io(#[from] IoError<F, S, C>),
@@ -115,8 +111,10 @@ mod tests {
 
         #[test]
         fn test_equality() {
-            let err1: RegistrationError<ConnectionDisallowed> = RegistrationError::SendToClosedChannel;
-            let err2: RegistrationError<ConnectionDisallowed> = RegistrationError::SendToClosedChannel;
+            let err1: RegistrationError<ConnectionDisallowed> =
+                RegistrationError::SendToClosedChannel;
+            let err2: RegistrationError<ConnectionDisallowed> =
+                RegistrationError::SendToClosedChannel;
             let err3: RegistrationError<ConnectionDisallowed> =
                 RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
 

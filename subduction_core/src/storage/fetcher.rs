@@ -35,7 +35,11 @@ impl<K: FutureKind, S: Storage<K>> Fetcher<K, S> {
     /// Create a new fetcher capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(crate) fn new(storage: Arc<S>, sedimentree_id: SedimentreeId, generation: Generation) -> Self {
+    pub(crate) const fn new(
+        storage: Arc<S>,
+        sedimentree_id: SedimentreeId,
+        generation: Generation,
+    ) -> Self {
         Self {
             storage,
             sedimentree_id,
@@ -57,11 +61,13 @@ impl<K: FutureKind, S: Storage<K>> Fetcher<K, S> {
     }
 
     /// Load all loose commits for this sedimentree.
+    #[must_use]
     pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<LooseCommit>, S::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
     /// Load all fragments for this sedimentree.
+    #[must_use]
     pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Fragment>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
@@ -70,6 +76,7 @@ impl<K: FutureKind, S: Storage<K>> Fetcher<K, S> {
     ///
     /// Note: Blob storage is content-addressed and not per-sedimentree,
     /// but this capability implies access to blobs referenced by the sedimentree's commits.
+    #[must_use]
     pub fn load_blob(&self, digest: Digest) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
         self.storage.load_blob(digest)
     }

@@ -22,13 +22,13 @@ pub struct Verified<T> {
 impl<T> Verified<T> {
     /// Returns the verifying key of the issuer who signed this payload.
     #[must_use]
-    pub fn issuer(&self) -> ed25519_dalek::VerifyingKey {
+    pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
         self.issuer
     }
 
     /// Returns a reference to the verified payload.
     #[must_use]
-    pub fn payload(&self) -> &T {
+    pub const fn payload(&self) -> &T {
         &self.payload
     }
 
@@ -43,16 +43,17 @@ impl<T: PartialOrd> PartialOrd for Verified<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.payload.partial_cmp(&other.payload) {
             Some(Ordering::Equal) => self.issuer.as_bytes().partial_cmp(other.issuer.as_bytes()),
-            non_eq => non_eq,
+            ord => ord,
         }
     }
 }
 
+#[allow(clippy::non_canonical_partial_ord_impl)]
 impl<T: Ord> Ord for Verified<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.payload.cmp(&other.payload) {
             Ordering::Equal => self.issuer.as_bytes().cmp(other.issuer.as_bytes()),
-            non_eq => non_eq,
+            ord @ (Ordering::Less | Ordering::Greater) => ord,
         }
     }
 }

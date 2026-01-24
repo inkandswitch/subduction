@@ -8,8 +8,8 @@ extern crate std;
 use core::fmt;
 
 use ed25519_dalek::VerifyingKey;
-use futures::future::BoxFuture;
 use futures::FutureExt;
+use futures::future::BoxFuture;
 use futures_kind::Sendable;
 use keyhive_core::{
     access::Access,
@@ -22,7 +22,10 @@ use keyhive_core::{
 };
 use sedimentree_core::id::SedimentreeId;
 use serde::Deserialize;
-use subduction_core::{peer::id::PeerId, policy::{ConnectionPolicy, Generation, StoragePolicy}};
+use subduction_core::{
+    peer::id::PeerId,
+    policy::{ConnectionPolicy, Generation, StoragePolicy},
+};
 
 /// Error returned when a connection is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -97,6 +100,7 @@ impl fmt::Display for PutDisallowedError {
 impl core::error::Error for PutDisallowedError {}
 
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
+#[allow(missing_debug_implementations)]
 pub struct SubductionKeyhive<
     S: AsyncSigner + Clone,
     T: ContentRef,
@@ -107,21 +111,23 @@ pub struct SubductionKeyhive<
 >(Keyhive<S, T, P, C, L, R>);
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> SubductionKeyhive<S, T, P, C, L, R>
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
-    pub fn new(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
+    #[must_use]
+    pub const fn new(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
         Self(keyhive)
     }
 
     /// Get a reference to the inner [`Keyhive`].
-    pub fn keyhive(&self) -> &Keyhive<S, T, P, C, L, R> {
+    #[must_use]
+    pub const fn keyhive(&self) -> &Keyhive<S, T, P, C, L, R> {
         &self.0
     }
 }
@@ -133,7 +139,8 @@ impl<
     C: CiphertextStore<T, P> + Clone + Send + Sync,
     L: MembershipListener<S, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R> {
+> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+{
     type ConnectionDisallowed = ConnectionDisallowedError;
 
     fn authorize_connect(
@@ -161,7 +168,8 @@ impl<
     C: CiphertextStore<T, P> + Clone + Send + Sync,
     L: MembershipListener<S, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R> {
+> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+{
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
 
@@ -177,8 +185,8 @@ impl<
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
         async move {
-            let identifier = try_peer_id_to_identifier(peer)
-                .ok_or(FetchDisallowedError::InvalidPeerId)?;
+            let identifier =
+                try_peer_id_to_identifier(peer).ok_or(FetchDisallowedError::InvalidPeerId)?;
 
             let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
                 .ok_or(FetchDisallowedError::InvalidSedimentreeId)?;
@@ -211,8 +219,8 @@ impl<
         sedimentree_id: SedimentreeId,
     ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async move {
-            let identifier = try_peer_id_to_identifier(author)
-                .ok_or(PutDisallowedError::InvalidAuthorId)?;
+            let identifier =
+                try_peer_id_to_identifier(author).ok_or(PutDisallowedError::InvalidAuthorId)?;
 
             let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
                 .ok_or(PutDisallowedError::InvalidSedimentreeId)?;
@@ -240,13 +248,13 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
 {
     fn from(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
         SubductionKeyhive(keyhive)
@@ -254,13 +262,13 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
 {
     fn from(subduction_keyhive: SubductionKeyhive<S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0
@@ -271,6 +279,7 @@ impl<
 ///
 /// This conversion may fail because [`Identifier`] wraps an Ed25519 public key,
 /// while [`PeerId`] is arbitrary bytes that may not represent a valid key.
+#[must_use]
 pub fn try_peer_id_to_identifier(peer_id: PeerId) -> Option<Identifier> {
     let verifying_key = VerifyingKey::from_bytes(peer_id.as_bytes()).ok()?;
     Some(Identifier::from(verifying_key))
@@ -280,6 +289,7 @@ pub fn try_peer_id_to_identifier(peer_id: PeerId) -> Option<Identifier> {
 ///
 /// This conversion may fail because [`IndividualId`] wraps an Ed25519 public key,
 /// while [`PeerId`] is arbitrary bytes that may not represent a valid key.
+#[must_use]
 pub fn try_peer_id_to_individual_id(peer_id: PeerId) -> Option<IndividualId> {
     let verifying_key = VerifyingKey::from_bytes(peer_id.as_bytes()).ok()?;
     Some(IndividualId::from(verifying_key))
@@ -289,6 +299,7 @@ pub fn try_peer_id_to_individual_id(peer_id: PeerId) -> Option<IndividualId> {
 ///
 /// This conversion may fail because [`DocumentId`] wraps an Ed25519 public key,
 /// while [`SedimentreeId`] is arbitrary bytes that may not represent a valid key.
+#[must_use]
 pub fn try_sedimentree_id_to_document_id(sedimentree_id: SedimentreeId) -> Option<DocumentId> {
     let verifying_key = VerifyingKey::from_bytes(sedimentree_id.as_bytes()).ok()?;
     Some(DocumentId::from(Identifier::from(verifying_key)))
