@@ -20,7 +20,7 @@
 
 ## Documentation
 
-The [`design/`](./design/) directory contains protocol design documents including message formats, security rationale, and threat model.
+The [`design/`](./design/) directory contains protocol design documents including message formats, threat model, and so on.
 
 ## Architecture
 
