@@ -101,16 +101,30 @@ impl WebCryptoSigner {
             .indexed_db()?
             .ok_or_else(|| JsValue::from_str("IndexedDB not available"))?;
 
-        // Open database
-        let open_request = idb_factory.open(DB_NAME)?;
-        let db = Self::await_idb_request(&open_request).await?;
-        let db: web_sys::IdbDatabase = db.into();
+        // Open database with version and upgrade handler to ensure store exists.
+        // This prevents a race where open() without version creates an empty DB,
+        // then save_to_idb()'s upgrade handler never runs because version matches.
+        let open_request = idb_factory.open_with_u32(DB_NAME, 1)?;
 
-        // Check if store exists
-        if !db.object_store_names().contains(STORE_NAME) {
-            db.close();
-            return Ok(None);
-        }
+        let store_name = STORE_NAME;
+        #[allow(clippy::expect_used)]
+        let onupgradeneeded = Closure::once(move |event: web_sys::IdbVersionChangeEvent| {
+            let db: web_sys::IdbDatabase = event
+                .target()
+                .and_then(|t| t.dyn_into::<web_sys::IdbOpenDbRequest>().ok())
+                .and_then(|r| r.result().ok())
+                .and_then(|r| r.dyn_into().ok())
+                .expect("database from upgrade event");
+            if !db.object_store_names().contains(store_name) {
+                db.create_object_store(store_name)
+                    .expect("create object store");
+            }
+        });
+        open_request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
+
+        let db = Self::await_idb_request(&open_request).await?;
+        drop(onupgradeneeded);
+        let db: web_sys::IdbDatabase = db.into();
 
         // Read from store
         let tx = db.transaction_with_str(STORE_NAME)?;
