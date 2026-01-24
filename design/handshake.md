@@ -225,11 +225,12 @@ sequenceDiagram
     R->>I: Rejection { InvalidAudience, timestamp }
 
     Note left of I: handle rejection
-    Note left of I: optionally adjust clock
-    Note left of I: optionally retry
 
     Note left of I: Connection Failed
     Note right of R: Connection Closed
+
+    Note left of I: optionally adjust clock
+    I-->>R: optionally retry
 ```
 
 ## Implementation Notes
