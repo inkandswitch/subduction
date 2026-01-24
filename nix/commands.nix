@@ -1,3 +1,4 @@
+# Project-specific commands not covered by nix-command-utils built-in modules
 {
   pkgs,
   system,
@@ -11,11 +12,9 @@
   prometheus = "${pkgs.prometheus}/bin/prometheus";
   wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
 
+  # Multi-crate wasm builds (project-specific)
   release = {
-    "release:host" = cmd "Build release for ${system}"
-      "${cargo} build --release";
-
-    "release:wasm" = cmd "Build all JS-wrapped wasm libraries for release"
+    "release:wasm:all" = cmd "Build all JS-wrapped wasm libraries for release"
       ''
         set -e
         export INITIAL_DIR="$(pwd)"
@@ -36,10 +35,7 @@
   };
 
   build = {
-    "build:host" = cmd "Build for ${system}"
-      "${cargo} build";
-
-    "build:wasm" = cmd "Build all JS-wrapped Wasm libraries"
+    "build:wasm:all" = cmd "Build all JS-wrapped Wasm libraries"
       ''
         export INITIAL_DIR="$(pwd)"
         ${cargo} build
@@ -59,12 +55,6 @@
   };
 
   bench = {
-    "bench:host" = cmd "Run benchmarks, including test utils"
-      "${cargo} bench";
-
-    "bench:host:open" = cmd "Open host Criterion benchmarks in browser"
-      "${pkgs.xdg-utils}/bin/xdg-open ./target/criterion/report/index.html";
-
     "bench:heap" = cmd "Run heap allocation profiling" ''
       ${cargo} test --package sedimentree_core --test heap_profile -- --nocapture
       ${pkgs.jq}/bin/jq '.' sedimentree_core/dhat-heap.json | ${pkgs.moreutils}/bin/sponge sedimentree_core/dhat-heap.json
@@ -73,31 +63,9 @@
     '';
   };
 
-  lint = {
-    "lint" = cmd "Run Clippy"
-      "${cargo} clippy";
-
-    "lint:pedantic" = cmd "Run Clippy pedantically"
-      "${cargo} clippy -- -W clippy::pedantic";
-
-    "lint:fix" = cmd "Apply non-pendantic Clippy suggestions"
-      "${cargo} clippy --fix";
-  };
-
-  watch = {
-    "watch:build:host" = cmd "Rebuild host target on save"
-      "${cargo} watch --clear";
-  };
-
   test = {
-    "test:all" = cmd "Run Cargo tests"
-      "test:host && test:docs && test:wasm";
-
-    "test:host" = cmd "Run Cargo tests for host target"
-      "${cargo} test && ${cargo} test --doc";
-
     "test:no_std" = cmd "Test no_std compatibility (core crates only)" ''
-      set -e  # Exit on first error
+      set -e
 
       echo "===> Testing sedimentree_core with no_std (base)..."
       ${cargo} check --package sedimentree_core --no-default-features -v
@@ -107,12 +75,6 @@
       ${cargo} check --package subduction_core --no-default-features -v
 
       echo ""
-      echo "Note: serde feature requires Vec/collection support which needs:"
-      echo "  - alloc feature in no_std environments, OR"
-      echo "  - std feature in std environments"
-      echo "Core libraries are no_std compatible, but serde serialization requires alloc or std."
-      echo ""
-
       echo "===> Testing subduction_wasm (no_std with alloc by default)..."
       ${cargo} check --package subduction_wasm --target wasm32-unknown-unknown -v
 
@@ -125,7 +87,7 @@
     '';
 
     "test:std" = cmd "Test std feature enablement explicitly" ''
-      set -e  # Exit on first error
+      set -e
 
       echo "===> Testing sedimentree_core with std..."
       ${cargo} test --package sedimentree_core --features std,arbitrary -- --nocapture
@@ -146,20 +108,8 @@
       echo "✓ All std tests passed"
     '';
 
-    "test:websocket:no_std" = cmd "Verify subduction_websocket builds without std (should fail gracefully)" ''
-      echo "===> Checking if subduction_websocket requires std (expected to fail)..."
-      if ${cargo} check --package subduction_websocket --no-default-features 2>&1 | tail -20; then
-        echo ""
-        echo "⚠ Warning: subduction_websocket unexpectedly builds without std"
-        exit 1
-      else
-        echo ""
-        echo "✓ Confirmed: subduction_websocket requires std (as expected for networking)"
-      fi
-    '';
-
     "test:websocket:tokio" = cmd "Run all WebSocket tokio tests" ''
-      set -e  # Exit on first error
+      set -e
 
       echo "===> Running tokio WebSocket tests..."
       ${cargo} test --package subduction_websocket --features tokio_client,tokio_server -- --nocapture --test-threads=1
@@ -167,12 +117,6 @@
       echo ""
       echo "✓ All tokio WebSocket tests passed"
     '';
-
-    "test:wasm" = cmd "Run wasm-pack tests on all targets"
-      "test:wasm:node && test:ts:web";
-
-    "test:wasm:node" = cmd "Run wasm-pack tests in Node.js"
-      "${wasm-pack} test --node subduction_wasm";
 
     "test:ts:web" = cmd "Run subduction_wasm Typescript tests in Playwright" ''
       cd ./subduction_wasm
@@ -182,7 +126,7 @@
       ${pkgs.http-server}/bin/http-server --silent &
       bg_pid=$!
 
-      build:wasm
+      build:wasm:all
       ${playwright} test ./subduction_wasm
 
       cleanup() {
@@ -194,18 +138,6 @@
 
     "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
       "${playwright} show-report";
-
-    "test:wasm:chrome" = cmd "Run wasm-pack tests in headless Chrome"
-      "${wasm-pack} test --chrome subduction_wasm --features='browser_test'";
-
-    "test:wasm:firefox" = cmd "Run wasm-pack tests in headless Chrome"
-      "${wasm-pack} test --firefox subduction_wasm --features='browser_test'";
-
-    "test:wasm:safari" = cmd "Run wasm-pack tests in headless Chrome"
-      "${wasm-pack} test --safari subduction_wasm --features='browser_test'";
-
-    "test:docs" = cmd "Run Cargo doctests"
-      "${cargo} test --doc";
 
     "test:props" = cmd "Run proptests with many iterations" ''
       set -e
@@ -231,20 +163,6 @@
     '';
   };
 
-  docs = {
-    "docs:build:host" = cmd "Refresh the docs"
-      "${cargo} doc";
-
-    "docs:build:wasm" = cmd "Refresh the docs with the wasm32-unknown-unknown target"
-      "${cargo} doc --target=wasm32-unknown-unknown";
-
-    "docs:open:host" = cmd "Open refreshed docs"
-      "${cargo} doc --open";
-
-    "docs:open:wasm" = cmd "Open refreshed docs"
-      "${cargo} doc --open --target=wasm32-unknown-unknown";
-  };
-
   monitoring = {
     "monitoring:start" = cmd "Start Prometheus and Grafana for metrics" ''
       set -e
@@ -254,11 +172,9 @@
       echo "  Grafana:    http://localhost:3939"
       echo ""
 
-      # Create temp directories for Grafana
       mkdir -p /tmp/grafana-data /tmp/grafana-dashboards
       cp "$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
 
-      # Start Prometheus in background
       ${prometheus} \
         --config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/prometheus.yml" \
         --web.listen-address=":9092" \
@@ -267,7 +183,6 @@
       PROM_PID=$!
       echo "Prometheus started (PID: $PROM_PID)"
 
-      # Start Grafana in background
       ${grafana-server} \
         --homepath="${grafana-homepath}" \
         --config="$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/grafana.ini" \
@@ -292,5 +207,77 @@
       wait
     '';
   };
+  ci = {
+    "ci" = cmd "Run full CI suite (build, lint, test, docs)" ''
+      set -e
+
+      echo "========================================"
+      echo "  Subduction CI"
+      echo "========================================"
+      echo ""
+
+      echo "===> [1/8] Checking formatting..."
+      ${cargo} fmt --check
+      echo "✓ Formatting OK"
+      echo ""
+
+      echo "===> [2/8] Running Clippy..."
+      ${cargo} clippy --workspace --all-targets -- -D warnings
+      echo "✓ Clippy OK"
+      echo ""
+
+      echo "===> [3/8] Building host target..."
+      ${cargo} build --workspace
+      echo "✓ Host build OK"
+      echo ""
+
+      echo "===> [4/8] Running host tests..."
+      ${cargo} test --workspace
+      echo "✓ Host tests OK"
+      echo ""
+
+      echo "===> [5/8] Running doc tests..."
+      ${cargo} test --doc --workspace
+      echo "✓ Doc tests OK"
+      echo ""
+
+      echo "===> [6/8] Checking no_std compatibility..."
+      ${cargo} check --package sedimentree_core --no-default-features
+      ${cargo} check --package subduction_core --no-default-features
+      ${cargo} check --package subduction_wasm --target wasm32-unknown-unknown
+      echo "✓ no_std checks OK"
+      echo ""
+
+      echo "===> [7/8] Building wasm packages..."
+      ${wasm-pack} build --target web subduction_wasm
+      echo "✓ Wasm build OK"
+      echo ""
+
+      echo "===> [8/8] Running wasm tests..."
+      ${wasm-pack} test --node subduction_wasm
+      echo "✓ Wasm tests OK"
+      echo ""
+
+      echo "========================================"
+      echo "  ✓ All CI checks passed!"
+      echo "========================================"
+    '';
+
+    "ci:quick" = cmd "Run quick CI checks (lint, test)" ''
+      set -e
+
+      echo "===> Checking formatting..."
+      ${cargo} fmt --check
+
+      echo "===> Running Clippy..."
+      ${cargo} clippy --workspace -- -D warnings
+
+      echo "===> Running tests..."
+      ${cargo} test --workspace
+
+      echo ""
+      echo "✓ Quick CI passed"
+    '';
+  };
 in
-  release // build // bench // lint // watch // test // docs // monitoring
+  ci // release // build // bench // test // monitoring
