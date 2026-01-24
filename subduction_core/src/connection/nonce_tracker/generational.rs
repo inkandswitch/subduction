@@ -18,11 +18,12 @@
 //! [`MAX_PLAUSIBLE_DRIFT`](crate::connection::handshake::MAX_PLAUSIBLE_DRIFT)
 //! with a 2 minute buffer.
 
-use alloc::{boxed::Box, collections::BTreeSet};
+use alloc::boxed::Box;
 use core::time::Duration;
 
 use async_lock::Mutex;
 use futures_kind::Sendable;
+use sedimentree_core::collections::Set;
 
 use super::{Nonce, NonceReused, NonceTracker};
 use crate::{peer::id::PeerId, timestamp::TimestampSeconds};
@@ -33,70 +34,29 @@ pub const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(180); // 3 min
 /// Default number of buckets for the recommended configuration.
 pub const DEFAULT_BUCKET_COUNT: usize = 4;
 
-/// Abstract set storage for no_std flexibility.
-pub trait NonceSet {
-    /// Insert a key, returning `true` if the key was not present.
-    fn insert(&mut self, key: (PeerId, Nonce)) -> bool;
-
-    /// Check if the key is present.
-    fn contains(&self, key: &(PeerId, Nonce)) -> bool;
-
-    /// Remove all entries.
-    fn clear(&mut self);
-}
-
-impl NonceSet for BTreeSet<(PeerId, Nonce)> {
-    fn insert(&mut self, key: (PeerId, Nonce)) -> bool {
-        BTreeSet::insert(self, key)
-    }
-
-    fn contains(&self, key: &(PeerId, Nonce)) -> bool {
-        BTreeSet::contains(self, key)
-    }
-
-    fn clear(&mut self) {
-        BTreeSet::clear(self);
-    }
-}
-
-#[cfg(feature = "std")]
-impl NonceSet for std::collections::HashSet<(PeerId, Nonce)> {
-    fn insert(&mut self, key: (PeerId, Nonce)) -> bool {
-        std::collections::HashSet::insert(self, key)
-    }
-
-    fn contains(&self, key: &(PeerId, Nonce)) -> bool {
-        std::collections::HashSet::contains(self, key)
-    }
-
-    fn clear(&mut self) {
-        std::collections::HashSet::clear(self);
-    }
-}
-
 /// Generational bucket-based nonce tracker.
 ///
 /// Uses `N` buckets with configurable duration. Lookup is O(N) across buckets.
 /// Pruning clears expired buckets in O(expired_buckets).
 #[derive(Debug)]
-pub struct GenerationalNonceTracker<S, const N: usize> {
-    inner: Mutex<GenerationalInner<S, N>>,
+pub struct GenerationalNonceTracker<const N: usize> {
+    inner: Mutex<GenerationalInner<N>>,
     bucket_duration_secs: u64,
 }
 
 #[derive(Debug)]
-struct GenerationalInner<S, const N: usize> {
-    buckets: [S; N],
+struct GenerationalInner<const N: usize> {
+    buckets: [Set<(PeerId, Nonce)>; N],
     /// Bucket number of the oldest valid bucket.
     horizon: u64,
 }
 
-impl<S: NonceSet + Default, const N: usize> GenerationalNonceTracker<S, N> {
+impl<const N: usize> GenerationalNonceTracker<N> {
     /// Create a new tracker with the specified bucket duration.
     pub fn new(bucket_duration: Duration) -> Self {
         Self {
             inner: Mutex::new(GenerationalInner {
-                buckets: core::array::from_fn(|_| S::default()),
+                buckets: core::array::from_fn(|_| Set::default()),
                 horizon: 0,
             }),
             bucket_duration_secs: bucket_duration.as_secs(),
@@ -112,16 +72,14 @@ impl<S: NonceSet + Default, const N: usize> GenerationalNonceTracker<S, N> {
     }
 }
 
-impl<S: NonceSet + Default> GenerationalNonceTracker<S, DEFAULT_BUCKET_COUNT> {
+impl GenerationalNonceTracker<DEFAULT_BUCKET_COUNT> {
     /// Create a tracker with the default configuration (4 buckets × 3 minutes).
     pub fn with_defaults() -> Self {
         Self::new(DEFAULT_BUCKET_DURATION)
     }
 }
 
-impl<S: NonceSet + Default + Send + Sync, const N: usize> NonceTracker<Sendable>
-    for GenerationalNonceTracker<S, N>
-{
+impl<const N: usize> NonceTracker<Sendable> for GenerationalNonceTracker<N> {
     fn try_claim(
         &self,
         peer: PeerId,
@@ -169,13 +127,10 @@ impl<S: NonceSet + Default + Send + Sync, const N: usize> NonceTracker<Sendable>
     }
 }
 
-/// Type alias for the recommended configuration using `BTreeSet` (no_std compatible).
-pub type DefaultNonceTracker = GenerationalNonceTracker<BTreeSet<(PeerId, Nonce)>, DEFAULT_BUCKET_COUNT>;
-
-#[cfg(feature = "std")]
-/// Type alias for the recommended configuration using `HashSet` (faster, requires std).
-pub type HashSetNonceTracker =
-    GenerationalNonceTracker<std::collections::HashSet<(PeerId, Nonce)>, DEFAULT_BUCKET_COUNT>;
+/// Type alias for the recommended configuration (4 buckets × 3 minutes).
+///
+/// Uses `HashSet` with std, `BTreeSet` without.
+pub type DefaultNonceTracker = GenerationalNonceTracker<DEFAULT_BUCKET_COUNT>;
 
 #[cfg(test)]
 mod tests {
