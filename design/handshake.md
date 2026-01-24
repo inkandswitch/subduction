@@ -6,24 +6,19 @@ The Subduction handshake establishes mutual identity between peers. It answers _
 
 The handshake is a two-message protocol using Ed25519 signatures. Either peer can initiate a connection — the protocol is symmetric. We call the peer that opens the connection the _initiator_ and the peer that accepts it the _responder_.
 
-> **Note:** In some deployments, one peer may act as a dedicated server (always responding, never initiating), but this is a deployment choice, not a protocol requirement. The handshake itself is fully peer-to-peer.
+> [!NOTE]
+> In some deployments, one peer may act as a dedicated server (always responding, never initiating), but this is a deployment choice, not a protocol requirement. The handshake itself is fully peer-to-peer.
 
-```
-┌───────────┐                                   ┌───────────┐
-│ Initiator │                                   │ Responder │
-└─────┬─────┘                                   └─────┬─────┘
-      │                                               │
-      │  1. Signed<Challenge>                         │
-      │  ────────────────────────────────────────►    │
-      │     { audience, timestamp, nonce }            │
-      │                                               │
-      │                                               │
-      │                      2. Signed<Response>      │
-      │  ◄────────────────────────────────────────    │
-      │     { challenge_digest, timestamp }           │
-      │                                               │
-      ▼                                               ▼
-Knows responder_id                            Knows initiator_id
+```mermaid
+sequenceDiagram
+    participant I as Initiator
+    participant R as Responder
+
+    I->>R: Signed<Challenge> { audience, timestamp, nonce }
+    R->>I: Signed<Response> { challenge_digest, timestamp }
+
+    Note over I: Knows responder_id
+    Note over R: Knows initiator_id
 ```
 
 Both parties learn each other's `PeerId` from the signature's issuer (the Ed25519 verifying key).
@@ -71,26 +66,17 @@ Rejection reasons:
 - `ReplayedNonce` — Nonce was already used (replay attack)
 - `InvalidSignature` — Signature verification failed
 
-> **Security Note:** Rejections are unsigned. Initiators should not trust `server_timestamp` for drift correction if the drift exceeds `MAX_PLAUSIBLE_DRIFT` (±5 minutes).
+> [!WARNING]
+> Rejections are unsigned. Initiators should not trust `server_timestamp` for drift correction if the drift exceeds `MAX_PLAUSIBLE_DRIFT` (±5 minutes).
 
 ## Audience Modes
 
 The `Audience` enum supports two connection modes:
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Audience                                 │
-├─────────────────────────────┬───────────────────────────────────┤
-│  Known(PeerId)              │  Discover([u8; 32])               │
-├─────────────────────────────┼───────────────────────────────────┤
-│  Initiator knows the        │  Initiator knows a service name   │
-│  responder's peer ID        │  (e.g., "sync.example.com")       │
-│                             │                                   │
-│  Typical: direct peer       │  Typical: connecting to a         │
-│  connections where IDs      │  well-known endpoint or           │
-│  are pre-shared             │  load-balanced service            │
-└─────────────────────────────┴───────────────────────────────────┘
-```
+| `Known(PeerId)` | `Discover([u8; 32])` |
+|-----------------|----------------------|
+| Initiator knows the responder's peer ID | Initiator knows a service name (e.g., "sync.example.com") |
+| Typical: direct peer connections where IDs are pre-shared | Typical: connecting to a well-known endpoint or load-balanced service |
 
 ### Discovery Mode
 
@@ -109,31 +95,13 @@ The responder accepts connections if the audience matches **either**:
 1. `Audience::Known(responder_peer_id)` — always accepted
 2. `Audience::Discover(hash)` — accepted if discovery mode is configured and hash matches
 
-```
-Initiator Challenge
-      │
-      ▼
-┌───────────────────────────────────────┐
-│ audience == Known(responder_peer_id)? │
-└──────────────┬────────────────────────┘
-               │
-       ┌───────┴───────┐
-       │               │
-      Yes              No
-       │               │
-       ▼               ▼
-   Accept    ┌─────────────────────────────────┐
-             │ discovery configured &&         │
-             │ audience == Discover(hash)?     │
-             └──────────────┬──────────────────┘
-                            │
-                    ┌───────┴───────┐
-                    │               │
-                   Yes              No
-                    │               │
-                    ▼               ▼
-                Accept          Reject
-                            (InvalidAudience)
+```mermaid
+flowchart TD
+    A[Initiator Challenge] --> B{audience == Known&lpar;responder_peer_id&rpar;?}
+    B -->|Yes| C[Accept]
+    B -->|No| D{discovery configured &&<br/>audience == Discover&lpar;hash&rpar;?}
+    D -->|Yes| E[Accept]
+    D -->|No| F[Reject<br/>InvalidAudience]
 ```
 
 ## Validation
@@ -214,61 +182,53 @@ Sent as WebSocket binary frames.
 
 ## Sequence Diagram (Success)
 
-```
-┌───────────┐                                        ┌───────────┐
-│ Initiator │                                        │ Responder │
-└─────┬─────┘                                        └─────┬─────┘
-      │                                                    │
-      │ generate nonce                                     │
-      │ create Challenge { audience, timestamp, nonce }    │
-      │ sign with initiator_key                            │
-      │                                                    │
-      │ ─────────── Signed<Challenge> ──────────────────►  │
-      │                                                    │
-      │                          verify signature ─────────┤
-      │                          extract initiator_id ─────┤
-      │                          validate audience ────────┤
-      │                          validate timestamp ───────┤
-      │                                                    │
-      │                          create Response           │
-      │                          { H(challenge), now }     │
-      │                          sign with responder_key   │
-      │                                                    │
-      │ ◄─────────── Signed<Response> ─────────────────────│
-      │                                                    │
-      ├───────── verify signature                          │
-      ├───────── extract responder_id                      │
-      ├───────── validate challenge_digest                 │
-      │                                                    │
-      ▼                                                    ▼
- Connection                                           Connection
- Established                                          Established
+```mermaid
+sequenceDiagram
+    participant I as Initiator
+    participant R as Responder
+
+    Note over I: generate nonce
+    Note over I: create Challenge { audience, timestamp, nonce }
+    Note over I: sign with initiator_key
+
+    I->>R: Signed<Challenge>
+
+    Note over R: verify signature
+    Note over R: extract initiator_id
+    Note over R: validate audience
+    Note over R: validate timestamp
+    Note over R: create Response { H(challenge), now }
+    Note over R: sign with responder_key
+
+    R->>I: Signed<Response>
+
+    Note over I: verify signature
+    Note over I: extract responder_id
+    Note over I: validate challenge_digest
+
+    Note over I,R: Connection Established
 ```
 
 ## Sequence Diagram (Rejection)
 
-```
-┌───────────┐                                        ┌───────────┐
-│ Initiator │                                        │ Responder │
-└─────┬─────┘                                        └─────┬─────┘
-      │                                                    │
-      │ ─────────── Signed<Challenge> ──────────────────►  │
-      │            (wrong audience)                        │
-      │                                                    │
-      │                          verify signature ─────────┤
-      │                          validate audience ────────┤
-      │                               ✗ FAIL               │
-      │                                                    │
-      │ ◄─────────── Rejection ────────────────────────────│
-      │              { InvalidAudience, timestamp }        │
-      │                                                    │
-      ├───────── handle rejection                          │
-      ├───────── optionally adjust clock                   │
-      ├───────── optionally retry                          │
-      │                                                    │
-      ▼                                                    ▼
- Connection                                           Connection
-   Failed                                               Closed
+```mermaid
+sequenceDiagram
+    participant I as Initiator
+    participant R as Responder
+
+    I->>R: Signed<Challenge> (wrong audience)
+
+    Note over R: verify signature
+    Note over R: validate audience ✗ FAIL
+
+    R->>I: Rejection { InvalidAudience, timestamp }
+
+    Note over I: handle rejection
+    Note over I: optionally adjust clock
+    Note over I: optionally retry
+
+    Note over I: Connection Failed
+    Note over R: Connection Closed
 ```
 
 ## Implementation Notes
