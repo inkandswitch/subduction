@@ -2,10 +2,22 @@
 
 use core::cmp::Ordering;
 
-/// A payload that has been verified.
+/// A payload whose signature has been verified.
 ///
-/// This type is used internally after signature verification.
-/// It should NEVER be sent over the wire directly.
+/// This type is a **witness** that [`Signed::try_verify`](super::signed::Signed::try_verify)
+/// succeeded. It provides access to the payload that [`Signed<T>`](super::signed::Signed)
+/// intentionally withholds, ensuring callers cannot skip verification.
+///
+/// ```text
+/// T  ──seal──►  Signed<T>  ──try_verify──►  Verified<T>
+///                    │                           │
+///            payload inaccessible          payload exposed
+/// ```
+///
+/// # Wire Format
+///
+/// This type should NEVER be sent over the wire directly. Always transmit
+/// [`Signed<T>`](super::signed::Signed) and have the recipient verify.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]

@@ -24,6 +24,31 @@ use self::{
 use super::{signer::Signer, verified::Verified};
 
 /// A signed payload with its issuer and signature.
+///
+/// # Type-State Pattern
+///
+/// This type participates in a type-state flow that encodes verification at the type level:
+///
+/// ```text
+/// T  ──seal──►  Signed<T>  ──try_verify──►  Verified<T>
+/// ```
+///
+/// - [`Signed<T>`] holds a signature that **has not been verified**
+/// - [`Verified<T>`] is a witness that the signature **was checked and is valid**
+///
+/// # No Direct Payload Access
+///
+/// `Signed<T>` intentionally does not expose a `payload(&self) -> &T` method.
+/// This forces callers to go through [`try_verify`](Self::try_verify) to access
+/// the payload, preventing "verify and forget" bugs where verification is called
+/// but its result is ignored.
+///
+/// To access the payload, verify first:
+///
+/// ```ignore
+/// let verified = signed.try_verify()?;
+/// let payload: &T = verified.payload();
+/// ```
 #[derive(Clone, Debug, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
