@@ -15,10 +15,9 @@ sequenceDiagram
     participant R as Responder
 
     I->>R: Signed<Challenge> { audience, timestamp, nonce }
+    Note right of R: Knows initiator_id
     R->>I: Signed<Response> { challenge_digest, timestamp }
-
-    Note over I: Knows responder_id
-    Note over R: Knows initiator_id
+    Note right of I: Knows responder_id
 ```
 
 Both parties learn each other's `PeerId` from the signature's issuer (the Ed25519 verifying key).
@@ -99,9 +98,11 @@ The responder accepts connections if the audience matches **either**:
 flowchart TD
     A[Initiator Challenge] --> B{audience == Known&lpar;responder_peer_id&rpar;?}
     B -->|Yes| C[Accept]
-    B -->|No| D{discovery configured &&<br/>audience == Discover&lpar;hash&rpar;?}
-    D -->|Yes| E[Accept]
+    B -->|No| D{discovery configured?}
     D -->|No| F[Reject<br/>InvalidAudience]
+    D -->|Yes| E{audience == Discover&lpar;hash&rpar;?}
+    E -->|Yes| G[Accept]
+    E -->|No| F
 ```
 
 ## Validation
@@ -187,24 +188,24 @@ sequenceDiagram
     participant I as Initiator
     participant R as Responder
 
-    Note over I: generate nonce
-    Note over I: create Challenge { audience, timestamp, nonce }
-    Note over I: sign with initiator_key
+    Note right of I: generate nonce
+    Note right of I: create Challenge { audience, timestamp, nonce }
+    Note right of I: sign with initiator_key
 
     I->>R: Signed<Challenge>
 
-    Note over R: verify signature
-    Note over R: extract initiator_id
-    Note over R: validate audience
-    Note over R: validate timestamp
-    Note over R: create Response { H(challenge), now }
-    Note over R: sign with responder_key
+    Note right of R: verify signature
+    Note right of R: extract initiator_id
+    Note right of R: validate audience
+    Note right of R: validate timestamp
+    Note right of R: create Response { H(challenge), now }
+    Note right of R: sign with responder_key
 
     R->>I: Signed<Response>
 
-    Note over I: verify signature
-    Note over I: extract responder_id
-    Note over I: validate challenge_digest
+    Note right of I: verify signature
+    Note right of I: extract responder_id
+    Note right of I: validate challenge_digest
 
     Note over I,R: Connection Established
 ```
@@ -218,17 +219,17 @@ sequenceDiagram
 
     I->>R: Signed<Challenge> (wrong audience)
 
-    Note over R: verify signature
-    Note over R: validate audience ✗ FAIL
+    Note right of R: verify signature
+    Note right of R: validate audience ✗ FAIL
 
     R->>I: Rejection { InvalidAudience, timestamp }
 
-    Note over I: handle rejection
-    Note over I: optionally adjust clock
-    Note over I: optionally retry
+    Note right of I: handle rejection
+    Note right of I: optionally adjust clock
+    Note right of I: optionally retry
 
-    Note over I: Connection Failed
-    Note over R: Connection Closed
+    Note right of I: Connection Failed
+    Note right of R: Connection Closed
 ```
 
 ## Implementation Notes
