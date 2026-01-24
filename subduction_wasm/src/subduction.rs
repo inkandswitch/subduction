@@ -19,7 +19,11 @@ use sedimentree_core::{
 };
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
-    connection::manager::Spawn, peer::id::PeerId, sharded_map::ShardedMap, Subduction,
+    connection::manager::Spawn,
+    peer::id::PeerId,
+    policy::OpenPolicy,
+    sharded_map::ShardedMap,
+    Subduction,
 };
 use wasm_bindgen::prelude::*;
 
@@ -69,6 +73,7 @@ pub struct WasmSubduction {
             Local,
             JsSubductionStorage,
             JsConnection,
+            OpenPolicy,
             WasmHashMetric,
             WASM_SHARD_COUNT,
         >,
@@ -88,7 +93,7 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) =
-            Subduction::new(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn);
+            Subduction::new(storage, OpenPolicy, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn);
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -127,7 +132,7 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) =
-            Subduction::hydrate(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn).await?;
+            Subduction::hydrate(storage, OpenPolicy, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn).await?;
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();

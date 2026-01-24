@@ -105,5 +105,3 @@ pub trait Reconnect<K: FutureKind>: Connection<K> {
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[error("Connection disallowed")]
 pub struct ConnectionDisallowed;
-
-pub struct FIXME;

@@ -53,9 +53,10 @@ use core::{
 #[derive(Debug, Clone)]
 pub struct Subduction<
     'a,
-    F: SubductionFutureKind<'a, S, C, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
@@ -64,6 +65,7 @@ pub struct Subduction<
     next_connection_id: Arc<AtomicUsize>,
     conns: Arc<Mutex<Map<ConnectionId, C>>>,
     storage: Arc<S>,
+    policy: P,
 
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(ConnectionId, Message)>,
@@ -77,13 +79,14 @@ pub struct Subduction<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> Subduction<'a, F, S, C, M, N> {
-    /// Initialize a new `Subduction` with the given storage backend, depth metric, sharded `Sedimentree` map, and spawner.
+> Subduction<'a, F, S, C, P, M, N> {
+    /// Initialize a new `Subduction` with the given storage backend, policy, depth metric, sharded `Sedimentree` map, and spawner.
     ///
     /// The spawner is used to spawn individual connection handler tasks.
     ///
@@ -93,12 +96,13 @@ impl<
     #[allow(clippy::type_complexity)]
     pub fn new<Sp: Spawn<F> + Send + Sync + 'static>(
         storage: S,
+        policy: P,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
     ) -> (
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, M, N>,
+        ListenerFuture<'a, F, S, C, P, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     ) {
         tracing::info!("initializing Subduction instance");
@@ -122,6 +126,7 @@ impl<
             next_connection_id: Arc::new(AtomicUsize::new(0)),
             conns: Arc::new(Mutex::new(Map::new())),
             storage: Arc::new(storage),
+            policy,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -151,16 +156,17 @@ impl<
     /// * Returns [`HydrationError`] if loading from storage fails.
     pub async fn hydrate<Sp: Spawn<F> + Send + Sync + 'static>(
         storage: S,
+        policy: P,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
     ) -> Result<(
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, M, N>,
+        ListenerFuture<'a, F, S, C, P, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     ), HydrationError<F, S>> {
         let ids = storage.load_all_sedimentree_ids().await.map_err(HydrationError::LoadAllIdsError)?;
-        let (subduction, fut_listener, manager_fut) = Self::new(storage, depth_metric, sedimentrees, spawner);
+        let (subduction, fut_listener, manager_fut) = Self::new(storage, policy, depth_metric, sedimentrees, spawner);
         for id in ids {
             let loose_commits = subduction.storage.load_loose_commits(id).await.map_err(HydrationError::LoadLooseCommitsError)?;
             let fragments = subduction.storage.load_fragments(id).await.map_err(HydrationError::LoadFragmentsError)?;
@@ -1476,12 +1482,13 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> Drop for Subduction<'a, F, S, C, M, N> {
+> Drop for Subduction<'a, F, S, C, P, M, N> {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
         self.abort_listener_handle.abort();
@@ -1490,52 +1497,54 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> ConnectionPolicy<F> for Subduction<'a, F, S, C, M, N> {
-    type ConnectionDisallowed = core::convert::Infallible;
+> ConnectionPolicy<F> for Subduction<'a, F, S, C, P, M, N> {
+    type ConnectionDisallowed = P::ConnectionDisallowed;
 
     fn authorize_connect(
         &self,
-        _peer_id: PeerId,
+        peer_id: PeerId,
     ) -> F::Future<'_, Result<(), Self::ConnectionDisallowed>> {
-        todo!()
+        self.policy.authorize_connect(peer_id)
     }
 }
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> StoragePolicy<F> for Subduction<'a, F, S, C, M, N> {
-    type FetchDisallowed = core::convert::Infallible;
-    type PutDisallowed = core::convert::Infallible;
+> StoragePolicy<F> for Subduction<'a, F, S, C, P, M, N> {
+    type FetchDisallowed = P::FetchDisallowed;
+    type PutDisallowed = P::PutDisallowed;
 
-    fn generation(&self, _sedimentree_id: SedimentreeId) -> F::Future<'_, Generation> {
-        todo!()
+    fn generation(&self, sedimentree_id: SedimentreeId) -> F::Future<'_, Generation> {
+        self.policy.generation(sedimentree_id)
     }
 
     fn authorize_fetch(
         &self,
-        _peer: PeerId,
-        _sedimentree_id: SedimentreeId,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
     ) -> F::Future<'_, Result<(), Self::FetchDisallowed>> {
-        todo!()
+        self.policy.authorize_fetch(peer, sedimentree_id)
     }
 
     fn authorize_put(
         &self,
-        _requestor: PeerId,
-        _author: PeerId,
-        _sedimentree_id: SedimentreeId,
+        requestor: PeerId,
+        author: PeerId,
+        sedimentree_id: SedimentreeId,
     ) -> F::Future<'_, Result<(), Self::PutDisallowed>> {
-        todo!()
+        self.policy.authorize_put(requestor, author, sedimentree_id)
     }
 }
 
@@ -1550,9 +1559,10 @@ pub trait SubductionFutureKind<
     'a,
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
+    P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     M: DepthMetric,
     const N: usize,
->: StartListener<'a, S, C, M, N>
+>: StartListener<'a, S, C, P, M, N>
 {
 }
 
@@ -1560,22 +1570,29 @@ impl<
         'a,
         S: Storage<Self>,
         C: Connection<Self> + PartialEq + 'a,
+        P: ConnectionPolicy<Self> + StoragePolicy<Self>,
         M: DepthMetric,
         const N: usize,
-        T: StartListener<'a, S, C, M, N>,
-    > SubductionFutureKind<'a, S, C, M, N> for T
+        T: StartListener<'a, S, C, P, M, N>,
+    > SubductionFutureKind<'a, S, C, P, M, N> for T
 {
 }
 
 /// A trait for starting the listener task for Subduction.
 ///
 /// This lets us abstract over `Send` and `!Send` futures
-pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq + 'a, M: DepthMetric, const N: usize>:
-    FutureKind + RunManager<C> + Sized
+pub trait StartListener<
+    'a,
+    S: Storage<Self>,
+    C: Connection<Self> + PartialEq + 'a,
+    P: ConnectionPolicy<Self> + StoragePolicy<Self>,
+    M: DepthMetric,
+    const N: usize,
+>: FutureKind + RunManager<C> + Sized
 {
     /// Start the listener task for Subduction.
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
+        subduction: Arc<Subduction<'a, Self, S, C, P, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -1586,6 +1603,7 @@ pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq + 
     Sendable where
         C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
         S: Storage<Sendable> + Send + Sync + 'a,
+        P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
         S::Error: Send + 'static,
         C::DisconnectionError: Send + 'static,
@@ -1595,11 +1613,12 @@ pub trait StartListener<'a, S: Storage<Self>, C: Connection<Self> + PartialEq + 
     Local where
         C: Connection<Local> + PartialEq + Clone + 'static,
         S: Storage<Local> + 'a,
+        P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
         M: DepthMetric + 'a
 )]
-impl<'a, K: FutureKind, C, S, M, const N: usize> StartListener<'a, S, C, M, N> for K {
+impl<'a, K: FutureKind, C, S, P, M, const N: usize> StartListener<'a, S, C, P, M, N> for K {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, M, N>>,
+        subduction: Arc<Subduction<'a, Self, S, C, P, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -1620,24 +1639,26 @@ impl<'a, K: FutureKind, C, S, M, const N: usize> StartListener<'a, S, C, M, N> f
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,
-    F: StartListener<'a, S, C, M, N>,
+    F: StartListener<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize = 256,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
-    _phantom: PhantomData<(S, C, M)>,
+    _phantom: PhantomData<(S, C, P, M)>,
 }
 
 impl<
     'a,
-    F: StartListener<'a, S, C, M, N>,
+    F: StartListener<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> ListenerFuture<'a, F, S, C, M, N> {
+> ListenerFuture<'a, F, S, C, P, M, N> {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
         Self {
@@ -1655,12 +1676,13 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, M, N>,
+    F: StartListener<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> Deref for ListenerFuture<'a, F, S, C, M, N> {
+> Deref for ListenerFuture<'a, F, S, C, P, M, N> {
     type Target = Abortable<F::Future<'a, ()>>;
 
     fn deref(&self) -> &Self::Target {
@@ -1670,12 +1692,13 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, M, N>,
+    F: StartListener<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> Future for ListenerFuture<'a, F, S, C, M, N> {
+> Future for ListenerFuture<'a, F, S, C, P, M, N> {
     type Output = Result<(), Aborted>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -1685,12 +1708,13 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, M, N>,
+    F: StartListener<'a, S, C, P, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
-> Unpin for ListenerFuture<'a, F, S, C, M, N> {
+> Unpin for ListenerFuture<'a, F, S, C, P, M, N> {
 }
 
 #[cfg(all(test, feature = "test_utils"))]

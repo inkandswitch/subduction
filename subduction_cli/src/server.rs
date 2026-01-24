@@ -7,6 +7,7 @@ use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
     peer::id::PeerId,
+    policy::OpenPolicy,
     storage::{MetricsStorage, RefreshMetrics},
 };
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
@@ -102,15 +103,17 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .transpose()?
         .unwrap_or_else(|| PeerId::new([0; 32]));
 
-    let server: TokioWebSocketServer<MetricsStorage<FsStorage>> = TokioWebSocketServer::setup(
-        addr,
-        FuturesTimerTimeout,
-        Duration::from_secs(args.timeout),
-        peer_id,
-        storage,
-        CountLeadingZeroBytes,
-    )
-    .await?;
+    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy> =
+        TokioWebSocketServer::setup(
+            addr,
+            FuturesTimerTimeout,
+            Duration::from_secs(args.timeout),
+            peer_id,
+            storage,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        )
+        .await?;
 
     tracing::info!("WebSocket server started on {}", addr);
     tracing::info!("Peer ID: {}", peer_id);

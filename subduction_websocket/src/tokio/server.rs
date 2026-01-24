@@ -16,8 +16,12 @@ use sedimentree_core::{
     storage::Storage,
 };
 use subduction_core::{
-    connection::id::ConnectionId, peer::id::PeerId, sharded_map::ShardedMap,
-    subduction::error::RegistrationError, Subduction,
+    connection::id::ConnectionId,
+    peer::id::PeerId,
+    policy::{ConnectionPolicy, StoragePolicy},
+    sharded_map::ShardedMap,
+    subduction::error::RegistrationError,
+    Subduction,
 };
 
 use crate::tokio::TokioSpawn;
@@ -44,12 +48,13 @@ pub enum ConnectToPeerError {
 #[derive(Debug, Clone)]
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
+    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
 > where
     S::Error: 'static + Send + Sync,
 {
-    subduction: TokioWebSocketSubduction<S, O, M>,
+    subduction: TokioWebSocketSubduction<S, P, O, M>,
     server_peer_id: PeerId,
     address: SocketAddr,
     accept_task: Arc<JoinHandle<()>>,
@@ -58,9 +63,10 @@ pub struct TokioWebSocketServer<
 
 impl<
         S: 'static + Send + Sync + Storage<Sendable>,
+        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
         M: 'static + Send + Sync + DepthMetric,
         O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-    > TokioWebSocketServer<S, M, O>
+    > TokioWebSocketServer<S, P, M, O>
 where
     S::Error: 'static + Send + Sync,
 {
@@ -74,7 +80,7 @@ where
         timeout: O,
         default_time_limit: Duration,
         server_peer_id: PeerId,
-        subduction: TokioWebSocketSubduction<S, O, M>,
+        subduction: TokioWebSocketSubduction<S, P, O, M>,
     ) -> Result<Self, tungstenite::Error> {
         tracing::info!("Starting WebSocket server on {}", address);
         let tcp_listener = TcpListener::bind(address).await?;
@@ -171,11 +177,12 @@ where
         default_time_limit: Duration,
         server_peer_id: PeerId,
         storage: S,
+        policy: P,
         depth_metric: M,
     ) -> Result<Self, tungstenite::Error> {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
         let (subduction, listener_fut, manager_fut) =
-            Subduction::new(storage, depth_metric, sedimentrees, TokioSpawn);
+            Subduction::new(storage, policy, depth_metric, sedimentrees, TokioSpawn);
 
         let server = Self::new(
             address,
@@ -291,5 +298,5 @@ where
     }
 }
 
-type TokioWebSocketSubduction<S, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, M>>;
+type TokioWebSocketSubduction<S, P, O, M> =
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, P, M>>;
