@@ -1837,11 +1837,30 @@ impl<
 mod tests {
     use super::*;
     use crate::connection::test_utils::MockConnection;
+    use crate::policy::OpenPolicy;
+    use futures::future::{BoxFuture, LocalBoxFuture};
     use sedimentree_core::{
         commit::CountLeadingZeroBytes, id::SedimentreeId, sedimentree::Sedimentree,
         storage::MemoryStorage,
     };
     use testresult::TestResult;
+
+    /// A spawner that uses FuturesUnordered for testing (no actual spawning).
+    struct TestSpawn;
+
+    impl Spawn<Sendable> for TestSpawn {
+        fn spawn(&self, _fut: BoxFuture<'static, ()>) -> AbortHandle {
+            let (handle, _reg) = AbortHandle::new_pair();
+            handle
+        }
+    }
+
+    impl Spawn<futures_kind::Local> for TestSpawn {
+        fn spawn(&self, _fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
+            let (handle, _reg) = AbortHandle::new_pair();
+            handle
+        }
+    }
 
     mod initialization {
         use super::*;
@@ -1852,10 +1871,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             // Verify initial state via async runtime would be needed,
@@ -1870,10 +1892,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let ids = subduction.sedimentree_ids().await;
@@ -1886,10 +1911,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let peer_ids = subduction.peer_ids().await;
@@ -1906,10 +1934,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let ids = subduction.sedimentree_ids().await;
@@ -1922,10 +1953,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
@@ -1947,10 +1981,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
@@ -1964,10 +2001,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
@@ -1988,10 +2028,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
@@ -2005,10 +2048,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
@@ -2029,10 +2075,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
@@ -2059,10 +2108,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let peer_ids = subduction.peer_ids().await;
@@ -2075,10 +2127,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn = MockConnection::new();
@@ -2096,10 +2151,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn = MockConnection::new();
@@ -2121,10 +2179,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn = MockConnection::new();
@@ -2144,10 +2205,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn_id = ConnectionId::new(999);
@@ -2161,10 +2225,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
@@ -2183,10 +2250,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn = MockConnection::new();
@@ -2205,10 +2275,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn_id = ConnectionId::new(999);
@@ -2224,10 +2297,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
@@ -2249,10 +2325,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let peer_id1 = PeerId::new([1u8; 32]);
@@ -2279,10 +2358,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let peer_id = PeerId::new([1u8; 32]);
@@ -2302,10 +2384,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let peer_id = PeerId::new([1u8; 32]);
@@ -2326,10 +2411,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let digest = Digest::from([1u8; 32]);
@@ -2343,10 +2431,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
@@ -2391,10 +2482,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             // Register a failing connection
@@ -2425,10 +2519,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             // Register a failing connection
@@ -2459,10 +2556,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             // Register a failing connection with a different peer ID than the sender
@@ -2496,10 +2596,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             // Register a failing connection with a different peer ID than the sender
@@ -2533,10 +2636,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             // Register a failing connection
@@ -2565,10 +2671,13 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     depth_metric,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             // Register two connections that will succeed
@@ -2634,10 +2743,13 @@ mod tests {
         async fn test_sendable_single_commit() -> TestResult {
             let storage = MemoryStorage::new();
             let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -2683,10 +2795,13 @@ mod tests {
         async fn test_sendable_multiple_sequential() -> TestResult {
             let storage = MemoryStorage::new();
             let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -2731,10 +2846,13 @@ mod tests {
         async fn test_sendable_same_sedimentree() -> TestResult {
             let storage = MemoryStorage::new();
             let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Sendable, _, ChannelMockConnection, _>::new(
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _>::new(
+                    None,
                     storage,
+                    OpenPolicy,
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
+                    TestSpawn,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -2788,10 +2906,13 @@ mod tests {
                 .run_until(async {
                     let storage = MemoryStorage::new();
                     let (subduction, listener_fut, actor_fut) =
-                        Subduction::<'_, Local, _, ChannelMockConnection, _>::new(
+                        Subduction::<'_, Local, _, ChannelMockConnection, _, _>::new(
+                            None,
                             storage,
+                            OpenPolicy,
                             CountLeadingZeroBytes,
                             ShardedMap::with_key(0, 0),
+                            TestSpawn,
                         );
 
                     let (conn, handle) =
@@ -2842,10 +2963,13 @@ mod tests {
             tokio::task::LocalSet::new().run_until(async {
                 let storage = MemoryStorage::new();
                 let (subduction, listener_fut, actor_fut) =
-                    Subduction::<'_, Local, _, ChannelMockConnection, _>::new(
+                    Subduction::<'_, Local, _, ChannelMockConnection, _, _>::new(
+                        None,
                         storage,
+                        OpenPolicy,
                         CountLeadingZeroBytes,
                         ShardedMap::with_key(0, 0),
+                        TestSpawn,
                     );
 
                 let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -2885,10 +3009,13 @@ mod tests {
                 .run_until(async {
                     let storage = MemoryStorage::new();
                     let (subduction, listener_fut, actor_fut) =
-                        Subduction::<'_, Local, _, ChannelMockConnection, _>::new(
+                        Subduction::<'_, Local, _, ChannelMockConnection, _, _>::new(
+                            None,
                             storage,
+                            OpenPolicy,
                             CountLeadingZeroBytes,
                             ShardedMap::with_key(0, 0),
+                            TestSpawn,
                         );
 
                     let (conn, handle) =

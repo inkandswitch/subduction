@@ -76,6 +76,8 @@ pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur during registration of a new connection.
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 pub enum RegistrationError<D> {
     /// The connection was disallowed by the [`ConnectionPolicy`].
     #[error("connection disallowed: {0}")]
@@ -126,7 +128,7 @@ mod tests {
         #[test]
         fn prop_equality_is_reflexive() {
             bolero::check!()
-                .with_type::<RegistrationError>()
+                .with_type::<RegistrationError<()>>()
                 .for_each(|err| {
                     assert_eq!(err, err);
                 });
@@ -135,7 +137,7 @@ mod tests {
         #[test]
         fn prop_clone_equals_original() {
             bolero::check!()
-                .with_type::<RegistrationError>()
+                .with_type::<RegistrationError<()>>()
                 .for_each(|err| {
                     assert_eq!(err.clone(), *err);
                 });
@@ -144,7 +146,7 @@ mod tests {
         #[test]
         fn prop_display_produces_non_empty_string() {
             bolero::check!()
-                .with_type::<RegistrationError>()
+                .with_type::<RegistrationError<()>>()
                 .for_each(|err| {
                     let display = format!("{err}");
                     assert!(!display.is_empty());
