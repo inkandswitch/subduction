@@ -19,8 +19,6 @@ use core::cmp::Ordering;
 /// This type should NEVER be sent over the wire directly. Always transmit
 /// [`Signed<T>`](super::signed::Signed) and have the recipient verify.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Verified<T> {
     #[cbor(with = "crate::cbor::verifying_key")]

@@ -138,7 +138,7 @@ impl<'de, T> serde::Deserialize<'de> for Digest<T> {
         impl<T> serde::de::Visitor<'_> for DigestVisitor<T> {
             type Value = Digest<T>;
 
-            fn expecting(&self, formatter: &mut core::fmt::Formatter) -> core::fmt::Result {
+            fn expecting(&self, formatter: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
                 formatter.write_str("32 bytes")
             }
 

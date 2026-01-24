@@ -266,6 +266,7 @@ impl Rejection {
 
 /// Errors when validating a [`Challenge`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 pub enum ChallengeValidationError {
     /// The audience field doesn't match.
     #[error("invalid audience")]

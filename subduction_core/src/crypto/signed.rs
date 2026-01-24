@@ -50,8 +50,6 @@ use super::{signer::Signer, verified::Verified};
 /// let payload: &T = verified.payload();
 /// ```
 #[derive(Clone, Debug, minicbor::Encode, minicbor::Decode)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Signed<T: for<'a> minicbor::Decode<'a, ()>> {
     #[n(0)]
