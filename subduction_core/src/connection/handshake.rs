@@ -27,75 +27,20 @@
 
 use core::time::Duration;
 
-use sedimentree_core::blob::Digest;
+use futures_kind::FutureKind;
+use sedimentree_core::blob::Digest as RawDigest;
 use thiserror::Error;
 
 use crate::{
-    crypto::{signed::Signed, signer::Signer},
+    crypto::{digest::Digest, signed::Signed, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 
+pub use crate::crypto::nonce::Nonce;
+
 /// Maximum plausible clock drift for rejecting implausible timestamps.
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
-
-/// A random nonce for challenge uniqueness.
-///
-/// 128 bits provides sufficient collision resistance for replay protection
-/// within a ~5 minute window, especially when combined with timestamps.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct Nonce(
-    #[n(0)]
-    #[cbor(with = "minicbor::bytes")]
-    [u8; 16],
-);
-
-impl Nonce {
-    /// Create a new nonce from a raw value.
-    #[must_use]
-    pub const fn new(value: u128) -> Self {
-        Self(value.to_le_bytes())
-    }
-
-    /// Get the raw nonce value.
-    #[must_use]
-    pub const fn as_u128(&self) -> u128 {
-        u128::from_le_bytes(self.0)
-    }
-
-    /// Create a nonce from bytes.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(bytes)
-    }
-
-    /// Get the raw bytes.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-
-    /// Create a random nonce using `getrandom`.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the system random number generator fails.
-    #[cfg(feature = "getrandom")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "getrandom")))]
-    #[allow(clippy::expect_used)]
-    #[must_use]
-    pub fn random() -> Self {
-        let mut bytes = [0u8; 16];
-        getrandom::fill(&mut bytes).expect("getrandom failed");
-        Self(bytes)
-    }
-}
 
 /// The intended recipient of a challenge.
 ///
@@ -111,11 +56,11 @@ impl Nonce {
 pub enum Audience {
     /// Known peer identity.
     #[n(0)]
-    Peer(#[n(0)] PeerId),
+    Known(#[n(0)] PeerId),
 
     /// Discovery mode: hash of URL or similar service identifier.
     #[n(1)]
-    Discovery(
+    Discover(
         #[n(0)]
         #[cbor(with = "minicbor::bytes")]
         [u8; 32],
@@ -125,53 +70,26 @@ pub enum Audience {
 impl Audience {
     /// Create an audience from a known peer ID.
     #[must_use]
-    pub const fn peer(id: PeerId) -> Self {
-        Self::Peer(id)
+    pub const fn known(id: PeerId) -> Self {
+        Self::Known(id)
     }
 
     /// Create a discovery audience from a service identifier.
     ///
     /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
     #[must_use]
-    pub fn discovery(service_identifier: &[u8]) -> Self {
-        let digest = Digest::hash(service_identifier);
-        Self::Discovery(*digest.as_bytes())
+    pub fn discover(service_identifier: &[u8]) -> Self {
+        let digest = RawDigest::hash(service_identifier);
+        Self::Discover(*digest.as_bytes())
     }
 
     /// Create a discovery audience from a pre-hashed value.
     #[must_use]
-    pub const fn discovery_raw(hash: [u8; 32]) -> Self {
-        Self::Discovery(hash)
+    pub const fn discover_raw(hash: [u8; 32]) -> Self {
+        Self::Discover(hash)
     }
 }
 
-/// A BLAKE3 digest of a [`Challenge`], used to bind responses to requests.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct ChallengeDigest(
-    #[n(0)]
-    #[cbor(with = "minicbor::bytes")]
-    [u8; 32],
-);
-
-impl ChallengeDigest {
-    /// Create a digest from raw bytes.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-
-    /// Get the raw bytes of the digest.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
 
 /// A handshake challenge sent by the client.
 ///
@@ -206,21 +124,6 @@ impl Challenge {
             timestamp: now,
             nonce,
         }
-    }
-
-    /// Compute the BLAKE3 digest of this challenge.
-    ///
-    /// This is used in the [`Response`] to bind it to this specific challenge.
-    ///
-    /// # Panics
-    ///
-    /// Panics if CBOR encoding fails (should never happen for this type).
-    #[allow(clippy::expect_used)]
-    #[must_use]
-    pub fn digest(&self) -> ChallengeDigest {
-        let encoded = minicbor::to_vec(self).expect("Challenge encoding should not fail");
-        let hash = Digest::hash(&encoded);
-        ChallengeDigest(*hash.as_bytes())
     }
 
     /// Check if this challenge is fresh (timestamp within acceptable drift).
@@ -270,7 +173,7 @@ impl Challenge {
 pub struct Response {
     /// Hash of the challenge being responded to (binds response to request).
     #[n(0)]
-    pub challenge_digest: ChallengeDigest,
+    pub challenge_digest: Digest<Challenge>,
 
     /// Server's current timestamp (for client-side drift correction).
     #[n(1)]
@@ -280,7 +183,7 @@ pub struct Response {
 impl Response {
     /// Create a new response for a challenge.
     #[must_use]
-    pub const fn new(challenge_digest: ChallengeDigest, now: TimestampSeconds) -> Self {
+    pub const fn new(challenge_digest: Digest<Challenge>, now: TimestampSeconds) -> Self {
         Self {
             challenge_digest,
             server_timestamp: now,
@@ -290,7 +193,7 @@ impl Response {
     /// Create a response directly from a challenge.
     #[must_use]
     pub fn for_challenge(challenge: &Challenge, now: TimestampSeconds) -> Self {
-        Self::new(challenge.digest(), now)
+        Self::new(Digest::hash(challenge), now)
     }
 
     /// Validate that this response matches the expected challenge.
@@ -299,7 +202,7 @@ impl Response {
     ///
     /// Returns an error if the challenge digest doesn't match.
     pub fn validate(&self, expected_challenge: &Challenge) -> Result<(), ResponseValidationError> {
-        let expected_digest = expected_challenge.digest();
+        let expected_digest = Digest::hash(expected_challenge);
         if self.challenge_digest != expected_digest {
             return Err(ResponseValidationError::ChallengeMismatch);
         }
@@ -455,15 +358,14 @@ impl DriftCorrection {
 ///
 /// The caller must provide the current timestamp and a random nonce.
 /// For `no_std` compatibility, these are not generated internally.
-#[must_use]
-pub fn create_challenge(
-    signer: &impl Signer,
+pub async fn create_challenge<K: FutureKind>(
+    signer: &impl Signer<K>,
     audience: Audience,
     now: TimestampSeconds,
     nonce: Nonce,
 ) -> Signed<Challenge> {
     let challenge = Challenge::new(audience, now, nonce);
-    Signed::sign(signer, challenge)
+    Signed::sign(signer, challenge).await
 }
 
 /// Result of verifying a challenge on the server side.
@@ -508,14 +410,13 @@ pub fn verify_challenge(
 }
 
 /// Create a signed response for a verified challenge.
-#[must_use]
-pub fn create_response(
-    signer: &impl Signer,
+pub async fn create_response<K: FutureKind>(
+    signer: &impl Signer<K>,
     challenge: &Challenge,
     now: TimestampSeconds,
 ) -> Signed<Response> {
     let response = Response::for_challenge(challenge, now);
-    Signed::sign(signer, response)
+    Signed::sign(signer, response).await
 }
 
 /// Result of verifying a response on the client side.
@@ -602,32 +503,38 @@ mod tests {
         #[test]
         fn digest_is_deterministic() {
             let challenge = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(42),
             );
-            assert_eq!(challenge.digest(), challenge.digest());
+            assert_eq!(
+                Digest::<Challenge>::hash(&challenge),
+                Digest::<Challenge>::hash(&challenge)
+            );
         }
 
         #[test]
         fn different_nonces_different_digests() {
             let c1 = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(1),
             );
             let c2 = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(2),
             );
-            assert_ne!(c1.digest(), c2.digest());
+            assert_ne!(
+                Digest::<Challenge>::hash(&c1),
+                Digest::<Challenge>::hash(&c2)
+            );
         }
 
         #[test]
         fn is_fresh_within_drift() {
             let challenge = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(42),
             );
@@ -638,7 +545,7 @@ mod tests {
         #[test]
         fn is_not_fresh_outside_drift() {
             let challenge = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(42),
             );
@@ -653,7 +560,7 @@ mod tests {
         #[test]
         fn for_challenge_matches_digest() {
             let challenge = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(42),
             );
@@ -664,12 +571,12 @@ mod tests {
         #[test]
         fn wrong_challenge_fails_validation() {
             let challenge1 = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(1),
             );
             let challenge2 = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(2),
             );
@@ -739,17 +646,17 @@ mod tests {
             LocalSigner::from_bytes(&[seed; 32])
         }
 
-        #[test]
-        fn full_handshake_round_trip() {
+        #[tokio::test]
+        async fn full_handshake_round_trip() {
             let client_signer = test_signer(1);
             let server_signer = test_signer(2);
 
             let now = TimestampSeconds::new(1000);
-            let audience = Audience::discovery(b"https://example.com");
+            let audience = Audience::discover(b"https://example.com");
             let nonce = Nonce::new(12345);
 
             // Client creates challenge
-            let signed_challenge = create_challenge(&client_signer, audience, now, nonce);
+            let signed_challenge = create_challenge(&client_signer, audience, now, nonce).await;
 
             // Server verifies challenge
             let verified_challenge =
@@ -761,7 +668,7 @@ mod tests {
 
             // Server creates response
             let signed_response =
-                create_response(&server_signer, &verified_challenge.challenge, now);
+                create_response(&server_signer, &verified_challenge.challenge, now).await;
 
             // Client verifies response
             let original_challenge = Challenge::new(audience, now, nonce);
@@ -771,16 +678,17 @@ mod tests {
             assert_eq!(verified_response.server_id, server_signer.peer_id());
         }
 
-        #[test]
-        fn wrong_audience_rejected() {
+        #[tokio::test]
+        async fn wrong_audience_rejected() {
             let client_signer = test_signer(1);
 
             let now = TimestampSeconds::new(1000);
-            let client_audience = Audience::discovery(b"https://example.com");
-            let server_audience = Audience::discovery(b"https://other.com");
+            let client_audience = Audience::discover(b"https://example.com");
+            let server_audience = Audience::discover(b"https://other.com");
             let nonce = Nonce::new(12345);
 
-            let signed_challenge = create_challenge(&client_signer, client_audience, now, nonce);
+            let signed_challenge =
+                create_challenge(&client_signer, client_audience, now, nonce).await;
 
             let result = verify_challenge(
                 &signed_challenge,
@@ -797,16 +705,17 @@ mod tests {
             ));
         }
 
-        #[test]
-        fn stale_timestamp_rejected() {
+        #[tokio::test]
+        async fn stale_timestamp_rejected() {
             let client_signer = test_signer(1);
 
             let client_now = TimestampSeconds::new(1000);
             let server_now = TimestampSeconds::new(2000); // 1000 seconds later
-            let audience = Audience::discovery(b"https://example.com");
+            let audience = Audience::discover(b"https://example.com");
             let nonce = Nonce::new(12345);
 
-            let signed_challenge = create_challenge(&client_signer, audience, client_now, nonce);
+            let signed_challenge =
+                create_challenge(&client_signer, audience, client_now, nonce).await;
 
             // Use a short max drift to trigger rejection
             let result = verify_challenge(
@@ -824,12 +733,12 @@ mod tests {
             ));
         }
 
-        #[test]
-        fn wrong_challenge_digest_rejected() {
+        #[tokio::test]
+        async fn wrong_challenge_digest_rejected() {
             let server_signer = test_signer(2);
 
             let now = TimestampSeconds::new(1000);
-            let audience = Audience::discovery(b"https://example.com");
+            let audience = Audience::discover(b"https://example.com");
             let nonce1 = Nonce::new(11111);
             let nonce2 = Nonce::new(22222);
 
@@ -837,7 +746,7 @@ mod tests {
             let challenge1 = Challenge::new(audience, now, nonce1);
 
             // Server creates response for challenge1
-            let signed_response = create_response(&server_signer, &challenge1, now);
+            let signed_response = create_response(&server_signer, &challenge1, now).await;
 
             // Client tries to verify with different challenge (nonce2)
             let challenge2 = Challenge::new(audience, now, nonce2);
@@ -878,7 +787,10 @@ mod tests {
             bolero::check!()
                 .with_type::<Challenge>()
                 .for_each(|challenge| {
-                    assert_eq!(challenge.digest(), challenge.digest());
+                    assert_eq!(
+                        Digest::<Challenge>::hash(challenge),
+                        Digest::<Challenge>::hash(challenge)
+                    );
                 });
         }
 

@@ -21,6 +21,7 @@
 use core::time::Duration;
 
 use async_tungstenite::WebSocketStream;
+use futures_kind::FutureKind;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::handshake::{
@@ -128,13 +129,18 @@ enum HandshakeMessage {
 ///
 /// Panics if CBOR encoding fails (should never happen for well-formed types).
 #[allow(clippy::expect_used)]
-pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
+pub async fn server_handshake<T, S, K>(
     ws: &mut WebSocketStream<T>,
-    signer: &impl Signer,
+    signer: &S,
     expected_audience: &Audience,
     now: TimestampSeconds,
     max_drift: Duration,
-) -> Result<ServerHandshakeResult, WebSocketHandshakeError> {
+) -> Result<ServerHandshakeResult, WebSocketHandshakeError>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+    S: Signer<K>,
+    K: FutureKind,
+{
     // Receive the challenge
     let challenge_msg = ws
         .next()
@@ -186,7 +192,7 @@ pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
         };
 
     // Create and send response
-    let signed_response = handshake::create_response(signer, &verified.challenge, now);
+    let signed_response = handshake::create_response(signer, &verified.challenge, now).await;
     let response_msg = HandshakeMessage::SignedResponse(signed_response);
     let response_bytes =
         minicbor::to_vec(&response_msg).expect("response encoding should not fail");
@@ -224,16 +230,21 @@ pub async fn server_handshake<T: AsyncRead + AsyncWrite + Unpin>(
 ///
 /// Panics if CBOR encoding fails (should never happen for well-formed types).
 #[allow(clippy::expect_used)]
-pub async fn client_handshake<T: AsyncRead + AsyncWrite + Unpin>(
+pub async fn client_handshake<T, S, K>(
     ws: &mut WebSocketStream<T>,
-    signer: &impl Signer,
+    signer: &S,
     audience: Audience,
     now: TimestampSeconds,
     nonce: Nonce,
-) -> Result<ClientHandshakeResult, WebSocketHandshakeError> {
+) -> Result<ClientHandshakeResult, WebSocketHandshakeError>
+where
+    T: AsyncRead + AsyncWrite + Unpin,
+    S: Signer<K>,
+    K: FutureKind,
+{
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
-    let signed_challenge = Signed::sign(signer, challenge);
+    let signed_challenge = Signed::sign(signer, challenge).await;
     let challenge_msg = HandshakeMessage::SignedChallenge(signed_challenge);
     let challenge_bytes =
         minicbor::to_vec(&challenge_msg).expect("challenge encoding should not fail");
@@ -285,6 +296,7 @@ pub async fn client_handshake<T: AsyncRead + AsyncWrite + Unpin>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use futures_kind::Sendable;
     use subduction_core::crypto::signer::LocalSigner;
 
     fn test_signer(seed: u8) -> LocalSigner {
@@ -294,15 +306,15 @@ mod tests {
     mod handshake_message {
         use super::*;
 
-        #[test]
-        fn signed_challenge_roundtrips() {
+        #[tokio::test]
+        async fn signed_challenge_roundtrips() {
             let test_signer = test_signer(1);
             let challenge = Challenge::new(
-                Audience::discovery(b"test"),
+                Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
                 Nonce::new(42),
             );
-            let signed_challenge = Signed::sign(&test_signer, challenge);
+            let signed_challenge = Signed::sign::<Sendable>(&test_signer, challenge).await;
             let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());
 
             let bytes = minicbor::to_vec(&msg)

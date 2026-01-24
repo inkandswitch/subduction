@@ -5,6 +5,7 @@
 //! hardware security modules, remote signing services, etc.).
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
+use futures_kind::FutureKind;
 
 use crate::peer::id::PeerId;
 
@@ -15,9 +16,15 @@ use crate::peer::id::PeerId;
 /// - Hardware security modules
 /// - Remote signing services
 /// - Key derivation schemes
-pub trait Signer {
+///
+/// The trait is generic over [`FutureKind`] to support both:
+/// - `Sendable`: Thread-safe futures for multi-threaded runtimes like Tokio
+/// - `Local`: Single-threaded futures for Wasm and local executors
+///
+/// For synchronous signers like [`LocalSigner`], the async overhead is negligible.
+pub trait Signer<K: FutureKind> {
     /// Sign the given message bytes.
-    fn sign(&self, message: &[u8]) -> Signature;
+    fn sign(&self, message: &[u8]) -> K::Future<'_, Signature>;
 
     /// Get the verifying (public) key corresponding to this signer.
     fn verifying_key(&self) -> VerifyingKey;
@@ -61,12 +68,26 @@ impl LocalSigner {
     pub fn from_bytes(bytes: &[u8; 32]) -> Self {
         Self::new(SigningKey::from_bytes(bytes))
     }
+
+    /// Get the verifying (public) key.
+    #[must_use]
+    pub fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+
+    /// Get the peer ID derived from the verifying key.
+    #[must_use]
+    pub fn peer_id(&self) -> PeerId {
+        PeerId::from(self.verifying_key())
+    }
 }
 
-impl Signer for LocalSigner {
-    fn sign(&self, message: &[u8]) -> Signature {
+#[futures_kind::kinds(Sendable, Local)]
+impl<K: FutureKind> Signer<K> for LocalSigner {
+    fn sign(&self, message: &[u8]) -> K::Future<'_, Signature> {
         use ed25519_dalek::Signer as _;
-        self.signing_key.sign(message)
+        let signature = self.signing_key.sign(message);
+        K::into_kind(async move { signature })
     }
 
     fn verifying_key(&self) -> VerifyingKey {
@@ -87,14 +108,15 @@ mod tests {
     use super::*;
     use alloc::format;
     use ed25519_dalek::Verifier;
+    use futures_kind::Sendable;
 
-    #[test]
-    fn local_signer_sign_and_verify() {
+    #[tokio::test]
+    async fn local_signer_sign_and_verify() {
         let key_bytes = [42u8; 32];
         let signer = LocalSigner::from_bytes(&key_bytes);
 
         let message = b"hello world";
-        let signature = signer.sign(message);
+        let signature = <LocalSigner as Signer<Sendable>>::sign(&signer, message).await;
 
         assert!(signer.verifying_key().verify(message, &signature).is_ok());
     }

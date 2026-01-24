@@ -46,21 +46,6 @@ pub enum IoError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
     ConnCall(C::CallError),
 }
 
-/// An error that can occur when attaching a new connection.
-///
-/// This combines I/O errors with policy-based connection rejection.
-#[derive(Debug, Error)]
-pub enum AttachError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>, E: core::error::Error>
-{
-    /// An I/O error occurred during attachment.
-    #[error(transparent)]
-    Io(#[from] IoError<F, S, C>),
-
-    /// The connection was rejected by the policy.
-    #[error(transparent)]
-    Registration(#[from] RegistrationError<E>),
-}
-
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
 pub enum BlobRequestErr<F: FutureKind, S: Storage<F>, C: Connection<F>> {
@@ -90,15 +75,27 @@ pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
 }
 
 /// An error that can occur during registration of a new connection.
-#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
-pub enum RegistrationError<E: core::error::Error = core::convert::Infallible> {
+#[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
+pub enum RegistrationError<D> {
     /// The connection was disallowed by the [`ConnectionPolicy`].
     #[error("connection disallowed: {0}")]
-    ConnectionDisallowed(E),
+    ConnectionDisallowed(D),
 
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
     SendToClosedChannel,
+}
+
+/// An error that can occur during attachment.
+#[derive(Debug, Error)]
+pub enum AttachError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>, D> {
+    /// An I/O error occurred.
+    #[error("I/O error: {0}")]
+    Io(#[from] IoError<F, S, C>),
+
+    /// The connection was not allowed.
+    #[error("registration error: {0}")]
+    Registration(#[from] RegistrationError<D>),
 }
 
 #[cfg(test)]
@@ -107,16 +104,12 @@ mod tests {
 
     mod registration_error {
         use super::*;
-        use crate::connection::ConnectionDisallowed;
 
         #[test]
         fn test_equality() {
-            let err1: RegistrationError<ConnectionDisallowed> =
-                RegistrationError::SendToClosedChannel;
-            let err2: RegistrationError<ConnectionDisallowed> =
-                RegistrationError::SendToClosedChannel;
-            let err3: RegistrationError<ConnectionDisallowed> =
-                RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
+            let err1 = RegistrationError::SendToClosedChannel;
+            let err2 = RegistrationError::SendToClosedChannel;
+            let err3 = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
 
             assert_eq!(err1, err2);
             assert_ne!(err1, err3);

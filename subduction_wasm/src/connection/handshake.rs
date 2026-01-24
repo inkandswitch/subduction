@@ -10,6 +10,7 @@ use alloc::{
 };
 
 use futures::channel::oneshot;
+use futures_kind::Local;
 use subduction_core::{
     connection::handshake::{self, Audience, Challenge, Nonce, Rejection, RejectionReason},
     crypto::{signed::Signed, signer::Signer},
@@ -19,7 +20,7 @@ use subduction_core::{
 use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{MessageEvent, WebSocket, js_sys};
 
-use crate::signer::WasmHandshakeError;
+use crate::error::WasmHandshakeError;
 
 /// Handshake message types for WebSocket transport.
 ///
@@ -65,18 +66,18 @@ pub(super) struct ClientHandshakeResult {
 /// - The response doesn't match the challenge
 pub(super) async fn client_handshake(
     ws: &WebSocket,
-    signer: &impl Signer,
+    signer: &impl Signer<Local>,
     expected_peer_id: PeerId,
 ) -> Result<ClientHandshakeResult, WasmHandshakeError> {
     // Create and send challenge
-    let audience = Audience::peer(expected_peer_id);
+    let audience = Audience::known(expected_peer_id);
     // Get current time from JavaScript's Date.now() (milliseconds since epoch)
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let now_secs = (js_sys::Date::now() / 1000.0) as u64;
     let now = TimestampSeconds::new(now_secs);
     let nonce = Nonce::random();
     let challenge = Challenge::new(audience, now, nonce);
-    let signed_challenge = Signed::sign(signer, challenge);
+    let signed_challenge = Signed::sign::<Local>(signer, challenge).await;
 
     let challenge_msg = HandshakeMessage::SignedChallenge(signed_challenge);
     let challenge_bytes = minicbor::to_vec(&challenge_msg)

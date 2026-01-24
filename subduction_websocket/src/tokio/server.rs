@@ -79,7 +79,7 @@ where
     /// # Errors
     ///
     /// Returns [`tungstenite::Error`] if there is a problem binding the socket.
-    pub async fn new<R: 'static + Send + Sync + Signer + Clone>(
+    pub async fn new<R: 'static + Send + Sync + Signer<Sendable> + Clone>(
         address: SocketAddr,
         timeout: O,
         default_time_limit: Duration,
@@ -100,7 +100,7 @@ where
         let child_cancellation_token = cancellation_token.child_token();
 
         // Create the expected audience for incoming connections
-        let expected_audience = Audience::peer(server_peer_id);
+        let expected_audience = Audience::known(server_peer_id);
 
         let inner_subduction = subduction.clone();
         let accept_task: JoinHandle<()> = tokio::spawn(async move {
@@ -210,7 +210,7 @@ where
     ///
     /// Returns an error if the socket could not be bound.
     #[allow(clippy::too_many_arguments)]
-    pub async fn setup<R: 'static + Send + Sync + Signer + Clone>(
+    pub async fn setup<R: 'static + Send + Sync + Signer<Sendable> + Clone>(
         address: SocketAddr,
         timeout: O,
         default_time_limit: Duration,
@@ -295,7 +295,7 @@ where
     ///
     /// Returns an error if the connection could not be established,
     /// handshake fails, or registration fails.
-    pub async fn connect_to_peer<R: Signer>(
+    pub async fn connect_to_peer<R: Signer<Sendable>>(
         &self,
         uri: Uri,
         timeout: O,
@@ -316,7 +316,7 @@ where
             .map_err(ConnectToPeerError::WebSocket)?;
 
         // Perform handshake
-        let audience = Audience::peer(expected_peer_id);
+        let audience = Audience::known(expected_peer_id);
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 

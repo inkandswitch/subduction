@@ -80,7 +80,7 @@ impl<R: Signer + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync
             connect_async_with_config(address.clone(), Some(ws_config)).await?;
 
         // Perform handshake
-        let audience = Audience::peer(expected_peer_id);
+        let audience = Audience::known(expected_peer_id);
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 

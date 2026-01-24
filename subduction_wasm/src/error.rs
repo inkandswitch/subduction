@@ -44,15 +44,18 @@ impl From<WasmIoError> for JsValue {
     }
 }
 
-impl From<AttachError<Local, JsSubductionStorage, JsConnection, Infallible>> for WasmIoError {
-    fn from(err: AttachError<Local, JsSubductionStorage, JsConnection, Infallible>) -> Self {
-        match err {
-            AttachError::Io(io_err) => WasmIoError(io_err),
-            AttachError::Registration(reg_err) => match reg_err {
-                RegistrationError::ConnectionDisallowed(infallible) => match infallible {},
-                RegistrationError::SendToClosedChannel => unreachable!(),
-            },
-        }
+/// A Wasm wrapper around the [`AttachError`] type.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmAttachError(
+    #[from] AttachError<Local, JsSubductionStorage, JsConnection, Infallible>,
+);
+
+impl From<WasmAttachError> for JsValue {
+    fn from(err: WasmAttachError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("AttachError");
+        js_err.into()
     }
 }
 
@@ -152,10 +155,10 @@ impl From<&CallError> for WasmCallErrorInner {
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
 #[error(transparent)]
 #[allow(missing_copy_implementations)]
-pub struct WasmRegistrationError(RegistrationError);
+pub struct WasmRegistrationError(RegistrationError<Infallible>);
 
-impl From<RegistrationError> for WasmRegistrationError {
-    fn from(err: RegistrationError) -> Self {
+impl From<RegistrationError<Infallible>> for WasmRegistrationError {
+    fn from(err: RegistrationError<Infallible>) -> Self {
         WasmRegistrationError(err)
     }
 }
@@ -179,5 +182,37 @@ impl From<WasmDisconnectionError> for JsValue {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("DisconnectionError");
         err.into()
+    }
+}
+
+/// Error returned when a handshake fails.
+#[derive(Debug, Error)]
+pub enum WasmHandshakeError {
+    /// WebSocket error during handshake.
+    #[error("WebSocket error: {0}")]
+    WebSocket(String),
+
+    /// Invalid message received during handshake.
+    #[error("invalid handshake message: {0}")]
+    InvalidMessage(String),
+
+    /// Server rejected the handshake.
+    #[error("handshake rejected: {0}")]
+    Rejected(String),
+
+    /// Signature verification failed.
+    #[error("signature verification failed")]
+    InvalidSignature,
+
+    /// Response doesn't match our challenge.
+    #[error("response doesn't match challenge")]
+    ChallengeMismatch,
+}
+
+impl From<WasmHandshakeError> for JsValue {
+    fn from(err: WasmHandshakeError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("HandshakeError");
+        js_err.into()
     }
 }

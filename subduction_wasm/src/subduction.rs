@@ -29,7 +29,7 @@ use crate::{
     connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::{JsDigest, WasmDigest},
-    error::{WasmDisconnectionError, WasmHydrationError, WasmIoError, WasmRegistrationError},
+    error::{WasmAttachError, WasmDisconnectionError, WasmHydrationError, WasmIoError, WasmRegistrationError},
     fragment::{WasmFragment, WasmFragmentRequested},
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
@@ -203,9 +203,9 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a `WasmIoError` if attaching the connection fails.
-    pub async fn attach(&self, conn: JsConnection) -> Result<Registered, WasmIoError> {
-        let (is_new, conn_id) = self.core.attach(conn).await.map_err(WasmIoError::from)?;
+    /// Returns a `WasmAttachError` if attaching the connection fails.
+    pub async fn attach(&self, conn: JsConnection) -> Result<Registered, WasmAttachError> {
+        let (is_new, conn_id) = self.core.attach(conn).await.map_err(WasmAttachError::from)?;
 
         Ok(Registered {
             is_new,
