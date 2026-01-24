@@ -66,7 +66,7 @@ Rejection reasons:
 - `InvalidSignature` — Signature verification failed
 
 > [!WARNING]
-> Rejections are unsigned. Initiators should not trust `server_timestamp` for drift correction if the drift exceeds `MAX_PLAUSIBLE_DRIFT` (±5 minutes).
+> Rejections are unsigned. Initiators should not trust `server_timestamp` for drift correction if the drift exceeds `MAX_PLAUSIBLE_DRIFT` (±10 minutes).
 
 ## Audience Modes
 
@@ -145,7 +145,7 @@ struct DriftCorrection {
 }
 ```
 
-The `MAX_PLAUSIBLE_DRIFT` constant (±5 minutes) bounds corrections to reject implausible timestamps from attackers.
+The `MAX_PLAUSIBLE_DRIFT` constant (±10 minutes) bounds corrections to reject implausible timestamps from attackers.
 
 ```
 Initiator clock: 12:00:00
