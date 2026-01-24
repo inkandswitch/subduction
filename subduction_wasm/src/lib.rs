@@ -19,6 +19,7 @@ pub mod loose_commit;
 pub mod peer_id;
 pub mod sedimentree;
 pub mod sedimentree_id;
+pub mod signer;
 pub mod storage;
 pub mod subduction;
 

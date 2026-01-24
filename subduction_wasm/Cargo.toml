@@ -19,6 +19,7 @@ crate-type = ["cdylib", "rlib"]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
+ed25519-dalek = { workspace = true }
 minicbor = { workspace = true }
 build_info = { path = "../build_info" }
 console_error_panic_hook = { workspace = true, optional = true }

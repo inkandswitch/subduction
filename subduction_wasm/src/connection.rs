@@ -1,5 +1,6 @@
 //! JS [`Connection`] interface for Subduction.
 
+mod handshake;
 pub mod message;
 pub mod nonce;
 pub mod websocket;

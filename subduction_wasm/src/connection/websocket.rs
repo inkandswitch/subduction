@@ -1,6 +1,12 @@
 //! JS [`WebSocket`] connection implementation for Subduction.
 
-use alloc::{boxed::Box, rc::Rc, string::ToString, sync::Arc, vec::Vec};
+use alloc::{
+    boxed::Box,
+    rc::Rc,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 use core::{
     cell::RefCell,
     convert::Infallible,
@@ -31,8 +37,10 @@ use web_sys::{
     js_sys::{self, Promise},
 };
 
+use super::handshake::client_handshake;
 use super::{WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId};
 use crate::peer_id::WasmPeerId;
+use crate::signer::{JsSigner, WasmHandshakeError};
 
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.
 #[wasm_bindgen(js_name = SubductionWebSocket)]
@@ -214,6 +222,93 @@ impl WasmWebSocket {
             timeout_milliseconds,
         )
         .await?)
+    }
+
+    /// Connect to a WebSocket server with mutual authentication via handshake.
+    ///
+    /// This method performs a cryptographic handshake to verify both parties'
+    /// identities before establishing the connection. The server's peer ID is
+    /// verified against `expected_peer_id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The WebSocket URL to connect to
+    /// * `signer` - The client's signer for authentication
+    /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
+    /// * `timeout_milliseconds` - Request timeout in milliseconds
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The WebSocket connection could not be established
+    /// - The handshake fails (signature invalid, wrong server, clock drift, etc.)
+    #[wasm_bindgen(js_name = connectWithHandshake)]
+    pub async fn connect_with_handshake(
+        address: &Url,
+        signer: &JsSigner,
+        expected_peer_id: &WasmPeerId,
+        timeout_milliseconds: u32,
+    ) -> Result<WasmWebSocket, WebSocketAuthenticatedConnectionError> {
+        // Create WebSocket
+        let ws = WebSocket::new(&address.href())
+            .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
+        ws.set_binary_type(BinaryType::Arraybuffer);
+
+        // Wait for WebSocket to open
+        let (open_tx, open_rx) = oneshot::channel::<Result<(), String>>();
+        let open_tx_cell = Rc::new(RefCell::new(Some(open_tx)));
+        let open_tx_clone = open_tx_cell.clone();
+
+        let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = open_tx_clone.borrow_mut().take() {
+                drop(tx.send(Ok(())));
+            }
+        });
+
+        let onerror_tx = open_tx_cell.clone();
+        let onerror = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = onerror_tx.borrow_mut().take() {
+                drop(tx.send(Err("WebSocket connection failed".into())));
+            }
+        });
+
+        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+
+        // Handle case where socket is already open
+        if ws.ready_state() == WebSocket::OPEN
+            && let Some(tx) = open_tx_cell.borrow_mut().take()
+        {
+            drop(tx.send(Ok(())));
+        }
+
+        // Wait for open or error
+        open_rx
+            .await
+            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)?
+            .map_err(WebSocketAuthenticatedConnectionError::ConnectionFailed)?;
+
+        // Clear temporary handlers
+        ws.set_onopen(None);
+        ws.set_onerror(None);
+        drop(onopen);
+        drop(onerror);
+
+        // Perform handshake
+        let handshake_result = client_handshake(&ws, signer, expected_peer_id.clone().into())
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
+
+        tracing::info!(
+            "Handshake complete: connected to server {}",
+            handshake_result.server_id
+        );
+
+        // Now set up the normal message handlers using the verified peer ID
+        let verified_peer_id = WasmPeerId::from(handshake_result.server_id);
+        Self::setup(&verified_peer_id, &ws, timeout_milliseconds)
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Setup)
     }
 
     /// Get the peer ID of the remote peer.
@@ -567,6 +662,38 @@ impl From<WebSocketConnectionError> for JsValue {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("WebSocketConnectionError");
         err.into()
+    }
+}
+
+/// Error connecting to a WebSocket server with handshake authentication.
+#[derive(Debug, Error)]
+pub enum WebSocketAuthenticatedConnectionError {
+    /// Problem creating the WebSocket.
+    #[error("WebSocket creation failed: {0:?}")]
+    SocketCreationFailed(JsValue),
+
+    /// WebSocket connection failed.
+    #[error("connection failed: {0}")]
+    ConnectionFailed(alloc::string::String),
+
+    /// Connection was canceled.
+    #[error("connection canceled")]
+    Canceled,
+
+    /// Handshake failed.
+    #[error("handshake failed: {0}")]
+    Handshake(#[from] WasmHandshakeError),
+
+    /// WebSocket setup failed after handshake.
+    #[error("setup failed: {0}")]
+    Setup(#[from] WasmWebSocketSetupCanceled),
+}
+
+impl From<WebSocketAuthenticatedConnectionError> for JsValue {
+    fn from(err: WebSocketAuthenticatedConnectionError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("WebSocketAuthenticatedConnectionError");
+        js_err.into()
     }
 }
 

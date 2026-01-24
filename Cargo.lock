@@ -2992,6 +2992,7 @@ dependencies = [
  "base58",
  "build_info",
  "console_error_panic_hook",
+ "ed25519-dalek",
  "from_js_ref",
  "futures 0.3.31",
  "futures-util",
