@@ -122,13 +122,14 @@ mod tests {
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
         use alloc::format;
+        use alloc::string::String;
 
         use super::*;
 
         #[test]
         fn prop_equality_is_reflexive() {
             bolero::check!()
-                .with_type::<RegistrationError<()>>()
+                .with_type::<RegistrationError<String>>()
                 .for_each(|err| {
                     assert_eq!(err, err);
                 });
@@ -137,7 +138,7 @@ mod tests {
         #[test]
         fn prop_clone_equals_original() {
             bolero::check!()
-                .with_type::<RegistrationError<()>>()
+                .with_type::<RegistrationError<String>>()
                 .for_each(|err| {
                     assert_eq!(err.clone(), *err);
                 });
@@ -146,7 +147,7 @@ mod tests {
         #[test]
         fn prop_display_produces_non_empty_string() {
             bolero::check!()
-                .with_type::<RegistrationError<()>>()
+                .with_type::<RegistrationError<String>>()
                 .for_each(|err| {
                     let display = format!("{err}");
                     assert!(!display.is_empty());

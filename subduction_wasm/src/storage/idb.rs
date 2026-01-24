@@ -71,6 +71,7 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns a `JsValue` if the database could not be opened.
     #[wasm_bindgen]
+    #[allow(clippy::too_many_lines)]
     pub async fn setup(factory: &IdbFactory) -> Result<Self, JsValue> {
         let span = tracing::debug_span!("IndexedDbStorage::setup");
         let _enter = span.enter();

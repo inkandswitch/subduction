@@ -46,7 +46,7 @@ arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
 getrandom = ["dep:getrandom"]
 bolero = ["dep:bolero", "arbitrary"]
 metrics = ["dep:metrics", "std"]
-serde = ["dep:serde"]
+serde = ["dep:serde", "ed25519-dalek/serde"]
 serde-std = ["serde/std"]
 std = [
   "async-channel/std",

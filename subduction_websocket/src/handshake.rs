@@ -173,50 +173,54 @@ where
 
     // Verify the challenge - try Known(peer_id) first, then discovery audience
     let known_audience = Audience::known(server_peer_id);
-    let verified = match handshake::verify_challenge(&signed_challenge, &known_audience, now, max_drift) {
-        Ok(v) => v,
-        Err(HandshakeError::ChallengeValidation(
-            handshake::ChallengeValidationError::InvalidAudience,
-        )) if discovery_audience.is_some() => {
-            // Try discovery audience as fallback
-            match handshake::verify_challenge(
-                &signed_challenge,
-                discovery_audience.as_ref().expect("checked is_some"),
-                now,
-                max_drift,
-            ) {
-                Ok(v) => v,
-                Err(e) => {
-                    let reason = match &e {
-                        HandshakeError::InvalidSignature => RejectionReason::InvalidSignature,
-                        HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
-                        HandshakeError::ResponseValidation(_) => RejectionReason::InvalidSignature,
-                    };
-                    let rejection = Rejection::new(reason, now);
-                    let msg = HandshakeMessage::Rejection(rejection);
-                    let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
-                    ws.send(tungstenite::Message::Binary(bytes.into())).await?;
-                    return Err(e.into());
+    let verified =
+        match handshake::verify_challenge(&signed_challenge, &known_audience, now, max_drift) {
+            Ok(v) => v,
+            Err(HandshakeError::ChallengeValidation(
+                handshake::ChallengeValidationError::InvalidAudience,
+            )) if discovery_audience.is_some() => {
+                // Try discovery audience as fallback
+                match handshake::verify_challenge(
+                    &signed_challenge,
+                    discovery_audience.as_ref().expect("checked is_some"),
+                    now,
+                    max_drift,
+                ) {
+                    Ok(v) => v,
+                    Err(e) => {
+                        let reason = match &e {
+                            HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
+                            HandshakeError::InvalidSignature
+                            | HandshakeError::ResponseValidation(_) => {
+                                RejectionReason::InvalidSignature
+                            }
+                        };
+                        let rejection = Rejection::new(reason, now);
+                        let msg = HandshakeMessage::Rejection(rejection);
+                        let bytes =
+                            minicbor::to_vec(&msg).expect("rejection encoding should not fail");
+                        ws.send(tungstenite::Message::Binary(bytes.into())).await?;
+                        return Err(e.into());
+                    }
                 }
             }
-        }
-        Err(e) => {
-            // Send rejection
-            let reason = match &e {
-                HandshakeError::InvalidSignature => RejectionReason::InvalidSignature,
-                HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
-                HandshakeError::ResponseValidation(_) => {
-                    // This shouldn't happen on server side, but handle it
-                    RejectionReason::InvalidSignature
-                }
-            };
-            let rejection = Rejection::new(reason, now);
-            let msg = HandshakeMessage::Rejection(rejection);
-            let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
-            ws.send(tungstenite::Message::Binary(bytes.into())).await?;
-            return Err(e.into());
-        }
-    };
+            Err(e) => {
+                // Send rejection
+                let reason = match &e {
+                    HandshakeError::InvalidSignature => RejectionReason::InvalidSignature,
+                    HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
+                    HandshakeError::ResponseValidation(_) => {
+                        // This shouldn't happen on server side, but handle it
+                        RejectionReason::InvalidSignature
+                    }
+                };
+                let rejection = Rejection::new(reason, now);
+                let msg = HandshakeMessage::Rejection(rejection);
+                let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
+                ws.send(tungstenite::Message::Binary(bytes.into())).await?;
+                return Err(e.into());
+            }
+        };
 
     // Create and send response
     let signed_response = handshake::create_response(signer, &verified.challenge, now).await;

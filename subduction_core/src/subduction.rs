@@ -175,8 +175,14 @@ impl<
             .load_all_sedimentree_ids()
             .await
             .map_err(HydrationError::LoadAllIdsError)?;
-        let (subduction, fut_listener, manager_fut) =
-            Self::new(audience, storage, policy, depth_metric, sedimentrees, spawner);
+        let (subduction, fut_listener, manager_fut) = Self::new(
+            audience,
+            storage,
+            policy,
+            depth_metric,
+            sedimentrees,
+            spawner,
+        );
         for id in ids {
             let loose_commits = subduction
                 .storage
@@ -1845,7 +1851,7 @@ mod tests {
     };
     use testresult::TestResult;
 
-    /// A spawner that uses FuturesUnordered for testing (no actual spawning).
+    /// A spawner that doesn't actually spawn (for tests that don't need task execution).
     struct TestSpawn;
 
     impl Spawn<Sendable> for TestSpawn {
@@ -1858,6 +1864,27 @@ mod tests {
     impl Spawn<futures_kind::Local> for TestSpawn {
         fn spawn(&self, _fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
             let (handle, _reg) = AbortHandle::new_pair();
+            handle
+        }
+    }
+
+    /// A spawner that uses tokio::spawn for tests that need actual task execution.
+    struct TokioSpawn;
+
+    impl Spawn<Sendable> for TokioSpawn {
+        fn spawn(&self, fut: BoxFuture<'static, ()>) -> AbortHandle {
+            use futures::future::Abortable;
+            let (handle, reg) = AbortHandle::new_pair();
+            tokio::spawn(Abortable::new(fut, reg));
+            handle
+        }
+    }
+
+    impl Spawn<futures_kind::Local> for TokioSpawn {
+        fn spawn(&self, fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
+            use futures::future::Abortable;
+            let (handle, reg) = AbortHandle::new_pair();
+            tokio::task::spawn_local(Abortable::new(fut, reg));
             handle
         }
     }
@@ -1882,7 +1909,7 @@ mod tests {
 
             // Verify initial state via async runtime would be needed,
             // but we can at least verify construction doesn't panic
-            assert!(!subduction.abort_actor_handle.is_aborted());
+            assert!(!subduction.abort_manager_handle.is_aborted());
             assert!(!subduction.abort_listener_handle.is_aborted());
         }
 
@@ -2394,7 +2421,7 @@ mod tests {
                 );
 
             let peer_id = PeerId::new([1u8; 32]);
-            let result = subduction.allowed_to_connect(&peer_id).await;
+            let result = subduction.authorize_connect(peer_id).await;
             assert!(result.is_ok());
         }
 
@@ -2749,7 +2776,7 @@ mod tests {
                     OpenPolicy,
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
-                    TestSpawn,
+                    TokioSpawn,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -2801,7 +2828,7 @@ mod tests {
                     OpenPolicy,
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
-                    TestSpawn,
+                    TokioSpawn,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -2852,7 +2879,7 @@ mod tests {
                     OpenPolicy,
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
-                    TestSpawn,
+                    TokioSpawn,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -2912,7 +2939,7 @@ mod tests {
                             OpenPolicy,
                             CountLeadingZeroBytes,
                             ShardedMap::with_key(0, 0),
-                            TestSpawn,
+                            TokioSpawn,
                         );
 
                     let (conn, handle) =
@@ -2969,7 +2996,7 @@ mod tests {
                         OpenPolicy,
                         CountLeadingZeroBytes,
                         ShardedMap::with_key(0, 0),
-                        TestSpawn,
+                        TokioSpawn,
                     );
 
                 let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -3015,7 +3042,7 @@ mod tests {
                             OpenPolicy,
                             CountLeadingZeroBytes,
                             ShardedMap::with_key(0, 0),
-                            TestSpawn,
+                            TokioSpawn,
                         );
 
                     let (conn, handle) =

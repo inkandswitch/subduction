@@ -108,7 +108,10 @@ where
         let discovery_audience = subduction.audience();
 
         if service_name.is_some() {
-            tracing::info!("Discovery mode enabled with service name: {:?}", service_name);
+            tracing::info!(
+                "Discovery mode enabled with service name: {:?}",
+                service_name
+            );
         }
 
         let inner_subduction = subduction.clone();
@@ -234,8 +237,14 @@ where
     ) -> Result<Self, tungstenite::Error> {
         let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
-        let (subduction, listener_fut, manager_fut) =
-            Subduction::new(audience, storage, policy, depth_metric, sedimentrees, TokioSpawn);
+        let (subduction, listener_fut, manager_fut) = Subduction::new(
+            audience,
+            storage,
+            policy,
+            depth_metric,
+            sedimentrees,
+            TokioSpawn,
+        );
 
         let server = Self::new(
             address,
