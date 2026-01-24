@@ -6,10 +6,10 @@
         "nixpkgs": "nixpkgs"
       },
       "locked": {
-        "lastModified": 1769213192,
-        "narHash": "sha256-Lab3bFspz1ZTWZFwRWjMsDqTv8dXXNCQtQix+drJngM=",
+        "lastModified": 1769220798,
+        "narHash": "sha256-ulD8bbh5eV4rUH61JC4gS8Ik0R2hBEEyCom3f8w2vXE=",
         "ref": "refs/heads/main",
-        "rev": "80de3c66b7810667fc932dc3a16537db16d66a2f",
+        "rev": "6c72a70e0241a5af26ba664ab63f3e2d89c45cd0",
         "revCount": 5,
         "type": "git",
         "url": "https://codeberg.org/expede/nix-command-utils"
@@ -115,11 +115,11 @@
         ]
       },
       "locked": {
-        "lastModified": 1769136478,
-        "narHash": "sha256-8UNd5lmGf8phCr/aKxagJ4kNsF0pCHLish2G4ZKCFFY=",
+        "lastModified": 1769222645,
+        "narHash": "sha256-gu6oZ86zLudBZMq8LL1qdtYt/S69GV5keQVXdvBrVSU=",
         "owner": "oxalica",
         "repo": "rust-overlay",
-        "rev": "470ee44393bb19887056b557ea2c03fc5230bd5a",
+        "rev": "22da29e7f3d8cff75009cbbcf992c7cb66920cfd",
         "type": "github"
       },
       "original": {

@@ -5,7 +5,7 @@ pub mod request;
 
 use crate::{
     connection::{
-        manager::{RunManager, Command, ConnectionManager, Spawner},
+        manager::{RunManager, Command, ConnectionManager, Spawn},
         id::ConnectionId,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
         Connection,
@@ -95,7 +95,7 @@ where
     /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
     /// or provide secure random keys to [`ShardedMap::with_key`].
     #[allow(clippy::type_complexity)]
-    pub fn new<Sp: Spawner<F> + Send + Sync + 'static>(
+    pub fn new<Sp: Spawn<F> + Send + Sync + 'static>(
         storage: S,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
@@ -153,7 +153,7 @@ where
     /// # Errors
     ///
     /// * Returns [`HydrationError`] if loading from storage fails.
-    pub async fn hydrate<Sp: Spawner<F> + Send + Sync + 'static>(
+    pub async fn hydrate<Sp: Spawn<F> + Send + Sync + 'static>(
         storage: S,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,

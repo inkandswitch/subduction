@@ -19,7 +19,7 @@ use sedimentree_core::{
 };
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
-    connection::manager::Spawner, peer::id::PeerId, sharded_map::ShardedMap, Subduction,
+    connection::manager::Spawn, peer::id::PeerId, sharded_map::ShardedMap, Subduction,
 };
 use wasm_bindgen::prelude::*;
 
@@ -47,9 +47,9 @@ const WASM_SHARD_COUNT: usize = 4;
 
 /// A spawner that uses wasm-bindgen-futures to spawn local tasks.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct WasmSpawner;
+pub struct WasmSpawn;
 
-impl Spawner<Local> for WasmSpawner {
+impl Spawn<Local> for WasmSpawn {
     fn spawn(&self, fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
         let (handle, reg) = AbortHandle::new_pair();
         wasm_bindgen_futures::spawn_local(async move {
@@ -88,7 +88,7 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) =
-            Subduction::new(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawner);
+            Subduction::new(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn);
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -127,7 +127,7 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) =
-            Subduction::hydrate(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawner).await?;
+            Subduction::hydrate(storage, WasmHashMetric(raw_fn), sedimentrees, WasmSpawn).await?;
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();

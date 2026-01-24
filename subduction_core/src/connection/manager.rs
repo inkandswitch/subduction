@@ -27,7 +27,7 @@ pub enum Command<C> {
 /// Trait for spawning connection handler tasks.
 ///
 /// Implement this for your runtime (e.g., tokio, async-std, wasm-bindgen-futures).
-pub trait Spawner<K: FutureKind> {
+pub trait Spawn<K: FutureKind> {
     /// Spawn a future as a background task.
     ///
     /// The future should be driven to completion. The returned [`AbortHandle`]
@@ -39,7 +39,7 @@ pub trait Spawner<K: FutureKind> {
 ///
 /// Unlike [`SelectAll`]-based approaches, each connection runs in its own task,
 /// providing isolation and (on multi-threaded runtimes) true parallelism.
-pub struct ConnectionManager<K: FutureKind, C, S: Spawner<K>> {
+pub struct ConnectionManager<K: FutureKind, C, S: Spawn<K>> {
     spawner: S,
 
     /// Active connection handles - used to abort connections on removal.
@@ -57,7 +57,7 @@ pub struct ConnectionManager<K: FutureKind, C, S: Spawner<K>> {
     _marker: core::marker::PhantomData<K>,
 }
 
-impl<K: FutureKind, C, S: Spawner<K>> ConnectionManager<K, C, S> {
+impl<K: FutureKind, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     /// Create a new [`ConnectionManager`].
     #[must_use]
     pub fn new(
@@ -97,14 +97,14 @@ impl<K: FutureKind, C, S: Spawner<K>> ConnectionManager<K, C, S> {
 /// without knowing whether K is Sendable or Local.
 pub trait RunManager<C>: FutureKind + Sized {
     /// Run the manager, processing commands to add/remove connections.
-    fn run_manager<S: Spawner<Self> + Send + Sync + 'static>(
+    fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, C, S>,
     ) -> Self::Future<'static, ()>
     where
         C: Connection<Self> + Clone + 'static;
 }
 
-impl<K: FutureKind + RunManager<C>, C, S: Spawner<K> + Send + Sync + 'static> ConnectionManager<K, C, S> {
+impl<K: FutureKind + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static> ConnectionManager<K, C, S> {
     /// Run the manager, processing commands to add/remove connections.
     pub fn run(self) -> K::Future<'static, ()>
     where
@@ -120,7 +120,7 @@ impl<K: FutureKind + RunManager<C>, C, S: Spawner<K> + Send + Sync + 'static> Co
     Local where C: Connection<Local> + Clone + 'static
 )]
 impl<K: FutureKind, C> RunManager<C> for K {
-    fn run_manager<S: Spawner<Self> + Send + Sync + 'static>(
+    fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, C, S>,
     ) -> Self::Future<'static, ()> {
         K::into_kind(async move {
@@ -178,7 +178,7 @@ async fn connection_loop<K: FutureKind, C: Connection<K>>(
     }
 }
 
-impl<K: FutureKind, C, S: Spawner<K>> core::fmt::Debug for ConnectionManager<K, C, S> {
+impl<K: FutureKind, C, S: Spawn<K>> core::fmt::Debug for ConnectionManager<K, C, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectionManager").finish_non_exhaustive()
     }
@@ -235,9 +235,9 @@ mod tests {
     use futures_kind::Sendable;
 
     /// A spawner that uses FuturesUnordered for testing (no actual spawning).
-    struct TestSpawner;
+    struct TestSpawn;
 
-    impl Spawner<Sendable> for TestSpawner {
+    impl Spawn<Sendable> for TestSpawn {
         fn spawn(&self, _fut: BoxFuture<'static, ()>) -> AbortHandle {
             // For testing, we don't actually spawn - just return a dummy handle
             let (handle, _reg) = AbortHandle::new_pair();
@@ -252,6 +252,6 @@ mod tests {
         let (closed_tx, _closed_rx) = async_channel::unbounded();
 
         let _manager: ConnectionManager<Sendable, MockConnection, _> =
-            ConnectionManager::new(TestSpawner, cmd_rx, msg_tx, closed_tx);
+            ConnectionManager::new(TestSpawn, cmd_rx, msg_tx, closed_tx);
     }
 }

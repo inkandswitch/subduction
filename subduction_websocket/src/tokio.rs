@@ -8,7 +8,7 @@ use futures::{
     FutureExt,
 };
 use futures_kind::Sendable;
-use subduction_core::connection::manager::Spawner;
+use subduction_core::connection::manager::Spawn;
 
 use crate::timeout::{TimedOut, Timeout};
 
@@ -23,9 +23,9 @@ pub mod unified;
 
 /// A spawner that uses tokio to spawn tasks.
 #[derive(Debug, Clone, Copy, Default)]
-pub struct TokioSpawner;
+pub struct TokioSpawn;
 
-impl Spawner<Sendable> for TokioSpawner {
+impl Spawn<Sendable> for TokioSpawn {
     fn spawn(&self, fut: BoxFuture<'static, ()>) -> AbortHandle {
         let (handle, reg) = AbortHandle::new_pair();
         tokio::spawn(async move {
