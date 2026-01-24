@@ -74,7 +74,7 @@ The `Audience` enum supports two connection modes:
 
 | `Known(PeerId)` | `Discover([u8; 32])` |
 |-----------------|----------------------|
-| Initiator knows the responder's peer ID | Initiator knows a service name (e.g., "sync.example.com") |
+| Initiator knows the responder's peer ID | Initiator knows a service name (e.g. "sync.example.com") |
 | Typical: direct peer connections where IDs are pre-shared | Typical: connecting to a well-known endpoint or load-balanced service |
 
 ### Discovery Mode

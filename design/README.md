@@ -11,7 +11,8 @@ This directory contains protocol design documents for Subduction.
 | [sync/](./sync/) | Sync protocol overview and comparison |
 | [sync/batch.md](./sync/batch.md) | Pull-based full sedimentree reconciliation |
 | [sync/incremental.md](./sync/incremental.md) | Push-based real-time change propagation |
-| [threat_model.md](./threat_model.md) | Security assumptions, threats, mitigations |
+| [security/](./security/) | Threat model and security rationale |
+| [guidance.md](./guidance.md) | Deployment and development guidance |
 
 ## Protocol Layers
 
@@ -19,9 +20,9 @@ This directory contains protocol design documents for Subduction.
 block-beta
     columns 1
     Application
-    Sync["Sync (Batch + Incremental)"]
-    Connection["Connection (Handshake + Policy)"]
-    Transport["Transport (WebSocket)"]
+    Sync["Sync<br/>(Batch + Incremental)"]
+    Connection["Connection<br/>(Handshake + Policy)"]
+    Transport["Transport<br/>(WebSocket)"]
 ```
 
 ## Typical Flow
