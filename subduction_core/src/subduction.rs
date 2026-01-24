@@ -16,7 +16,7 @@ use crate::{
 };
 use async_channel::{bounded, Sender};
 use async_lock::Mutex;
-use error::{HydrationError, BlobRequestErr, IoError, ListenError, RegistrationError};
+use error::{AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError};
 use futures::{
     FutureExt, StreamExt, future::try_join_all, stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered}
 };
@@ -346,8 +346,12 @@ impl<
     ///
     /// # Errors
     ///
-    /// * Returns `IoError` if a storage or network error occurs.
-    pub async fn attach(&self, conn: C) -> Result<(bool, ConnectionId), IoError<F, S, C>> {
+    /// * Returns `AttachError::Registration` if the connection is rejected by the policy.
+    /// * Returns `AttachError::Io` if a storage or network error occurs.
+    pub async fn attach(
+        &self,
+        conn: C,
+    ) -> Result<(bool, ConnectionId), AttachError<F, S, C, P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
         tracing::info!("Attaching connection to peer {:?}", peer_id);
 
@@ -450,9 +454,17 @@ impl<
     /// # Errors
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
-    pub async fn register(&self, conn: C) -> Result<(bool, ConnectionId), RegistrationError> {
-        tracing::info!("registering connection from peer {:?}", conn.peer_id());
-        todo!("self.is_connect_allowed(&conn.peer_id()).await?;");
+    pub async fn register(
+        &self,
+        conn: C,
+    ) -> Result<(bool, ConnectionId), RegistrationError<P::ConnectionDisallowed>> {
+        let peer_id = conn.peer_id();
+        tracing::info!("registering connection from peer {:?}", peer_id);
+
+        self.policy
+            .authorize_connect(peer_id)
+            .await
+            .map_err(RegistrationError::ConnectionDisallowed)?;
 
         let conns = { self.conns.lock().await.clone() };
 

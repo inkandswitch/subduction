@@ -34,14 +34,14 @@ use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketC
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]
-pub enum ConnectToPeerError {
+pub enum ConnectToPeerError<E: core::error::Error> {
     /// WebSocket connection error.
     #[error("WebSocket connection error: {0}")]
     WebSocket(#[from] tungstenite::Error),
 
     /// Registration error.
     #[error("Registration error: {0}")]
-    Registration(#[from] RegistrationError),
+    Registration(#[from] RegistrationError<E>),
 }
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
@@ -233,7 +233,7 @@ where
     pub async fn register(
         &self,
         ws: UnifiedWebSocket<O>,
-    ) -> Result<(bool, ConnectionId), RegistrationError> {
+    ) -> Result<(bool, ConnectionId), RegistrationError<P::ConnectionDisallowed>> {
         self.subduction.register(ws).await
     }
 
@@ -248,7 +248,7 @@ where
         timeout: O,
         default_time_limit: Duration,
         peer_id: PeerId,
-    ) -> Result<ConnectionId, ConnectToPeerError> {
+    ) -> Result<ConnectionId, ConnectToPeerError<P::ConnectionDisallowed>> {
         let uri_str = uri.to_string();
         tracing::info!("Connecting to peer at {uri_str}");
 

@@ -16,6 +16,7 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{message::Message, Connection},
     peer::id::PeerId,
+    policy::OpenPolicy,
     sharded_map::ShardedMap,
     Subduction,
 };
@@ -39,6 +40,7 @@ async fn rend_receive() -> TestResult {
     let memory_storage = MemoryStorage::default();
     let (suduction, listener_fut, manager_fut) = Subduction::new(
         memory_storage.clone(),
+        OpenPolicy,
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
@@ -134,6 +136,7 @@ async fn batch_sync() -> TestResult {
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         server_storage.clone(),
+        OpenPolicy,
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
@@ -179,7 +182,8 @@ async fn batch_sync() -> TestResult {
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<TimeoutTokio>,
-    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
+        OpenPolicy,
+    >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
 
     tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);

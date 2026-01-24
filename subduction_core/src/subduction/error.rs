@@ -6,7 +6,7 @@ use futures_kind::FutureKind;
 use sedimentree_core::{blob::Digest, storage::Storage};
 use thiserror::Error;
 
-use crate::connection::{Connection, ConnectionDisallowed};
+use crate::connection::Connection;
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
 #[derive(Debug, Clone, Copy, Error)]
@@ -44,14 +44,25 @@ pub enum IoError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// An error occurred during a roundtrip call on the connection.
     #[error(transparent)]
     ConnCall(C::CallError),
+}
 
-    /// The connection was disallowed by the [`ConnectionPolicy`] policy.
+/// An error that can occur when attaching a new connection.
+///
+/// This combines I/O errors with policy-based connection rejection.
+#[derive(Debug, Error)]
+pub enum AttachError<
+    F: FutureKind + ?Sized,
+    S: Storage<F>,
+    C: Connection<F>,
+    E: core::error::Error,
+> {
+    /// An I/O error occurred during attachment.
     #[error(transparent)]
-    ConnPolicy(#[from] ConnectionDisallowed),
+    Io(#[from] IoError<F, S, C>),
 
-    /// An error occurred during registration of a new connection.
+    /// The connection was rejected by the policy.
     #[error(transparent)]
-    RegistrationError(#[from] RegistrationError),
+    Registration(#[from] RegistrationError<E>),
 }
 
 /// An error that can occur while handling a blob request.
@@ -84,12 +95,10 @@ pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur during registration of a new connection.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-pub enum RegistrationError {
+pub enum RegistrationError<E: core::error::Error = core::convert::Infallible> {
     /// The connection was disallowed by the [`ConnectionPolicy`].
-    #[error(transparent)]
-    ConnectionDisallowed(#[from] ConnectionDisallowed),
+    #[error("connection disallowed: {0}")]
+    ConnectionDisallowed(E),
 
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
@@ -102,12 +111,14 @@ mod tests {
 
     mod registration_error {
         use super::*;
+        use crate::connection::ConnectionDisallowed;
 
         #[test]
         fn test_equality() {
-            let err1 = RegistrationError::SendToClosedChannel;
-            let err2 = RegistrationError::SendToClosedChannel;
-            let err3 = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
+            let err1: RegistrationError<ConnectionDisallowed> = RegistrationError::SendToClosedChannel;
+            let err2: RegistrationError<ConnectionDisallowed> = RegistrationError::SendToClosedChannel;
+            let err3: RegistrationError<ConnectionDisallowed> =
+                RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
 
             assert_eq!(err1, err2);
             assert_ne!(err1, err3);

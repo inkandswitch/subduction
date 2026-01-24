@@ -2,9 +2,10 @@
 
 use alloc::string::{String, ToString};
 use futures_kind::Local;
+use core::convert::Infallible;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
-    subduction::error::{HydrationError, IoError, ListenError, RegistrationError},
+    subduction::error::{AttachError, HydrationError, IoError, ListenError, RegistrationError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -40,6 +41,18 @@ impl From<WasmIoError> for JsValue {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("IoError");
         js_err.into()
+    }
+}
+
+impl From<AttachError<Local, JsSubductionStorage, JsConnection, Infallible>> for WasmIoError {
+    fn from(err: AttachError<Local, JsSubductionStorage, JsConnection, Infallible>) -> Self {
+        match err {
+            AttachError::Io(io_err) => WasmIoError(io_err),
+            AttachError::Registration(reg_err) => match reg_err {
+                RegistrationError::ConnectionDisallowed(infallible) => match infallible {},
+                RegistrationError::SendToClosedChannel => unreachable!()
+            },
+        }
     }
 }
 
