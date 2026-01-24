@@ -46,7 +46,7 @@ futures = { version = "0.3.31", default-features = false, features = ["alloc", "
 futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 futures_kind = "0.1.1"
-getrandom = "0.3.3" # no_std by default
+getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
 metrics = "0.24"
@@ -104,7 +104,7 @@ wildcard_enum_match_arm = "warn"
 
 all = { level = "deny", priority = -1 }
 cargo = { level = "deny", priority = -1 }
-multiple_crate_versions = "allow" # getrandom 0.2 vs 0.3 from ed25519-dalek
+multiple_crate_versions = "allow" # various transitive deps
 pedantic = { level = "deny", priority = -1 }
 
 [profile.release]

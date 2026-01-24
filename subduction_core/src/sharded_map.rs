@@ -59,7 +59,7 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
         let mut key_bytes = [0u8; 16];
 
         #[allow(clippy::expect_used)]
-        getrandom::fill(&mut key_bytes).expect("getrandom failed");
+        getrandom::getrandom(&mut key_bytes).expect("getrandom failed");
 
         #[allow(clippy::expect_used)]
         let key0 = u64::from_le_bytes(

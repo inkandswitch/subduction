@@ -243,6 +243,7 @@ dependencies = [
  "base58",
  "blake3",
  "build_info",
+ "getrandom 0.2.17",
  "getrandom 0.3.4",
  "js-sys",
  "sedimentree_core",
@@ -261,6 +262,7 @@ dependencies = [
  "automerge_sedimentree_wasm",
  "build_info",
  "console_error_panic_hook",
+ "getrandom 0.3.4",
  "subduction_wasm",
  "tracing",
  "wasm-bindgen",
@@ -1370,8 +1372,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff2abc00be7fca6ebc474524697ae276ad847ad0a6b3faa4bcb027e9a4614ad0"
 dependencies = [
  "cfg-if 1.0.4",
+ "js-sys",
  "libc",
  "wasi",
+ "wasm-bindgen",
 ]
 
 [[package]]
@@ -2955,7 +2959,7 @@ dependencies = [
  "ed25519-dalek",
  "futures 0.3.31",
  "futures_kind",
- "getrandom 0.3.4",
+ "getrandom 0.2.17",
  "metrics",
  "minicbor",
  "nonempty 0.12.0",
@@ -2997,6 +3001,7 @@ dependencies = [
  "futures 0.3.31",
  "futures-util",
  "futures_kind",
+ "getrandom 0.2.17",
  "getrandom 0.3.4",
  "js-sys",
  "minicbor",

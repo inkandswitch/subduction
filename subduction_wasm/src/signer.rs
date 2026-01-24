@@ -16,10 +16,8 @@ use crate::peer_id::WasmPeerId;
 
 #[wasm_bindgen]
 extern "C" {
-    /// A duck-typed signer interface.
-    ///
-    /// JavaScript implementations must provide `sign` and `verifyingKey` methods.
-    #[wasm_bindgen(js_name = Signer, typescript_type = "Signer")]
+    /// Cryptographic signer.
+    #[wasm_bindgen(js_name = Signer)]
     pub type JsSigner;
 
     /// Sign a message and return the 64-byte Ed25519 signature.

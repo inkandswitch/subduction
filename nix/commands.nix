@@ -13,44 +13,54 @@
   wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
 
   # Multi-crate wasm builds (project-specific)
+  # Build each crate individually with -p to avoid pulling in unrelated features.
   release = {
     "release:wasm:all" = cmd "Build all JS-wrapped wasm libraries for release"
       ''
         set -e
-        export INITIAL_DIR="$(pwd)"
-        ${cargo} build --release
 
+        echo "===> Building subduction_wasm..."
+        ${cargo} build --release -p subduction_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/subduction_wasm"
         ${pnpm} build
 
+        echo "===> Building automerge_sedimentree_wasm..."
+        ${cargo} build --release -p automerge_sedimentree_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
         ${pnpm} build
 
+        echo "===> Building automerge_subduction_wasm..."
+        ${cargo} build --release -p automerge_subduction_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/automerge_subduction_wasm"
         ${pnpm} build
 
-        cd $INITIAL_DIR
-        unset INITIAL_DIR
+        echo ""
+        echo "✓ All wasm packages built"
       '';
   };
 
   build = {
     "build:wasm:all" = cmd "Build all JS-wrapped Wasm libraries"
       ''
-        export INITIAL_DIR="$(pwd)"
-        ${cargo} build
+        set -e
 
+        echo "===> Building subduction_wasm..."
+        ${cargo} build -p subduction_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/subduction_wasm"
         ${pnpm} build
 
+        echo "===> Building automerge_sedimentree_wasm..."
+        ${cargo} build -p automerge_sedimentree_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/automerge_sedimentree_wasm"
         ${pnpm} build
 
+        echo "===> Building automerge_subduction_wasm..."
+        ${cargo} build -p automerge_subduction_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/automerge_subduction_wasm"
         ${pnpm} build
 
-        cd $INITIAL_DIR
-        unset INITIAL_DIR
+        echo ""
+        echo "✓ All wasm packages built"
       '';
   };
 
@@ -160,6 +170,48 @@
       ${cargo} test --all-features proptests -- --nocapture
       echo ""
       echo "✓ All property tests passed"
+    '';
+  };
+
+  wasm = {
+    "wasm:sizes" = cmd "Print wasm bundle sizes" ''
+      set -e
+
+      format_size() {
+        local size=$1
+        if [ "$size" -gt 1048576 ]; then
+          echo "$(echo "scale=2; $size / 1048576" | ${pkgs.bc}/bin/bc) MB"
+        elif [ "$size" -gt 1024 ]; then
+          echo "$(echo "scale=2; $size / 1024" | ${pkgs.bc}/bin/bc) KB"
+        else
+          echo "$size B"
+        fi
+      }
+
+      rows=""
+      for dir in automerge_sedimentree_wasm automerge_subduction_wasm subduction_wasm; do
+        wasm_file="$WORKSPACE_ROOT/$dir/pkg-slim/"*.wasm 2>/dev/null || continue
+        if [ -f $wasm_file ]; then
+          name=$(basename "$dir")
+          raw_size=$(${pkgs.coreutils}/bin/stat -c%s $wasm_file 2>/dev/null || echo "0")
+          gzip_size=$(${pkgs.gzip}/bin/gzip -c $wasm_file | ${pkgs.coreutils}/bin/wc -c)
+          raw_fmt=$(format_size "$raw_size")
+          gz_fmt=$(format_size "$gzip_size")
+          rows="$rows$name|$raw_fmt|$gz_fmt\n"
+        fi
+      done
+
+      echo ""
+      echo "┌───────────────────────────────────┬────────────┬────────────┐"
+      echo "│ Package                           │        Raw │    Gzipped │"
+      echo "├───────────────────────────────────┼────────────┼────────────┤"
+
+      printf "$rows" | while IFS='|' read -r name raw gz; do
+        printf "│ %-33s │ %10s │ %10s │\n" "$name" "$raw" "$gz"
+      done
+
+      echo "└───────────────────────────────────┴────────────┴────────────┘"
+      echo ""
     '';
   };
 
@@ -280,4 +332,4 @@
     '';
   };
 in
-  ci // release // build // bench // test // monitoring
+  bench // build // ci // monitoring // release // test // wasm

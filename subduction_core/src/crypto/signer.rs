@@ -59,7 +59,7 @@ impl LocalSigner {
     #[must_use]
     pub fn generate() -> Self {
         let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes).expect("getrandom failed");
+        getrandom::getrandom(&mut bytes).expect("getrandom failed");
         Self::new(SigningKey::from_bytes(&bytes))
     }
 
