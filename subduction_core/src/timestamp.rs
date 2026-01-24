@@ -64,4 +64,10 @@ impl TimestampSeconds {
             Self(self.0.saturating_sub(offset_secs.unsigned_abs()))
         }
     }
+
+    /// Subtract a duration, saturating at zero.
+    #[must_use]
+    pub const fn saturating_sub(&self, duration: Duration) -> Self {
+        Self(self.0.saturating_sub(duration.as_secs()))
+    }
 }

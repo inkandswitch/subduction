@@ -1,4 +1,4 @@
-# Security Recommendations
+# Guidance
 
 ## For Deployers
 
@@ -14,3 +14,7 @@
 2. **Validate policy** — Test authorization edge cases
 3. **Handle errors** — Don't leak information in error messages
 4. **Log security events** — Track failed auth attempts
+
+## Further Reading
+
+See [`design/`](./design/) for protocol documentation, security rationale, and threat model.
