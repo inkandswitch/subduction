@@ -20,7 +20,7 @@ use subduction_core::{
     subduction::error::RegistrationError, Subduction,
 };
 
-use crate::tokio::TokioSpawner;
+use crate::tokio::TokioSpawn;
 use tokio::{
     net::TcpListener,
     task::{JoinHandle, JoinSet},
@@ -175,7 +175,7 @@ where
     ) -> Result<Self, tungstenite::Error> {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
         let (subduction, listener_fut, manager_fut) =
-            Subduction::new(storage, depth_metric, sedimentrees, TokioSpawner);
+            Subduction::new(storage, depth_metric, sedimentrees, TokioSpawn);
 
         let server = Self::new(
             address,

@@ -20,7 +20,7 @@ use subduction_core::{
     Subduction,
 };
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawner,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -41,7 +41,7 @@ async fn rend_receive() -> TestResult {
         memory_storage.clone(),
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
-        TokioSpawner,
+        TokioSpawn,
     );
 
     tokio::spawn(async move {
@@ -136,7 +136,7 @@ async fn batch_sync() -> TestResult {
         server_storage.clone(),
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
-        TokioSpawner,
+        TokioSpawn,
     );
     tokio::spawn(async move {
         listener_fut.await?;
@@ -179,7 +179,7 @@ async fn batch_sync() -> TestResult {
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<TimeoutTokio>,
-    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawner);
+    >::new(client_storage, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
 
     tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);
