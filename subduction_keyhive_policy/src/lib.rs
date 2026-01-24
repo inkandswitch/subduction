@@ -5,6 +5,8 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+use core::fmt;
+
 use ed25519_dalek::VerifyingKey;
 use futures::future::BoxFuture;
 use futures::FutureExt;
@@ -20,7 +22,79 @@ use keyhive_core::{
 };
 use sedimentree_core::id::SedimentreeId;
 use serde::Deserialize;
-use subduction_core::{peer::id::PeerId, policy::{ConnectionPolicy, StoragePolicy}};
+use subduction_core::{peer::id::PeerId, policy::{ConnectionPolicy, Generation, StoragePolicy}};
+
+/// Error returned when a connection is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConnectionDisallowedError {
+    /// The peer ID is not a valid Ed25519 public key.
+    InvalidPeerId,
+    /// The peer is not a known agent in the Keyhive.
+    UnknownAgent,
+}
+
+impl fmt::Display for ConnectionDisallowedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPeerId => write!(f, "peer ID is not a valid Ed25519 public key"),
+            Self::UnknownAgent => write!(f, "peer is not a known agent"),
+        }
+    }
+}
+
+impl core::error::Error for ConnectionDisallowedError {}
+
+/// Error returned when a fetch operation is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FetchDisallowedError {
+    /// The peer ID is not a valid Ed25519 public key.
+    InvalidPeerId,
+    /// The sedimentree ID is not a valid Ed25519 public key (document ID).
+    InvalidSedimentreeId,
+    /// The document does not exist.
+    DocumentNotFound,
+    /// The peer does not have sufficient access to fetch from this document.
+    InsufficientAccess,
+}
+
+impl fmt::Display for FetchDisallowedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidPeerId => write!(f, "peer ID is not a valid Ed25519 public key"),
+            Self::InvalidSedimentreeId => write!(f, "sedimentree ID is not a valid document ID"),
+            Self::DocumentNotFound => write!(f, "document not found"),
+            Self::InsufficientAccess => write!(f, "peer does not have Pull access"),
+        }
+    }
+}
+
+impl core::error::Error for FetchDisallowedError {}
+
+/// Error returned when a put operation is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PutDisallowedError {
+    /// The author peer ID is not a valid Ed25519 public key.
+    InvalidAuthorId,
+    /// The sedimentree ID is not a valid Ed25519 public key (document ID).
+    InvalidSedimentreeId,
+    /// The document does not exist.
+    DocumentNotFound,
+    /// The author does not have sufficient access to write to this document.
+    InsufficientAccess,
+}
+
+impl fmt::Display for PutDisallowedError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidAuthorId => write!(f, "author ID is not a valid Ed25519 public key"),
+            Self::InvalidSedimentreeId => write!(f, "sedimentree ID is not a valid document ID"),
+            Self::DocumentNotFound => write!(f, "document not found"),
+            Self::InsufficientAccess => write!(f, "author does not have Write access"),
+        }
+    }
+}
+
+impl core::error::Error for PutDisallowedError {}
 
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
 pub struct SubductionKeyhive<
@@ -52,90 +126,114 @@ impl<
     }
 }
 
-impl<S, T, P, C, L, R> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
-where
+impl<
     S: AsyncSigner + Clone + Send + Sync,
     T: ContentRef + Send + Sync,
     P: for<'de> Deserialize<'de> + Send + Sync,
     C: CiphertextStore<T, P> + Clone + Send + Sync,
     L: MembershipListener<S, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
-{
-    fn is_connect_allowed(&self, peer_id: PeerId) -> BoxFuture<'_, bool> {
+> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R> {
+    type ConnectionDisallowed = ConnectionDisallowedError;
+
+    fn authorize_connect(
+        &self,
+        peer_id: PeerId,
+    ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
         async move {
-            let Some(identifier) = try_peer_id_to_identifier(peer_id) else {
-                // FIXME add errors to the policy
-                return false;
-            };
+            let identifier = try_peer_id_to_identifier(peer_id)
+                .ok_or(ConnectionDisallowedError::InvalidPeerId)?;
 
             if self.0.get_agent(identifier).await.is_some() {
-                return true;
+                return Ok(());
             }
 
-            false
+            Err(ConnectionDisallowedError::UnknownAgent)
         }
         .boxed()
     }
 }
 
-impl<S, T, P, C, L, R> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
-where
+impl<
     S: AsyncSigner + Clone + Send + Sync,
     T: ContentRef + Send + Sync,
     P: for<'de> Deserialize<'de> + Send + Sync,
     C: CiphertextStore<T, P> + Clone + Send + Sync,
     L: MembershipListener<S, T> + Send + Sync,
     R: rand::CryptoRng + rand::RngCore + Send + Sync,
-{
-    fn is_fetch_allowed(&self, peer: PeerId, sedimentree_id: SedimentreeId) -> BoxFuture<'_, bool> {
+> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R> {
+    type FetchDisallowed = FetchDisallowedError;
+    type PutDisallowed = PutDisallowedError;
+
+    fn generation(&self, _sedimentree_id: SedimentreeId) -> BoxFuture<'_, Generation> {
+        // TODO: Return the actual membership version from Keyhive document
+        // For now, return 0 (no revocation checking)
+        async { Generation::default() }.boxed()
+    }
+
+    fn authorize_fetch(
+        &self,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
         async move {
-            let Some(identifier) = try_peer_id_to_identifier(peer) else {
-                return false;
-            };
+            let identifier = try_peer_id_to_identifier(peer)
+                .ok_or(FetchDisallowedError::InvalidPeerId)?;
 
-            let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
-                return false;
-            };
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(FetchDisallowedError::InvalidSedimentreeId)?;
 
-            let Some(doc) = self.0.get_document(doc_id).await else {
-                return false;
-            };
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(FetchDisallowedError::DocumentNotFound)?;
 
             let members = doc.lock().await.transitive_members().await;
 
             // Check if the peer has at least Pull access
-            members
+            if members
                 .get(&identifier)
                 .is_some_and(|(_, access)| *access >= Access::Pull)
+            {
+                Ok(())
+            } else {
+                Err(FetchDisallowedError::InsufficientAccess)
+            }
         }
         .boxed()
     }
 
-    fn is_put_allowed(
+    fn authorize_put(
         &self,
         _requestor: PeerId,
         author: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, bool> {
+    ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async move {
-            let Some(identifier) = try_peer_id_to_identifier(author) else {
-                return false;
-            };
+            let identifier = try_peer_id_to_identifier(author)
+                .ok_or(PutDisallowedError::InvalidAuthorId)?;
 
-            let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
-                return false;
-            };
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(PutDisallowedError::InvalidSedimentreeId)?;
 
-            let Some(doc) = self.0.get_document(doc_id).await else {
-                return false;
-            };
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(PutDisallowedError::DocumentNotFound)?;
 
             let members = doc.lock().await.transitive_members().await;
 
             // Check if the author has at least Write access
-            members
+            if members
                 .get(&identifier)
                 .is_some_and(|(_, access)| *access >= Access::Write)
+            {
+                Ok(())
+            } else {
+                Err(PutDisallowedError::InsufficientAccess)
+            }
         }
         .boxed()
     }

@@ -10,7 +10,7 @@ use crate::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
         Connection,
     },
-    policy::{ConnectionPolicy, StoragePolicy},
+    policy::{ConnectionPolicy, Generation, StoragePolicy},
     peer::id::PeerId,
     sharded_map::ShardedMap,
 };
@@ -53,22 +53,17 @@ use core::{
 #[derive(Debug, Clone)]
 pub struct Subduction<
     'a,
-    F,
-    S,
-    C,
-    M = CountLeadingZeroBytes,
-    const N: usize = 256,
->
-where
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
-    M: DepthMetric, {
+    M: DepthMetric = CountLeadingZeroBytes,
+    const N: usize = 256,
+> {
     depth_metric: M,
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
     next_connection_id: Arc<AtomicUsize>,
     conns: Arc<Mutex<Map<ConnectionId, C>>>,
-    storage: S,
+    storage: Arc<S>,
 
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(ConnectionId, Message)>,
@@ -80,13 +75,14 @@ where
     _phantom: core::marker::PhantomData<&'a F>,
 }
 
-impl<'a, F, S, C, M, const N: usize> Subduction<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
+    const N: usize,
+> Subduction<'a, F, S, C, M, N> {
     /// Initialize a new `Subduction` with the given storage backend, depth metric, sharded `Sedimentree` map, and spawner.
     ///
     /// The spawner is used to spawn individual connection handler tasks.
@@ -125,7 +121,7 @@ where
             sedimentrees: Arc::new(sedimentrees),
             next_connection_id: Arc::new(AtomicUsize::new(0)),
             conns: Arc::new(Mutex::new(Map::new())),
-            storage,
+            storage: Arc::new(storage),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -1478,48 +1474,67 @@ where
     }
 }
 
-impl<'a, F, S, C, M, const N: usize> Drop for Subduction<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
+    const N: usize,
+> Drop for Subduction<'a, F, S, C, M, N> {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
         self.abort_listener_handle.abort();
     }
 }
 
-impl<'a, F, S, C, M, const N: usize> ConnectionPolicy<F> for Subduction<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
-    fn is_connect_allowed(&self, _peer_id: PeerId) -> F::Future<'_, bool> {
+    const N: usize,
+> ConnectionPolicy<F> for Subduction<'a, F, S, C, M, N> {
+    type ConnectionDisallowed = core::convert::Infallible;
+
+    fn authorize_connect(
+        &self,
+        _peer_id: PeerId,
+    ) -> F::Future<'_, Result<(), Self::ConnectionDisallowed>> {
         todo!()
     }
 }
 
-impl<'a, F, S, C, M, const N: usize> StoragePolicy<F> for Subduction<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: SubductionFutureKind<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
-    fn is_fetch_allowed(&self, _peer: PeerId, _sedimentree_id: SedimentreeId) -> F::Future<'_, bool> {
+    const N: usize,
+> StoragePolicy<F> for Subduction<'a, F, S, C, M, N> {
+    type FetchDisallowed = core::convert::Infallible;
+    type PutDisallowed = core::convert::Infallible;
+
+    fn generation(&self, _sedimentree_id: SedimentreeId) -> F::Future<'_, Generation> {
         todo!()
     }
 
-    fn is_put_allowed(
+    fn authorize_fetch(
+        &self,
+        _peer: PeerId,
+        _sedimentree_id: SedimentreeId,
+    ) -> F::Future<'_, Result<(), Self::FetchDisallowed>> {
+        todo!()
+    }
+
+    fn authorize_put(
         &self,
         _requestor: PeerId,
         _author: PeerId,
         _sedimentree_id: SedimentreeId,
-    ) -> F::Future<'_, bool> {
+    ) -> F::Future<'_, Result<(), Self::PutDisallowed>> {
         todo!()
     }
 }
@@ -1605,29 +1620,24 @@ impl<'a, K: FutureKind, C, S, M, const N: usize> StartListener<'a, S, C, M, N> f
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,
-    F,
-    S,
-    C,
-    M,
-    const N: usize = 256,
->
-where
     F: StartListener<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
+    const N: usize = 256,
+> {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
     _phantom: PhantomData<(S, C, M)>,
 }
 
-impl<'a, F, S, C, M, const N: usize> ListenerFuture<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: StartListener<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
+    const N: usize,
+> ListenerFuture<'a, F, S, C, M, N> {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
         Self {
@@ -1643,13 +1653,14 @@ where
     }
 }
 
-impl<'a, F, S, C, M, const N: usize> Deref for ListenerFuture<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: StartListener<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
+    const N: usize,
+> Deref for ListenerFuture<'a, F, S, C, M, N> {
     type Target = Abortable<F::Future<'a, ()>>;
 
     fn deref(&self) -> &Self::Target {
@@ -1657,13 +1668,14 @@ where
     }
 }
 
-impl<'a, F, S, C, M, const N: usize> Future for ListenerFuture<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: StartListener<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
+    const N: usize,
+> Future for ListenerFuture<'a, F, S, C, M, N> {
     type Output = Result<(), Aborted>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
@@ -1671,13 +1683,14 @@ where
     }
 }
 
-impl<'a, F, S, C, M, const N: usize> Unpin for ListenerFuture<'a, F, S, C, M, N>
-where
+impl<
+    'a,
     F: StartListener<'a, S, C, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     M: DepthMetric,
-{
+    const N: usize,
+> Unpin for ListenerFuture<'a, F, S, C, M, N> {
 }
 
 #[cfg(all(test, feature = "test_utils"))]
