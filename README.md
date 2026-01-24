@@ -23,6 +23,41 @@
 Subduction is organized as a Rust workspace with multiple crates:
 
 ```mermaid
+block-beta
+    columns 1
+
+    block:bindings["Platform Bindings & Tools"]
+        columns 3
+        subduction_cli
+        subduction_wasm
+        wasm_crates["*_wasm crates"]
+    end
+
+    block:transport["Transport & Policy"]
+        columns 2
+        subduction_websocket
+        subduction_keyhive_policy
+    end
+
+    block:protocol["Core Protocol"]
+        columns 2
+        subduction_core
+        automerge_sedimentree
+    end
+
+    block:foundation["Data Partitioning"]
+        columns 1
+        sedimentree_core
+    end
+
+    bindings --> transport
+    transport --> protocol
+    protocol --> foundation
+```
+
+### Crate Dependencies
+
+```mermaid
 graph TD
     subgraph Core
         sedimentree_core
