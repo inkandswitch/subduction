@@ -1,0 +1,73 @@
+# Sync Protocols
+
+Subduction uses two complementary sync protocols to keep sedimentrees consistent across peers.
+
+## Overview
+
+| Protocol | Direction | Scope | Use Case |
+|----------|-----------|-------|----------|
+| [Batch](./batch.md) | Pull (request/response) | Entire sedimentree | Initial sync, reconnection |
+| [Incremental](./incremental.md) | Push (fire-and-forget) | Single commit/fragment | Real-time updates |
+
+## Typical Usage
+
+```mermaid
+sequenceDiagram
+    participant A as Peer A
+    participant B as Peer B
+
+    Note over A,B: 1. Initial Sync (Batch)
+    A->>B: BatchSyncRequest { summary }
+    B->>A: BatchSyncResponse { diff }
+    Note over A,B: States reconciled
+
+    Note over A,B: 2. Ongoing Sync (Incremental)
+    A->>B: LooseCommit { commit, blob }
+    B->>A: LooseCommit { commit, blob }
+    Note over A,B: Real-time updates
+
+    Note over A,B: 3. Reconnection (Batch)
+    Note over A: Connection lost...
+    Note over A: Connection restored
+    A->>B: BatchSyncRequest { summary }
+    B->>A: BatchSyncResponse { diff }
+    Note over A,B: Caught up on missed changes
+```
+
+## Comparison
+
+| Aspect | Batch Sync | Incremental Sync |
+|--------|------------|------------------|
+| **Direction** | Pull (request/response) | Push (fire-and-forget) |
+| **Scope** | Entire sedimentree state | Single commit or fragment |
+| **Latency** | One round-trip | Immediate |
+| **Bandwidth** | Efficient for large diffs | Efficient for small changes |
+| **Ordering** | Snapshot at request time | No guarantees |
+| **Reliability** | Guaranteed delivery | Best-effort |
+
+## When to Use Each
+
+### Batch Sync
+
+- First connection to a peer
+- Reconnecting after disconnect
+- Periodic consistency check
+- Joining an existing document
+
+### Incremental Sync
+
+- Active editing sessions
+- Real-time collaboration
+- Low-latency updates
+- Continuous synchronization
+
+## Consistency Model
+
+Both protocols are **eventually consistent**:
+
+1. Incremental sync provides low-latency propagation
+2. Batch sync recovers from missed messages
+3. Content-addressing ensures identical data has identical hashes
+4. Idempotent storage means duplicates are harmless
+
+If incremental messages are lost (network issues, peer offline), batch sync on reconnection will catch up.

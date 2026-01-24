@@ -55,31 +55,6 @@ Message::Fragment {
 
 A fragment is created when a commit's hash has enough leading zero bytes to trigger a checkpoint at that depth. Fragments consolidate multiple commits into a single structure.
 
-## Fragment Boundaries
-
-Commits are promoted to fragments based on the `DepthMetric`:
-
-```mermaid
-flowchart TD
-    A[New commit created] --> B[Compute depth from digest]
-    B --> C{depth > 0?}
-    C -->|No| D[Broadcast as LooseCommit only]
-    C -->|Yes| E[Request fragment creation]
-    E --> F[Create Fragment at depth]
-    F --> G[Broadcast Fragment]
-    D --> H[Peers store commit]
-    G --> H
-```
-
-The default metric counts leading zero bytes in the BLAKE3 hash:
-
-```
-Depth 0: All commits (no leading zeros required)
-Depth 1: Commits with ≥1 leading zero byte  (1/256 probability)
-Depth 2: Commits with ≥2 leading zero bytes (1/65536 probability)
-...
-```
-
 ## Propagation
 
 When a change occurs locally:
@@ -246,16 +221,6 @@ for conn in connections.values() {
     }
 }
 ```
-
-## Comparison to Batch Sync
-
-| Aspect | Incremental Sync | Batch Sync |
-|--------|------------------|------------|
-| Direction | Push (fire-and-forget) | Pull (request/response) |
-| Scope | Single commit or fragment | Entire sedimentree state |
-| Use case | Ongoing real-time updates | Initial sync, reconnection |
-| Efficiency | One message per change | One round-trip for full state |
-| Ordering | No ordering guarantees | Snapshot at request time |
 
 ## Error Handling
 

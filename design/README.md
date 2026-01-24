@@ -7,21 +7,21 @@ This directory contains protocol design documents for Subduction.
 | Document | Purpose |
 |----------|---------|
 | [handshake.md](./handshake.md) | Mutual authentication via Ed25519 signatures |
+| [sedimentree.md](./sedimentree.md) | Depth-based data partitioning scheme |
+| [sync/](./sync/) | Sync protocol overview and comparison |
 | [sync/batch.md](./sync/batch.md) | Pull-based full sedimentree reconciliation |
 | [sync/incremental.md](./sync/incremental.md) | Push-based real-time change propagation |
+| [threat_model.md](./threat_model.md) | Security assumptions, threats, mitigations |
 
 ## Protocol Layers
 
-```
-┌─────────────────────────────────────────────────────────┐
-│                    Application                          │
-├─────────────────────────────────────────────────────────┤
-│              Sync (Batch + Incremental)                 │
-├─────────────────────────────────────────────────────────┤
-│            Connection (Handshake + Policy)              │
-├─────────────────────────────────────────────────────────┤
-│                 Transport (WebSocket)                   │
-└─────────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+    columns 1
+    Application
+    Sync["Sync (Batch + Incremental)"]
+    Connection["Connection (Handshake + Policy)"]
+    Transport["Transport (WebSocket)"]
 ```
 
 ## Typical Flow

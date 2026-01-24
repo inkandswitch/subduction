@@ -18,6 +18,10 @@
 - **Multi-Platform**: Runs on native Rust, WebAssembly (browser & Node.js), and provides a CLI tool
 - **Automerge Integration**: While not the only data that can be synced via Subduction, [Automerge] was the original target.
 
+## Documentation
+
+The [`design/`](./design/) directory contains protocol design documents including message formats, security rationale, and threat model.
+
 ## Architecture
 
 Subduction is organized as a Rust workspace with multiple crates:

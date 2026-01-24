@@ -186,12 +186,3 @@ BatchSyncResponse {
 }
 ```
 
-## Comparison to Incremental Sync
-
-| Aspect | Batch Sync | Incremental Sync |
-|--------|------------|------------------|
-| Direction | Pull (request/response) | Push (fire-and-forget) |
-| Scope | Entire sedimentree state | Single commit or fragment |
-| Use case | Initial sync, reconnection | Ongoing real-time updates |
-| Efficiency | One round-trip for full state | One message per change |
-| Ordering | No ordering guarantees | Receives changes as they happen |
