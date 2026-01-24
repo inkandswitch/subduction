@@ -17,7 +17,7 @@ sequenceDiagram
     I->>R: Signed<Challenge> { audience, timestamp, nonce }
     Note right of R: Knows initiator_id
     R->>I: Signed<Response> { challenge_digest, timestamp }
-    Note right of I: Knows responder_id
+    Note left of I: Knows responder_id
 ```
 
 Both parties learn each other's `PeerId` from the signature's issuer (the Ed25519 verifying key).
@@ -188,9 +188,9 @@ sequenceDiagram
     participant I as Initiator
     participant R as Responder
 
-    Note right of I: generate nonce
-    Note right of I: create Challenge { audience, timestamp, nonce }
-    Note right of I: sign with initiator_key
+    Note left of I: generate nonce
+    Note left of I: create Challenge { audience, timestamp, nonce }
+    Note left of I: sign with initiator_key
 
     I->>R: Signed<Challenge>
 
@@ -203,9 +203,9 @@ sequenceDiagram
 
     R->>I: Signed<Response>
 
-    Note right of I: verify signature
-    Note right of I: extract responder_id
-    Note right of I: validate challenge_digest
+    Note left of I: verify signature
+    Note left of I: extract responder_id
+    Note left of I: validate challenge_digest
 
     Note over I,R: Connection Established
 ```
@@ -224,11 +224,11 @@ sequenceDiagram
 
     R->>I: Rejection { InvalidAudience, timestamp }
 
-    Note right of I: handle rejection
-    Note right of I: optionally adjust clock
-    Note right of I: optionally retry
+    Note left of I: handle rejection
+    Note left of I: optionally adjust clock
+    Note left of I: optionally retry
 
-    Note right of I: Connection Failed
+    Note left of I: Connection Failed
     Note right of R: Connection Closed
 ```
 
