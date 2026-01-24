@@ -39,8 +39,8 @@ use web_sys::{
 
 use super::handshake::client_handshake;
 use super::{WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId};
-use crate::peer_id::WasmPeerId;
 use crate::error::WasmHandshakeError;
+use crate::peer_id::WasmPeerId;
 use crate::signer::JsSigner;
 
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.

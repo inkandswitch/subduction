@@ -3,7 +3,7 @@
 use crate::fs_storage::FsStorage;
 use anyhow::Result;
 use std::{path::PathBuf, time::Duration};
-use subduction_core::crypto::signer::{LocalSigner, Signer};
+use subduction_core::crypto::signer::LocalSigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;

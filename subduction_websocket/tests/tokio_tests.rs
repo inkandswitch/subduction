@@ -14,7 +14,7 @@ use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     Subduction,
     connection::{Connection, Reconnect, message::Message},
-    crypto::signer::{LocalSigner, Signer},
+    crypto::signer::LocalSigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
 };

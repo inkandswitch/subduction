@@ -37,14 +37,17 @@ pub enum ClientConnectError {
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug, Clone)]
-pub struct TokioWebSocketClient<R: Signer + Clone, O: Timeout<Sendable> + Clone + Send + Sync> {
+pub struct TokioWebSocketClient<
+    R: Signer<Sendable> + Clone,
+    O: Timeout<Sendable> + Clone + Send + Sync,
+> {
     address: Uri,
     signer: R,
     expected_peer_id: PeerId,
     socket: WebSocket<ConnectStream, Sendable, O>,
 }
 
-impl<R: Signer + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
+impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
     TokioWebSocketClient<R, O>
 {
     /// Create a new [`WebSocketClient`] connection.
@@ -116,7 +119,7 @@ impl<R: Signer + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync
     }
 }
 
-impl<R: Signer + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
+impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
     Connection<Sendable> for TokioWebSocketClient<R, O>
 {
     type SendError = SendError;
@@ -163,7 +166,7 @@ impl<R: Signer + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync
 }
 
 impl<
-    R: 'static + Signer + Clone + Send + Sync,
+    R: 'static + Signer<Sendable> + Clone + Send + Sync,
     O: 'static + Timeout<Sendable> + Clone + Send + Sync,
 > Reconnect<Sendable> for TokioWebSocketClient<R, O>
 {
@@ -193,8 +196,8 @@ impl<
     }
 }
 
-impl<R: Signer + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync> PartialEq
-    for TokioWebSocketClient<R, O>
+impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
+    PartialEq for TokioWebSocketClient<R, O>
 {
     fn eq(&self, other: &Self) -> bool {
         self.address == other.address && self.socket.peer_id() == other.socket.peer_id()

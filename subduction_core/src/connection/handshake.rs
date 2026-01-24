@@ -90,7 +90,6 @@ impl Audience {
     }
 }
 
-
 /// A handshake challenge sent by the client.
 ///
 /// This is signed by the client and sent to the server. The server extracts
@@ -641,6 +640,7 @@ mod tests {
     mod executor {
         use super::*;
         use crate::crypto::signer::LocalSigner;
+        use futures_kind::Sendable;
 
         fn test_signer(seed: u8) -> LocalSigner {
             LocalSigner::from_bytes(&[seed; 32])
@@ -656,7 +656,8 @@ mod tests {
             let nonce = Nonce::new(12345);
 
             // Client creates challenge
-            let signed_challenge = create_challenge(&client_signer, audience, now, nonce).await;
+            let signed_challenge =
+                create_challenge::<Sendable>(&client_signer, audience, now, nonce).await;
 
             // Server verifies challenge
             let verified_challenge =
@@ -668,7 +669,8 @@ mod tests {
 
             // Server creates response
             let signed_response =
-                create_response(&server_signer, &verified_challenge.challenge, now).await;
+                create_response::<Sendable>(&server_signer, &verified_challenge.challenge, now)
+                    .await;
 
             // Client verifies response
             let original_challenge = Challenge::new(audience, now, nonce);
@@ -688,7 +690,7 @@ mod tests {
             let nonce = Nonce::new(12345);
 
             let signed_challenge =
-                create_challenge(&client_signer, client_audience, now, nonce).await;
+                create_challenge::<Sendable>(&client_signer, client_audience, now, nonce).await;
 
             let result = verify_challenge(
                 &signed_challenge,
@@ -715,7 +717,7 @@ mod tests {
             let nonce = Nonce::new(12345);
 
             let signed_challenge =
-                create_challenge(&client_signer, audience, client_now, nonce).await;
+                create_challenge::<Sendable>(&client_signer, audience, client_now, nonce).await;
 
             // Use a short max drift to trigger rejection
             let result = verify_challenge(
@@ -746,7 +748,8 @@ mod tests {
             let challenge1 = Challenge::new(audience, now, nonce1);
 
             // Server creates response for challenge1
-            let signed_response = create_response(&server_signer, &challenge1, now).await;
+            let signed_response =
+                create_response::<Sendable>(&server_signer, &challenge1, now).await;
 
             // Client tries to verify with different challenge (nonce2)
             let challenge2 = Challenge::new(audience, now, nonce2);

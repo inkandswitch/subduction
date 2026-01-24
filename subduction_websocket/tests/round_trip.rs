@@ -16,7 +16,7 @@ use sedimentree_core::{
 use subduction_core::{
     Subduction,
     connection::{Connection, message::Message},
-    crypto::signer::{LocalSigner, Signer},
+    crypto::signer::LocalSigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
 };

@@ -25,10 +25,15 @@ impl<T, Ctx> minicbor::Encode<Ctx> for Digest<T> {
 }
 
 impl<'b, T, Ctx> minicbor::Decode<'b, Ctx> for Digest<T> {
-    fn decode(d: &mut minicbor::Decoder<'b>, _ctx: &mut Ctx) -> Result<Self, minicbor::decode::Error> {
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        _ctx: &mut Ctx,
+    ) -> Result<Self, minicbor::decode::Error> {
         let bytes = d.bytes()?;
         if bytes.len() != 32 {
-            return Err(minicbor::decode::Error::message("expected 32 bytes for digest"));
+            return Err(minicbor::decode::Error::message(
+                "expected 32 bytes for digest",
+            ));
         }
         let mut arr = [0u8; 32];
         arr.copy_from_slice(bytes);

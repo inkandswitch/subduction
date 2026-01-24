@@ -104,11 +104,12 @@ mod tests {
 
     mod registration_error {
         use super::*;
+        use crate::connection::ConnectionDisallowed;
 
         #[test]
         fn test_equality() {
-            let err1 = RegistrationError::SendToClosedChannel;
-            let err2 = RegistrationError::SendToClosedChannel;
+            let err1 = RegistrationError::<ConnectionDisallowed>::SendToClosedChannel;
+            let err2 = RegistrationError::<ConnectionDisallowed>::SendToClosedChannel;
             let err3 = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
 
             assert_eq!(err1, err2);

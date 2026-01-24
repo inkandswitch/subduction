@@ -6,7 +6,7 @@ use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
-    crypto::signer::{LocalSigner, Signer},
+    crypto::signer::LocalSigner,
     peer::id::PeerId,
     policy::OpenPolicy,
     storage::{MetricsStorage, RefreshMetrics},
