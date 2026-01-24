@@ -93,19 +93,6 @@ The diff algorithm compares:
 1. **Loose commits** — commits not yet rolled into fragments
 2. **Fragments at each depth** — using checkpoint digests for efficient comparison
 
-## Authorization
-
-Batch sync respects the `StoragePolicy`:
-
-```mermaid
-flowchart TD
-    A[Receive BatchSyncRequest] --> B{authorize_fetch?}
-    B -->|Denied| C[Log warning, return empty diff]
-    B -->|Allowed| D[Compute and return diff]
-```
-
-The responder checks `StoragePolicy::authorize_fetch(peer_id, sedimentree_id)` before returning data. Unauthorized requests receive an empty diff (not an error) to avoid leaking information about what exists.
-
 ## Wire Format
 
 Messages are CBOR-encoded and wrapped in the `Message` enum:
@@ -141,7 +128,6 @@ sequenceDiagram
 
     A->>B: BatchSyncRequest { id, req_id, summary }
 
-    Note right of B: Verify authorization
     Note right of B: Load local sedimentree
     Note right of B: Compute diff against summary
     Note right of B: Load blobs for diff
@@ -154,24 +140,6 @@ sequenceDiagram
     Note left of A: Store blobs
 
     Note over A,B: Sedimentrees Synchronized
-```
-
-## Sequence Diagram (Unauthorized)
-
-```mermaid
-sequenceDiagram
-    participant A as Requester
-    participant B as Responder
-
-    A->>B: BatchSyncRequest { id, req_id, summary }
-
-    Note right of B: authorize_fetch → Denied
-    Note right of B: Log unauthorized attempt
-
-    B->>A: BatchSyncResponse { req_id, id, empty diff }
-
-    Note left of A: No data received
-    Note left of A: Cannot distinguish "empty" from "unauthorized"
 ```
 
 ## Implementation Notes
@@ -202,11 +170,6 @@ for (fragment, blob) in response.diff.missing_fragments {
 
 ```rust
 let BatchSyncRequest { id, req_id, sedimentree_summary } = request;
-
-// Check authorization
-if policy.authorize_fetch(peer_id, id).await.is_err() {
-    return BatchSyncResponse { req_id, id, diff: SyncDiff::empty() };
-}
 
 // Compute diff
 let local = sedimentrees.get(&id)?;

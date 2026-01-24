@@ -15,13 +15,13 @@ sequenceDiagram
     participant B as Receiver 1
     participant C as Receiver 2
 
-    Note left of A: Local change occurs
+    Note over A: Local change occurs
 
     A->>B: LooseCommit { id, commit, blob }
     A->>C: LooseCommit { id, commit, blob }
 
-    Note right of B: Store commit + blob
-    Note right of C: Store commit + blob
+    Note over B: Store commit + blob
+    Note over C: Store commit + blob
 ```
 
 Changes propagate to all connected peers in parallel.
@@ -95,33 +95,19 @@ sequenceDiagram
     participant C as Peer C
     participant D as Peer D
 
-    Note left of A: Create commit
+    Note over A: Create commit
 
     A->>B: LooseCommit
     A->>C: LooseCommit
 
-    Note right of B: Store, then propagate
+    Note over B: Store, then propagate
     B->>D: LooseCommit
 
-    Note right of C: Store, then propagate
+    Note over C: Store, then propagate
     C->>D: LooseCommit (duplicate, ignored)
 ```
 
 Peers deduplicate by content digest — receiving the same commit twice is idempotent.
-
-## Authorization
-
-Incremental sync respects the `StoragePolicy`:
-
-```mermaid
-flowchart TD
-    A[Receive LooseCommit] --> B{authorize_put?}
-    B -->|Denied| C[Log warning, discard]
-    B -->|Allowed| D[Store locally]
-    D --> E[Propagate to other peers]
-```
-
-The receiver checks `StoragePolicy::authorize_put(sender_peer_id, author_peer_id, sedimentree_id)` before accepting data.
 
 ## Wire Format
 
