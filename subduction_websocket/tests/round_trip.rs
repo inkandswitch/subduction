@@ -15,7 +15,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{message::Message, Connection},
-    peer::id::PeerId,
+    crypto::signer::{LocalSigner, Signer},
     policy::OpenPolicy,
     sharded_map::ShardedMap,
     Subduction,
@@ -32,9 +32,19 @@ fn init_tracing() {
     });
 }
 
+const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
+
+fn test_signer(seed: u8) -> LocalSigner {
+    LocalSigner::from_bytes(&[seed; 32])
+}
+
 #[tokio::test]
 async fn rend_receive() -> TestResult {
     init_tracing();
+
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = server_signer.peer_id();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
@@ -61,7 +71,8 @@ async fn rend_receive() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         task_subduction,
     )
     .await?;
@@ -72,7 +83,8 @@ async fn rend_receive() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([1; 32]),
+        client_signer,
+        server_peer_id,
     )
     .await?;
 
@@ -97,6 +109,10 @@ async fn rend_receive() -> TestResult {
 #[tokio::test]
 async fn batch_sync() -> TestResult {
     init_tracing();
+
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = server_signer.peer_id();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
@@ -165,7 +181,8 @@ async fn batch_sync() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         server_subduction.clone(),
     )
     .await?;
@@ -176,12 +193,11 @@ async fn batch_sync() -> TestResult {
     // CLIENT SETUP //
     ///////////////////
 
-    // let client_tree = Sedimentree::new(vec![], vec![commit2.clone(), commit3.clone()]);
     let client_storage = MemoryStorage::default();
     let (client, listener_fut, client_manager_fut) = Subduction::<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<TimeoutTokio>,
+        TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
 
@@ -193,7 +209,8 @@ async fn batch_sync() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([1; 32]),
+        client_signer,
+        server_peer_id,
     )
     .await?;
 

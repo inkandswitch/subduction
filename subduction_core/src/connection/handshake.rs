@@ -30,7 +30,11 @@ use core::time::Duration;
 use sedimentree_core::blob::Digest;
 use thiserror::Error;
 
-use crate::{peer::id::PeerId, timestamp::TimestampSeconds};
+use crate::{
+    crypto::{signed::Signed, signer::Signer},
+    peer::id::PeerId,
+    timestamp::TimestampSeconds,
+};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps.
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
@@ -82,7 +86,7 @@ impl Nonce {
     #[cfg_attr(docsrs, doc(cfg(feature = "getrandom")))]
     pub fn random() -> Self {
         let mut bytes = [0u8; 16];
-        getrandom::getrandom(&mut bytes).expect("getrandom failed");
+        getrandom::fill(&mut bytes).expect("getrandom failed");
         Self(bytes)
     }
 }
@@ -435,6 +439,127 @@ impl DriftCorrection {
     }
 }
 
+/// Create a signed challenge for initiating a handshake.
+///
+/// The caller must provide the current timestamp and a random nonce.
+/// For `no_std` compatibility, these are not generated internally.
+#[must_use]
+pub fn create_challenge(
+    signer: &impl Signer,
+    audience: Audience,
+    now: TimestampSeconds,
+    nonce: Nonce,
+) -> Signed<Challenge> {
+    let challenge = Challenge::new(audience, now, nonce);
+    Signed::sign(signer, challenge)
+}
+
+/// Result of verifying a challenge on the server side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerifiedChallenge {
+    /// The client's peer ID (extracted from the signature).
+    pub client_id: PeerId,
+    /// The verified challenge payload.
+    pub challenge: Challenge,
+}
+
+/// Verify a signed challenge from a client.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The signature is invalid
+/// - The audience doesn't match
+/// - The timestamp is outside the acceptable drift window
+pub fn verify_challenge(
+    signed_challenge: &Signed<Challenge>,
+    expected_audience: &Audience,
+    now: TimestampSeconds,
+    max_drift: Duration,
+) -> Result<VerifiedChallenge, HandshakeError> {
+    // Verify signature and decode
+    let verified = signed_challenge
+        .try_verify()
+        .map_err(|_| HandshakeError::InvalidSignature)?;
+
+    let challenge = verified.payload();
+
+    // Validate the challenge
+    challenge
+        .validate(expected_audience, now, max_drift)
+        .map_err(HandshakeError::ChallengeValidation)?;
+
+    Ok(VerifiedChallenge {
+        client_id: PeerId::from(verified.issuer()),
+        challenge: *challenge,
+    })
+}
+
+/// Create a signed response for a verified challenge.
+#[must_use]
+pub fn create_response(
+    signer: &impl Signer,
+    challenge: &Challenge,
+    now: TimestampSeconds,
+) -> Signed<Response> {
+    let response = Response::for_challenge(challenge, now);
+    Signed::sign(signer, response)
+}
+
+/// Result of verifying a response on the client side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct VerifiedResponse {
+    /// The server's peer ID (extracted from the signature).
+    pub server_id: PeerId,
+    /// The verified response payload.
+    pub response: Response,
+}
+
+/// Verify a signed response from a server.
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The signature is invalid
+/// - The challenge digest doesn't match the original challenge
+pub fn verify_response(
+    signed_response: &Signed<Response>,
+    original_challenge: &Challenge,
+) -> Result<VerifiedResponse, HandshakeError> {
+    // Verify signature and decode
+    let verified = signed_response
+        .try_verify()
+        .map_err(|_| HandshakeError::InvalidSignature)?;
+
+    let response = verified.payload();
+
+    // Validate the response matches our challenge
+    response
+        .validate(original_challenge)
+        .map_err(HandshakeError::ResponseValidation)?;
+
+    Ok(VerifiedResponse {
+        server_id: PeerId::from(verified.issuer()),
+        response: *response,
+    })
+}
+
+/// Errors that can occur during the handshake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
+pub enum HandshakeError {
+    /// The signature on the message was invalid.
+    #[error("invalid signature")]
+    InvalidSignature,
+
+    /// Challenge validation failed.
+    #[error("challenge validation failed: {0}")]
+    ChallengeValidation(#[from] ChallengeValidationError),
+
+    /// Response validation failed.
+    #[error("response validation failed: {0}")]
+    ResponseValidation(#[from] ResponseValidationError),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -590,6 +715,123 @@ mod tests {
 
             assert!(dc.adjust(TimestampSeconds::new(1020), client_ts));
             assert_eq!(dc.offset_secs(), 20);
+        }
+    }
+
+    mod executor {
+        use super::*;
+        use crate::crypto::signer::LocalSigner;
+
+        fn test_signer(seed: u8) -> LocalSigner {
+            LocalSigner::from_bytes(&[seed; 32])
+        }
+
+        #[test]
+        fn full_handshake_round_trip() {
+            let client_signer = test_signer(1);
+            let server_signer = test_signer(2);
+
+            let now = TimestampSeconds::new(1000);
+            let audience = Audience::discovery(b"https://example.com");
+            let nonce = Nonce::new(12345);
+
+            // Client creates challenge
+            let signed_challenge = create_challenge(&client_signer, audience, now, nonce);
+
+            // Server verifies challenge
+            let verified_challenge =
+                verify_challenge(&signed_challenge, &audience, now, MAX_PLAUSIBLE_DRIFT)
+                    .expect("challenge should verify");
+
+            assert_eq!(verified_challenge.client_id, client_signer.peer_id());
+            assert_eq!(verified_challenge.challenge.nonce, nonce);
+
+            // Server creates response
+            let signed_response =
+                create_response(&server_signer, &verified_challenge.challenge, now);
+
+            // Client verifies response
+            let original_challenge = Challenge::new(audience, now, nonce);
+            let verified_response = verify_response(&signed_response, &original_challenge)
+                .expect("response should verify");
+
+            assert_eq!(verified_response.server_id, server_signer.peer_id());
+        }
+
+        #[test]
+        fn wrong_audience_rejected() {
+            let client_signer = test_signer(1);
+
+            let now = TimestampSeconds::new(1000);
+            let client_audience = Audience::discovery(b"https://example.com");
+            let server_audience = Audience::discovery(b"https://other.com");
+            let nonce = Nonce::new(12345);
+
+            let signed_challenge = create_challenge(&client_signer, client_audience, now, nonce);
+
+            let result =
+                verify_challenge(&signed_challenge, &server_audience, now, MAX_PLAUSIBLE_DRIFT);
+
+            assert!(matches!(
+                result,
+                Err(HandshakeError::ChallengeValidation(
+                    ChallengeValidationError::InvalidAudience
+                ))
+            ));
+        }
+
+        #[test]
+        fn stale_timestamp_rejected() {
+            let client_signer = test_signer(1);
+
+            let client_now = TimestampSeconds::new(1000);
+            let server_now = TimestampSeconds::new(2000); // 1000 seconds later
+            let audience = Audience::discovery(b"https://example.com");
+            let nonce = Nonce::new(12345);
+
+            let signed_challenge = create_challenge(&client_signer, audience, client_now, nonce);
+
+            // Use a short max drift to trigger rejection
+            let result = verify_challenge(
+                &signed_challenge,
+                &audience,
+                server_now,
+                Duration::from_secs(60),
+            );
+
+            assert!(matches!(
+                result,
+                Err(HandshakeError::ChallengeValidation(
+                    ChallengeValidationError::ClockDrift { .. }
+                ))
+            ));
+        }
+
+        #[test]
+        fn wrong_challenge_digest_rejected() {
+            let server_signer = test_signer(2);
+
+            let now = TimestampSeconds::new(1000);
+            let audience = Audience::discovery(b"https://example.com");
+            let nonce1 = Nonce::new(11111);
+            let nonce2 = Nonce::new(22222);
+
+            // Client creates challenge with nonce1
+            let challenge1 = Challenge::new(audience, now, nonce1);
+
+            // Server creates response for challenge1
+            let signed_response = create_response(&server_signer, &challenge1, now);
+
+            // Client tries to verify with different challenge (nonce2)
+            let challenge2 = Challenge::new(audience, now, nonce2);
+            let result = verify_response(&signed_response, &challenge2);
+
+            assert!(matches!(
+                result,
+                Err(HandshakeError::ResponseValidation(
+                    ResponseValidationError::ChallengeMismatch
+                ))
+            ));
         }
     }
 

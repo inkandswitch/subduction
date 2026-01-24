@@ -8,8 +8,13 @@ pub mod protocol_version;
 use core::cmp::Ordering;
 use thiserror::Error;
 
-use self::{encoded_payload::EncodedPayload, envelope::Envelope};
-use super::verified::Verified;
+use self::{
+    encoded_payload::EncodedPayload,
+    envelope::Envelope,
+    magic::Magic,
+    protocol_version::ProtocolVersion,
+};
+use super::{signer::Signer, verified::Verified};
 
 /// A signed payload with its issuer and signature.
 #[derive(Clone, Debug, minicbor::Encode, minicbor::Decode)]
@@ -54,6 +59,37 @@ impl<T: for<'de> minicbor::Decode<'de, ()>> Signed<T> {
             issuer: self.issuer,
             payload: envelope.into_payload(),
         })
+    }
+
+    /// Get the issuer's verifying key.
+    #[must_use]
+    pub fn issuer(&self) -> ed25519_dalek::VerifyingKey {
+        self.issuer
+    }
+
+    /// Get the encoded payload bytes.
+    #[must_use]
+    pub fn encoded_payload(&self) -> &EncodedPayload<T> {
+        &self.encoded_payload
+    }
+}
+
+impl<T: for<'de> minicbor::Decode<'de, ()> + minicbor::Encode<()>> Signed<T> {
+    /// Sign a payload using the provided signer.
+    ///
+    /// This wraps the payload in an [`Envelope`] with magic bytes and protocol
+    /// version, encodes it to CBOR, signs the bytes, and returns a [`Signed<T>`].
+    #[must_use]
+    pub fn sign(signer: &impl Signer, payload: T) -> Self {
+        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
+        let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
+        let signature = signer.sign(&encoded);
+
+        Self {
+            issuer: signer.verifying_key(),
+            signature,
+            encoded_payload: EncodedPayload::new(encoded),
+        }
     }
 }
 

@@ -19,6 +19,21 @@ impl TimestampSeconds {
         Self(secs)
     }
 
+    /// Get the current timestamp.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the system time is before the Unix epoch.
+    #[cfg(feature = "std")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[must_use]
+    pub fn now() -> Self {
+        let duration = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("system time before Unix epoch");
+        Self(duration.as_secs())
+    }
+
     /// Get the raw seconds value.
     #[must_use]
     pub const fn as_secs(&self) -> u64 {

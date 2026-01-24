@@ -13,7 +13,7 @@ use sedimentree_core::{
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{message::Message, Connection, Reconnect},
-    peer::id::PeerId,
+    crypto::signer::{LocalSigner, Signer},
     policy::OpenPolicy,
     sharded_map::ShardedMap,
     Subduction,
@@ -30,6 +30,13 @@ fn init_tracing() {
     TRACING.get_or_init(|| {
         tracing_subscriber::fmt().with_env_filter("warn").init();
     });
+}
+
+/// Maximum clock drift for handshake tests.
+const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
+
+fn test_signer(seed: u8) -> LocalSigner {
+    LocalSigner::from_bytes(&[seed; 32])
 }
 
 fn random_blob() -> Blob {
@@ -57,6 +64,10 @@ fn random_commit() -> (LooseCommit, Blob) {
 async fn client_reconnect() -> TestResult {
     init_tracing();
 
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = server_signer.peer_id();
+
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, manager_fut) =
@@ -76,7 +87,8 @@ async fn client_reconnect() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         server_subduction.clone(),
     )
     .await?;
@@ -89,7 +101,8 @@ async fn client_reconnect() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([1; 32]),
+        client_signer,
+        server_peer_id,
     )
     .await?;
 
@@ -120,6 +133,10 @@ async fn client_reconnect() -> TestResult {
 async fn server_graceful_shutdown() -> TestResult {
     init_tracing();
 
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = server_signer.peer_id();
+
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, manager_fut) =
@@ -139,7 +156,8 @@ async fn server_graceful_shutdown() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         server_subduction.clone(),
     )
     .await?;
@@ -152,7 +170,8 @@ async fn server_graceful_shutdown() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([1; 32]),
+        client_signer.clone(),
+        server_peer_id,
     )
     .await?;
 
@@ -172,7 +191,8 @@ async fn server_graceful_shutdown() -> TestResult {
         format!("ws://{}:{}", bound.ip(), bound.port()).parse()?,
         TimeoutTokio,
         Duration::from_secs(1),
-        PeerId::new([2; 32]),
+        test_signer(2),
+        server_peer_id,
     )
     .await;
 
@@ -187,6 +207,9 @@ async fn server_graceful_shutdown() -> TestResult {
 #[tokio::test]
 async fn multiple_concurrent_clients() -> TestResult {
     init_tracing();
+
+    let server_signer = test_signer(0);
+    let server_peer_id = server_signer.peer_id();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -215,7 +238,8 @@ async fn multiple_concurrent_clients() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         server_subduction.clone(),
     )
     .await?;
@@ -228,9 +252,10 @@ async fn multiple_concurrent_clients() -> TestResult {
     let mut clients = Vec::new();
 
     for i in 0..num_clients {
+        let client_signer = test_signer(u8::try_from(i)? + 10);
         let client_storage = MemoryStorage::default();
         let (client, listener_fut, actor_fut) =
-            Subduction::<Sendable, MemoryStorage, TokioWebSocketClient<TimeoutTokio>, OpenPolicy>::new(
+            Subduction::<Sendable, MemoryStorage, TokioWebSocketClient<LocalSigner, TimeoutTokio>, OpenPolicy>::new(
                 client_storage,
                 OpenPolicy,
                 CountLeadingZeroBytes,
@@ -245,7 +270,8 @@ async fn multiple_concurrent_clients() -> TestResult {
             uri.clone(),
             TimeoutTokio,
             Duration::from_secs(5),
-            PeerId::new([u8::try_from(i)? + 1; 32]),
+            client_signer,
+            server_peer_id,
         )
         .await?;
 
@@ -322,6 +348,10 @@ async fn multiple_concurrent_clients() -> TestResult {
 async fn request_with_delayed_response() -> TestResult {
     init_tracing();
 
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = server_signer.peer_id();
+
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
@@ -347,7 +377,8 @@ async fn request_with_delayed_response() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         server_subduction.clone(),
     )
     .await?;
@@ -358,7 +389,7 @@ async fn request_with_delayed_response() -> TestResult {
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<TimeoutTokio>,
+        TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
 
@@ -370,7 +401,8 @@ async fn request_with_delayed_response() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([1; 32]),
+        client_signer,
+        server_peer_id,
     )
     .await?;
 
@@ -412,6 +444,9 @@ async fn request_with_delayed_response() -> TestResult {
 async fn connection_to_invalid_address() -> TestResult {
     init_tracing();
 
+    let client_signer = test_signer(1);
+    let fake_server_peer_id = test_signer(0).peer_id();
+
     // Try to connect to an address that's not listening
     let uri = "ws://127.0.0.1:9".parse()?; // Port 9 is discard protocol, unlikely to have WS server
 
@@ -419,7 +454,8 @@ async fn connection_to_invalid_address() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(1),
-        PeerId::new([1; 32]),
+        client_signer,
+        fake_server_peer_id,
     )
     .await;
 
@@ -431,6 +467,10 @@ async fn connection_to_invalid_address() -> TestResult {
 #[tokio::test]
 async fn large_message_handling() -> TestResult {
     init_tracing();
+
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = server_signer.peer_id();
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -453,7 +493,8 @@ async fn large_message_handling() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(10),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         server_subduction.clone(),
     )
     .await?;
@@ -464,7 +505,7 @@ async fn large_message_handling() -> TestResult {
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<TimeoutTokio>,
+        TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
 
@@ -476,7 +517,8 @@ async fn large_message_handling() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(10),
-        PeerId::new([1; 32]),
+        client_signer,
+        server_peer_id,
     )
     .await?;
 
@@ -532,6 +574,10 @@ async fn large_message_handling() -> TestResult {
 async fn message_ordering() -> TestResult {
     init_tracing();
 
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = server_signer.peer_id();
+
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
@@ -553,7 +599,8 @@ async fn message_ordering() -> TestResult {
         addr,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([0; 32]),
+        HANDSHAKE_MAX_DRIFT,
+        server_signer,
         server_subduction.clone(),
     )
     .await?;
@@ -564,7 +611,7 @@ async fn message_ordering() -> TestResult {
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<TimeoutTokio>,
+        TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(client_storage, OpenPolicy, CountLeadingZeroBytes, ShardedMap::with_key(0, 0), TokioSpawn);
 
@@ -576,7 +623,8 @@ async fn message_ordering() -> TestResult {
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
-        PeerId::new([1; 32]),
+        client_signer,
+        server_peer_id,
     )
     .await?;
 
