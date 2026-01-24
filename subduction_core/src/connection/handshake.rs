@@ -39,8 +39,8 @@ use crate::{
 
 pub use crate::crypto::nonce::Nonce;
 
-/// Maximum plausible clock drift for rejecting implausible timestamps.
-pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
+/// Maximum plausible clock drift for rejecting implausible timestamps (±5 minutes).
+pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(5 * 60);
 
 /// The intended recipient of a challenge.
 ///

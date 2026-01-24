@@ -74,17 +74,22 @@ where
     /// * `default_time_limit` - Default timeout duration
     /// * `handshake_max_drift` - Maximum acceptable clock drift during handshake
     /// * `signer` - The server's signer for authenticating handshakes
+    /// * `service_name` - Optional service name for discovery mode. When set,
+    ///   clients can connect without knowing the server's peer ID. The name is
+    ///   hashed to a 32-byte identifier.
     /// * `subduction` - The Subduction instance to register connections with
     ///
     /// # Errors
     ///
     /// Returns [`tungstenite::Error`] if there is a problem binding the socket.
+    #[allow(clippy::too_many_lines)]
     pub async fn new<R: 'static + Send + Sync + Signer<Sendable> + Clone>(
         address: SocketAddr,
         timeout: O,
         default_time_limit: Duration,
         handshake_max_drift: Duration,
         signer: R,
+        service_name: Option<&str>,
         subduction: TokioWebSocketSubduction<S, P, O, M>,
     ) -> Result<Self, tungstenite::Error> {
         let server_peer_id = signer.peer_id();
@@ -99,8 +104,12 @@ where
         let cancellation_token = CancellationToken::new();
         let child_cancellation_token = cancellation_token.child_token();
 
-        // Create the expected audience for incoming connections
-        let expected_audience = Audience::known(server_peer_id);
+        // Get optional discovery audience from Subduction
+        let discovery_audience = subduction.audience();
+
+        if service_name.is_some() {
+            tracing::info!("Discovery mode enabled with service name: {:?}", service_name);
+        }
 
         let inner_subduction = subduction.clone();
         let accept_task: JoinHandle<()> = tokio::spawn(async move {
@@ -118,7 +127,7 @@ where
 
                                 let task_subduction = inner_subduction.clone();
                                 let task_signer = signer.clone();
-                                let task_audience = expected_audience;
+                                let task_discovery_audience = discovery_audience;
                                 conns.spawn({
                                     let tout = timeout.clone();
                                     async move {
@@ -137,11 +146,13 @@ where
                                         tracing::debug!("WebSocket upgrade complete for {addr}");
 
                                         // Step 2: Subduction handshake
+                                        // Accepts either Audience::Known(peer_id) or discovery audience
                                         let now = TimestampSeconds::now();
                                         let handshake_result = server_handshake(
                                             &mut ws_stream,
                                             &task_signer,
-                                            &task_audience,
+                                            server_peer_id,
+                                            task_discovery_audience,
                                             now,
                                             handshake_max_drift,
                                         ).await;
@@ -216,13 +227,15 @@ where
         default_time_limit: Duration,
         handshake_max_drift: Duration,
         signer: R,
+        service_name: Option<&str>,
         storage: S,
         policy: P,
         depth_metric: M,
     ) -> Result<Self, tungstenite::Error> {
+        let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
         let (subduction, listener_fut, manager_fut) =
-            Subduction::new(storage, policy, depth_metric, sedimentrees, TokioSpawn);
+            Subduction::new(audience, storage, policy, depth_metric, sedimentrees, TokioSpawn);
 
         let server = Self::new(
             address,
@@ -230,6 +243,7 @@ where
             default_time_limit,
             handshake_max_drift,
             signer,
+            service_name,
             subduction,
         )
         .await?;

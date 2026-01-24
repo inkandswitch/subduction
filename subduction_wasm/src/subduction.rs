@@ -1,6 +1,6 @@
 //! Subduction node.
 
-use alloc::{format, sync::Arc, vec::Vec};
+use alloc::{format, string::String, sync::Arc, vec::Vec};
 use core::{fmt::Debug, time::Duration};
 use sedimentree_core::collections::Map;
 
@@ -19,7 +19,10 @@ use sedimentree_core::{
 };
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
-    Subduction, connection::manager::Spawn, peer::id::PeerId, policy::OpenPolicy,
+    Subduction,
+    connection::{handshake::Audience, manager::Spawn},
+    peer::id::PeerId,
+    policy::OpenPolicy,
     sharded_map::ShardedMap,
 };
 use wasm_bindgen::prelude::*;
@@ -84,15 +87,28 @@ pub struct WasmSubduction {
 #[wasm_bindgen(js_class = Subduction)]
 impl WasmSubduction {
     /// Create a new [`Subduction`] instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `storage` - Storage backend for persisting data
+    /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
+    ///   When set, clients can connect without knowing the server's peer ID.
+    /// * `hash_metric_override` - Optional custom depth metric function
     #[must_use]
     #[wasm_bindgen(constructor)]
-    pub fn new(storage: JsSubductionStorage, hash_metric_override: Option<JsToDepth>) -> Self {
+    pub fn new(
+        storage: JsSubductionStorage,
+        service_name: Option<String>,
+        hash_metric_override: Option<JsToDepth>,
+    ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) = Subduction::new(
+            audience,
             storage,
             OpenPolicy,
             WasmHashMetric(raw_fn),
@@ -123,20 +139,30 @@ impl WasmSubduction {
 
     /// Hydrate a [`Subduction`] instance from external storage.
     ///
+    /// # Arguments
+    ///
+    /// * `storage` - Storage backend for persisting data
+    /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
+    ///   When set, clients can connect without knowing the server's peer ID.
+    /// * `hash_metric_override` - Optional custom depth metric function
+    ///
     /// # Errors
     ///
     /// Returns [`WasmHydrationError`] if hydration fails.
     #[wasm_bindgen]
     pub async fn hydrate(
         storage: JsSubductionStorage,
+        service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
     ) -> Result<Self, WasmHydrationError> {
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) = Subduction::hydrate(
+            audience,
             storage,
             OpenPolicy,
             WasmHashMetric(raw_fn),

@@ -49,6 +49,7 @@ async fn rend_receive() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
     let (suduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         memory_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -73,6 +74,7 @@ async fn rend_receive() -> TestResult {
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         task_subduction,
     )
     .await?;
@@ -151,6 +153,7 @@ async fn batch_sync() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         server_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -183,6 +186,7 @@ async fn batch_sync() -> TestResult {
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         server_subduction.clone(),
     )
     .await?;
@@ -200,6 +204,7 @@ async fn batch_sync() -> TestResult {
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(
+        None,
         client_storage,
         OpenPolicy,
         CountLeadingZeroBytes,

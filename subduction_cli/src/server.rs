@@ -35,6 +35,14 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value = "60")]
     pub(crate) handshake_max_drift: u64,
 
+    /// Service name for discovery mode (e.g., `sync.example.com`).
+    /// Clients can connect without knowing the server's peer ID.
+    /// The name is hashed to a 32-byte identifier for the handshake.
+    /// Defaults to the socket address if not specified.
+    /// Omit the protocol so the same name works across `wss://`, `https://`, etc.
+    #[arg(long)]
+    pub(crate) service_name: Option<String>,
+
     /// Request timeout in seconds
     #[arg(short, long, default_value = "5")]
     pub(crate) timeout: u64,
@@ -60,6 +68,7 @@ pub(crate) struct ServerArgs {
 const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
 
 /// Run the WebSocket server.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()> {
     let addr: SocketAddr = args.socket.parse()?;
     let data_dir = args.data_dir.unwrap_or_else(|| PathBuf::from("./data"));
@@ -112,6 +121,12 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     };
     let peer_id = signer.peer_id();
 
+    // Default service name to socket address if not specified
+    let service_name = args
+        .service_name
+        .clone()
+        .unwrap_or_else(|| args.socket.clone());
+
     let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy> =
         TokioWebSocketServer::setup(
             addr,
@@ -119,6 +134,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             Duration::from_secs(args.timeout),
             Duration::from_secs(args.handshake_max_drift),
             signer.clone(),
+            Some(service_name.as_str()),
             storage,
             OpenPolicy,
             CountLeadingZeroBytes,

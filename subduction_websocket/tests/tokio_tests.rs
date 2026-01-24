@@ -71,6 +71,7 @@ async fn client_reconnect() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         server_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -94,6 +95,7 @@ async fn client_reconnect() -> TestResult {
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         server_subduction.clone(),
     )
     .await?;
@@ -145,6 +147,7 @@ async fn server_graceful_shutdown() -> TestResult {
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         server_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -168,6 +171,7 @@ async fn server_graceful_shutdown() -> TestResult {
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         server_subduction.clone(),
     )
     .await?;
@@ -227,6 +231,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         server_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -256,6 +261,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         server_subduction.clone(),
     )
     .await?;
@@ -276,6 +282,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             TokioWebSocketClient<LocalSigner, TimeoutTokio>,
             OpenPolicy,
         >::new(
+            None,
             client_storage,
             OpenPolicy,
             CountLeadingZeroBytes,
@@ -377,6 +384,7 @@ async fn request_with_delayed_response() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         server_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -404,6 +412,7 @@ async fn request_with_delayed_response() -> TestResult {
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         server_subduction.clone(),
     )
     .await?;
@@ -417,6 +426,7 @@ async fn request_with_delayed_response() -> TestResult {
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(
+        None,
         client_storage,
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -508,6 +518,7 @@ async fn large_message_handling() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         server_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -531,6 +542,7 @@ async fn large_message_handling() -> TestResult {
         Duration::from_secs(10),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         server_subduction.clone(),
     )
     .await?;
@@ -544,6 +556,7 @@ async fn large_message_handling() -> TestResult {
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(
+        None,
         client_storage,
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -625,6 +638,7 @@ async fn message_ordering() -> TestResult {
     let sed_id = SedimentreeId::new([0u8; 32]);
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
         server_storage.clone(),
         OpenPolicy,
         CountLeadingZeroBytes,
@@ -648,6 +662,7 @@ async fn message_ordering() -> TestResult {
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
         server_signer,
+        None,
         server_subduction.clone(),
     )
     .await?;
@@ -661,6 +676,7 @@ async fn message_ordering() -> TestResult {
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
     >::new(
+        None,
         client_storage,
         OpenPolicy,
         CountLeadingZeroBytes,

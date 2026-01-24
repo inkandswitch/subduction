@@ -6,6 +6,7 @@ pub mod request;
 use crate::{
     connection::{
         Connection,
+        handshake::Audience,
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
@@ -57,6 +58,7 @@ pub struct Subduction<
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
+    audience: Option<Audience>,
     depth_metric: M,
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
     next_connection_id: Arc<AtomicUsize>,
@@ -93,6 +95,7 @@ impl<
     /// or provide secure random keys to [`ShardedMap::with_key`].
     #[allow(clippy::type_complexity)]
     pub fn new<Sp: Spawn<F> + Send + Sync + 'static>(
+        audience: Option<Audience>,
         storage: S,
         policy: P,
         depth_metric: M,
@@ -119,6 +122,7 @@ impl<
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
 
         let sd = Arc::new(Self {
+            audience,
             depth_metric,
             sedimentrees: Arc::new(sedimentrees),
             next_connection_id: Arc::new(AtomicUsize::new(0)),
@@ -153,6 +157,7 @@ impl<
     ///
     /// * Returns [`HydrationError`] if loading from storage fails.
     pub async fn hydrate<Sp: Spawn<F> + Send + Sync + 'static>(
+        audience: Option<Audience>,
         storage: S,
         policy: P,
         depth_metric: M,
@@ -171,7 +176,7 @@ impl<
             .await
             .map_err(HydrationError::LoadAllIdsError)?;
         let (subduction, fut_listener, manager_fut) =
-            Self::new(storage, policy, depth_metric, sedimentrees, spawner);
+            Self::new(audience, storage, policy, depth_metric, sedimentrees, spawner);
         for id in ids {
             let loose_commits = subduction
                 .storage
@@ -191,6 +196,15 @@ impl<
                 .await;
         }
         Ok((subduction, fut_listener, manager_fut))
+    }
+
+    /// Get the configured audience for this instance.
+    ///
+    /// Returns `Some(Audience::Known(peer_id))` for direct connections,
+    /// `Some(Audience::Discover(...))` for discovery mode, or `None` if not set.
+    #[must_use]
+    pub const fn audience(&self) -> Option<Audience> {
+        self.audience
     }
 
     /// Listen for incoming messages from all connections and handle them appropriately.
