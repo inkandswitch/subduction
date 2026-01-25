@@ -1,30 +1,33 @@
 # Incremental Sync Protocol
 
-Incremental sync propagates individual changes to all connected peers as they happen. It answers _"what just changed?"_ by pushing commits and fragments immediately.
+Incremental sync propagates individual changes to subscribed and authorized peers as they happen. It answers _"what just changed?"_ by pushing commits and fragments immediately.
 
 ## Overview
 
-Incremental sync is a push-based protocol. When a peer adds a commit or fragment locally, it broadcasts the change to all connected peers. There is no request/response — messages are fire-and-forget.
+Incremental sync is a push-based protocol. When a peer adds a commit or fragment locally, it forwards the change to peers who have subscribed to that sedimentree and are authorized to receive it. There is no request/response — messages are fire-and-forget.
 
 > [!NOTE]
-> Incremental sync assumes peers are already roughly synchronized. Use batch sync first to establish a baseline, then incremental sync for ongoing updates.
+> Incremental sync assumes peers are already roughly synchronized. Use batch sync first to establish a baseline (with `subscribe: true` to opt into updates), then incremental sync for ongoing updates. See [Subscriptions](./subscriptions.md) for details.
 
 ```mermaid
 sequenceDiagram
     participant A as Sender
-    participant B as Receiver 1
-    participant C as Receiver 2
+    participant S as Server
+    participant B as Subscriber 1
+    participant C as Subscriber 2
 
     Note over A: Local change occurs
 
-    A->>B: LooseCommit { id, commit, blob }
-    A->>C: LooseCommit { id, commit, blob }
+    A->>S: LooseCommit { id, commit, blob }
+    Note over S: Forward to subscribed + authorized peers
+    S->>B: LooseCommit { id, commit, blob }
+    S->>C: LooseCommit { id, commit, blob }
 
     Note over B: Store commit + blob
     Note over C: Store commit + blob
 ```
 
-Changes propagate to all connected peers in parallel.
+Changes propagate only to peers who have subscribed to that sedimentree.
 
 ## Message Types
 
@@ -60,29 +63,34 @@ A fragment is created when a commit's hash has enough leading zero bytes to trig
 When a change occurs locally:
 
 1. Store the commit/fragment and blob locally
-2. Broadcast to all connected peers
-3. Each peer stores and re-broadcasts to *their* peers (gossip)
+2. Forward to subscribed and authorized peers (not all connected peers)
+3. Each peer stores and re-forwards to _their_ subscribers (gossip)
 
 ```mermaid
 sequenceDiagram
     participant A as Origin
-    participant B as Peer B
-    participant C as Peer C
-    participant D as Peer D
+    participant S as Server
+    participant B as Subscriber B
+    participant C as Subscriber C
+    participant D as Not Subscribed
 
     Note over A: Create commit
 
-    A->>B: LooseCommit
-    A->>C: LooseCommit
+    A->>S: LooseCommit
+    Note over S: Get subscribers for this sedimentree
+    Note over S: Filter by authorization
+    S->>B: LooseCommit
+    S->>C: LooseCommit
+    Note over S: D not subscribed, not forwarded
 
-    Note over B: Store, then propagate
-    B->>D: LooseCommit
-
-    Note over C: Store, then propagate
-    C->>D: LooseCommit (duplicate, ignored)
+    Note over B: Store, then propagate to own subscribers
+    Note over C: Store, then propagate to own subscribers
 ```
 
 Peers deduplicate by content digest — receiving the same commit twice is idempotent.
+
+> [!NOTE]
+> The authorization check uses `filter_authorized_fetch` to batch-check which peers are allowed to receive the update. Peers whose access has been revoked simply stop receiving forwards — no explicit notification is sent.
 
 ## Wire Format
 
@@ -159,12 +167,13 @@ storage.save_loose_commit(id, commit.clone()).await?;
 storage.save_blob(blob.clone()).await?;
 sedimentree.add_commit(commit.clone());
 
-// Broadcast to all peers
+// Forward to subscribed and authorized peers
 let msg = Message::LooseCommit { id, commit, blob };
-for conn in connections.values() {
+let subscriber_conns = get_authorized_subscriber_conns(id, &self.peer_id()).await;
+for conn in subscriber_conns {
     if let Err(e) = conn.send(&msg).await {
         // Connection failed, unregister it
-        unregister(conn.id()).await;
+        unregister(&conn).await;
     }
 }
 
@@ -190,11 +199,10 @@ storage.save_loose_commit(id, commit.clone()).await?;
 storage.save_blob(blob.clone()).await?;
 sedimentree.add_commit(commit);
 
-// Propagate to other peers (excluding sender)
-for conn in connections.values() {
-    if conn.peer_id() != sender_peer_id {
-        conn.send(&msg).await?;
-    }
+// Forward to subscribed and authorized peers (excluding sender)
+let subscriber_conns = get_authorized_subscriber_conns(id, &sender_peer_id).await;
+for conn in subscriber_conns {
+    conn.send(&msg).await?;
 }
 ```
 
@@ -214,11 +222,10 @@ sedimentree.add_fragment(fragment);
 // Prune loose commits that are now covered by this fragment
 sedimentree.prune_commits_covered_by(&fragment);
 
-// Propagate to other peers
-for conn in connections.values() {
-    if conn.peer_id() != sender_peer_id {
-        conn.send(&msg).await?;
-    }
+// Forward to subscribed and authorized peers (excluding sender)
+let subscriber_conns = get_authorized_subscriber_conns(id, &sender_peer_id).await;
+for conn in subscriber_conns {
+    conn.send(&msg).await?;
 }
 ```
 

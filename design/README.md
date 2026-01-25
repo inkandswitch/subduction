@@ -34,14 +34,14 @@ sequenceDiagram
     B->>A: Signed<Response>
     Note over A,B: Identities established
 
-    Note over A,B: 2. Initial Sync (Batch)
-    A->>B: BatchSyncRequest { summary }
+    Note over A,B: 2. Initial Sync + Subscribe (Batch)
+    A->>B: BatchSyncRequest { summary, subscribe: true }
     B->>A: BatchSyncResponse { diff }
-    Note over A,B: States reconciled
+    Note over A,B: States reconciled, A subscribed
 
     Note over A,B: 3. Ongoing Sync (Incremental)
     A->>B: LooseCommit { commit, blob }
-    B->>A: LooseCommit { commit, blob }
+    Note over B: Forward to subscribed peers
     Note over A,B: Real-time updates
 ```
 
@@ -50,5 +50,6 @@ sequenceDiagram
 - **no_std compatible** — Core protocol logic works without std
 - **Transport agnostic** — Protocol messages are CBOR, transport is pluggable
 - **Policy separation** — Authentication (handshake) is separate from authorization (policy)
+- **Subscription-based** — Updates forwarded only to subscribed and authorized peers
 - **Content addressed** — All data identified by BLAKE3 hash
 - **Idempotent** — Receiving the same data twice is safe

@@ -33,6 +33,7 @@ struct BatchSyncRequest {
     id: SedimentreeId,                       // Which sedimentree to sync
     req_id: RequestId,                       // Correlation ID for request/response matching
     sedimentree_summary: SedimentreeSummary, // Requester's current state
+    subscribe: bool,                         // Opt into live updates for this sedimentree
 }
 
 struct RequestId {
@@ -42,6 +43,8 @@ struct RequestId {
 ```
 
 The `SedimentreeSummary` is a compact representation of the sedimentree's structure — fragment digests and loose commit digests at each depth level.
+
+When `subscribe: true`, the responder adds the requester to the subscription set for this sedimentree after completing the sync. See [Subscriptions](./subscriptions.md) for details.
 
 ### BatchSyncResponse (Responder → Requester)
 
@@ -151,7 +154,12 @@ let summary = local_sedimentree.summarize();
 let req_id = conn.next_request_id().await;
 
 let response = conn.call(
-    BatchSyncRequest { id, req_id, sedimentree_summary: summary },
+    BatchSyncRequest {
+        id,
+        req_id,
+        sedimentree_summary: summary,
+        subscribe: true,  // Opt into live updates
+    },
     Some(timeout),
 ).await?;
 
@@ -164,6 +172,7 @@ for (fragment, blob) in response.diff.missing_fragments {
     storage.save_fragment(id, fragment).await?;
     storage.save_blob(blob).await?;
 }
+// If subscribe: true, we're now subscribed for incremental updates
 ```
 
 ### Handling a Batch Sync Request

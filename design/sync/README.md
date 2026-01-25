@@ -1,6 +1,6 @@
 # Sync Protocols
 
-Subduction uses two complementary sync protocols to keep sedimentrees consistent across peers.
+Subduction uses two complementary sync protocols to keep sedimentrees consistent across peers, with an optional subscription mechanism for real-time updates.
 
 ## Overview
 
@@ -8,6 +8,7 @@ Subduction uses two complementary sync protocols to keep sedimentrees consistent
 |----------|-----------|-------|----------|
 | [Batch](./batch.md) | Pull (request/response) | Entire sedimentree | Initial sync, reconnection |
 | [Incremental](./incremental.md) | Push (fire-and-forget) | Single commit/fragment | Real-time updates |
+| [Subscriptions](./subscriptions.md) | Opt-in | Per sedimentree | Live update filtering |
 
 ## Typical Usage
 
@@ -16,22 +17,22 @@ sequenceDiagram
     participant A as Peer A
     participant B as Peer B
 
-    Note over A,B: 1. Initial Sync (Batch)
-    A->>B: BatchSyncRequest { summary }
+    Note over A,B: 1. Initial Sync + Subscribe (Batch)
+    A->>B: BatchSyncRequest { summary, subscribe: true }
     B->>A: BatchSyncResponse { diff }
-    Note over A,B: States reconciled
+    Note over A,B: States reconciled, A subscribed
 
     Note over A,B: 2. Ongoing Sync (Incremental)
     A->>B: LooseCommit { commit, blob }
-    B->>A: LooseCommit { commit, blob }
+    Note over B: Forward to subscribed peers
     Note over A,B: Real-time updates
 
     Note over A,B: 3. Reconnection (Batch)
     Note over A: Connection lost...
     Note over A: Connection restored
-    A->>B: BatchSyncRequest { summary }
+    A->>B: BatchSyncRequest { summary, subscribe: true }
     B->>A: BatchSyncResponse { diff }
-    Note over A,B: Caught up on missed changes
+    Note over A,B: Caught up, re-subscribed
 ```
 
 ## Comparison
