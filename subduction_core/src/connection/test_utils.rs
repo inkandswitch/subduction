@@ -178,13 +178,17 @@ impl Connection<Sendable> for FailingSendMockConnection {
 #[derive(Clone, Debug)]
 pub struct ChannelMockConnection {
     peer_id: PeerId,
+
     /// Sender for outbound messages (from Subduction to "remote")
     outbound_tx: async_channel::Sender<Message>,
+
     /// Receiver for inbound messages (from "remote" to Subduction)
     inbound_rx: async_channel::Receiver<Message>,
+
     /// Sender for inbound messages (kept for potential direct access in complex tests)
     #[allow(dead_code)]
     inbound_tx: async_channel::Sender<Message>,
+
     /// Request ID counter
     request_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -200,6 +204,7 @@ impl PartialEq for ChannelMockConnection {
 pub struct ChannelMockConnectionHandle {
     /// Receiver for outbound messages (messages Subduction sends)
     pub outbound_rx: async_channel::Receiver<Message>,
+
     /// Sender for inbound messages (inject messages to Subduction)
     pub inbound_tx: async_channel::Sender<Message>,
 }
@@ -353,6 +358,7 @@ impl Connection<Local> for ChannelMockConnection {
 #[derive(Clone, Debug)]
 pub struct CallbackOnRecvConnection<C> {
     inner: C,
+
     /// Channel to send observation results from callback
     callback_result_tx: async_channel::Sender<CallbackObservation>,
 }
@@ -362,8 +368,10 @@ pub struct CallbackOnRecvConnection<C> {
 pub struct CallbackObservation {
     /// The sedimentree ID from the message.
     pub sedimentree_id: sedimentree_core::id::SedimentreeId,
+
     /// Whether the sedimentree was visible when callback fired.
     pub was_visible: bool,
+
     /// Number of commits visible when callback fired.
     pub commit_count: usize,
 }

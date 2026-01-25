@@ -35,6 +35,7 @@ use subduction_core::{
 pub enum ConnectionDisallowedError {
     /// The peer ID is not a valid Ed25519 public key.
     InvalidPeerId,
+
     /// The peer is not a known agent in the Keyhive.
     UnknownAgent,
 }
@@ -55,10 +56,13 @@ impl core::error::Error for ConnectionDisallowedError {}
 pub enum FetchDisallowedError {
     /// The peer ID is not a valid Ed25519 public key.
     InvalidPeerId,
+
     /// The sedimentree ID is not a valid Ed25519 public key (document ID).
     InvalidSedimentreeId,
+
     /// The document does not exist.
     DocumentNotFound,
+
     /// The peer does not have sufficient access to fetch from this document.
     InsufficientAccess,
 }
@@ -81,10 +85,13 @@ impl core::error::Error for FetchDisallowedError {}
 pub enum PutDisallowedError {
     /// The author peer ID is not a valid Ed25519 public key.
     InvalidAuthorId,
+
     /// The sedimentree ID is not a valid Ed25519 public key (document ID).
     InvalidSedimentreeId,
+
     /// The document does not exist.
     DocumentNotFound,
+
     /// The author does not have sufficient access to write to this document.
     InsufficientAccess,
 }

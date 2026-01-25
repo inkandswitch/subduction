@@ -62,6 +62,7 @@ pub enum WebSocketHandshakeError {
     Rejected {
         /// The rejection reason.
         reason: RejectionReason,
+
         /// The server's timestamp (for drift correction).
         server_timestamp: TimestampSeconds,
     },
@@ -72,6 +73,7 @@ pub enum WebSocketHandshakeError {
 pub struct ServerHandshakeResult {
     /// The verified client peer ID.
     pub client_id: PeerId,
+
     /// The verified challenge (for logging/debugging).
     pub challenge: Challenge,
 }
@@ -81,6 +83,7 @@ pub struct ServerHandshakeResult {
 pub struct ClientHandshakeResult {
     /// The verified server peer ID.
     pub server_id: PeerId,
+
     /// The server's timestamp (for drift correction).
     pub server_timestamp: TimestampSeconds,
 }

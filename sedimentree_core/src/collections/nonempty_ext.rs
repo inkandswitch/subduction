@@ -7,8 +7,10 @@ use nonempty::NonEmpty;
 pub enum RemoveResult<T> {
     /// Element was not found in the collection.
     NotFound(NonEmpty<T>),
+
     /// Element was removed; collection still has elements.
     Removed(NonEmpty<T>),
+
     /// Element was removed; it was the last one.
     WasLast(T),
 }

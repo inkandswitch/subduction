@@ -45,6 +45,7 @@ pub(super) enum HandshakeMessage {
 pub(super) struct ClientHandshakeResult {
     /// The verified server peer ID.
     pub server_id: PeerId,
+
     /// The server's timestamp (for drift correction).
     pub server_timestamp: TimestampSeconds,
 }

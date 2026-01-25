@@ -36,8 +36,6 @@ struct Node {
 #[derive(Debug, Clone)]
 struct Edge {
     source: NodeIdx,
-    #[allow(dead_code)]
-    target: NodeIdx,
     next: Option<EdgeIdx>,
 }
 
@@ -90,11 +88,7 @@ impl CommitDag {
     fn add_edge(&mut self, source: NodeIdx, target: NodeIdx) {
         // Add an edge in the child node
         let new_edge_idx = EdgeIdx(self.edges.len());
-        let new_edge = Edge {
-            source,
-            target,
-            next: None,
-        };
+        let new_edge = Edge { source, next: None };
         self.edges.push(new_edge);
 
         #[allow(clippy::expect_used)]
@@ -124,11 +118,7 @@ impl CommitDag {
 
         // Now add an edge in the parent node
         let new_edge_idx = EdgeIdx(self.edges.len());
-        let new_edge = Edge {
-            source,
-            target,
-            next: None,
-        };
+        let new_edge = Edge { source, next: None };
         self.edges.push(new_edge);
 
         #[allow(clippy::expect_used)]

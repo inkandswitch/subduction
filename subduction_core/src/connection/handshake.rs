@@ -415,6 +415,7 @@ pub async fn create_challenge<K: FutureKind, S: Signer<K>>(
 pub struct VerifiedChallenge {
     /// The client's peer ID (extracted from the signature).
     pub client_id: PeerId,
+
     /// The verified challenge payload.
     pub challenge: Challenge,
 }
@@ -466,6 +467,7 @@ pub async fn create_response<K: FutureKind, S: Signer<K>>(
 pub struct VerifiedResponse {
     /// The server's peer ID (extracted from the signature).
     pub server_id: PeerId,
+
     /// The verified response payload.
     pub response: Response,
 }

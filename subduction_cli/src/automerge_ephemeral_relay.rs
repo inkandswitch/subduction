@@ -246,6 +246,7 @@ impl<const N: usize> ShardedDeduplicator<N> {
 struct JoinMessage {
     msg_type: String,
     sender_id: String,
+
     /// Raw CBOR bytes for `peer_metadata` (passed through without interpretation).
     peer_metadata_raw: Vec<u8>,
 }
@@ -296,6 +297,7 @@ impl<'b, C> minicbor::Decode<'b, C> for JoinMessage {
 struct PeerMessage {
     msg_type: String,
     sender_id: String,
+
     /// Raw CBOR bytes for `peer_metadata` (embedded without interpretation).
     peer_metadata_raw: Vec<u8>,
 }

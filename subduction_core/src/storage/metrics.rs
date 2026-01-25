@@ -27,6 +27,7 @@ use crate::metrics;
 #[derive(Debug, Clone)]
 pub struct MetricsStorage<S> {
     inner: S,
+
     /// Track previously-seen sedimentree IDs to clean up stale gauges on refresh.
     previous_ids: Arc<Mutex<Set<SedimentreeId>>>,
 }

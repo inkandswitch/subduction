@@ -35,7 +35,6 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
     /// Create a new putter capability.
     ///
     /// This should only be called after authorization has been verified.
-    #[allow(dead_code)]
     pub(crate) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,

@@ -29,6 +29,7 @@ type TaskId = usize;
 pub enum Command<C> {
     /// Add a new connection to be managed.
     Add(C),
+
     /// Remove a connection (aborts its task immediately).
     Remove(C),
 }
