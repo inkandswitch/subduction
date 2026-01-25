@@ -15,7 +15,7 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    storage::Storage,
+    storage::{BatchResult, Storage},
 };
 
 use crate::metrics;
@@ -292,6 +292,63 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
             let start = Instant::now();
             let result = self.inner.delete_blob(blob_digest).await;
             metrics::storage_operation_duration("delete_blob", start.elapsed().as_secs_f64());
+            result
+        })
+    }
+
+    fn save_commit_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit: LooseCommit,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+        K::into_kind(async move {
+            let start = Instant::now();
+            let result = self
+                .inner
+                .save_commit_with_blob(sedimentree_id, commit, blob)
+                .await;
+            metrics::storage_operation_duration(
+                "save_commit_with_blob",
+                start.elapsed().as_secs_f64(),
+            );
+            result
+        })
+    }
+
+    fn save_fragment_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+        K::into_kind(async move {
+            let start = Instant::now();
+            let result = self
+                .inner
+                .save_fragment_with_blob(sedimentree_id, fragment, blob)
+                .await;
+            metrics::storage_operation_duration(
+                "save_fragment_with_blob",
+                start.elapsed().as_secs_f64(),
+            );
+            result
+        })
+    }
+
+    fn save_batch(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> K::Future<'_, Result<BatchResult, Self::Error>> {
+        K::into_kind(async move {
+            let start = Instant::now();
+            let result = self
+                .inner
+                .save_batch(sedimentree_id, commits, fragments)
+                .await;
+            metrics::storage_operation_duration("save_batch", start.elapsed().as_secs_f64());
             result
         })
     }

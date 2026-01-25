@@ -35,7 +35,6 @@ pub trait Storage<K: FutureKind + ?Sized> {
     fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
 
     /// Save a loose commit to storage.
-    // FIXME also include the blob so this can be done transactionsally
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
@@ -81,6 +80,62 @@ pub trait Storage<K: FutureKind + ?Sized> {
 
     /// Delete a blob from storage.
     fn delete_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<(), Self::Error>>;
+
+    // ─────────────────────────────────────────────────────────────────────────
+    // Compound operations
+    //
+    // These methods combine multiple storage operations into logical units.
+    // Backends with transaction support (SQLite, Postgres, etc.) can wrap
+    // these in BEGIN/COMMIT for atomic execution.
+    //
+    // Simple backends should execute operations sequentially (blob first,
+    // then metadata). Partial failures may leave storage in an incomplete
+    // state that can be recovered via re-sync. See `MemoryStorage` for the
+    // reference implementation pattern.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    /// Save a commit with its blob.
+    ///
+    /// Saves the blob first, then the commit metadata. This ordering ensures
+    /// that referenced data exists before the reference. For transactional
+    /// backends, wrap in a transaction for atomicity.
+    fn save_commit_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit: LooseCommit,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest, Self::Error>>;
+
+    /// Save a fragment with its blob.
+    ///
+    /// Saves the blob first, then the fragment metadata. This ordering ensures
+    /// that referenced data exists before the reference. For transactional
+    /// backends, wrap in a transaction for atomicity.
+    fn save_fragment_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest, Self::Error>>;
+
+    /// Save a batch of commits and fragments.
+    ///
+    /// Saves the sedimentree ID first, then commits (blob + metadata each),
+    /// then fragments (blob + metadata each). For transactional backends,
+    /// wrap in a transaction for atomicity.
+    fn save_batch(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> K::Future<'_, Result<BatchResult, Self::Error>>;
+}
+
+/// Result of a batch save operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchResult {
+    /// Digests of saved blobs (commits first, then fragments).
+    pub blob_digests: Vec<Digest>,
 }
 
 /// Errors that can occur when loading tree data (commits or fragments)
@@ -268,6 +323,100 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
             tracing::debug!(?blob_digest, "MemoryStorage::delete_blob");
             self.blobs.lock().await.remove(&blob_digest);
             Ok(())
+        })
+    }
+
+    fn save_commit_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit: LooseCommit,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(
+                ?sedimentree_id,
+                ?commit,
+                "MemoryStorage::save_commit_with_blob"
+            );
+            let digest = Digest::hash(blob.contents());
+            self.blobs.lock().await.entry(digest).or_insert(blob);
+            self.commits
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .insert(commit);
+            Ok(digest)
+        })
+    }
+
+    fn save_fragment_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(
+                ?sedimentree_id,
+                ?fragment,
+                "MemoryStorage::save_fragment_with_blob"
+            );
+            let digest = Digest::hash(blob.contents());
+            self.blobs.lock().await.entry(digest).or_insert(blob);
+            self.fragments
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .insert(fragment);
+            Ok(digest)
+        })
+    }
+
+    fn save_batch(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> K::Future<'_, Result<BatchResult, Self::Error>> {
+        K::into_kind(async move {
+            tracing::debug!(
+                ?sedimentree_id,
+                num_commits = commits.len(),
+                num_fragments = fragments.len(),
+                "MemoryStorage::save_batch"
+            );
+
+            let mut blob_digests = Vec::with_capacity(commits.len() + fragments.len());
+
+            self.ids.lock().await.insert(sedimentree_id);
+
+            for (commit, blob) in commits {
+                let digest = Digest::hash(blob.contents());
+                self.blobs.lock().await.entry(digest).or_insert(blob);
+                self.commits
+                    .lock()
+                    .await
+                    .entry(sedimentree_id)
+                    .or_default()
+                    .insert(commit);
+                blob_digests.push(digest);
+            }
+
+            for (fragment, blob) in fragments {
+                let digest = Digest::hash(blob.contents());
+                self.blobs.lock().await.entry(digest).or_insert(blob);
+                self.fragments
+                    .lock()
+                    .await
+                    .entry(sedimentree_id)
+                    .or_default()
+                    .insert(fragment);
+                blob_digests.push(digest);
+            }
+
+            Ok(BatchResult { blob_digests })
         })
     }
 }

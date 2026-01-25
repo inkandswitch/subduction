@@ -12,7 +12,7 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    storage::Storage,
+    storage::{BatchResult, Storage},
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -405,6 +405,77 @@ impl Storage<Sendable> for FsStorage {
         }
         .boxed()
     }
+
+    fn save_commit_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit: LooseCommit,
+        blob: Blob,
+    ) -> BoxFuture<'_, Result<Digest, Self::Error>> {
+        async move {
+            tracing::debug!(
+                "FsStorage: saving commit with blob for {:?}",
+                sedimentree_id
+            );
+            let digest = Storage::<Sendable>::save_blob(self, blob).await?;
+            Storage::<Sendable>::save_loose_commit(self, sedimentree_id, commit).await?;
+            Ok(digest)
+        }
+        .boxed()
+    }
+
+    fn save_fragment_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+        blob: Blob,
+    ) -> BoxFuture<'_, Result<Digest, Self::Error>> {
+        async move {
+            tracing::debug!(
+                "FsStorage: saving fragment with blob for {:?}",
+                sedimentree_id
+            );
+            let digest = Storage::<Sendable>::save_blob(self, blob).await?;
+            Storage::<Sendable>::save_fragment(self, sedimentree_id, fragment).await?;
+            Ok(digest)
+        }
+        .boxed()
+    }
+
+    fn save_batch(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> BoxFuture<'_, Result<BatchResult, Self::Error>> {
+        async move {
+            tracing::debug!(
+                "FsStorage: saving batch for {:?} ({} commits, {} fragments)",
+                sedimentree_id,
+                commits.len(),
+                fragments.len()
+            );
+
+            let mut blob_digests = Vec::with_capacity(commits.len() + fragments.len());
+
+            Storage::<Sendable>::save_sedimentree_id(self, sedimentree_id).await?;
+
+            for (commit, blob) in commits {
+                let digest = Storage::<Sendable>::save_blob(self, blob).await?;
+                Storage::<Sendable>::save_loose_commit(self, sedimentree_id, commit).await?;
+                blob_digests.push(digest);
+            }
+
+            for (fragment, blob) in fragments {
+                let digest = Storage::<Sendable>::save_blob(self, blob).await?;
+                Storage::<Sendable>::save_fragment(self, sedimentree_id, fragment).await?;
+                blob_digests.push(digest);
+            }
+
+            Ok(BatchResult { blob_digests })
+        }
+        .boxed()
+    }
 }
 
 impl Storage<Local> for FsStorage {
@@ -488,5 +559,35 @@ impl Storage<Local> for FsStorage {
 
     fn delete_blob(&self, blob_digest: Digest) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         <Self as Storage<Sendable>>::delete_blob(self, blob_digest).boxed_local()
+    }
+
+    fn save_commit_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit: LooseCommit,
+        blob: Blob,
+    ) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
+        <Self as Storage<Sendable>>::save_commit_with_blob(self, sedimentree_id, commit, blob)
+            .boxed_local()
+    }
+
+    fn save_fragment_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+        blob: Blob,
+    ) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
+        <Self as Storage<Sendable>>::save_fragment_with_blob(self, sedimentree_id, fragment, blob)
+            .boxed_local()
+    }
+
+    fn save_batch(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> LocalBoxFuture<'_, Result<BatchResult, Self::Error>> {
+        <Self as Storage<Sendable>>::save_batch(self, sedimentree_id, commits, fragments)
+            .boxed_local()
     }
 }

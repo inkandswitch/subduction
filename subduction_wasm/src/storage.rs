@@ -15,7 +15,7 @@ use sedimentree_core::{
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::LooseCommit,
-    storage::Storage,
+    storage::{BatchResult, Storage},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -377,6 +377,71 @@ impl Storage<Local> for JsSubductionStorage {
                 .await
                 .map_err(JsSubductionStorageError::LoadBlobError)?;
             Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn save_commit_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commit: LooseCommit,
+        blob: Blob,
+    ) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
+        async move {
+            let span = tracing::debug_span!("JsSubductionStorage::save_commit_with_blob");
+            let _enter = span.enter();
+
+            let digest = self.save_blob(blob).await?;
+            self.save_loose_commit(sedimentree_id, commit).await?;
+            Ok(digest)
+        }
+        .boxed_local()
+    }
+
+    fn save_fragment_with_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        fragment: Fragment,
+        blob: Blob,
+    ) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
+        async move {
+            let span = tracing::debug_span!("JsSubductionStorage::save_fragment_with_blob");
+            let _enter = span.enter();
+
+            let digest = self.save_blob(blob).await?;
+            self.save_fragment(sedimentree_id, fragment).await?;
+            Ok(digest)
+        }
+        .boxed_local()
+    }
+
+    fn save_batch(
+        &self,
+        sedimentree_id: SedimentreeId,
+        commits: Vec<(LooseCommit, Blob)>,
+        fragments: Vec<(Fragment, Blob)>,
+    ) -> LocalBoxFuture<'_, Result<BatchResult, Self::Error>> {
+        async move {
+            let span = tracing::debug_span!("JsSubductionStorage::save_batch");
+            let _enter = span.enter();
+
+            let mut blob_digests = Vec::with_capacity(commits.len() + fragments.len());
+
+            self.save_sedimentree_id(sedimentree_id).await?;
+
+            for (commit, blob) in commits {
+                let digest = self.save_blob(blob).await?;
+                self.save_loose_commit(sedimentree_id, commit).await?;
+                blob_digests.push(digest);
+            }
+
+            for (fragment, blob) in fragments {
+                let digest = self.save_blob(blob).await?;
+                self.save_fragment(sedimentree_id, fragment).await?;
+                blob_digests.push(digest);
+            }
+
+            Ok(BatchResult { blob_digests })
         }
         .boxed_local()
     }
