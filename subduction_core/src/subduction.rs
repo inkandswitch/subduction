@@ -10,6 +10,7 @@ use crate::{
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
+        nonce_cache::NonceCache,
     },
     peer::id::PeerId,
     policy::{ConnectionPolicy, Generation, StoragePolicy},
@@ -65,6 +66,7 @@ pub struct Subduction<
     conns: Arc<Mutex<Map<ConnectionId, C>>>,
     storage: Arc<S>,
     policy: P,
+    nonce_tracker: Arc<NonceCache>,
 
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(ConnectionId, Message)>,
@@ -98,6 +100,7 @@ impl<
         audience: Option<Audience>,
         storage: S,
         policy: P,
+        nonce_cache: NonceCache,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
@@ -129,6 +132,7 @@ impl<
             conns: Arc::new(Mutex::new(Map::new())),
             storage: Arc::new(storage),
             policy,
+            nonce_tracker: Arc::new(nonce_cache),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -160,6 +164,7 @@ impl<
         audience: Option<Audience>,
         storage: S,
         policy: P,
+        nonce_cache: NonceCache,
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
@@ -179,6 +184,7 @@ impl<
             audience,
             storage,
             policy,
+            nonce_cache,
             depth_metric,
             sedimentrees,
             spawner,
@@ -1691,8 +1697,8 @@ impl<
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     M: DepthMetric,
     const N: usize,
-    T: StartListener<'a, S, C, P, M, N>,
-> SubductionFutureKind<'a, S, C, P, M, N> for T
+    U: StartListener<'a, S, C, P, M, N>,
+> SubductionFutureKind<'a, S, C, P, M, N> for U
 {
 }
 

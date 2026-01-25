@@ -281,6 +281,10 @@ pub enum ChallengeValidationError {
         /// The server's current timestamp.
         server_timestamp: TimestampSeconds,
     },
+
+    /// The nonce has already been used (replay attack detected).
+    #[error("replayed nonce")]
+    ReplayedNonce,
 }
 
 impl ChallengeValidationError {
@@ -290,6 +294,7 @@ impl ChallengeValidationError {
         match self {
             Self::InvalidAudience => RejectionReason::InvalidAudience,
             Self::ClockDrift { .. } => RejectionReason::ClockDrift,
+            Self::ReplayedNonce => RejectionReason::ReplayedNonce,
         }
     }
 }

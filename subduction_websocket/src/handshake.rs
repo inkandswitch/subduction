@@ -24,8 +24,11 @@ use async_tungstenite::WebSocketStream;
 use futures_kind::FutureKind;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
-    connection::handshake::{
-        self, Audience, Challenge, HandshakeError, Nonce, Rejection, RejectionReason,
+    connection::{
+        handshake::{
+            self, Audience, Challenge, HandshakeError, Nonce, Rejection, RejectionReason,
+        },
+        nonce_cache::NonceCache,
     },
     crypto::{signed::Signed, signer::Signer},
     peer::id::PeerId,
@@ -115,6 +118,7 @@ enum HandshakeMessage {
 /// * `signer` - The server's signer for creating the response
 /// * `server_peer_id` - The server's peer ID (always accepted as `Audience::Known`)
 /// * `discovery_audience` - Optional discovery audience (also accepted if provided)
+/// * `nonce_tracker` - Nonce tracker for replay protection
 /// * `now` - The current timestamp
 /// * `max_drift` - Maximum acceptable clock drift
 ///
@@ -125,6 +129,7 @@ enum HandshakeMessage {
 /// - The challenge signature is invalid
 /// - The audience doesn't match
 /// - The timestamp is outside the acceptable drift window
+/// - The nonce has already been used (replay attack)
 ///
 /// # Panics
 ///
@@ -135,6 +140,7 @@ pub async fn server_handshake<T, S, K>(
     signer: &S,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
+    nonce_cache: &NonceCache,
     now: TimestampSeconds,
     max_drift: Duration,
 ) -> Result<ServerHandshakeResult, WebSocketHandshakeError>
@@ -221,6 +227,24 @@ where
                 return Err(e.into());
             }
         };
+
+    // Claim the nonce for replay protection
+    // Only do this after signature verification succeeds (to prevent DoS via cache filling)
+    if nonce_cache
+        .try_claim(verified.client_id, verified.challenge.nonce, now)
+        .await
+        .is_err()
+    {
+        let rejection = Rejection::new(RejectionReason::ReplayedNonce, now);
+        let msg = HandshakeMessage::Rejection(rejection);
+        let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
+        ws.send(tungstenite::Message::Binary(bytes.into())).await?;
+        return Err(WebSocketHandshakeError::Handshake(
+            HandshakeError::ChallengeValidation(
+                handshake::ChallengeValidationError::ReplayedNonce,
+            ),
+        ));
+    }
 
     // Create and send response
     let signed_response = handshake::create_response(signer, &verified.challenge, now).await;

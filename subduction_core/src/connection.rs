@@ -4,7 +4,7 @@ pub mod handshake;
 pub mod id;
 pub mod manager;
 pub mod message;
-pub mod nonce_tracker;
+pub mod nonce_cache;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;

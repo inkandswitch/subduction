@@ -6,6 +6,7 @@ use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
+    connection::nonce_tracker::generational::DefaultNonceTracker,
     crypto::signer::LocalSigner,
     peer::id::PeerId,
     policy::OpenPolicy,
@@ -127,7 +128,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .clone()
         .unwrap_or_else(|| args.socket.clone());
 
-    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy> =
+    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, DefaultNonceTracker> =
         TokioWebSocketServer::setup(
             addr,
             FuturesTimerTimeout,
@@ -137,6 +138,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             Some(service_name.as_str()),
             storage,
             OpenPolicy,
+            DefaultNonceTracker::with_defaults(),
             CountLeadingZeroBytes,
         )
         .await?;

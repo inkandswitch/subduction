@@ -18,7 +18,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     Subduction,
-    connection::{handshake::Audience, id::ConnectionId},
+    connection::{handshake::Audience, id::ConnectionId, nonce_cache::NonceCache},
     crypto::signer::Signer,
     peer::id::PeerId,
     policy::{ConnectionPolicy, StoragePolicy},
@@ -36,7 +36,7 @@ use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
@@ -52,10 +52,29 @@ pub struct TokioWebSocketServer<
     cancellation_token: CancellationToken,
 }
 
+impl<S, P, M, O> Clone for TokioWebSocketServer<S, P, M, O>
+where
+    S: 'static + Send + Sync + Storage<Sendable>,
+    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+        M: 'static + Send + Sync + DepthMetric,
+    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+    S::Error: 'static + Send + Sync,
+{
+    fn clone(&self) -> Self {
+        Self {
+            subduction: self.subduction.clone(),
+            server_peer_id: self.server_peer_id,
+            address: self.address,
+            accept_task: self.accept_task.clone(),
+            cancellation_token: self.cancellation_token.clone(),
+        }
+    }
+}
+
 impl<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    M: 'static + Send + Sync + DepthMetric,
+        M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
 > TokioWebSocketServer<S, P, M, O>
 where
@@ -233,6 +252,7 @@ where
         service_name: Option<&str>,
         storage: S,
         policy: P,
+        nonce_cache: NonceCache,
         depth_metric: M,
     ) -> Result<Self, tungstenite::Error> {
         let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
@@ -241,6 +261,7 @@ where
             audience,
             storage,
             policy,
+            nonce_cache,
             depth_metric,
             sedimentrees,
             TokioSpawn,
