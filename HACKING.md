@@ -68,7 +68,6 @@ pub struct Subduction<
     S: Storage<F>,           // Storage backend
     C: Connection<F>,        // Network connection type
     P: ConnectionPolicy<F> + StoragePolicy<F>,  // Access control
-    T: NonceTracker<F>,      // Replay protection
     M: DepthMetric,          // Hash → depth mapping
     const N: usize,          // ShardedMap shard count
 >
@@ -76,12 +75,14 @@ pub struct Subduction<
 
 This looks intimidating but serves a purpose: *compile-time configuration*. The entire sync stack is assembled at compile time with little dynamic dispatch for hot paths.
 
+Note: `NonceCache` is a concrete field, not a generic parameter (YAGNI — only one implementation needed).
+
 **Typical instantiations:**
 
-| Context      | F          | S           | C                  | T                     | M                       |
-|--------------|------------|-------------|--------------------|-----------------------|-------------------------|
-| CLI server   | `Sendable` | `FsStorage` | `UnifiedWebSocket` | `DefaultNonceTracker` | `CountLeadingZeroBytes` |
-| Wasm browser | `Local`    | `JsStorage` | `JsConnection`     | `DefaultNonceTracker` | `WasmHashMetric`        |
+| Context      | F          | S           | C                  | M                       |
+|--------------|------------|-------------|--------------------| ------------------------|
+| CLI server   | `Sendable` | `FsStorage` | `UnifiedWebSocket` | `CountLeadingZeroBytes` |
+| Wasm browser | `Local`    | `JsStorage` | `JsConnection`     | `WasmHashMetric`        |
 
 ### Policy Traits: Capability-Based Access Control
 
@@ -107,19 +108,20 @@ pub trait StoragePolicy<K: FutureKind> {
 
 **OpenPolicy** is the permissive default (allows everything). **KeyhivePolicy** integrates with the Keyhive access control system for real authorization.
 
-### NonceTracker: Replay Protection
+### NonceCache: Replay Protection
 
-The handshake protocol uses signed challenges with nonces. `NonceTracker` prevents replay attacks:
+The handshake protocol uses signed challenges with nonces. `NonceCache` prevents replay attacks:
 
 ```rust
-pub trait NonceTracker<K: FutureKind> {
-    fn try_claim(&self, peer: PeerId, nonce: Nonce, timestamp: TimestampSeconds)
-        -> K::Future<'_, Result<(), NonceReused>>;
-    fn prune(&self, now: TimestampSeconds, max_age: Duration) -> K::Future<'_, ()>;
+pub struct NonceCache { /* ... */ }
+
+impl NonceCache {
+    pub async fn try_claim(&self, peer: PeerId, nonce: Nonce, timestamp: TimestampSeconds)
+        -> Result<(), NonceReused>;
 }
 ```
 
-**GenerationalNonceTracker** uses time-based buckets for efficient pruning:
+Uses time-based buckets for efficient expiry with lazy cleanup:
 
 ```
 ┌──────────┬──────────┬──────────┬──────────┐
@@ -127,10 +129,13 @@ pub trait NonceTracker<K: FutureKind> {
 │  0-3 min │  3-6 min │  6-9 min │ 9-12 min │
 └──────────┴──────────┴──────────┴──────────┘
      ↑
-  cleared on prune()
+  rotates as time advances
 ```
 
-Instead of scanning all entries, expired buckets are cleared in O(1).
+- 4 buckets × 3 min = 12 min window (covers 10 min `MAX_PLAUSIBLE_DRIFT`)
+- Lazy GC: buckets cleared during `try_claim()` via `advance_horizon()`
+- No background task needed
+- Concrete type, not a trait (only one implementation needed)
 
 ### Spawn Trait: Task-per-Connection Parallelism
 
@@ -216,7 +221,7 @@ subduction_core/
 │   ├── handshake.rs      # Challenge/Response protocol
 │   ├── manager.rs        # Spawn trait, connection lifecycle
 │   ├── message.rs        # Wire protocol messages
-│   └── nonce_tracker/    # Replay protection
+│   └── nonce_cache.rs    # Replay protection
 ├── crypto/
 │   ├── nonce.rs          # Cryptographic nonces
 │   ├── signed.rs         # Signed<T> wrapper
@@ -255,9 +260,11 @@ These prevent mixing up different 32-byte arrays or timestamps with other intege
 
 ### Arc for Shared Ownership
 
-`Subduction` stores `Arc<S>` for storage and `Arc<T>` for nonce tracker. This enables:
+`Subduction` stores `Arc<S>` for storage. This enables:
 - Sharing across connection tasks
 - Fat capabilities (`Fetcher`/`Putter`) that bundle storage access with authorization proof
+
+`NonceCache` is also wrapped in `Arc` internally for sharing across handshakes.
 
 ### Compile-Time Validation
 
