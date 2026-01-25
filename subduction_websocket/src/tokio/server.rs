@@ -319,26 +319,24 @@ where
     /// Connect to a peer and register the connection for bidirectional sync.
     ///
     /// Performs the handshake protocol to authenticate both sides. The client
-    /// identity is derived from the provided signer.
+    /// identity is derived from the signer stored in the Subduction instance.
     ///
     /// # Arguments
     ///
     /// * `uri` - The WebSocket URI to connect to
     /// * `timeout` - Timeout strategy for requests
     /// * `default_time_limit` - Default timeout duration
-    /// * `signer` - The client's signer for authenticating the handshake
     /// * `expected_peer_id` - The expected peer ID of the server
     ///
     /// # Errors
     ///
     /// Returns an error if the connection could not be established,
     /// handshake fails, or registration fails.
-    pub async fn try_connect<R: Signer<Sendable>>(
+    pub async fn try_connect(
         &self,
         uri: Uri,
         timeout: O,
         default_time_limit: Duration,
-        signer: &R,
         expected_peer_id: PeerId,
     ) -> Result<ConnectionId, TryConnectError<P::ConnectionDisallowed>> {
         use crate::handshake::client_handshake;
@@ -359,7 +357,8 @@ where
         let nonce = Nonce::random();
 
         let handshake_result =
-            client_handshake(&mut ws_stream, signer, audience, now, nonce).await?;
+            client_handshake(&mut ws_stream, self.subduction.signer(), audience, now, nonce)
+                .await?;
 
         // Verify we connected to the expected peer
         if handshake_result.server_id != expected_peer_id {

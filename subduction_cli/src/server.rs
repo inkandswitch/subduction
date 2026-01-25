@@ -167,7 +167,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
         let timeout_duration = Duration::from_secs(args.timeout);
         let peer_server = server.clone();
-        let peer_signer = signer.clone();
 
         // Spawn connection attempt in background to avoid blocking startup
         tokio::spawn(async move {
@@ -176,7 +175,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     uri.clone(),
                     FuturesTimerTimeout,
                     timeout_duration,
-                    &peer_signer,
                     expected_peer_id,
                 )
                 .await
