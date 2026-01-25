@@ -365,7 +365,7 @@ impl<
                 #[cfg(feature = "metrics")]
                 crate::metrics::batch_sync_response();
 
-                self.recv_batch_sync_response(&from, id, &diff).await?;
+                self.recv_batch_sync_response(&from, id, diff).await?;
             }
             Message::BlobsRequest(digests) => {
                 match self.recv_blob_request(conn, &digests).await {
@@ -836,7 +836,7 @@ impl<
                     debug_assert_eq!(req_id, resp_batch_id);
 
                     if let Err(e) = self
-                        .recv_batch_sync_response(&conn.peer_id(), id, &diff)
+                        .recv_batch_sync_response(&conn.peer_id(), id, diff)
                         .await
                     {
                         tracing::error!(
@@ -1287,7 +1287,7 @@ impl<
         &self,
         from: &PeerId,
         id: SedimentreeId,
-        diff: &SyncDiff,
+        diff: SyncDiff,
     ) -> Result<(), IoError<F, S, C>> {
         tracing::info!(
             "received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
@@ -1300,14 +1300,14 @@ impl<
         // TODO: Use get_putter(from, author, id) for authorization when error handling is updated
         let putter = self.storage.local_putter(id);
 
-        for (commit, blob) in &diff.missing_commits {
-            self.insert_commit_locally(&putter, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
+        for (commit, blob) in diff.missing_commits {
+            self.insert_commit_locally(&putter, commit, blob)
                 .await
                 .map_err(IoError::Storage)?;
         }
 
-        for (fragment, blob) in &diff.missing_fragments {
-            self.insert_fragment_locally(&putter, fragment.clone(), blob.clone())
+        for (fragment, blob) in diff.missing_fragments {
+            self.insert_fragment_locally(&putter, fragment, blob)
                 .await
                 .map_err(IoError::Storage)?;
         }
@@ -1407,17 +1407,17 @@ impl<
                     let putter = self.storage.local_putter(id);
 
                     for (commit, blob) in missing_commits {
-                        self.insert_commit_locally(&putter, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
+                        blobs.push(blob.clone());
+                        self.insert_commit_locally(&putter, commit, blob)
                             .await
                             .map_err(IoError::Storage)?;
-                        blobs.push(blob);
                     }
 
                     for (fragment, blob) in missing_fragments {
-                        self.insert_fragment_locally(&putter, fragment.clone(), blob.clone())
+                        blobs.push(blob.clone());
+                        self.insert_fragment_locally(&putter, fragment, blob)
                             .await
                             .map_err(IoError::Storage)?;
-                        blobs.push(blob);
                     }
 
                     had_success = true;
@@ -1517,25 +1517,17 @@ impl<
                                 let putter = self.storage.local_putter(id);
 
                                 for (commit, blob) in missing_commits {
-                                    self.insert_commit_locally(
-                                        &putter,
-                                        commit.clone(),
-                                        blob.clone(),
-                                    ) // TODO potentially a LOT of cloning
-                                    .await
-                                    .map_err(IoError::<F, S, C>::Storage)?;
-                                    inner_blobs.lock().await.insert(blob);
+                                    inner_blobs.lock().await.insert(blob.clone());
+                                    self.insert_commit_locally(&putter, commit, blob)
+                                        .await
+                                        .map_err(IoError::<F, S, C>::Storage)?;
                                 }
 
                                 for (fragment, blob) in missing_fragments {
-                                    self.insert_fragment_locally(
-                                        &putter,
-                                        fragment.clone(),
-                                        blob.clone(),
-                                    )
-                                    .await
-                                    .map_err(IoError::<F, S, C>::Storage)?;
-                                    inner_blobs.lock().await.insert(blob);
+                                    inner_blobs.lock().await.insert(blob.clone());
+                                    self.insert_fragment_locally(&putter, fragment, blob)
+                                        .await
+                                        .map_err(IoError::<F, S, C>::Storage)?;
                                 }
 
                                 had_success = true;
@@ -1730,6 +1722,8 @@ impl<
     ) -> Result<bool, S::Error> {
         let id = putter.sedimentree_id();
         tracing::debug!("inserting commit {:?} locally", commit.digest());
+
+        // Check in-memory tree first to skip storage for duplicates
         let was_added = self
             .sedimentrees
             .with_entry_or_default(id, |tree| tree.add_commit(commit.clone()))
@@ -2038,6 +2032,7 @@ mod tests {
     use super::*;
     use crate::connection::nonce_cache::NonceCache;
     use crate::connection::test_utils::MockConnection;
+    use crate::crypto::signer::LocalSigner;
     use crate::policy::OpenPolicy;
     use futures::future::{BoxFuture, LocalBoxFuture};
     use sedimentree_core::{
@@ -2045,6 +2040,11 @@ mod tests {
         storage::MemoryStorage,
     };
     use testresult::TestResult;
+
+    /// Create a test signer with deterministic key bytes.
+    fn test_signer() -> LocalSigner {
+        LocalSigner::from_bytes(&[42u8; 32])
+    }
 
     /// A spawner that doesn't actually spawn (for tests that don't need task execution).
     struct TestSpawn;
@@ -2093,8 +2093,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2115,8 +2116,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2135,8 +2137,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2159,8 +2162,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2179,8 +2183,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2208,8 +2213,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2229,8 +2235,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2257,8 +2264,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2278,8 +2286,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2306,8 +2315,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2340,8 +2350,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2360,8 +2371,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2371,7 +2383,7 @@ mod tests {
                 );
 
             let conn = MockConnection::new();
-            let (fresh, _conn_id) = subduction.register(conn).await?;
+            let fresh = subduction.register(conn).await?;
 
             assert!(fresh);
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
@@ -2385,8 +2397,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2396,13 +2409,11 @@ mod tests {
                 );
 
             let conn = MockConnection::new();
-            let (fresh1, conn_id1) = subduction.register(conn).await?;
-            let (fresh2, conn_id2) = subduction.register(conn).await?;
+            let fresh1 = subduction.register(conn).await?;
+            let fresh2 = subduction.register(conn).await?;
 
             assert!(fresh1);
             assert!(!fresh2);
-
-            assert_eq!(conn_id1, conn_id2);
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             Ok(())
@@ -2414,8 +2425,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2425,11 +2437,11 @@ mod tests {
                 );
 
             let conn = MockConnection::new();
-            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            let _fresh = subduction.register(conn).await?;
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             let removed = subduction.unregister(&conn).await;
-            assert!(removed);
+            assert_eq!(removed, Some(true));
             assert_eq!(subduction.connected_peer_ids().await.len(), 0);
 
             Ok(())
@@ -2441,8 +2453,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2454,7 +2467,7 @@ mod tests {
             // Unregister a connection that was never registered
             let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32]));
             let removed = subduction.unregister(&conn).await;
-            assert!(!removed);
+            assert_eq!(removed, None);
         }
 
         #[tokio::test]
@@ -2463,8 +2476,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2489,8 +2503,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2500,9 +2515,9 @@ mod tests {
                 );
 
             let conn = MockConnection::new();
-            let (_fresh, conn_id) = subduction.register(conn).await?;
+            let _fresh = subduction.register(conn).await?;
 
-            let removed = subduction.disconnect(&conn_id).await?;
+            let removed = subduction.disconnect(&conn).await?;
             assert!(removed);
             assert_eq!(subduction.connected_peer_ids().await.len(), 0);
 
@@ -2515,8 +2530,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2525,8 +2541,8 @@ mod tests {
                     TestSpawn,
                 );
 
-            let conn_id = ConnectionId::new(999);
-            let removed = subduction.disconnect(&conn_id).await?;
+            let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32]));
+            let removed = subduction.disconnect(&conn).await?;
             assert!(!removed);
 
             Ok(())
@@ -2538,8 +2554,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2567,8 +2584,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2601,8 +2619,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2628,8 +2647,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2656,8 +2676,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2677,8 +2698,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2729,8 +2751,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2742,7 +2765,7 @@ mod tests {
             // Register a failing connection
             let peer_id = PeerId::new([1u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(peer_id);
-            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            let _fresh = subduction.register(conn).await?;
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Add a commit - the send will fail
@@ -2767,8 +2790,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2780,7 +2804,7 @@ mod tests {
             // Register a failing connection
             let peer_id = PeerId::new([1u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(peer_id);
-            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            let _fresh = subduction.register(conn).await?;
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Add a fragment - the send will fail
@@ -2805,8 +2829,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2819,7 +2844,7 @@ mod tests {
             let sender_peer_id = PeerId::new([1u8; 32]);
             let other_peer_id = PeerId::new([2u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            let _fresh = subduction.register(conn).await?;
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Receive a commit from a different peer - the propagation send will fail
@@ -2846,8 +2871,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2860,7 +2886,7 @@ mod tests {
             let sender_peer_id = PeerId::new([1u8; 32]);
             let other_peer_id = PeerId::new([2u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            let _fresh = subduction.register(conn).await?;
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Receive a fragment from a different peer - the propagation send will fail
@@ -2887,8 +2913,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2900,7 +2927,7 @@ mod tests {
             // Register a failing connection
             let peer_id = PeerId::new([1u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(peer_id);
-            let (_fresh, _conn_id) = subduction.register(conn).await?;
+            let _fresh = subduction.register(conn).await?;
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Request blobs - the send will fail
@@ -2923,8 +2950,9 @@ mod tests {
             let depth_metric = CountLeadingZeroBytes;
 
             let (subduction, _listener_fut, _actor_fut) =
-                Subduction::<'_, Sendable, _, MockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -2996,8 +3024,9 @@ mod tests {
         async fn test_sendable_single_commit() -> TestResult {
             let storage = MemoryStorage::new();
             let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -3049,8 +3078,9 @@ mod tests {
         async fn test_sendable_multiple_sequential() -> TestResult {
             let storage = MemoryStorage::new();
             let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -3101,8 +3131,9 @@ mod tests {
         async fn test_sendable_same_sedimentree() -> TestResult {
             let storage = MemoryStorage::new();
             let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _>::new(
+                Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
                     None,
+                    test_signer(),
                     storage,
                     OpenPolicy,
                     NonceCache::default(),
@@ -3162,10 +3193,12 @@ mod tests {
                 .run_until(async {
                     let storage = MemoryStorage::new();
                     let (subduction, listener_fut, actor_fut) =
-                        Subduction::<'_, Local, _, ChannelMockConnection, _, _>::new(
+                        Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                             None,
+                            test_signer(),
                             storage,
                             OpenPolicy,
+                            NonceCache::default(),
                             CountLeadingZeroBytes,
                             ShardedMap::with_key(0, 0),
                             TokioSpawn,
@@ -3219,8 +3252,9 @@ mod tests {
             tokio::task::LocalSet::new().run_until(async {
                 let storage = MemoryStorage::new();
                 let (subduction, listener_fut, actor_fut) =
-                    Subduction::<'_, Local, _, ChannelMockConnection, _, _>::new(
+                    Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                         None,
+                        test_signer(),
                         storage,
                         OpenPolicy,
                         NonceCache::default(),
@@ -3266,10 +3300,12 @@ mod tests {
                 .run_until(async {
                     let storage = MemoryStorage::new();
                     let (subduction, listener_fut, actor_fut) =
-                        Subduction::<'_, Local, _, ChannelMockConnection, _, _>::new(
+                        Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                             None,
+                            test_signer(),
                             storage,
                             OpenPolicy,
+                            NonceCache::default(),
                             CountLeadingZeroBytes,
                             ShardedMap::with_key(0, 0),
                             TokioSpawn,

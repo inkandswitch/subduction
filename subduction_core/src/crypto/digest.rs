@@ -10,7 +10,7 @@ use sedimentree_core::blob::Digest as UntypedDigest;
 /// are not accidentally mixed up.
 pub struct Digest<T> {
     bytes: [u8; 32],
-    _marker: PhantomData<fn() -> T>,
+    _marker: PhantomData<T>,
 }
 
 impl<T, Ctx> minicbor::Encode<Ctx> for Digest<T> {
