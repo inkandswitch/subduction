@@ -7,9 +7,10 @@ use crate::{
     connection::{
         Connection,
         handshake::DiscoveryId,
-        id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
+        message::{
+            BatchSyncRequest, BatchSyncResponse, Message, RemoveSubscriptions, RequestId, SyncDiff,
+        },
         nonce_cache::NonceCache,
     },
     crypto::signer::Signer,
@@ -25,7 +26,6 @@ use core::{
     marker::PhantomData,
     ops::Deref,
     pin::Pin,
-    sync::atomic::{AtomicUsize, Ordering},
     task::{Context, Poll},
     time::Duration,
 };
@@ -38,7 +38,7 @@ use futures::{
 use futures_kind::{FutureKind, Local, Sendable};
 use nonempty::NonEmpty;
 use request::FragmentRequested;
-use sedimentree_core::collections::{Map, Set};
+use sedimentree_core::collections::{Map, Set, nonempty_ext::{NonEmptyExt, RemoveResult}};
 use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
@@ -69,8 +69,8 @@ pub struct Subduction<
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
     storage: StoragePowerbox<S, P>,
 
-    next_connection_id: Arc<AtomicUsize>,
-    conns: Arc<Mutex<Map<ConnectionId, C>>>,
+    connections: Arc<Mutex<Map<PeerId, NonEmpty<C>>>>,
+    subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
 
     manager_channel: Sender<Command<C>>,
@@ -136,8 +136,8 @@ impl<
             signer,
             depth_metric,
             sedimentrees: Arc::new(sedimentrees),
-            next_connection_id: Arc::new(AtomicUsize::new(0)),
-            conns: Arc::new(Mutex::new(Map::new())),
+            connections: Arc::new(Mutex::new(Map::new())),
+            subscriptions: Arc::new(Mutex::new(Map::new())),
             storage: StoragePowerbox::new(storage, Arc::new(policy)),
             nonce_tracker: Arc::new(nonce_cache),
             manager_channel: manager_sender,
@@ -336,9 +336,16 @@ impl<
                 id,
                 sedimentree_summary,
                 req_id,
+                subscribe,
             }) => {
                 #[cfg(feature = "metrics")]
                 crate::metrics::batch_sync_request();
+
+                // Add subscription if requested
+                if subscribe {
+                    self.add_subscription(from, id).await;
+                    tracing::debug!("added subscription for peer {from} to sedimentree {id:?}");
+                }
 
                 if let Err(ListenError::MissingBlobs(missing)) = self
                     .recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
@@ -390,6 +397,10 @@ impl<
                     "saved {len} blobs from blob response from peer {from}, no reply needed",
                 );
             }
+            Message::RemoveSubscriptions(RemoveSubscriptions { ids }) => {
+                self.remove_subscriptions(from, &ids).await;
+                tracing::debug!("removed subscriptions for peer {from}: {ids:?}");
+            }
         }
 
         Ok(())
@@ -408,11 +419,11 @@ impl<
     pub async fn attach(
         &self,
         conn: C,
-    ) -> Result<(bool, ConnectionId), AttachError<F, S, C, P::ConnectionDisallowed>> {
+    ) -> Result<bool, AttachError<F, S, C, P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
-        tracing::info!("Attaching connection to peer {:?}", peer_id);
+        tracing::info!("Attaching connection to peer {}", peer_id);
 
-        let (fresh, conn_id) = self.register(conn).await?;
+        let fresh = self.register(conn).await?;
 
         let ids = self.sedimentrees.into_keys().await;
 
@@ -421,19 +432,36 @@ impl<
                 .await?;
         }
 
-        Ok((fresh, conn_id))
+        Ok(fresh)
     }
 
-    /// Gracefully shut down a connection.
+    /// Gracefully shut down a specific connection.
     ///
     /// # Errors
     ///
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
-    pub async fn disconnect(&self, conn_id: &ConnectionId) -> Result<bool, C::DisconnectionError> {
-        tracing::info!("Disconnecting connection {:?}", conn_id);
-        let removed = { self.conns.lock().await.remove(conn_id) };
-        if let Some(conn) = removed {
-            conn.disconnect().await.map(|()| true)
+    pub async fn disconnect(&self, conn: &C) -> Result<bool, C::DisconnectionError> {
+        let peer_id = conn.peer_id();
+        tracing::info!("Disconnecting connection from peer {}", peer_id);
+
+        let mut connections = self.connections.lock().await;
+        if let Some(peer_conns) = connections.remove(&peer_id) {
+            match peer_conns.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    // Put the remaining connections back
+                    connections.insert(peer_id, remaining);
+                    conn.disconnect().await.map(|()| true)
+                }
+                RemoveResult::WasLast(_) => {
+                    // Don't put anything back, peer entry stays removed
+                    conn.disconnect().await.map(|()| true)
+                }
+                RemoveResult::NotFound(original) => {
+                    // Connection wasn't in the list, put original back
+                    connections.insert(peer_id, original);
+                    Ok(false)
+                }
+            }
         } else {
             Ok(false)
         }
@@ -445,13 +473,16 @@ impl<
     ///
     /// * Returns [`C::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), C::DisconnectionError> {
-        let conns: Vec<_> = {
-            let mut guard = self.conns.lock().await;
-            core::mem::take(&mut *guard).values().cloned().collect()
+        let all_conns: Vec<C> = {
+            let mut guard = self.connections.lock().await;
+            core::mem::take(&mut *guard)
+                .into_values()
+                .flat_map(|ne| ne.into_iter())
+                .collect()
         };
 
         try_join_all(
-            conns
+            all_conns
                 .into_iter()
                 .map(|conn| async move { conn.disconnect().await }),
         )
@@ -474,29 +505,19 @@ impl<
         &self,
         peer_id: &PeerId,
     ) -> Result<bool, C::DisconnectionError> {
-        let mut touched = false;
+        let peer_conns = { self.connections.lock().await.remove(peer_id) };
 
-        let mut conn_meta = Vec::new();
-        {
-            for (key, value) in self.conns.lock().await.iter() {
-                conn_meta.push((*key, value.peer_id()));
-            }
-        }
-
-        for (id, conn_peer_id) in &conn_meta {
-            if *conn_peer_id == *peer_id {
-                touched = true;
-                let removed = { self.conns.lock().await.remove(id) };
-                if let Some(conn) = removed
-                    && let Err(e) = conn.disconnect().await
-                {
+        if let Some(conns) = peer_conns {
+            for conn in conns {
+                if let Err(e) = conn.disconnect().await {
                     tracing::error!("{e}");
                     return Err(e);
                 }
             }
+            Ok(true)
+        } else {
+            Ok(false)
         }
-
-        Ok(touched)
     }
 
     /****************************
@@ -509,8 +530,8 @@ impl<
     ///
     /// # Returns
     ///
-    /// * `Ok(true)` if the connection was successfully registered.
-    /// * `Ok(false)` if the connection was already registered.
+    /// * `Ok(true)` if the connection is fresh (first for this peer or new connection).
+    /// * `Ok(false)` if the exact connection was already registered.
     ///
     /// # Errors
     ///
@@ -518,9 +539,9 @@ impl<
     pub async fn register(
         &self,
         conn: C,
-    ) -> Result<(bool, ConnectionId), RegistrationError<P::ConnectionDisallowed>> {
+    ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
-        tracing::info!("registering connection from peer {:?}", peer_id);
+        tracing::info!("registering connection from peer {}", peer_id);
 
         self.storage
             .policy()
@@ -528,57 +549,179 @@ impl<
             .await
             .map_err(RegistrationError::ConnectionDisallowed)?;
 
-        let conns = { self.conns.lock().await.clone() };
+        let mut connections = self.connections.lock().await;
 
-        if let Some((hit, _)) = conns.iter().find(|(_, value)| **value == conn) {
-            Ok((false, *hit))
-        } else {
-            let counter = self.next_connection_id.fetch_add(1, Ordering::Relaxed);
-            let conn_id: ConnectionId = ConnectionId::new(counter);
-
-            self.conns.lock().await.insert(conn_id, conn.clone());
-            self.manager_channel
-                .send(Command::Add(conn))
-                .await
-                .map_err(|_| RegistrationError::SendToClosedChannel)?;
-
-            #[cfg(feature = "metrics")]
-            crate::metrics::connection_opened();
-
-            Ok((true, conn_id))
+        // Check if this exact connection is already registered
+        if let Some(peer_conns) = connections.get(&peer_id) {
+            if peer_conns.iter().any(|c| c == &conn) {
+                return Ok(false);
+            }
         }
-    }
 
-    /// Low-level unregistration of a connection.
-    /// Unregister a connection by ConnectionId.
-    pub async fn unregister_by_id(&self, conn_id: &ConnectionId) -> bool {
-        let removed = self.conns.lock().await.remove(conn_id).is_some();
+        // Add connection to the peer's connection list
+        match connections.get_mut(&peer_id) {
+            Some(peer_conns) => {
+                peer_conns.push(conn.clone());
+            }
+            None => {
+                connections.insert(peer_id, NonEmpty::new(conn.clone()));
+            }
+        }
+
+        // Release the lock before sending to avoid deadlock
+        drop(connections);
+
+        self.manager_channel
+            .send(Command::Add(conn))
+            .await
+            .map_err(|_| RegistrationError::SendToClosedChannel)?;
 
         #[cfg(feature = "metrics")]
-        if removed {
-            crate::metrics::connection_closed();
-        }
+        crate::metrics::connection_opened();
 
-        removed
+        Ok(true)
     }
 
-    /// Unregister a connection by finding it in the connections map.
+    /// Unregister a connection.
     ///
-    /// This scans through connections to find a match via `PartialEq`.
-    pub async fn unregister(&self, conn: &C) -> bool {
-        let mut conns = self.conns.lock().await;
-        let found = conns.iter().find(|(_, c)| *c == conn).map(|(id, _)| *id);
+    /// Uses `NonEmptyExt::remove_item` to handle the three cases:
+    /// - Connection not found
+    /// - Connection removed, peer still has other connections
+    /// - Connection removed, was the last connection for this peer
+    ///
+    /// Returns `Some(true)` if this was the last connection for the peer,
+    /// `Some(false)` if the peer still has connections,
+    /// `None` if the connection wasn't found.
+    pub async fn unregister(&self, conn: &C) -> Option<bool> {
+        let peer_id = conn.peer_id();
+        let mut connections = self.connections.lock().await;
 
-        if let Some(conn_id) = found {
-            conns.remove(&conn_id);
+        if let Some(peer_conns) = connections.remove(&peer_id) {
+            match peer_conns.remove_item(conn) {
+                RemoveResult::Removed(remaining) => {
+                    connections.insert(peer_id, remaining);
 
-            #[cfg(feature = "metrics")]
-            crate::metrics::connection_closed();
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::connection_closed();
 
-            true
+                    Some(false) // Peer still has connections
+                }
+                RemoveResult::WasLast(_) => {
+                    // Don't put anything back, peer entry stays removed
+                    // Also remove peer from all subscriptions
+                    drop(connections); // Release connection lock before acquiring subscription lock
+                    self.remove_peer_from_subscriptions(peer_id).await;
+
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::connection_closed();
+
+                    Some(true) // Was the last connection for this peer
+                }
+                RemoveResult::NotFound(original) => {
+                    // Put the original back
+                    connections.insert(peer_id, original);
+                    None // Connection wasn't found
+                }
+            }
         } else {
-            false
+            None // Peer not found
         }
+    }
+
+    /// Get all connections as a flat list.
+    ///
+    /// This is useful for iterating over all connections to send messages.
+    async fn all_connections(&self) -> Vec<C> {
+        self.connections
+            .lock()
+            .await
+            .values()
+            .flat_map(|ne| ne.iter().cloned())
+            .collect()
+    }
+
+    /// Remove a peer from all subscription sets.
+    ///
+    /// Called when the last connection for a peer drops.
+    async fn remove_peer_from_subscriptions(&self, peer_id: PeerId) {
+        let mut subscriptions = self.subscriptions.lock().await;
+        subscriptions.retain(|_id, peers| {
+            peers.remove(&peer_id);
+            !peers.is_empty()
+        });
+    }
+
+    /// Remove a peer's subscriptions for specific sedimentree IDs.
+    async fn remove_subscriptions(&self, peer_id: PeerId, ids: &[SedimentreeId]) {
+        let mut subscriptions = self.subscriptions.lock().await;
+        for id in ids {
+            if let Some(peers) = subscriptions.get_mut(id) {
+                peers.remove(&peer_id);
+                if peers.is_empty() {
+                    subscriptions.remove(id);
+                }
+            }
+        }
+    }
+
+    /// Add a subscription for a peer to a sedimentree.
+    async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
+        let mut subscriptions = self.subscriptions.lock().await;
+        subscriptions
+            .entry(sedimentree_id)
+            .or_default()
+            .insert(peer_id);
+    }
+
+    /// Get connections for subscribers authorized to receive updates for a sedimentree.
+    ///
+    /// This is used when forwarding updates: we only send to subscribers who have Pull access.
+    async fn get_authorized_subscriber_conns(
+        &self,
+        sedimentree_id: SedimentreeId,
+        exclude_peer: &PeerId,
+    ) -> Vec<C> {
+        // Get the subscribers for this sedimentree
+        let subscriber_ids: Vec<PeerId> = {
+            let subscriptions = self.subscriptions.lock().await;
+            subscriptions
+                .get(&sedimentree_id)
+                .map(|peers| peers.iter().copied().collect())
+                .unwrap_or_default()
+        };
+
+        if subscriber_ids.is_empty() {
+            return Vec::new();
+        }
+
+        // For each subscriber, check if they're authorized to fetch this sedimentree
+        let mut authorized_peers = Vec::new();
+        for peer_id in subscriber_ids {
+            if peer_id == *exclude_peer {
+                continue;
+            }
+            // Check if this peer can fetch this sedimentree
+            let can_fetch = self
+                .storage
+                .policy()
+                .filter_authorized_fetch(peer_id, alloc::vec![sedimentree_id])
+                .await;
+            if !can_fetch.is_empty() {
+                authorized_peers.push(peer_id);
+            }
+        }
+
+        // Get connections for authorized peers
+        let connections = self.connections.lock().await;
+        authorized_peers
+            .into_iter()
+            .flat_map(|pid| {
+                connections
+                    .get(&pid)
+                    .map(|conns| conns.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_default()
+            })
+            .collect()
     }
 
     /*********
@@ -670,7 +813,7 @@ impl<
             let tree = self.sedimentrees.get_cloned(&id).await;
             if let Some(tree) = tree {
                 let summary = tree.summarize();
-                let conns: Vec<_> = { self.conns.lock().await.values().cloned().collect() };
+                let conns = self.all_connections().await;
                 for conn in conns {
                     let req_id = conn.next_request_id().await;
                     let BatchSyncResponse {
@@ -683,6 +826,7 @@ impl<
                                 id,
                                 req_id,
                                 sedimentree_summary: summary.clone(),
+                                subscribe: false,
                             },
                             timeout,
                         )
@@ -840,26 +984,20 @@ impl<
             blob,
         };
         {
-            let conns_with_ids: Vec<(ConnectionId, C)> = {
-                self.conns
-                    .lock()
-                    .await
-                    .iter()
-                    .map(|(id, c)| (*id, c.clone()))
-                    .collect()
-            };
-            for (conn_id, conn) in conns_with_ids {
+            let conns = self.all_connections().await;
+            for conn in conns {
+                let peer_id = conn.peer_id();
                 tracing::debug!(
-                    "Propagating commit {:?} for sedimentree {:?} to peer {:?}",
+                    "Propagating commit {:?} for sedimentree {:?} to peer {}",
                     msg.request_id(),
                     id,
-                    conn.peer_id()
+                    peer_id
                 );
 
                 if let Err(e) = conn.send(&msg).await {
                     tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
                     self.unregister(&conn).await;
-                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                    tracing::info!("unregistered failed connection from peer {}", peer_id);
                 }
             }
         }
@@ -909,26 +1047,19 @@ impl<
             blob,
         };
 
-        let conns_with_ids: Vec<(ConnectionId, C)> = {
-            self.conns
-                .lock()
-                .await
-                .iter()
-                .map(|(id, c)| (*id, c.clone()))
-                .collect()
-        };
-
-        for (conn_id, conn) in conns_with_ids {
+        let conns = self.all_connections().await;
+        for conn in conns {
+            let peer_id = conn.peer_id();
             tracing::debug!(
-                "Propagating fragment {:?} for sedimentree {:?} to peer {:?}",
+                "Propagating fragment {:?} for sedimentree {:?} to peer {}",
                 fragment.digest(),
                 id,
-                conn.peer_id()
+                peer_id
             );
             if let Err(e) = conn.send(&msg).await {
                 tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
                 self.unregister(&conn).await;
-                tracing::info!("unregistered failed connection {:?}", conn_id);
+                tracing::info!("unregistered failed connection from peer {}", peer_id);
             }
         }
 
@@ -973,23 +1104,14 @@ impl<
                 commit: commit.clone(),
                 blob,
             };
-            let conns_with_ids: Vec<(ConnectionId, C)> = {
-                self.conns
-                    .lock()
-                    .await
-                    .iter()
-                    .map(|(id, c)| (*id, c.clone()))
-                    .collect()
-            };
-            // FIXME: Should also check authorize_fetch before forwarding.
-            // Consider pubsub for explicit subscription instead of eager fanout.
-            for (conn_id, conn) in conns_with_ids {
-                if conn.peer_id() != *from
-                    && let Err(e) = conn.send(&msg).await
-                {
+            // Forward to authorized subscribers only
+            let conns = self.get_authorized_subscriber_conns(id, from).await;
+            for conn in conns {
+                let peer_id = conn.peer_id();
+                if let Err(e) = conn.send(&msg).await {
                     tracing::error!("{e}");
                     self.unregister(&conn).await;
-                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                    tracing::info!("unregistered failed connection from peer {}", peer_id);
                 }
             }
         }
@@ -1031,23 +1153,14 @@ impl<
                 fragment: fragment.clone(),
                 blob,
             };
-            let conns_with_ids: Vec<(ConnectionId, C)> = {
-                self.conns
-                    .lock()
-                    .await
-                    .iter()
-                    .map(|(id, c)| (*id, c.clone()))
-                    .collect()
-            };
-            // FIXME: Should also check authorize_fetch before forwarding.
-            // Consider pubsub for explicit subscription instead of eager fanout.
-            for (conn_id, conn) in conns_with_ids {
-                if conn.peer_id() != *from
-                    && let Err(e) = conn.send(&msg).await
-                {
+            // Forward to authorized subscribers only
+            let conns = self.get_authorized_subscriber_conns(id, from).await;
+            for conn in conns {
+                let peer_id = conn.peer_id();
+                if let Err(e) = conn.send(&msg).await {
                     tracing::error!("{e}");
                     self.unregister(&conn).await;
-                    tracing::info!("unregistered failed connection {:?}", conn_id);
+                    tracing::info!("unregistered failed connection from peer {}", peer_id);
                 }
             }
         }
@@ -1205,24 +1318,18 @@ impl<
     /// Find blobs from connected peers.
     pub async fn request_blobs(&self, digests: Vec<Digest>) {
         let msg = Message::BlobsRequest(digests);
-        let conns_with_ids: Vec<(ConnectionId, C)> = {
-            self.conns
-                .lock()
-                .await
-                .iter()
-                .map(|(id, c)| (*id, c.clone()))
-                .collect()
-        };
-        for (conn_id, conn) in conns_with_ids {
+        let conns = self.all_connections().await;
+        for conn in conns {
+            let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
                 tracing::error!(
-                    "Error requesting blobs {:?} from peer {:?}: {:?}",
+                    "Error requesting blobs {:?} from peer {}: {:?}",
                     msg,
-                    conn.peer_id(),
+                    peer_id,
                     e
                 );
                 self.unregister(&conn).await;
-                tracing::info!("unregistered failed connection {:?}", conn_id);
+                tracing::info!("unregistered failed connection from peer {}", peer_id);
             }
         }
     }
@@ -1251,19 +1358,20 @@ impl<
 
         let mut blobs = Vec::new();
         let mut had_success = false;
-        let mut peer_conns = Vec::new();
 
-        let conns = { self.conns.lock().await.clone() };
-        for (conn_id, conn) in conns {
-            if conn.peer_id() == *to_ask {
-                peer_conns.push((conn_id, conn));
-            }
-        }
+        let peer_conns: Vec<C> = {
+            self.connections
+                .lock()
+                .await
+                .get(to_ask)
+                .map(|ne| ne.iter().cloned().collect())
+                .unwrap_or_default()
+        };
 
         let mut conn_errs = Vec::new();
 
-        for (conn_id, conn) in peer_conns {
-            tracing::info!("Using connection {:?} to peer {:?}", conn_id, to_ask);
+        for conn in peer_conns {
+            tracing::info!("Using connection to peer {}", to_ask);
             let summary = self
                 .sedimentrees
                 .get_cloned(&id)
@@ -1279,6 +1387,7 @@ impl<
                         id,
                         req_id,
                         sedimentree_summary: summary,
+                        subscribe: false,
                     },
                     timeout,
                 )
@@ -1343,15 +1452,14 @@ impl<
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
         );
-        let mut peers: Map<PeerId, Vec<(ConnectionId, C)>> = Map::new();
-        {
-            for (conn_id, conn) in self.conns.lock().await.iter() {
-                peers
-                    .entry(conn.peer_id())
-                    .or_default()
-                    .push((*conn_id, conn.clone()));
-            }
-        }
+        let peers: Map<PeerId, Vec<C>> = {
+            self.connections
+                .lock()
+                .await
+                .iter()
+                .map(|(peer_id, conns)| (*peer_id, conns.iter().cloned().collect()))
+                .collect()
+        };
 
         tracing::debug!("Found {} peer(s)", peers.len());
         let blobs = Arc::new(Mutex::new(Set::<Blob>::new()));
@@ -1369,10 +1477,9 @@ impl<
                     let mut had_success = false;
                     let mut conn_errs = Vec::new();
 
-                    for (conn_id, conn) in peer_conns {
+                    for conn in peer_conns {
                         tracing::debug!(
-                            "Using connection {:?} to peer {:?}",
-                            conn_id,
+                            "Using connection to peer {}",
                             conn.peer_id()
                         );
                         let summary = self
@@ -1390,6 +1497,7 @@ impl<
                                     id,
                                     req_id,
                                     sedimentree_summary: summary,
+                                    subscribe: false,
                                 },
                                 timeout,
                             )
@@ -1526,12 +1634,7 @@ impl<
 
     /// Get the set of all connected peer IDs.
     pub async fn connected_peer_ids(&self) -> Set<PeerId> {
-        self.conns
-            .lock()
-            .await
-            .values()
-            .map(Connection::peer_id)
-            .collect()
+        self.connections.lock().await.keys().copied().collect()
     }
 
     /*******************
@@ -1740,6 +1843,14 @@ impl<
         self.storage
             .policy()
             .authorize_put(requestor, author, sedimentree_id)
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> F::Future<'_, Vec<SedimentreeId>> {
+        self.storage.policy().filter_authorized_fetch(peer, ids)
     }
 }
 

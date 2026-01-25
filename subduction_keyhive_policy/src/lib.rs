@@ -5,6 +5,9 @@
 #[cfg(feature = "std")]
 extern crate std;
 
+extern crate alloc;
+
+use alloc::vec::Vec;
 use core::fmt;
 
 use ed25519_dalek::VerifyingKey;
@@ -242,6 +245,44 @@ impl<
             } else {
                 Err(PutDisallowedError::InsufficientAccess)
             }
+        }
+        .boxed()
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+        async move {
+            let identifier = match try_peer_id_to_identifier(peer) {
+                Some(id) => id,
+                None => return Vec::new(),
+            };
+
+            let mut authorized = Vec::new();
+            for sedimentree_id in ids {
+                let doc_id = match try_sedimentree_id_to_document_id(sedimentree_id) {
+                    Some(id) => id,
+                    None => continue,
+                };
+
+                let doc = match self.0.get_document(doc_id).await {
+                    Some(doc) => doc,
+                    None => continue,
+                };
+
+                let members = doc.lock().await.transitive_members().await;
+
+                if members
+                    .get(&identifier)
+                    .is_some_and(|(_, access)| *access >= Access::Pull)
+                {
+                    authorized.push(sedimentree_id);
+                }
+            }
+
+            authorized
         }
         .boxed()
     }

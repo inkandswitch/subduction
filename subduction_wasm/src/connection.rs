@@ -261,6 +261,12 @@ impl WasmBatchSyncRequest {
     pub fn request_id(&self) -> WasmRequestId {
         self.0.req_id.into()
     }
+
+    /// Whether this request subscribes to future updates.
+    #[must_use]
+    pub fn subscribe(&self) -> bool {
+        self.0.subscribe
+    }
 }
 
 impl From<BatchSyncRequest> for WasmBatchSyncRequest {

@@ -148,6 +148,7 @@ mod generators {
             id: sedimentree_id_from_seed(seed),
             req_id: request_id_from_seed(seed.wrapping_add(1), seed),
             sedimentree_summary: SedimentreeSummary::default(),
+            subscribe: false,
         }
     }
 
@@ -519,6 +520,7 @@ mod sync {
                 id: black_box(id),
                 req_id: black_box(req_id),
                 sedimentree_summary: black_box(summary.clone()),
+                subscribe: false,
             });
         });
 

@@ -135,7 +135,8 @@ impl WasmMessage {
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -149,7 +150,8 @@ impl WasmMessage {
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -164,7 +166,8 @@ impl WasmMessage {
             Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -180,7 +183,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -199,7 +203,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -213,7 +218,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -227,7 +233,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
-            | Message::BatchSyncRequest(_) => None,
+            | Message::BatchSyncRequest(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 }

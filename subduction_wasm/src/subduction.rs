@@ -29,7 +29,6 @@ use wasm_bindgen::prelude::*;
 
 use crate::{
     connection::{JsConnection, JsConnectionError},
-    connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::{JsDigest, WasmDigest},
     error::{
@@ -247,25 +246,21 @@ impl WasmSubduction {
 
     /// Attach a connection.
     ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
     /// # Errors
     ///
     /// Returns a `WasmAttachError` if attaching the connection fails.
-    pub async fn attach(&self, conn: JsConnection) -> Result<Registered, WasmAttachError> {
-        let (is_new, conn_id) = self
-            .core
+    pub async fn attach(&self, conn: JsConnection) -> Result<bool, WasmAttachError> {
+        self.core
             .attach(conn)
             .await
-            .map_err(WasmAttachError::from)?;
-
-        Ok(Registered {
-            is_new,
-            conn_id: conn_id.into(),
-        })
+            .map_err(WasmAttachError::from)
     }
 
-    /// Disconnect a connection by its ID.
-    pub async fn disconnect(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core.disconnect(&conn_id.clone().into()).await.is_ok()
+    /// Disconnect a connection.
+    pub async fn disconnect(&self, conn: &JsConnection) -> bool {
+        self.core.disconnect(conn).await.is_ok()
     }
 
     /// Disconnect from all peers.
@@ -296,23 +291,23 @@ impl WasmSubduction {
 
     /// Register a new connection.
     ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
     /// # Errors
     ///
     /// Returns [`WasmRegistrationError`] if the connection is not allowed.
-    pub async fn register(&self, conn: JsConnection) -> Result<Registered, WasmRegistrationError> {
-        let (is_new, conn_id) = self.core.register(conn).await?;
-        Ok(Registered {
-            is_new,
-            conn_id: conn_id.into(),
-        })
+    pub async fn register(&self, conn: JsConnection) -> Result<bool, WasmRegistrationError> {
+        self.core.register(conn).await.map_err(Into::into)
     }
 
-    /// Unregister a connection by its ID.
+    /// Unregister a connection.
     ///
-    /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
+    /// Returns `Some(true)` if this was the last connection for the peer,
+    /// `Some(false)` if the peer still has other connections,
+    /// or `None` if the connection was not found.
     #[must_use]
-    pub async fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core.unregister_by_id(&conn_id.clone().into()).await
+    pub async fn unregister(&self, conn: &JsConnection) -> Option<bool> {
+        self.core.unregister(conn).await
     }
 
     /// Get a local blob by its digest.
@@ -591,33 +586,6 @@ impl WasmSubduction {
     #[wasm_bindgen(getter, js_name = storage)]
     pub fn storage(&self) -> JsValue {
         self.js_storage.clone()
-    }
-}
-
-/// Result of registering a connection.
-#[wasm_bindgen(js_name = Registered)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(missing_copy_implementations)]
-pub struct Registered {
-    is_new: bool,
-    conn_id: WasmConnectionId,
-}
-
-#[wasm_bindgen(js_class = Registered)]
-impl Registered {
-    /// Whether the connection was newly registered.
-    #[must_use]
-    #[wasm_bindgen(getter)]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn is_new(&self) -> bool {
-        self.is_new
-    }
-
-    /// The connection ID of the registered connection.
-    #[must_use]
-    #[wasm_bindgen(getter)]
-    pub fn conn_id(&self) -> WasmConnectionId {
-        self.conn_id.clone()
     }
 }
 

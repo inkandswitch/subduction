@@ -20,7 +20,6 @@ use subduction_core::{
     Subduction,
     connection::{
         handshake::{Audience, DiscoveryId},
-        id::ConnectionId,
         nonce_cache::NonceCache,
     },
     crypto::signer::Signer,
@@ -306,13 +305,15 @@ where
 
     /// Register a new WebSocket connection with the server.
     ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
     /// # Errors
     ///
     /// Returns an error if the registration message send fails over the internal channel.
     pub async fn register(
         &self,
         ws: UnifiedWebSocket<O>,
-    ) -> Result<(bool, ConnectionId), RegistrationError<P::ConnectionDisallowed>> {
+    ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
         self.subduction.register(ws).await
     }
 
@@ -338,7 +339,7 @@ where
         timeout: O,
         default_time_limit: Duration,
         expected_peer_id: PeerId,
-    ) -> Result<ConnectionId, TryConnectError<P::ConnectionDisallowed>> {
+    ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
         use crate::handshake::client_handshake;
         use subduction_core::connection::handshake::Nonce;
 
@@ -399,14 +400,13 @@ where
             }
         });
 
-        let (_is_new, conn_id) = self
-            .subduction
+        self.subduction
             .register(ws_conn)
             .await
             .map_err(TryConnectError::Registration)?;
 
-        tracing::info!("Connected to peer at {uri_str} with connection ID {conn_id:?}");
-        Ok(conn_id)
+        tracing::info!("Connected to peer at {uri_str}");
+        Ok(server_id)
     }
 
     /// Graceful shutdown: cancel and await tasks.

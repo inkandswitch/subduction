@@ -1,5 +1,6 @@
 //! Storage policy for controlling read/write access to sedimentrees.
 
+use alloc::vec::Vec;
 use core::error::Error;
 
 use futures_kind::FutureKind;
@@ -44,4 +45,17 @@ pub trait StoragePolicy<K: FutureKind> {
         author: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::PutDisallowed>>;
+
+    /// Filter a list of sedimentree IDs to only those the peer is authorized to fetch.
+    ///
+    /// This is a batch authorization check, useful for filtering subscriptions
+    /// when forwarding updates to peers.
+    ///
+    /// The default implementation checks each ID individually, but implementations
+    /// may provide more efficient batch checks.
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> K::Future<'_, Vec<SedimentreeId>>;
 }

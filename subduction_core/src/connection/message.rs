@@ -65,6 +65,10 @@ pub enum Message {
     /// A response to a [`BatchSyncRequest`].
     #[n(5)]
     BatchSyncResponse(#[n(0)] BatchSyncResponse),
+
+    /// A request to remove subscriptions from specific sedimentrees.
+    #[n(6)]
+    RemoveSubscriptions(#[n(0)] RemoveSubscriptions),
 }
 
 impl Message {
@@ -77,7 +81,8 @@ impl Message {
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_) => None,
+            | Message::BlobsResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -91,10 +96,14 @@ impl Message {
             Message::BlobsResponse(_) => "BlobsResponse",
             Message::BatchSyncRequest(_) => "BatchSyncRequest",
             Message::BatchSyncResponse(_) => "BatchSyncResponse",
+            Message::RemoveSubscriptions(_) => "RemoveSubscriptions",
         }
     }
 
     /// Get the sedimentree ID associated with this message, if any.
+    ///
+    /// Returns `None` for messages that don't have a single associated ID
+    /// (e.g., `BlobsRequest`, `RemoveSubscriptions` with multiple IDs).
     #[must_use]
     pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
         match self {
@@ -102,7 +111,9 @@ impl Message {
             | Message::Fragment { id, .. }
             | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
             | Message::BatchSyncResponse(BatchSyncResponse { id, .. }) => Some(*id),
-            Message::BlobsRequest(_) | Message::BlobsResponse(_) => None,
+            Message::BlobsRequest(_)
+            | Message::BlobsResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 }
@@ -124,6 +135,10 @@ pub struct BatchSyncRequest {
     /// The summary of the sedimentree that the requester has.
     #[n(2)]
     pub sedimentree_summary: SedimentreeSummary,
+
+    /// Whether to subscribe to future updates for this sedimentree.
+    #[n(3)]
+    pub subscribe: bool,
 }
 
 impl From<BatchSyncRequest> for Message {
@@ -154,6 +169,23 @@ pub struct BatchSyncResponse {
 impl From<BatchSyncResponse> for Message {
     fn from(resp: BatchSyncResponse) -> Self {
         Message::BatchSyncResponse(resp)
+    }
+}
+
+/// A request to remove subscriptions from specific sedimentrees.
+#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RemoveSubscriptions {
+    /// The IDs of the sedimentrees to unsubscribe from.
+    #[n(0)]
+    pub ids: Vec<SedimentreeId>,
+}
+
+impl From<RemoveSubscriptions> for Message {
+    fn from(unsub: RemoveSubscriptions) -> Self {
+        Message::RemoveSubscriptions(unsub)
     }
 }
 
@@ -248,6 +280,7 @@ mod tests {
                 id: SedimentreeId::new([2u8; 32]),
                 req_id,
                 sedimentree_summary: SedimentreeSummary::default(),
+                subscribe: false,
             });
             assert_eq!(msg.request_id(), Some(req_id));
         }
@@ -334,6 +367,7 @@ mod tests {
                     nonce: 42,
                 },
                 sedimentree_summary: SedimentreeSummary::default(),
+                subscribe: false,
             };
 
             let msg: Message = req.clone().into();
@@ -346,7 +380,8 @@ mod tests {
                 | Message::Fragment { .. }
                 | Message::BlobsRequest(_)
                 | Message::BlobsResponse(_)
-                | Message::BatchSyncResponse(_) => {
+                | Message::BatchSyncResponse(_)
+                | Message::RemoveSubscriptions(_) => {
                     unreachable!("Expected BatchSyncRequest")
                 }
             }
@@ -376,7 +411,8 @@ mod tests {
                 | Message::Fragment { .. }
                 | Message::BlobsRequest(_)
                 | Message::BlobsResponse(_)
-                | Message::BatchSyncRequest(_) => {
+                | Message::BatchSyncRequest(_)
+                | Message::RemoveSubscriptions(_) => {
                     unreachable!("Expected BatchSyncResponse")
                 }
             }

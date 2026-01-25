@@ -1,6 +1,8 @@
 //! An open policy that allows all connections and storage operations.
 
+use alloc::vec::Vec;
 use core::convert::Infallible;
+
 use futures_kind::FutureKind;
 use sedimentree_core::id::SedimentreeId;
 
@@ -49,5 +51,14 @@ impl<K: FutureKind> StoragePolicy<K> for OpenPolicy {
         _sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::PutDisallowed>> {
         K::into_kind(async { Ok(()) })
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        _peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> K::Future<'_, Vec<SedimentreeId>> {
+        // OpenPolicy allows everything
+        K::into_kind(async { ids })
     }
 }

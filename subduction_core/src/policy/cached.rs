@@ -20,7 +20,7 @@
 //! Only successful authorizations are cached. Failures are not cached since
 //! the error types may not be cloneable, and re-checking on failure is safer.
 
-use alloc::collections::BTreeSet;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use async_lock::Mutex;
 use futures_kind::{FutureKind, Local, Sendable};
@@ -179,6 +179,14 @@ where
             result
         })
     }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> <Sendable as FutureKind>::Future<'_, Vec<SedimentreeId>> {
+        self.inner.filter_authorized_fetch(peer, ids)
+    }
 }
 
 // StoragePolicy for Local
@@ -241,6 +249,14 @@ impl<P: StoragePolicy<Local>> StoragePolicy<Local> for CachedPolicy<P> {
 
             result
         })
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> <Local as FutureKind>::Future<'_, Vec<SedimentreeId>> {
+        self.inner.filter_authorized_fetch(peer, ids)
     }
 }
 
@@ -305,6 +321,15 @@ mod tests {
         ) -> K::Future<'_, Result<(), Self::PutDisallowed>> {
             self.put_count.fetch_add(1, Ordering::SeqCst);
             K::into_kind(async { Ok(()) })
+        }
+
+        fn filter_authorized_fetch(
+            &self,
+            _peer: PeerId,
+            ids: Vec<SedimentreeId>,
+        ) -> K::Future<'_, Vec<SedimentreeId>> {
+            // CountingPolicy allows everything
+            K::into_kind(async { ids })
         }
     }
 
