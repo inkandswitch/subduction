@@ -129,6 +129,71 @@ Multiple mechanisms prevent replay attacks:
 | **Challenge Digest** | Replay of responses to different challenges |
 | **Audience** | Misdirection to wrong peer |
 
+## Nonce Tracking
+
+The responder maintains a `NonceCache` to detect replayed challenges. Each entry is keyed by `(PeerId, Nonce)` — the initiator's identity and the challenge nonce.
+
+### Design
+
+```
+┌──────────┬──────────┬──────────┬──────────┐
+│ Bucket 0 │ Bucket 1 │ Bucket 2 │ Bucket 3 │
+│  0–3 min │  3–6 min │  6–9 min │ 9–12 min │
+└──────────┴──────────┴──────────┴──────────┘
+     ↑
+   head (rotates as time advances)
+```
+
+- **4 buckets × 3 minutes = 12 minute window**
+- Covers `MAX_PLAUSIBLE_DRIFT` (±10 min) plus buffer
+- Entries placed in bucket based on challenge timestamp
+- Lazy GC: buckets cleared on rotation during `advance_head()`
+
+### Claim Flow
+
+```mermaid
+flowchart TD
+    A[try_claim&lpar;peer, nonce, timestamp&rpar;] --> B[advance_head&lpar;now&rpar;]
+    B --> C{timestamp in valid window?}
+    C -->|No| D[Reject: outside window]
+    C -->|Yes| E{&lpar;peer, nonce&rpar; in any bucket?}
+    E -->|Yes| F[Reject: NonceReused]
+    E -->|No| G[Insert into appropriate bucket]
+    G --> H[Accept]
+```
+
+### When to Record Nonces
+
+Only record nonces for _successful_ handshakes — after signature verification passes:
+
+```rust
+// In server_handshake(), after verifying the challenge signature:
+nonce_cache
+    .try_claim(initiator_id, challenge.nonce, challenge.timestamp)
+    .await?;
+```
+
+Recording failed attempts would allow attackers to exhaust the cache with invalid signatures.
+
+### Memory Bounds
+
+Each entry is `(PeerId, Nonce)` = 32 + 16 = 48 bytes. With the 12-minute window:
+
+| Handshakes/sec | Entries | Memory  |
+|----------------|---------|---------|
+| 1              | ~720    | ~35 KB  |
+| 10             | ~7,200  | ~350 KB |
+| 100            | ~72,000 | ~3.5 MB |
+
+Bucket rotation automatically evicts old entries — no background GC task needed.
+
+### Platform Considerations
+
+The lazy GC design works uniformly across platforms:
+
+- **Native (tokio)**: No background tasks to manage
+- **Wasm (browser)**: Page navigation clears state naturally; no cleanup required
+
 ## Clock Drift Handling
 
 ### Configurable Drift Window

@@ -64,9 +64,9 @@ pub(super) struct ClientHandshakeResult {
 /// - The server rejected the handshake
 /// - The response signature is invalid
 /// - The response doesn't match the challenge
-pub(super) async fn client_handshake(
+pub(super) async fn client_handshake<S: Signer<Local>>(
     ws: &WebSocket,
-    signer: &impl Signer<Local>,
+    signer: &S,
     expected_peer_id: PeerId,
 ) -> Result<ClientHandshakeResult, WasmHandshakeError> {
     // Create and send challenge

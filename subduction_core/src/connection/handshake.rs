@@ -403,8 +403,8 @@ impl DriftCorrection {
 ///
 /// The caller must provide the current timestamp and a random nonce.
 /// For `no_std` compatibility, these are not generated internally.
-pub async fn create_challenge<K: FutureKind>(
-    signer: &impl Signer<K>,
+pub async fn create_challenge<K: FutureKind, S: Signer<K>>(
+    signer: &S,
     audience: Audience,
     now: TimestampSeconds,
     nonce: Nonce,
@@ -455,8 +455,8 @@ pub fn verify_challenge(
 }
 
 /// Create a signed response for a verified challenge.
-pub async fn create_response<K: FutureKind>(
-    signer: &impl Signer<K>,
+pub async fn create_response<K: FutureKind, S: Signer<K>>(
+    signer: &S,
     challenge: &Challenge,
     now: TimestampSeconds,
 ) -> Signed<Response> {
@@ -703,7 +703,7 @@ mod tests {
 
             // Client creates challenge
             let signed_challenge =
-                create_challenge::<Sendable>(&client_signer, audience, now, nonce).await;
+                create_challenge::<Sendable, _>(&client_signer, audience, now, nonce).await;
 
             // Server verifies challenge
             let verified_challenge =
@@ -715,7 +715,7 @@ mod tests {
 
             // Server creates response
             let signed_response =
-                create_response::<Sendable>(&server_signer, &verified_challenge.challenge, now)
+                create_response::<Sendable, _>(&server_signer, &verified_challenge.challenge, now)
                     .await;
 
             // Client verifies response
@@ -736,7 +736,7 @@ mod tests {
             let nonce = Nonce::new(12345);
 
             let signed_challenge =
-                create_challenge::<Sendable>(&client_signer, client_audience, now, nonce).await;
+                create_challenge::<Sendable, _>(&client_signer, client_audience, now, nonce).await;
 
             let result = verify_challenge(
                 &signed_challenge,
@@ -763,7 +763,7 @@ mod tests {
             let nonce = Nonce::new(12345);
 
             let signed_challenge =
-                create_challenge::<Sendable>(&client_signer, audience, client_now, nonce).await;
+                create_challenge::<Sendable, _>(&client_signer, audience, client_now, nonce).await;
 
             // Use a short max drift to trigger rejection
             let result = verify_challenge(
@@ -795,7 +795,7 @@ mod tests {
 
             // Server creates response for challenge1
             let signed_response =
-                create_response::<Sendable>(&server_signer, &challenge1, now).await;
+                create_response::<Sendable, _>(&server_signer, &challenge1, now).await;
 
             // Client tries to verify with different challenge (nonce2)
             let challenge2 = Challenge::new(audience, now, nonce2);

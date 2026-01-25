@@ -62,8 +62,8 @@ pub struct Subduction<
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
-    discovery_id: Option<DiscoveryId>,
     signer: Sig,
+    discovery_id: Option<DiscoveryId>,
 
     depth_metric: M,
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,

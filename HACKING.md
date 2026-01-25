@@ -75,8 +75,6 @@ pub struct Subduction<
 
 This looks intimidating but serves a purpose: *compile-time configuration*. The entire sync stack is assembled at compile time with little dynamic dispatch for hot paths.
 
-Note: `NonceCache` is a concrete field, not a generic parameter (YAGNI — only one implementation needed).
-
 **Typical instantiations:**
 
 | Context      | F          | S           | C                  | M                       |

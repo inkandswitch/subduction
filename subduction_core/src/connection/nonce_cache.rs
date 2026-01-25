@@ -62,8 +62,8 @@ pub struct NonceCache {
 struct NonceCacheInner {
     buckets: [Set<(PeerId, Nonce)>; BUCKET_COUNT],
 
-    // Bucket number of the oldest valid bucket.
-    horizon: u64,
+    /// Bucket number of the oldest valid bucket (ring buffer head).
+    head: u64,
 }
 
 impl Default for NonceCache {
@@ -79,7 +79,7 @@ impl NonceCache {
         Self {
             inner: Mutex::new(NonceCacheInner {
                 buckets: core::array::from_fn(|_| Set::default()),
-                horizon: 0,
+                head: 0,
             }),
             bucket_duration_secs: bucket_duration.as_secs(),
         }
@@ -105,8 +105,8 @@ impl NonceCache {
         let bucket_num = self.bucket_number(timestamp);
         let mut inner = self.inner.lock().await;
 
-        // Advance horizon if needed (clears old buckets)
-        Self::advance_horizon(&mut inner, bucket_num);
+        // Advance head if needed (clears old buckets)
+        Self::advance_head(&mut inner, bucket_num);
 
         // Check all active buckets
         for bucket in &inner.buckets {
@@ -132,14 +132,14 @@ impl NonceCache {
         (bucket_num % BUCKET_COUNT as u64) as usize
     }
 
-    fn advance_horizon(inner: &mut NonceCacheInner, current_bucket: u64) {
+    fn advance_head(inner: &mut NonceCacheInner, current_bucket: u64) {
         // Clear buckets that would be reused (they're now expired)
         let oldest_valid = current_bucket.saturating_sub(BUCKET_COUNT as u64 - 1);
-        while inner.horizon < oldest_valid {
-            let idx = Self::bucket_index(inner.horizon);
+        while inner.head < oldest_valid {
+            let idx = Self::bucket_index(inner.head);
             #[allow(clippy::indexing_slicing)] // idx is always < BUCKET_COUNT (4)
             inner.buckets[idx].clear();
-            inner.horizon += 1;
+            inner.head += 1;
         }
     }
 }
