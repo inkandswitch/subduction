@@ -312,7 +312,7 @@ impl WasmSubduction {
     /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
     #[must_use]
     pub async fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core.unregister(&conn_id.clone().into()).await
+        self.core.unregister_by_id(&conn_id.clone().into()).await
     }
 
     /// Get a local blob by its digest.

@@ -74,8 +74,8 @@ pub struct Subduction<
     nonce_tracker: Arc<NonceCache>,
 
     manager_channel: Sender<Command<C>>,
-    msg_queue: async_channel::Receiver<(ConnectionId, Message)>,
-    connection_closed: async_channel::Receiver<ConnectionId>,
+    msg_queue: async_channel::Receiver<(C, Message)>,
+    connection_closed: async_channel::Receiver<C>,
 
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
@@ -268,44 +268,36 @@ impl<
 
             match select(msg_fut, closed_fut).await {
                 Either::Left((msg_result, _)) => {
-                    if let Ok((conn_id, msg)) = msg_result {
+                    if let Ok((conn, msg)) = msg_result {
+                        let peer_id = conn.peer_id();
                         tracing::debug!(
-                            "Subduction listener received message from {:?}: {:?}",
-                            conn_id,
+                            "Subduction listener received message from peer {}: {:?}",
+                            peer_id,
                             msg
                         );
 
-                        // Look up connection for sending responses
-                        let conn = { self.conns.lock().await.get(&conn_id).cloned() };
-
-                        if let Some(conn) = conn {
-                            if let Err(e) = self.dispatch(conn_id, &conn, msg).await {
-                                tracing::error!(
-                                    "error dispatching message from connection {:?}: {}",
-                                    conn_id,
-                                    e
-                                );
-                                // Connection is broken - unregister from conns map.
-                                // The stream in the actor will naturally end when recv fails.
-                                let _ = self.unregister(&conn_id).await;
-                                tracing::info!("unregistered failed connection {:?}", conn_id);
-                            }
-                            // No re-registration needed - the stream handles continuous recv
-                        } else {
-                            tracing::warn!(
-                                "Message from unknown/unregistered connection {:?}",
-                                conn_id
+                        if let Err(e) = self.dispatch(&conn, msg).await {
+                            tracing::error!(
+                                "error dispatching message from peer {}: {}",
+                                peer_id,
+                                e
                             );
+                            // Connection is broken - unregister from conns map.
+                            // The stream in the actor will naturally end when recv fails.
+                            let _ = self.unregister(&conn).await;
+                            tracing::info!("unregistered failed connection from peer {}", peer_id);
                         }
+                        // No re-registration needed - the stream handles continuous recv
                     } else {
                         tracing::info!("Message queue closed");
                         break;
                     }
                 }
                 Either::Right((closed_result, _)) => {
-                    if let Ok(conn_id) = closed_result {
-                        tracing::info!("Connection {:?} closed, unregistering", conn_id);
-                        self.unregister(&conn_id).await;
+                    if let Ok(conn) = closed_result {
+                        let peer_id = conn.peer_id();
+                        tracing::info!("Connection from peer {} closed, unregistering", peer_id);
+                        self.unregister(&conn).await;
                     }
                 }
             }
@@ -315,7 +307,6 @@ impl<
 
     async fn dispatch(
         &self,
-        conn_id: ConnectionId,
         conn: &C,
         message: Message,
     ) -> Result<(), ListenError<F, S, C>> {
@@ -370,26 +361,21 @@ impl<
                 self.recv_batch_sync_response(&from, id, &diff).await?;
             }
             Message::BlobsRequest(digests) => {
-                let is_contained = { self.conns.lock().await.contains_key(&conn_id) };
-                if is_contained {
-                    match self.recv_blob_request(conn, &digests).await {
-                        Ok(()) => {
-                            tracing::info!(
-                                "successfully handled blob request from peer {:?}",
-                                from
-                            );
-                        }
-                        Err(BlobRequestErr::IoError(e)) => Err(e)?,
-                        Err(BlobRequestErr::MissingBlobs(missing)) => {
-                            tracing::warn!(
-                                "missing blobs for request from peer {:?}: {:?}",
-                                from,
-                                missing
-                            );
-                        }
+                match self.recv_blob_request(conn, &digests).await {
+                    Ok(()) => {
+                        tracing::info!(
+                            "successfully handled blob request from peer {:?}",
+                            from
+                        );
                     }
-                } else {
-                    tracing::warn!("no open connection for request ({:?})", conn_id);
+                    Err(BlobRequestErr::IoError(e)) => Err(e)?,
+                    Err(BlobRequestErr::MissingBlobs(missing)) => {
+                        tracing::warn!(
+                            "missing blobs for request from peer {:?}: {:?}",
+                            from,
+                            missing
+                        );
+                    }
                 }
             }
             Message::BlobsResponse(blobs) => {
@@ -552,7 +538,7 @@ impl<
 
             self.conns.lock().await.insert(conn_id, conn.clone());
             self.manager_channel
-                .send(Command::Add(conn_id, conn))
+                .send(Command::Add(conn))
                 .await
                 .map_err(|_| RegistrationError::SendToClosedChannel)?;
 
@@ -564,7 +550,8 @@ impl<
     }
 
     /// Low-level unregistration of a connection.
-    pub async fn unregister(&self, conn_id: &ConnectionId) -> bool {
+    /// Unregister a connection by ConnectionId.
+    pub async fn unregister_by_id(&self, conn_id: &ConnectionId) -> bool {
         let removed = self.conns.lock().await.remove(conn_id).is_some();
 
         #[cfg(feature = "metrics")]
@@ -573,6 +560,25 @@ impl<
         }
 
         removed
+    }
+
+    /// Unregister a connection by finding it in the connections map.
+    ///
+    /// This scans through connections to find a match via `PartialEq`.
+    pub async fn unregister(&self, conn: &C) -> bool {
+        let mut conns = self.conns.lock().await;
+        let found = conns.iter().find(|(_, c)| *c == conn).map(|(id, _)| *id);
+
+        if let Some(conn_id) = found {
+            conns.remove(&conn_id);
+
+            #[cfg(feature = "metrics")]
+            crate::metrics::connection_closed();
+
+            true
+        } else {
+            false
+        }
     }
 
     /*********
@@ -852,7 +858,7 @@ impl<
 
                 if let Err(e) = conn.send(&msg).await {
                     tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
-                    self.unregister(&conn_id).await;
+                    self.unregister(&conn).await;
                     tracing::info!("unregistered failed connection {:?}", conn_id);
                 }
             }
@@ -921,7 +927,7 @@ impl<
             );
             if let Err(e) = conn.send(&msg).await {
                 tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
-                self.unregister(&conn_id).await;
+                self.unregister(&conn).await;
                 tracing::info!("unregistered failed connection {:?}", conn_id);
             }
         }
@@ -975,12 +981,14 @@ impl<
                     .map(|(id, c)| (*id, c.clone()))
                     .collect()
             };
+            // FIXME: Should also check authorize_fetch before forwarding.
+            // Consider pubsub for explicit subscription instead of eager fanout.
             for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
                     && let Err(e) = conn.send(&msg).await
                 {
                     tracing::error!("{e}");
-                    self.unregister(&conn_id).await;
+                    self.unregister(&conn).await;
                     tracing::info!("unregistered failed connection {:?}", conn_id);
                 }
             }
@@ -1031,12 +1039,14 @@ impl<
                     .map(|(id, c)| (*id, c.clone()))
                     .collect()
             };
+            // FIXME: Should also check authorize_fetch before forwarding.
+            // Consider pubsub for explicit subscription instead of eager fanout.
             for (conn_id, conn) in conns_with_ids {
                 if conn.peer_id() != *from
                     && let Err(e) = conn.send(&msg).await
                 {
                     tracing::error!("{e}");
-                    self.unregister(&conn_id).await;
+                    self.unregister(&conn).await;
                     tracing::info!("unregistered failed connection {:?}", conn_id);
                 }
             }
@@ -1211,7 +1221,7 @@ impl<
                     conn.peer_id(),
                     e
                 );
-                self.unregister(&conn_id).await;
+                self.unregister(&conn).await;
                 tracing::info!("unregistered failed connection {:?}", conn_id);
             }
         }
@@ -2308,10 +2318,10 @@ mod tests {
                 );
 
             let conn = MockConnection::new();
-            let (_fresh, conn_id) = subduction.register(conn).await?;
+            let (_fresh, _conn_id) = subduction.register(conn).await?;
             assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
-            let removed = subduction.unregister(&conn_id).await;
+            let removed = subduction.unregister(&conn).await;
             assert!(removed);
             assert_eq!(subduction.connected_peer_ids().await.len(), 0);
 
@@ -2334,8 +2344,9 @@ mod tests {
                     TestSpawn,
                 );
 
-            let conn_id = ConnectionId::new(999);
-            let removed = subduction.unregister(&conn_id).await;
+            // Unregister a connection that was never registered
+            let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32]));
+            let removed = subduction.unregister(&conn).await;
             assert!(!removed);
         }
 

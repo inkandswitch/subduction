@@ -4,24 +4,33 @@
 //! for each connection. This provides:
 //! - **Isolation**: A panic or failure in one connection doesn't affect others
 //! - **Parallelism**: On multi-threaded runtimes, connections can run on different threads
-//! - **Active removal**: Connections can be aborted immediately by ID
+//! - **Active removal**: Connections can be aborted immediately
+//!
+//! The manager uses an internal `TaskId` for tracking spawned tasks. This is not
+//! exposed externally - callers work directly with connection objects `C`.
 
 use alloc::sync::Arc;
+use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_lock::Mutex;
 use futures::stream::AbortHandle;
 use futures_kind::{FutureKind, Local, Sendable};
-use sedimentree_core::collections::Map;
 
-use super::{Connection, id::ConnectionId, message::Message};
+use super::{Connection, message::Message};
+
+/// Internal task identifier for abort handle tracking.
+///
+/// Not exposed externally - callers use connection objects directly.
+type TaskId = usize;
 
 /// Commands that can be sent to the [`ConnectionManager`].
 #[derive(Debug)]
 pub enum Command<C> {
     /// Add a new connection to be managed.
-    Add(ConnectionId, C),
+    Add(C),
     /// Remove a connection (aborts its task immediately).
-    Remove(ConnectionId),
+    Remove(C),
 }
 
 /// Trait for spawning connection handler tasks.
@@ -42,17 +51,22 @@ pub trait Spawn<K: FutureKind> {
 pub struct ConnectionManager<K: FutureKind, C, S: Spawn<K>> {
     spawner: S,
 
-    /// Active connection handles - used to abort connections on removal.
-    handles: Arc<Mutex<Map<ConnectionId, AbortHandle>>>,
+    /// Counter for generating internal task IDs.
+    next_task_id: AtomicUsize,
+
+    /// Active tasks: maps internal TaskId to (AbortHandle, Connection).
+    ///
+    /// The connection is stored to enable `Remove(C)` lookup via `PartialEq`.
+    tasks: Arc<Mutex<Vec<(TaskId, AbortHandle, C)>>>,
 
     /// Inbound commands (add/remove connections).
     commands: async_channel::Receiver<Command<C>>,
 
     /// Outbound messages from all connections.
-    messages: async_channel::Sender<(ConnectionId, Message)>,
+    messages: async_channel::Sender<(C, Message)>,
 
     /// Notification when a connection closes (either normally or due to error).
-    closed: async_channel::Sender<ConnectionId>,
+    closed: async_channel::Sender<C>,
 
     _marker: core::marker::PhantomData<K>,
 }
@@ -63,12 +77,13 @@ impl<K: FutureKind, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     pub fn new(
         spawner: S,
         commands: async_channel::Receiver<Command<C>>,
-        messages: async_channel::Sender<(ConnectionId, Message)>,
-        closed: async_channel::Sender<ConnectionId>,
+        messages: async_channel::Sender<(C, Message)>,
+        closed: async_channel::Sender<C>,
     ) -> Self {
         Self {
             spawner,
-            handles: Arc::new(Mutex::new(Map::new())),
+            next_task_id: AtomicUsize::new(0),
+            tasks: Arc::new(Mutex::new(Vec::new())),
             commands,
             messages,
             closed,
@@ -78,15 +93,20 @@ impl<K: FutureKind, C, S: Spawn<K>> ConnectionManager<K, C, S> {
 
     /// Get the number of active connections.
     pub async fn connection_count(&self) -> usize {
-        self.handles.lock().await.len()
+        self.tasks.lock().await.len()
     }
 
-    async fn remove_connection(&self, id: ConnectionId) {
-        if let Some(handle) = self.handles.lock().await.remove(&id) {
-            tracing::debug!("ConnectionManager: removing connection {id}");
+}
+
+impl<K: FutureKind, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
+    async fn remove_connection(&self, conn: &C) {
+        let mut tasks = self.tasks.lock().await;
+        if let Some(pos) = tasks.iter().position(|(_, _, c)| c == conn) {
+            let (task_id, handle, _) = tasks.swap_remove(pos);
+            tracing::debug!("ConnectionManager: removing connection (task {task_id})");
             handle.abort();
         } else {
-            tracing::debug!("ConnectionManager: connection {id} not found for removal");
+            tracing::debug!("ConnectionManager: connection not found for removal");
         }
     }
 }
@@ -118,7 +138,7 @@ impl<K: FutureKind + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
 
 // Implementations of RunManager for Sendable and Local
 #[futures_kind::kinds(
-    Sendable where C: Connection<Sendable> + Clone + Send + 'static, C::RecvError: Send,
+    Sendable where C: Connection<Sendable> + Clone + Send + Sync + 'static, C::RecvError: Send,
     Local where C: Connection<Local> + Clone + 'static
 )]
 impl<K: FutureKind, C> RunManager<C> for K {
@@ -128,28 +148,35 @@ impl<K: FutureKind, C> RunManager<C> for K {
         K::into_kind(async move {
             while let Ok(cmd) = manager.commands.recv().await {
                 match cmd {
-                    Command::Add(id, conn) => {
-                        tracing::debug!("ConnectionManager: adding connection {id}");
+                    Command::Add(conn) => {
+                        let peer_id = conn.peer_id();
+                        tracing::debug!("ConnectionManager: adding connection for peer {peer_id}");
 
-                        let handles = manager.handles.clone();
+                        let task_id = manager.next_task_id.fetch_add(1, Ordering::Relaxed);
+                        let tasks = manager.tasks.clone();
                         let messages = manager.messages.clone();
                         let closed = manager.closed.clone();
+                        let conn_clone = conn.clone();
 
                         // Create the connection future inline
                         let fut = K::into_kind(async move {
-                            connection_loop(id, conn, messages).await;
+                            connection_loop(conn_clone.clone(), messages).await;
 
-                            // Normal completion cleanup
-                            handles.lock().await.remove(&id);
-                            let _ = closed.send(id).await;
-                            tracing::debug!("connection {id}: closed normally");
+                            // Normal completion cleanup - remove from tasks list
+                            let mut tasks_guard = tasks.lock().await;
+                            let target_id: TaskId = task_id;
+                            if let Some(pos) = tasks_guard.iter().position(|(id, _, _): &(TaskId, AbortHandle, C)| *id == target_id) {
+                                tasks_guard.swap_remove(pos);
+                            }
+                            let _ = closed.send(conn_clone).await;
+                            tracing::debug!("connection for peer {peer_id}: closed normally");
                         });
 
                         let handle = manager.spawner.spawn(fut);
-                        manager.handles.lock().await.insert(id, handle);
+                        manager.tasks.lock().await.push((task_id, handle, conn));
                     }
-                    Command::Remove(id) => {
-                        manager.remove_connection(id).await;
+                    Command::Remove(conn) => {
+                        manager.remove_connection(&conn).await;
                     }
                 }
             }
@@ -159,21 +186,21 @@ impl<K: FutureKind, C> RunManager<C> for K {
 }
 
 async fn connection_loop<K: FutureKind, C: Connection<K>>(
-    id: ConnectionId,
     conn: C,
-    messages: async_channel::Sender<(ConnectionId, Message)>,
+    messages: async_channel::Sender<(C, Message)>,
 ) {
+    let peer_id = conn.peer_id();
     loop {
         match conn.recv().await {
             Ok(msg) => {
-                tracing::debug!("connection {id}: received message");
-                if messages.send((id, msg)).await.is_err() {
-                    tracing::warn!("connection {id}: message channel closed");
+                tracing::debug!("connection for peer {peer_id}: received message");
+                if messages.send((conn.clone(), msg)).await.is_err() {
+                    tracing::warn!("connection for peer {peer_id}: message channel closed");
                     break;
                 }
             }
             Err(e) => {
-                tracing::debug!("connection {id}: recv error: {e}");
+                tracing::debug!("connection for peer {peer_id}: recv error: {e}");
                 break;
             }
         }

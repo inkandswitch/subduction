@@ -2696,6 +2696,7 @@ dependencies = [
  "futures-util",
  "futures_kind",
  "minicbor",
+ "nonempty 0.12.0",
  "num-bigint",
  "rand 0.8.5",
  "serde",

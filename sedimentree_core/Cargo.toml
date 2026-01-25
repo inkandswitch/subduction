@@ -20,6 +20,7 @@ futures = { workspace = true }
 futures_kind = { workspace = true }
 futures-util = { workspace = true }
 minicbor = { workspace = true }
+nonempty = { workspace = true }
 num-bigint = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
 thiserror = { workspace = true }
