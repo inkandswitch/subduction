@@ -264,7 +264,7 @@ async fn batch_sync() -> TestResult {
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
     client
-        .request_all_batch_sync_all(Some(Duration::from_millis(100)))
+        .full_sync(Some(Duration::from_millis(100)))
         .await?;
 
     let server_updated = server_subduction

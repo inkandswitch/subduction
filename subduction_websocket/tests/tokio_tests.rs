@@ -340,7 +340,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Sync all clients
     for client in &clients {
         client
-            .request_all_batch_sync_all(Some(Duration::from_millis(100)))
+            .full_sync(Some(Duration::from_millis(100)))
             .await?;
     }
 
@@ -476,7 +476,7 @@ async fn request_with_delayed_response() -> TestResult {
 
     // Make a sync request with a very short timeout
     let _result = client
-        .request_all_batch_sync_all(Some(Duration::from_millis(1)))
+        .full_sync(Some(Duration::from_millis(1)))
         .await;
 
     // This might succeed if the network is fast, or fail with timeout
@@ -618,7 +618,7 @@ async fn large_message_handling() -> TestResult {
 
     // Sync with server
     client
-        .request_all_batch_sync_all(Some(Duration::from_secs(5)))
+        .full_sync(Some(Duration::from_secs(5)))
         .await?;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -740,7 +740,7 @@ async fn message_ordering() -> TestResult {
 
     // Sync all at once
     client
-        .request_all_batch_sync_all(Some(Duration::from_millis(500)))
+        .full_sync(Some(Duration::from_millis(500)))
         .await?;
 
     tokio::time::sleep(Duration::from_millis(200)).await;

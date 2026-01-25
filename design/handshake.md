@@ -298,6 +298,74 @@ sequenceDiagram
     I-->>R: optionally retry
 ```
 
+## Type-State Pattern: `Signed<T>` → `Verified<T>`
+
+The handshake uses a _witness pattern_ to enforce signature verification at the type level.
+
+### The Problem
+
+Without type enforcement, it's easy to forget verification:
+
+```rust
+// DANGEROUS: payload accessed without verification
+let challenge = signed_challenge.payload();  // Hypothetical unsafe API
+```
+
+### The Solution
+
+`Signed<T>` intentionally provides **no direct access** to the payload. The only way to access it is through `try_verify()`, which returns `Verified<T>`:
+
+```
+T ──seal──► Signed<T> ──try_verify──► Verified<T>
+              (unverified)              (witness)
+```
+
+### Types
+
+```rust
+/// A signed payload — payload is inaccessible until verified
+pub struct Signed<T> {
+    payload_bytes: Vec<u8>,
+    signature: Signature,
+    issuer: VerifyingKey,
+    _marker: PhantomData<T>,
+}
+
+/// Witness that verification succeeded — only constructible via try_verify()
+pub struct Verified<T> {
+    issuer: VerifyingKey,
+    payload: T,
+}
+
+impl<T> Verified<T> {
+    // Only accessible after verification
+    pub fn issuer(&self) -> VerifyingKey { ... }
+    pub fn payload(&self) -> &T { ... }
+}
+```
+
+### Usage
+
+```rust
+// Verification is REQUIRED to access the payload
+let verified: Verified<Challenge> = signed_challenge.try_verify()?;
+let challenge: &Challenge = verified.payload();
+let initiator_id = PeerId::from(verified.issuer());
+```
+
+If `try_verify()` returns `Ok`, the `Verified<T>` value is _proof_ that verification succeeded. The type system prevents accessing unverified data.
+
+### Why This Matters
+
+| Without Witness | With Witness |
+|-----------------|--------------|
+| Runtime checks ("did I verify?") | Compile-time guarantee |
+| Easy to forget | Impossible to forget |
+| Bugs hide until production | Bugs caught at compile time |
+
+> [!NOTE]
+> This pattern is used only for _authentication_ (proving identity). For _authorization_ (proving permission), see your policy layer (e.g., Keyhive for capability-based access control).
+
 ## Implementation Notes
 
 ### Creating a Challenge (Initiator)

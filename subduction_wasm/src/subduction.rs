@@ -315,14 +315,14 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`JsSubductionStorageError`] if JS storage fails.
-    #[wasm_bindgen(js_name = getLocalBlob)]
-    pub async fn get_local_blob(
+    #[wasm_bindgen(js_name = getBlob)]
+    pub async fn get_blob(
         &self,
         digest: &WasmDigest,
     ) -> Result<Option<Uint8Array>, JsSubductionStorageError> {
         Ok(self
             .core
-            .get_local_blob(digest.clone().into())
+            .get_blob(digest.clone().into())
             .await?
             .map(|blob| Uint8Array::from(blob.as_slice())))
     }
@@ -332,13 +332,13 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`JsSubductionStorageError`] if JS storage fails.
-    #[wasm_bindgen(js_name = getLocalBlobs)]
-    pub async fn get_local_blobs(
+    #[wasm_bindgen(js_name = getBlobs)]
+    pub async fn get_blobs(
         &self,
         id: &WasmSedimentreeId,
     ) -> Result<Vec<Uint8Array>, JsSubductionStorageError> {
         #[allow(clippy::expect_used)]
-        if let Some(blobs) = self.core.get_local_blobs(id.clone().into()).await? {
+        if let Some(blobs) = self.core.get_blobs(id.clone().into()).await? {
             Ok(blobs
                 .into_iter()
                 .map(|blob| Uint8Array::from(blob.as_slice()))
@@ -438,8 +438,8 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = requestPeerBatchSync)]
-    pub async fn request_peer_batch_sync(
+    #[wasm_bindgen(js_name = syncWithPeer)]
+    pub async fn sync_with_peer(
         &self,
         to_ask: &WasmPeerId,
         id: &WasmSedimentreeId,
@@ -448,7 +448,7 @@ impl WasmSubduction {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let (success, blobs, conn_errors) = self
             .core
-            .request_peer_batch_sync(&to_ask.clone().into(), id.clone().into(), timeout)
+            .sync_with_peer(&to_ask.clone().into(), id.clone().into(), timeout)
             .await
             .map_err(WasmIoError::from)?;
 
@@ -473,19 +473,19 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = requestAllBatchSync)]
-    pub async fn request_all_batch_sync(
+    #[wasm_bindgen(js_name = syncAll)]
+    pub async fn sync_all(
         &self,
         id: &WasmSedimentreeId,
         timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
-        tracing::debug!("WasmSubduction::request_all_batch_sync");
+        tracing::debug!("WasmSubduction::sync_all");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let peer_map = self
             .core
-            .request_all_batch_sync(id.clone().into(), timeout)
+            .sync_all(id.clone().into(), timeout)
             .await?;
-        tracing::debug!("WasmSubduction::request_all_batch_sync - done");
+        tracing::debug!("WasmSubduction::sync_all - done");
         Ok(WasmPeerResultMap(
             peer_map
                 .into_iter()
@@ -511,15 +511,15 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = requestAllBatchSyncAll)]
-    pub async fn request_all_batch_sync_all(
+    #[wasm_bindgen(js_name = fullSync)]
+    pub async fn full_sync(
         &self,
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let (success, blobs, errs) = self
             .core
-            .request_all_batch_sync_all(timeout)
+            .full_sync(timeout)
             .await
             .map_err(WasmIoError::from)?;
 

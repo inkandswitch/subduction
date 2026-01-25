@@ -1,4 +1,73 @@
 //! The main synchronization logic and bookkeeping for [`Sedimentree`].
+//!
+//! # API Guide
+//!
+//! ## API Levels
+//!
+//! Subduction provides two levels of API for connection management:
+//!
+//! | Level | Methods | Use Case |
+//! |-------|---------|----------|
+//! | **High-level** | [`attach`], [`disconnect`] | Most applications — handles sync automatically |
+//! | **Low-level** | [`register`], [`unregister`] | Custom sync logic, testing, or fine-grained control |
+//!
+//! **Prefer the high-level API** unless you need explicit control over when sync occurs.
+//!
+//! ### High-Level: `attach` / `disconnect`
+//!
+//! - [`Subduction::attach`] — Register connection + perform initial batch sync
+//! - [`Subduction::disconnect`] — Graceful connection shutdown
+//! - [`Subduction::disconnect_all`] — Disconnect all connections
+//! - [`Subduction::disconnect_from_peer`] — Disconnect all connections from a peer
+//!
+//! ### Low-Level: `register` / `unregister`
+//!
+//! - [`Subduction::register`] — Add connection to tracking (no automatic sync)
+//! - [`Subduction::unregister`] — Remove connection from tracking
+//!
+//! ## Naming Conventions
+//!
+//! ### Getters: `get_*` vs `fetch_*`
+//!
+//! | Prefix | Behavior | Example |
+//! |--------|----------|---------|
+//! | `get_*` | Local only — returns data from storage/memory | [`get_blob`], [`get_blobs`], [`get_commits`] |
+//! | `fetch_*` | Local first, network fallback if not found | [`fetch_blobs`] |
+//!
+//! ### Sync Methods
+//!
+//! | Method | Scope |
+//! |--------|-------|
+//! | [`sync_with_peer`] | Sync one sedimentree from one peer |
+//! | [`sync_all`] | Sync one sedimentree from all connected peers |
+//! | [`full_sync`] | Sync all sedimentrees from all connected peers |
+//!
+//! ### Data Operations
+//!
+//! | Method | Description |
+//! |--------|-------------|
+//! | [`add_sedimentree`] | Add a sedimentree locally and broadcast to subscribers |
+//! | [`add_commit`] | Add a commit locally and broadcast to subscribers |
+//! | [`add_fragment`] | Add a fragment locally and broadcast to subscribers |
+//! | [`remove_sedimentree`] | Remove a sedimentree and associated data |
+//!
+//! [`attach`]: Subduction::attach
+//! [`disconnect`]: Subduction::disconnect
+//! [`disconnect_all`]: Subduction::disconnect_all
+//! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
+//! [`register`]: Subduction::register
+//! [`unregister`]: Subduction::unregister
+//! [`get_blob`]: Subduction::get_blob
+//! [`get_blobs`]: Subduction::get_blobs
+//! [`get_commits`]: Subduction::get_commits
+//! [`fetch_blobs`]: Subduction::fetch_blobs
+//! [`sync_with_peer`]: Subduction::sync_with_peer
+//! [`sync_all`]: Subduction::sync_all
+//! [`full_sync`]: Subduction::full_sync
+//! [`add_sedimentree`]: Subduction::add_sedimentree
+//! [`add_commit`]: Subduction::add_commit
+//! [`add_fragment`]: Subduction::add_fragment
+//! [`remove_sedimentree`]: Subduction::remove_sedimentree
 
 pub mod error;
 pub mod request;
@@ -428,7 +497,7 @@ impl<
         let ids = self.sedimentrees.into_keys().await;
 
         for tree_id in ids {
-            self.request_peer_batch_sync(&peer_id, tree_id, None)
+            self.sync_with_peer(&peer_id, tree_id, None)
                 .await?;
         }
 
@@ -738,7 +807,7 @@ impl<
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_local_blob(&self, digest: Digest) -> Result<Option<Blob>, S::Error> {
+    pub async fn get_blob(&self, digest: Digest) -> Result<Option<Blob>, S::Error> {
         tracing::debug!("Looking for blob with digest {:?}", digest);
         if let Some(data) = self.storage.load_blob(digest).await? {
             Ok(Some(data))
@@ -757,7 +826,7 @@ impl<
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_local_blobs(
+    pub async fn get_blobs(
         &self,
         id: SedimentreeId,
     ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
@@ -807,7 +876,7 @@ impl<
         timeout: Option<Duration>,
     ) -> Result<Option<NonEmpty<Blob>>, IoError<F, S, C>> {
         tracing::debug!("Fetching blobs for sedimentree with id {:?}", id);
-        if let Some(maybe_blobs) = self.get_local_blobs(id).await.map_err(IoError::Storage)? {
+        if let Some(maybe_blobs) = self.get_blobs(id).await.map_err(IoError::Storage)? {
             Ok(Some(maybe_blobs))
         } else {
             let tree = self.sedimentrees.get_cloned(&id).await;
@@ -848,7 +917,7 @@ impl<
                 }
             }
 
-            let updated = self.get_local_blobs(id).await.map_err(IoError::Storage)?;
+            let updated = self.get_blobs(id).await.map_err(IoError::Storage)?;
 
             Ok(updated)
         }
@@ -869,7 +938,7 @@ impl<
         let mut missing = Vec::new();
         for digest in digests {
             if let Some(blob) = self
-                .get_local_blob(*digest)
+                .get_blob(*digest)
                 .await
                 .map_err(IoError::Storage)?
             {
@@ -905,7 +974,7 @@ impl<
         self.insert_sedimentree_locally(&putter, sedimentree, blobs)
             .await
             .map_err(IoError::Storage)?;
-        self.request_all_batch_sync(id, None).await?;
+        self.sync_all(id, None).await?;
         Ok(())
     }
 
@@ -1344,7 +1413,7 @@ impl<
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
-    pub async fn request_peer_batch_sync(
+    pub async fn sync_with_peer(
         &self,
         to_ask: &PeerId,
         id: SedimentreeId,
@@ -1440,7 +1509,7 @@ impl<
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
     #[allow(clippy::too_many_lines)]
-    pub async fn request_all_batch_sync(
+    pub async fn sync_all(
         &self,
         id: SedimentreeId,
         timeout: Option<Duration>,
@@ -1570,7 +1639,7 @@ impl<
     /// # Errors
     ///
     /// * `Err(IoError)` if any I/O error occurs during the sync process.
-    pub async fn request_all_batch_sync_all(
+    pub async fn full_sync(
         &self,
         timeout: Option<Duration>,
     ) -> Result<(bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>), IoError<F, S, C>>
@@ -1583,7 +1652,7 @@ impl<
         let mut errs = Vec::new();
         for id in tree_ids {
             tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
-            let all_results = self.request_all_batch_sync(id, timeout).await?;
+            let all_results = self.sync_all(id, timeout).await?;
             if all_results
                 .values()
                 .any(|(success, _blobs, _errs)| *success)
@@ -2671,7 +2740,7 @@ mod tests {
         use sedimentree_core::blob::Digest;
 
         #[tokio::test]
-        async fn test_get_local_blob_returns_none_for_missing() {
+        async fn test_get_blob_returns_none_for_missing() {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -2688,12 +2757,12 @@ mod tests {
                 );
 
             let digest = Digest::from([1u8; 32]);
-            let blob = subduction.get_local_blob(digest).await.unwrap();
+            let blob = subduction.get_blob(digest).await.unwrap();
             assert!(blob.is_none());
         }
 
         #[tokio::test]
-        async fn test_get_local_blobs_returns_none_for_missing_tree() {
+        async fn test_get_blobs_returns_none_for_missing_tree() {
             let storage = MemoryStorage::new();
             let depth_metric = CountLeadingZeroBytes;
 
@@ -2710,7 +2779,7 @@ mod tests {
                 );
 
             let id = SedimentreeId::new([1u8; 32]);
-            let blobs = subduction.get_local_blobs(id).await.unwrap();
+            let blobs = subduction.get_blobs(id).await.unwrap();
             assert!(blobs.is_none());
         }
     }
