@@ -114,22 +114,12 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
         self.storage.save_blob(blob)
     }
 
-    /// Delete all loose commits for this sedimentree.
+    /// Register this sedimentree ID as having data stored.
+    ///
+    /// This is bookkeeping to track which sedimentrees exist.
     #[must_use]
-    pub fn delete_loose_commits(&self) -> K::Future<'_, Result<(), S::Error>> {
-        self.storage.delete_loose_commits(self.sedimentree_id)
-    }
-
-    /// Delete all fragments for this sedimentree.
-    #[must_use]
-    pub fn delete_fragments(&self) -> K::Future<'_, Result<(), S::Error>> {
-        self.storage.delete_fragments(self.sedimentree_id)
-    }
-
-    /// Delete a blob by its digest.
-    #[must_use]
-    pub fn delete_blob(&self, digest: Digest) -> K::Future<'_, Result<(), S::Error>> {
-        self.storage.delete_blob(digest)
+    pub fn save_sedimentree_id(&self) -> K::Future<'_, Result<(), S::Error>> {
+        self.storage.save_sedimentree_id(self.sedimentree_id)
     }
 }
 

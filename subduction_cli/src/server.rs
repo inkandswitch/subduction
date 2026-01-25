@@ -128,7 +128,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .clone()
         .unwrap_or_else(|| args.socket.clone());
 
-    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy> =
+    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, LocalSigner> =
         TokioWebSocketServer::setup(
             addr,
             FuturesTimerTimeout,

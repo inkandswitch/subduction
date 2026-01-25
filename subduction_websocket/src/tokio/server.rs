@@ -18,7 +18,11 @@ use sedimentree_core::{
 };
 use subduction_core::{
     Subduction,
-    connection::{handshake::Audience, id::ConnectionId, nonce_cache::NonceCache},
+    connection::{
+        handshake::{Audience, DiscoveryId},
+        id::ConnectionId,
+        nonce_cache::NonceCache,
+    },
     crypto::signer::Signer,
     peer::id::PeerId,
     policy::{ConnectionPolicy, StoragePolicy},
@@ -40,22 +44,23 @@ use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketC
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable>,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
 > where
     S::Error: 'static + Send + Sync,
 {
-    subduction: TokioWebSocketSubduction<S, P, O, M>,
-    server_peer_id: PeerId,
+    subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     address: SocketAddr,
     accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
 
-impl<S, P, M, O> Clone for TokioWebSocketServer<S, P, M, O>
+impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
 where
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable>,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
     S::Error: 'static + Send + Sync,
@@ -63,7 +68,6 @@ where
     fn clone(&self) -> Self {
         Self {
             subduction: self.subduction.clone(),
-            server_peer_id: self.server_peer_id,
             address: self.address,
             accept_task: self.accept_task.clone(),
             cancellation_token: self.cancellation_token.clone(),
@@ -74,17 +78,17 @@ where
 impl<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-> TokioWebSocketServer<S, P, M, O>
+> TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
 {
     /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
     ///
-    /// The `signer` is used to authenticate incoming connections during the
-    /// handshake phase. The server's peer ID is derived from the signer's
-    /// verifying key.
+    /// The signer from the Subduction instance is used to authenticate incoming
+    /// connections during the handshake phase.
     ///
     /// # Arguments
     ///
@@ -92,26 +96,20 @@ where
     /// * `timeout` - The timeout strategy for requests
     /// * `default_time_limit` - Default timeout duration
     /// * `handshake_max_drift` - Maximum acceptable clock drift during handshake
-    /// * `signer` - The server's signer for authenticating handshakes
-    /// * `service_name` - Optional service name for discovery mode. When set,
-    ///   clients can connect without knowing the server's peer ID. The name is
-    ///   hashed to a 32-byte identifier.
     /// * `subduction` - The Subduction instance to register connections with
     ///
     /// # Errors
     ///
     /// Returns [`tungstenite::Error`] if there is a problem binding the socket.
     #[allow(clippy::too_many_lines)]
-    pub async fn new<R: 'static + Send + Sync + Signer<Sendable> + Clone>(
+    pub async fn new(
         address: SocketAddr,
         timeout: O,
         default_time_limit: Duration,
         handshake_max_drift: Duration,
-        signer: R,
-        service_name: Option<&str>,
-        subduction: TokioWebSocketSubduction<S, P, O, M>,
+        subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     ) -> Result<Self, tungstenite::Error> {
-        let server_peer_id = signer.peer_id();
+        let server_peer_id = subduction.peer_id();
         tracing::info!(
             "Starting WebSocket server on {} as {}",
             address,
@@ -123,14 +121,12 @@ where
         let cancellation_token = CancellationToken::new();
         let child_cancellation_token = cancellation_token.child_token();
 
-        // Get optional discovery audience from Subduction
-        let discovery_audience = subduction.audience();
+        // Convert optional DiscoveryId to Audience for handshake
+        let discovery_audience: Option<Audience> =
+            subduction.discovery_id().map(Audience::discover_id);
 
-        if service_name.is_some() {
-            tracing::info!(
-                "Discovery mode enabled with service name: {:?}",
-                service_name
-            );
+        if discovery_audience.is_some() {
+            tracing::info!("Discovery mode enabled");
         }
 
         let inner_subduction = subduction.clone();
@@ -148,7 +144,6 @@ where
                                 tracing::info!("new TCP connection from {addr}");
 
                                 let task_subduction = inner_subduction.clone();
-                                let task_signer = signer.clone();
                                 let task_discovery_audience = discovery_audience;
                                 conns.spawn({
                                     let tout = timeout.clone();
@@ -172,7 +167,7 @@ where
                                         let now = TimestampSeconds::now();
                                         let handshake_result = server_handshake(
                                             &mut ws_stream,
-                                            &task_signer,
+                                            task_subduction.signer(),
                                             server_peer_id,
                                             task_discovery_audience,
                                             task_subduction.nonce_cache(),
@@ -227,7 +222,6 @@ where
         });
 
         Ok(Self {
-            server_peer_id,
             address: assigned_address,
             subduction,
             accept_task: Arc::new(accept_task),
@@ -244,22 +238,23 @@ where
     ///
     /// Returns an error if the socket could not be bound.
     #[allow(clippy::too_many_arguments)]
-    pub async fn setup<R: 'static + Send + Sync + Signer<Sendable> + Clone>(
+    pub async fn setup(
         address: SocketAddr,
         timeout: O,
         default_time_limit: Duration,
         handshake_max_drift: Duration,
-        signer: R,
+        signer: Sig,
         service_name: Option<&str>,
         storage: S,
         policy: P,
         nonce_cache: NonceCache,
         depth_metric: M,
     ) -> Result<Self, tungstenite::Error> {
-        let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
+        let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
         let (subduction, listener_fut, manager_fut) = Subduction::new(
-            audience,
+            discovery_id,
+            signer,
             storage,
             policy,
             nonce_cache,
@@ -273,8 +268,6 @@ where
             timeout,
             default_time_limit,
             handshake_max_drift,
-            signer,
-            service_name,
             subduction,
         )
         .await?;
@@ -301,8 +294,8 @@ where
 
     /// Get the server's peer ID.
     #[must_use]
-    pub const fn peer_id(&self) -> PeerId {
-        self.server_peer_id
+    pub fn peer_id(&self) -> PeerId {
+        self.subduction.peer_id()
     }
 
     /// Get the server's socket address.
@@ -424,8 +417,8 @@ where
     }
 }
 
-type TokioWebSocketSubduction<S, P, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, P, M>>;
+type TokioWebSocketSubduction<S, P, Sig, O, M> =
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, P, Sig, M>>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]

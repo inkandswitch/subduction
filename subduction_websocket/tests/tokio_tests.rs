@@ -72,6 +72,7 @@ async fn client_reconnect() -> TestResult {
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         server_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -95,8 +96,6 @@ async fn client_reconnect() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         server_subduction.clone(),
     )
     .await?;
@@ -149,6 +148,7 @@ async fn server_graceful_shutdown() -> TestResult {
     let server_storage = MemoryStorage::default();
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         server_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -172,8 +172,6 @@ async fn server_graceful_shutdown() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         server_subduction.clone(),
     )
     .await?;
@@ -234,6 +232,7 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         server_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -263,8 +262,6 @@ async fn multiple_concurrent_clients() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         server_subduction.clone(),
     )
     .await?;
@@ -284,8 +281,10 @@ async fn multiple_concurrent_clients() -> TestResult {
             MemoryStorage,
             TokioWebSocketClient<LocalSigner, TimeoutTokio>,
             OpenPolicy,
+            LocalSigner,
         >::new(
             None,
+            client_signer.clone(),
             client_storage,
             OpenPolicy,
             NonceCache::default(),
@@ -389,6 +388,7 @@ async fn request_with_delayed_response() -> TestResult {
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         server_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -416,8 +416,6 @@ async fn request_with_delayed_response() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         server_subduction.clone(),
     )
     .await?;
@@ -430,8 +428,10 @@ async fn request_with_delayed_response() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
+        LocalSigner,
     >::new(
         None,
+        client_signer.clone(),
         client_storage,
         OpenPolicy,
         NonceCache::default(),
@@ -525,6 +525,7 @@ async fn large_message_handling() -> TestResult {
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         server_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -548,8 +549,6 @@ async fn large_message_handling() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(10),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         server_subduction.clone(),
     )
     .await?;
@@ -562,8 +561,10 @@ async fn large_message_handling() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
+        LocalSigner,
     >::new(
         None,
+        client_signer.clone(),
         client_storage,
         OpenPolicy,
         NonceCache::default(),
@@ -647,6 +648,7 @@ async fn message_ordering() -> TestResult {
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         server_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -670,8 +672,6 @@ async fn message_ordering() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         server_subduction.clone(),
     )
     .await?;
@@ -684,8 +684,10 @@ async fn message_ordering() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
+        LocalSigner,
     >::new(
         None,
+        client_signer.clone(),
         client_storage,
         OpenPolicy,
         NonceCache::default(),

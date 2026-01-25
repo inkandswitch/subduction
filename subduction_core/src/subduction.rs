@@ -6,15 +6,17 @@ pub mod request;
 use crate::{
     connection::{
         Connection,
-        handshake::Audience,
+        handshake::DiscoveryId,
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncDiff},
         nonce_cache::NonceCache,
     },
+    crypto::signer::Signer,
     peer::id::PeerId,
     policy::{ConnectionPolicy, Generation, StoragePolicy},
     sharded_map::ShardedMap,
+    storage::{powerbox::StoragePowerbox, putter::Putter},
 };
 use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
@@ -52,20 +54,23 @@ use sedimentree_core::{
 #[derive(Debug, Clone)]
 pub struct Subduction<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
-    audience: Option<Audience>,
+    discovery_id: Option<DiscoveryId>,
+    signer: Sig,
+
     depth_metric: M,
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
+    storage: StoragePowerbox<S, P>,
+
     next_connection_id: Arc<AtomicUsize>,
     conns: Arc<Mutex<Map<ConnectionId, C>>>,
-    storage: Arc<S>,
-    policy: P,
     nonce_tracker: Arc<NonceCache>,
 
     manager_channel: Sender<Command<C>>,
@@ -80,24 +85,26 @@ pub struct Subduction<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> Subduction<'a, F, S, C, P, M, N>
+> Subduction<'a, F, S, C, P, Sig, M, N>
 {
-    /// Initialize a new `Subduction` with the given storage backend, policy, depth metric, sharded `Sedimentree` map, and spawner.
+    /// Initialize a new `Subduction` with the given storage backend, policy, signer, depth metric, sharded `Sedimentree` map, and spawner.
     ///
     /// The spawner is used to spawn individual connection handler tasks.
     ///
     /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
     /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
     /// or provide secure random keys to [`ShardedMap::with_key`].
-    #[allow(clippy::type_complexity)]
+    #[allow(clippy::type_complexity, clippy::too_many_arguments)]
     pub fn new<Sp: Spawn<F> + Send + Sync + 'static>(
-        audience: Option<Audience>,
+        discovery_id: Option<DiscoveryId>,
+        signer: Sig,
         storage: S,
         policy: P,
         nonce_cache: NonceCache,
@@ -106,7 +113,7 @@ impl<
         spawner: Sp,
     ) -> (
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, P, M, N>,
+        ListenerFuture<'a, F, S, C, P, Sig, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     ) {
         tracing::info!("initializing Subduction instance");
@@ -125,13 +132,13 @@ impl<
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
 
         let sd = Arc::new(Self {
-            audience,
+            discovery_id,
+            signer,
             depth_metric,
             sedimentrees: Arc::new(sedimentrees),
             next_connection_id: Arc::new(AtomicUsize::new(0)),
             conns: Arc::new(Mutex::new(Map::new())),
-            storage: Arc::new(storage),
-            policy,
+            storage: StoragePowerbox::new(storage, Arc::new(policy)),
             nonce_tracker: Arc::new(nonce_cache),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
@@ -160,8 +167,10 @@ impl<
     /// # Errors
     ///
     /// * Returns [`HydrationError`] if loading from storage fails.
+    #[allow(clippy::too_many_arguments)]
     pub async fn hydrate<Sp: Spawn<F> + Send + Sync + 'static>(
-        audience: Option<Audience>,
+        discovery_id: Option<DiscoveryId>,
+        signer: Sig,
         storage: S,
         policy: P,
         nonce_cache: NonceCache,
@@ -171,7 +180,7 @@ impl<
     ) -> Result<
         (
             Arc<Self>,
-            ListenerFuture<'a, F, S, C, P, M, N>,
+            ListenerFuture<'a, F, S, C, P, Sig, M, N>,
             crate::connection::manager::ManagerFuture<F>,
         ),
         HydrationError<F, S>,
@@ -181,7 +190,8 @@ impl<
             .await
             .map_err(HydrationError::LoadAllIdsError)?;
         let (subduction, fut_listener, manager_fut) = Self::new(
-            audience,
+            discovery_id,
+            signer,
             storage,
             policy,
             nonce_cache,
@@ -210,13 +220,26 @@ impl<
         Ok((subduction, fut_listener, manager_fut))
     }
 
-    /// Get the configured audience for this instance.
+    /// Get the configured discovery ID for this instance.
     ///
-    /// Returns `Some(Audience::Known(peer_id))` for direct connections,
-    /// `Some(Audience::Discover(...))` for discovery mode, or `None` if not set.
+    /// Returns the discovery ID this server advertises, or `None` if not set.
     #[must_use]
-    pub const fn audience(&self) -> Option<Audience> {
-        self.audience
+    pub const fn discovery_id(&self) -> Option<DiscoveryId> {
+        self.discovery_id
+    }
+
+    /// Get a reference to the signer.
+    ///
+    /// Use this for signing handshake challenges/responses.
+    #[must_use]
+    pub const fn signer(&self) -> &Sig {
+        &self.signer
+    }
+
+    /// Get this instance's peer ID (derived from the signer's verifying key).
+    #[must_use]
+    pub fn peer_id(&self) -> PeerId {
+        self.signer.peer_id()
     }
 
     /// Returns a reference to the nonce cache for replay protection.
@@ -513,7 +536,8 @@ impl<
         let peer_id = conn.peer_id();
         tracing::info!("registering connection from peer {:?}", peer_id);
 
-        self.policy
+        self.storage
+            .policy()
             .authorize_connect(peer_id)
             .await
             .map_err(RegistrationError::ConnectionDisallowed)?;
@@ -727,7 +751,8 @@ impl<
         sedimentree: Sedimentree,
         blobs: Vec<Blob>,
     ) -> Result<(), IoError<F, S, C>> {
-        self.insert_sedimentree_locally(id, sedimentree, blobs)
+        let putter = self.storage.local_putter(id);
+        self.insert_sedimentree_locally(&putter, sedimentree, blobs)
             .await
             .map_err(IoError::Storage)?;
         self.request_all_batch_sync(id, None).await?;
@@ -743,25 +768,27 @@ impl<
         let maybe_sedimentree = self.sedimentrees.remove(&id).await;
 
         if let Some(sedimentree) = maybe_sedimentree {
+            let destroyer = self.storage.local_destroyer(id);
+
             for commit in sedimentree.loose_commits() {
-                self.storage
+                destroyer
                     .delete_blob(commit.blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?;
             }
-            self.storage
-                .delete_loose_commits(id)
+            destroyer
+                .delete_loose_commits()
                 .await
                 .map_err(IoError::Storage)?;
 
             for fragment in sedimentree.fragments() {
-                self.storage
+                destroyer
                     .delete_blob(fragment.summary().blob_meta().digest())
                     .await
                     .map_err(IoError::Storage)?;
             }
-            self.storage
-                .delete_fragments(id)
+            destroyer
+                .delete_fragments()
                 .await
                 .map_err(IoError::Storage)?;
         }
@@ -796,7 +823,8 @@ impl<
             id
         );
 
-        self.insert_commit_locally(id, commit.clone(), blob.clone())
+        let putter = self.storage.local_putter(id);
+        self.insert_commit_locally(&putter, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
@@ -874,6 +902,7 @@ impl<
             fragment: fragment.clone(),
             blob,
         };
+
         let conns_with_ids: Vec<(ConnectionId, C)> = {
             self.conns
                 .lock()
@@ -882,6 +911,7 @@ impl<
                 .map(|(id, c)| (*id, c.clone()))
                 .collect()
         };
+
         for (conn_id, conn) in conns_with_ids {
             tracing::debug!(
                 "Propagating fragment {:?} for sedimentree {:?} to peer {:?}",
@@ -924,8 +954,10 @@ impl<
             from
         );
 
+        // TODO: Use get_putter(from, author, id) for authorization when error handling is updated
+        let putter = self.storage.local_putter(id);
         let was_new = self
-            .insert_commit_locally(id, commit.clone(), blob.clone())
+            .insert_commit_locally(&putter, commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
@@ -978,8 +1010,10 @@ impl<
             from
         );
 
+        // TODO: Use get_putter(from, author, id) for authorization when error handling is updated
+        let putter = self.storage.local_putter(id);
         let was_new = self
-            .insert_fragment_locally(id, fragment.clone(), blob.clone())
+            .insert_fragment_locally(&putter, fragment.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
@@ -1140,14 +1174,17 @@ impl<
             diff.missing_fragments.len()
         );
 
+        // TODO: Use get_putter(from, author, id) for authorization when error handling is updated
+        let putter = self.storage.local_putter(id);
+
         for (commit, blob) in &diff.missing_commits {
-            self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
+            self.insert_commit_locally(&putter, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                 .await
                 .map_err(IoError::Storage)?;
         }
 
         for (fragment, blob) in &diff.missing_fragments {
-            self.insert_fragment_locally(id, fragment.clone(), blob.clone())
+            self.insert_fragment_locally(&putter, fragment.clone(), blob.clone())
                 .await
                 .map_err(IoError::Storage)?;
         }
@@ -1247,15 +1284,18 @@ impl<
                         },
                     ..
                 }) => {
+                    // TODO: Use get_putter(to_ask, author, id) for authorization when error handling is updated
+                    let putter = self.storage.local_putter(id);
+
                     for (commit, blob) in missing_commits {
-                        self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
+                        self.insert_commit_locally(&putter, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
                             .await
                             .map_err(IoError::Storage)?;
                         blobs.push(blob);
                     }
 
                     for (fragment, blob) in missing_fragments {
-                        self.insert_fragment_locally(id, fragment.clone(), blob.clone())
+                        self.insert_fragment_locally(&putter, fragment.clone(), blob.clone())
                             .await
                             .map_err(IoError::Storage)?;
                         blobs.push(blob);
@@ -1355,16 +1395,23 @@ impl<
                                     },
                                 ..
                             }) => {
+                                // TODO: Use get_putter(peer_id, author, id) for authorization when error handling is updated
+                                let putter = self.storage.local_putter(id);
+
                                 for (commit, blob) in missing_commits {
-                                    self.insert_commit_locally(id, commit.clone(), blob.clone()) // TODO potentially a LOT of cloning
-                                        .await
-                                        .map_err(IoError::<F, S, C>::Storage)?;
+                                    self.insert_commit_locally(
+                                        &putter,
+                                        commit.clone(),
+                                        blob.clone(),
+                                    ) // TODO potentially a LOT of cloning
+                                    .await
+                                    .map_err(IoError::<F, S, C>::Storage)?;
                                     inner_blobs.lock().await.insert(blob);
                                 }
 
                                 for (fragment, blob) in missing_fragments {
                                     self.insert_fragment_locally(
-                                        id,
+                                        &putter,
                                         fragment.clone(),
                                         blob.clone(),
                                     )
@@ -1483,25 +1530,26 @@ impl<
 
     async fn insert_sedimentree_locally(
         &self,
-        id: SedimentreeId,
+        putter: &Putter<F, S>,
         sedimentree: Sedimentree,
         blobs: Vec<Blob>,
     ) -> Result<(), S::Error> {
+        let id = putter.sedimentree_id();
         tracing::debug!("adding sedimentree with id {:?}", id);
 
         // Save blobs first so they're available when commit/fragment callbacks fire
         for blob in blobs {
-            self.storage.save_blob(blob).await?;
+            putter.save_blob(blob).await?;
         }
 
-        self.storage.save_sedimentree_id(id).await?;
+        putter.save_sedimentree_id().await?;
 
         for commit in sedimentree.loose_commits() {
-            self.storage.save_loose_commit(id, commit.clone()).await?;
+            putter.save_loose_commit(commit.clone()).await?;
         }
 
         for fragment in sedimentree.fragments() {
-            self.storage.save_fragment(id, fragment.clone()).await?;
+            putter.save_fragment(fragment.clone()).await?;
         }
 
         self.sedimentrees
@@ -1563,10 +1611,11 @@ impl<
 
     async fn insert_commit_locally(
         &self,
-        id: SedimentreeId,
+        putter: &Putter<F, S>,
         commit: LooseCommit,
         blob: Blob,
     ) -> Result<bool, S::Error> {
+        let id = putter.sedimentree_id();
         tracing::debug!("inserting commit {:?} locally", commit.digest());
         let was_added = self
             .sedimentrees
@@ -1577,9 +1626,9 @@ impl<
         }
 
         // Save blob first so callback wrappers can load it by digest
-        self.storage.save_blob(blob).await?;
-        self.storage.save_sedimentree_id(id).await?;
-        self.storage.save_loose_commit(id, commit).await?;
+        putter.save_blob(blob).await?;
+        putter.save_sedimentree_id().await?;
+        putter.save_loose_commit(commit).await?;
 
         Ok(true)
     }
@@ -1587,10 +1636,11 @@ impl<
     // NOTE no integrity checking, we assume that they made a good fragment at the right depth
     async fn insert_fragment_locally(
         &self,
-        id: SedimentreeId,
+        putter: &Putter<F, S>,
         fragment: Fragment,
         blob: Blob,
     ) -> Result<bool, S::Error> {
+        let id = putter.sedimentree_id();
         let was_added = self
             .sedimentrees
             .with_entry_or_default(id, |tree| tree.add_fragment(fragment.clone()))
@@ -1600,22 +1650,23 @@ impl<
         }
 
         // Save blob first so callback wrappers can load it by digest
-        self.storage.save_blob(blob).await?;
-        self.storage.save_sedimentree_id(id).await?;
-        self.storage.save_fragment(id, fragment).await?;
+        putter.save_blob(blob).await?;
+        putter.save_sedimentree_id().await?;
+        putter.save_fragment(fragment).await?;
         Ok(true)
     }
 }
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> Drop for Subduction<'a, F, S, C, P, M, N>
+> Drop for Subduction<'a, F, S, C, P, Sig, M, N>
 {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
@@ -1625,13 +1676,14 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> ConnectionPolicy<F> for Subduction<'a, F, S, C, P, M, N>
+> ConnectionPolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N>
 {
     type ConnectionDisallowed = P::ConnectionDisallowed;
 
@@ -1639,25 +1691,26 @@ impl<
         &self,
         peer_id: PeerId,
     ) -> F::Future<'_, Result<(), Self::ConnectionDisallowed>> {
-        self.policy.authorize_connect(peer_id)
+        self.storage.policy().authorize_connect(peer_id)
     }
 }
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, M, N>,
+    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> StoragePolicy<F> for Subduction<'a, F, S, C, P, M, N>
+> StoragePolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N>
 {
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
 
     fn generation(&self, sedimentree_id: SedimentreeId) -> F::Future<'_, Generation> {
-        self.policy.generation(sedimentree_id)
+        self.storage.policy().generation(sedimentree_id)
     }
 
     fn authorize_fetch(
@@ -1665,7 +1718,7 @@ impl<
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> F::Future<'_, Result<(), Self::FetchDisallowed>> {
-        self.policy.authorize_fetch(peer, sedimentree_id)
+        self.storage.policy().authorize_fetch(peer, sedimentree_id)
     }
 
     fn authorize_put(
@@ -1674,7 +1727,9 @@ impl<
         author: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> F::Future<'_, Result<(), Self::PutDisallowed>> {
-        self.policy.authorize_put(requestor, author, sedimentree_id)
+        self.storage
+            .policy()
+            .authorize_put(requestor, author, sedimentree_id)
     }
 }
 
@@ -1690,9 +1745,10 @@ pub trait SubductionFutureKind<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
+    Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
->: StartListener<'a, S, C, P, M, N>
+>: StartListener<'a, S, C, P, Sig, M, N>
 {
 }
 
@@ -1701,10 +1757,11 @@ impl<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
+    Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
-    U: StartListener<'a, S, C, P, M, N>,
-> SubductionFutureKind<'a, S, C, P, M, N> for U
+    U: StartListener<'a, S, C, P, Sig, M, N>,
+> SubductionFutureKind<'a, S, C, P, Sig, M, N> for U
 {
 }
 
@@ -1716,13 +1773,14 @@ pub trait StartListener<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
+    Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
 >: FutureKind + RunManager<C> + Sized
 {
     /// Start the listener task for Subduction.
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, M, N>>,
+        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -1734,6 +1792,7 @@ pub trait StartListener<
         C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
         S: Storage<Sendable> + Send + Sync + 'a,
         P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
+        Sig: Signer<Sendable> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
         S::Error: Send + 'static,
         C::DisconnectionError: Send + 'static,
@@ -1744,11 +1803,12 @@ pub trait StartListener<
         C: Connection<Local> + PartialEq + Clone + 'static,
         S: Storage<Local> + 'a,
         P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
+        Sig: Signer<Local> + 'a,
         M: DepthMetric + 'a
 )]
-impl<'a, K: FutureKind, C, S, P, M, const N: usize> StartListener<'a, S, C, P, M, N> for K {
+impl<'a, K: FutureKind, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N> for K {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, M, N>>,
+        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -1769,26 +1829,28 @@ impl<'a, K: FutureKind, C, S, P, M, const N: usize> StartListener<'a, S, C, P, M
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,
-    F: StartListener<'a, S, C, P, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize = 256,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
-    _phantom: PhantomData<(S, C, P, M)>,
+    _phantom: PhantomData<(S, C, P, Sig, M)>,
 }
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> ListenerFuture<'a, F, S, C, P, M, N>
+> ListenerFuture<'a, F, S, C, P, Sig, M, N>
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
@@ -1807,13 +1869,14 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> Deref for ListenerFuture<'a, F, S, C, P, M, N>
+> Deref for ListenerFuture<'a, F, S, C, P, Sig, M, N>
 {
     type Target = Abortable<F::Future<'a, ()>>;
 
@@ -1824,13 +1887,14 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> Future for ListenerFuture<'a, F, S, C, P, M, N>
+> Future for ListenerFuture<'a, F, S, C, P, Sig, M, N>
 {
     type Output = Result<(), Aborted>;
 
@@ -1841,13 +1905,14 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F>,
     M: DepthMetric,
     const N: usize,
-> Unpin for ListenerFuture<'a, F, S, C, P, M, N>
+> Unpin for ListenerFuture<'a, F, S, C, P, Sig, M, N>
 {
 }
 

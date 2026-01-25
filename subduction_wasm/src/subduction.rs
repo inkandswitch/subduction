@@ -20,7 +20,7 @@ use sedimentree_core::{
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
     Subduction,
-    connection::{handshake::Audience, manager::Spawn, nonce_cache::NonceCache},
+    connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
@@ -41,6 +41,7 @@ use crate::{
     peer_id::WasmPeerId,
     sedimentree::WasmSedimentree,
     sedimentree_id::WasmSedimentreeId,
+    signer::JsSigner,
     storage::{JsSubductionStorage, JsSubductionStorageError},
 };
 
@@ -68,7 +69,6 @@ impl Spawn<Local> for WasmSpawn {
 
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
-#[derive(Debug)]
 pub struct WasmSubduction {
     core: Arc<
         Subduction<
@@ -77,11 +77,20 @@ pub struct WasmSubduction {
             JsSubductionStorage,
             JsConnection,
             OpenPolicy,
+            JsSigner,
             WasmHashMetric,
             WASM_SHARD_COUNT,
         >,
     >,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
+}
+
+impl core::fmt::Debug for WasmSubduction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WasmSubduction")
+            .field("js_storage", &self.js_storage)
+            .finish_non_exhaustive()
+    }
 }
 
 #[wasm_bindgen(js_class = Subduction)]
@@ -90,6 +99,7 @@ impl WasmSubduction {
     ///
     /// # Arguments
     ///
+    /// * `signer` - The cryptographic signer for this node's identity
     /// * `storage` - Storage backend for persisting data
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
@@ -97,6 +107,7 @@ impl WasmSubduction {
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(
+        signer: JsSigner,
         storage: JsSubductionStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
@@ -104,11 +115,12 @@ impl WasmSubduction {
         tracing::debug!("new Subduction node");
         let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
-        let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
+        let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) = Subduction::new(
-            audience,
+            discovery_id,
+            signer,
             storage,
             OpenPolicy,
             NonceCache::default(),
@@ -142,6 +154,7 @@ impl WasmSubduction {
     ///
     /// # Arguments
     ///
+    /// * `signer` - The cryptographic signer for this node's identity
     /// * `storage` - Storage backend for persisting data
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
@@ -152,6 +165,7 @@ impl WasmSubduction {
     /// Returns [`WasmHydrationError`] if hydration fails.
     #[wasm_bindgen]
     pub async fn hydrate(
+        signer: JsSigner,
         storage: JsSubductionStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
@@ -159,11 +173,12 @@ impl WasmSubduction {
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
-        let audience = service_name.map(|name| Audience::discover(name.as_bytes()));
+        let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let (core, listener_fut, manager_fut) = Subduction::hydrate(
-            audience,
+            discovery_id,
+            signer,
             storage,
             OpenPolicy,
             NonceCache::default(),

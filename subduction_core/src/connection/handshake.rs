@@ -42,11 +42,50 @@ pub use crate::crypto::nonce::Nonce;
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
 
+/// A discovery identifier for locating peers by service endpoint.
+///
+/// This is a BLAKE3 hash of a URL or similar service identifier, used when
+/// a client knows where to connect but not the peer's identity ahead of time.
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
+)]
+#[cbor(transparent)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DiscoveryId(
+    #[cbor(with = "minicbor::bytes")]
+    [u8; 32],
+);
+
+impl DiscoveryId {
+    /// Create a discovery ID from a service identifier.
+    ///
+    /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
+    #[must_use]
+    pub fn new(service_identifier: &[u8]) -> Self {
+        let digest = RawDigest::hash(service_identifier);
+        Self(*digest.as_bytes())
+    }
+
+    /// Create a discovery ID from a pre-hashed value.
+    #[must_use]
+    pub const fn from_raw(hash: [u8; 32]) -> Self {
+        Self(hash)
+    }
+
+    /// Get the raw bytes of the discovery ID.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
+    }
+}
+
 /// The intended recipient of a challenge.
 ///
 /// Supports two modes:
-/// - `Peer`: Client knows the server's [`PeerId`] ahead of time
-/// - `Discovery`: Client knows the URL/endpoint but not the peer identity
+/// - `Known`: Client knows the server's [`PeerId`] ahead of time
+/// - `Discover`: Client knows the URL/endpoint but not the peer identity
 #[derive(
     Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
 )]
@@ -60,11 +99,7 @@ pub enum Audience {
 
     /// Discovery mode: hash of URL or similar service identifier.
     #[n(1)]
-    Discover(
-        #[n(0)]
-        #[cbor(with = "minicbor::bytes")]
-        [u8; 32],
-    ),
+    Discover(#[n(0)] DiscoveryId),
 }
 
 impl Audience {
@@ -79,14 +114,19 @@ impl Audience {
     /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
     #[must_use]
     pub fn discover(service_identifier: &[u8]) -> Self {
-        let digest = RawDigest::hash(service_identifier);
-        Self::Discover(*digest.as_bytes())
+        Self::Discover(DiscoveryId::new(service_identifier))
     }
 
     /// Create a discovery audience from a pre-hashed value.
     #[must_use]
     pub const fn discover_raw(hash: [u8; 32]) -> Self {
-        Self::Discover(hash)
+        Self::Discover(DiscoveryId::from_raw(hash))
+    }
+
+    /// Create a discovery audience from a [`DiscoveryId`].
+    #[must_use]
+    pub const fn discover_id(discovery_id: DiscoveryId) -> Self {
+        Self::Discover(discovery_id)
     }
 }
 
@@ -833,6 +873,53 @@ mod tests {
                         assert!(dc.offset_secs().abs() <= max_drift);
                     }
                 });
+        }
+    }
+
+    mod discovery_id {
+        use super::*;
+
+        #[test]
+        fn cbor_roundtrip() {
+            let discovery_id = DiscoveryId::new(b"test.example.com");
+            let audience = Audience::Discover(discovery_id);
+
+            let encoded = minicbor::to_vec(audience).expect("encode");
+            let decoded: Audience = minicbor::decode(&encoded).expect("decode");
+
+            assert_eq!(audience, decoded);
+        }
+
+        #[test]
+        fn transparent_encoding_is_flat() {
+            // DiscoveryId should encode as raw bytes, not as a nested struct.
+            // The Discover variant (index 1) should contain the bytes directly.
+            let raw_bytes: [u8; 32] = [0x42; 32];
+            let discovery_id = DiscoveryId::from_raw(raw_bytes);
+            let audience = Audience::Discover(discovery_id);
+
+            let encoded = minicbor::to_vec(audience).expect("encode");
+
+            // Decode and verify the bytes are preserved
+            let decoded: Audience = minicbor::decode(&encoded).expect("decode");
+            let Audience::Discover(id) = decoded else {
+                unreachable!("encoded Discover, should decode as Discover");
+            };
+            assert_eq!(*id.as_bytes(), raw_bytes);
+        }
+
+        #[test]
+        fn different_inputs_different_ids() {
+            let id1 = DiscoveryId::new(b"service-a.example.com");
+            let id2 = DiscoveryId::new(b"service-b.example.com");
+            assert_ne!(id1, id2);
+        }
+
+        #[test]
+        fn same_input_same_id() {
+            let id1 = DiscoveryId::new(b"test.example.com");
+            let id2 = DiscoveryId::new(b"test.example.com");
+            assert_eq!(id1, id2);
         }
     }
 }

@@ -50,6 +50,7 @@ async fn rend_receive() -> TestResult {
     let memory_storage = MemoryStorage::default();
     let (suduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         memory_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -74,8 +75,6 @@ async fn rend_receive() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         task_subduction,
     )
     .await?;
@@ -155,6 +154,7 @@ async fn batch_sync() -> TestResult {
 
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
+        server_signer,
         server_storage.clone(),
         OpenPolicy,
         NonceCache::default(),
@@ -187,8 +187,6 @@ async fn batch_sync() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
-        server_signer,
-        None,
         server_subduction.clone(),
     )
     .await?;
@@ -205,8 +203,10 @@ async fn batch_sync() -> TestResult {
         MemoryStorage,
         TokioWebSocketClient<LocalSigner, TimeoutTokio>,
         OpenPolicy,
+        LocalSigner,
     >::new(
         None,
+        client_signer.clone(),
         client_storage,
         OpenPolicy,
         NonceCache::default(),
