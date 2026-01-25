@@ -20,11 +20,7 @@ use sedimentree_core::{
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
     Subduction,
-    connection::{
-        handshake::Audience,
-        manager::Spawn,
-        nonce_tracker::generational::DefaultNonceTracker,
-    },
+    connection::{handshake::Audience, manager::Spawn, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
@@ -81,7 +77,6 @@ pub struct WasmSubduction {
             JsSubductionStorage,
             JsConnection,
             OpenPolicy,
-            DefaultNonceTracker,
             WasmHashMetric,
             WASM_SHARD_COUNT,
         >,
@@ -116,7 +111,7 @@ impl WasmSubduction {
             audience,
             storage,
             OpenPolicy,
-            DefaultNonceTracker::with_defaults(),
+            NonceCache::default(),
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,
@@ -171,7 +166,7 @@ impl WasmSubduction {
             audience,
             storage,
             OpenPolicy,
-            DefaultNonceTracker::with_defaults(),
+            NonceCache::default(),
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,

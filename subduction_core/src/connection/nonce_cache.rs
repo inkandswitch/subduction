@@ -31,9 +31,9 @@ use crate::{peer::id::PeerId, timestamp::TimestampSeconds};
 pub use crate::crypto::nonce::Nonce;
 
 /// Default bucket duration (3 minutes).
-pub const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(180);
+const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(180);
 
-/// Number of buckets (fixed at 4).
+/// Number of buckets.
 const BUCKET_COUNT: usize = 4;
 
 /// Error returned when a nonce has already been used.
@@ -61,8 +61,15 @@ pub struct NonceCache {
 #[derive(Debug)]
 struct NonceCacheInner {
     buckets: [Set<(PeerId, Nonce)>; BUCKET_COUNT],
-    /// Bucket number of the oldest valid bucket.
+
+    // Bucket number of the oldest valid bucket.
     horizon: u64,
+}
+
+impl Default for NonceCache {
+    fn default() -> Self {
+        Self::new(DEFAULT_BUCKET_DURATION)
+    }
 }
 
 impl NonceCache {
@@ -75,11 +82,6 @@ impl NonceCache {
             }),
             bucket_duration_secs: bucket_duration.as_secs(),
         }
-    }
-
-    /// Create a cache with the default configuration (4 buckets × 3 minutes).
-    pub fn with_defaults() -> Self {
-        Self::new(DEFAULT_BUCKET_DURATION)
     }
 
     /// Attempt to claim a nonce from a successful handshake.
@@ -140,7 +142,7 @@ mod tests {
     use super::*;
 
     fn cache() -> NonceCache {
-        NonceCache::with_defaults()
+        NonceCache::default()
     }
 
     fn peer(id: u8) -> PeerId {

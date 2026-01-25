@@ -15,7 +15,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     Subduction,
-    connection::{Connection, message::Message},
+    connection::{Connection, message::Message, nonce_cache::NonceCache},
     crypto::signer::LocalSigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
@@ -52,6 +52,7 @@ async fn rend_receive() -> TestResult {
         None,
         memory_storage.clone(),
         OpenPolicy,
+        NonceCache::default(),
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
@@ -156,6 +157,7 @@ async fn batch_sync() -> TestResult {
         None,
         server_storage.clone(),
         OpenPolicy,
+        NonceCache::default(),
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
@@ -207,6 +209,7 @@ async fn batch_sync() -> TestResult {
         None,
         client_storage,
         OpenPolicy,
+        NonceCache::default(),
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,

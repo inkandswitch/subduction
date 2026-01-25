@@ -175,6 +175,7 @@ where
                                             &task_signer,
                                             server_peer_id,
                                             task_discovery_audience,
+                                            task_subduction.nonce_cache(),
                                             now,
                                             handshake_max_drift,
                                         ).await;
