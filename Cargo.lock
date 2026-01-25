@@ -2706,6 +2706,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "sedimentree_wasm"
+version = "0.1.0"
+dependencies = [
+ "async-lock",
+ "base58",
+ "from_js_ref",
+ "futures 0.3.31",
+ "futures_kind",
+ "js-sys",
+ "minicbor",
+ "sedimentree_core",
+ "thiserror 2.0.18",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures 0.4.58",
+ "wasm-bindgen-test",
+ "wasm_refgen",
+ "web-sys",
+]
+
+[[package]]
 name = "semver"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3008,6 +3029,7 @@ dependencies = [
  "minicbor",
  "rand 0.8.5",
  "sedimentree_core",
+ "sedimentree_wasm",
  "subduction_core",
  "thiserror 2.0.18",
  "tracing",

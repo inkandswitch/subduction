@@ -1,0 +1,70 @@
+[package]
+name = "sedimentree_wasm"
+version = "0.1.0"
+description = "Wasm/JavaScript bindings for Sedimentree (browser and Node.js)"
+categories = ["web-programming"]
+keywords = ["sedimentree", "wasm"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+async-lock = { workspace = true }
+base58 = { workspace = true }
+from_js_ref = { workspace = true }
+futures = { workspace = true }
+futures_kind = { workspace = true }
+js-sys = { workspace = true }
+minicbor = { workspace = true }
+sedimentree_core = { path = "../sedimentree_core", default-features = false }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+wasm-bindgen = { workspace = true }
+wasm-bindgen-futures = { workspace = true }
+wasm_refgen = { workspace = true }
+
+[dependencies.web-sys]
+version = "0.3.81"
+default-features = false
+features = []
+
+[dev-dependencies]
+wasm-bindgen-test = "0.2"
+
+[features]
+default = []
+# IndexedDB storage backend
+idb = [
+  "web-sys/DomStringList",
+  "web-sys/IdbCursorWithValue",
+  "web-sys/IdbDatabase",
+  "web-sys/IdbFactory",
+  "web-sys/IdbIndex",
+  "web-sys/IdbKeyRange",
+  "web-sys/IdbObjectStore",
+  "web-sys/IdbObjectStoreParameters",
+  "web-sys/IdbOpenDbRequest",
+  "web-sys/IdbTransaction",
+  "web-sys/IdbTransactionMode",
+  "web-sys/IdbVersionChangeEvent"
+]
+std = [
+  "async-lock/std",
+  "minicbor/std",
+  "futures/std",
+  "js-sys/std",
+  "sedimentree_core/std",
+  "thiserror/std",
+  "wasm-bindgen/std",
+  "wasm-bindgen-futures/std"
+]
+
+[lints]
+workspace = true

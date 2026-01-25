@@ -35,13 +35,14 @@ use crate::{
         WasmAttachError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
         WasmRegistrationError,
     },
-    fragment::{WasmFragment, WasmFragmentRequested},
+    fragment::WasmFragmentRequested,
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
     sedimentree::WasmSedimentree,
     sedimentree_id::WasmSedimentreeId,
+    sedimentree_fragment::WasmFragment,
     signer::JsSigner,
-    storage::{JsSubductionStorage, JsSubductionStorageError},
+    storage::{JsSedimentreeStorage, JsSedimentreeStorageError},
 };
 
 use super::depth::WasmDepth;
@@ -73,7 +74,7 @@ pub struct WasmSubduction {
         Subduction<
             'static,
             Local,
-            JsSubductionStorage,
+            JsSedimentreeStorage,
             JsConnection,
             OpenPolicy,
             JsSigner,
@@ -107,12 +108,12 @@ impl WasmSubduction {
     #[wasm_bindgen(constructor)]
     pub fn new(
         signer: JsSigner,
-        storage: JsSubductionStorage,
+        storage: JsSedimentreeStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
     ) -> Self {
         tracing::debug!("new Subduction node");
-        let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
+        let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
@@ -165,12 +166,12 @@ impl WasmSubduction {
     #[wasm_bindgen]
     pub async fn hydrate(
         signer: JsSigner,
-        storage: JsSubductionStorage,
+        storage: JsSedimentreeStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
     ) -> Result<Self, WasmHydrationError> {
         tracing::debug!("hydrating new Subduction node");
-        let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
+        let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
@@ -314,12 +315,12 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`JsSubductionStorageError`] if JS storage fails.
+    /// Returns a [`JsSedimentreeStorageError`] if JS storage fails.
     #[wasm_bindgen(js_name = getBlob)]
     pub async fn get_blob(
         &self,
         digest: &WasmDigest,
-    ) -> Result<Option<Uint8Array>, JsSubductionStorageError> {
+    ) -> Result<Option<Uint8Array>, JsSedimentreeStorageError> {
         Ok(self
             .core
             .get_blob(digest.clone().into())
@@ -331,12 +332,12 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`JsSubductionStorageError`] if JS storage fails.
+    /// Returns a [`JsSedimentreeStorageError`] if JS storage fails.
     #[wasm_bindgen(js_name = getBlobs)]
     pub async fn get_blobs(
         &self,
         id: &WasmSedimentreeId,
-    ) -> Result<Vec<Uint8Array>, JsSubductionStorageError> {
+    ) -> Result<Vec<Uint8Array>, JsSedimentreeStorageError> {
         #[allow(clippy::expect_used)]
         if let Some(blobs) = self.core.get_blobs(id.clone().into()).await? {
             Ok(blobs
