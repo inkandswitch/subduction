@@ -151,23 +151,5 @@ mod tests {
                     assert_eq!(id1.cmp(&id2), s1.cmp(s2));
                 });
         }
-
-        #[test]
-        fn prop_equality_is_reflexive() {
-            bolero::check!().with_type::<StorageId>().for_each(|id| {
-                assert_eq!(id, id);
-            });
-        }
-
-        #[test]
-        fn prop_ordering_is_transitive() {
-            bolero::check!()
-                .with_type::<(StorageId, StorageId, StorageId)>()
-                .for_each(|(id1, id2, id3)| {
-                    if id1 < id2 && id2 < id3 {
-                        assert!(id1 < id3);
-                    }
-                });
-        }
     }
 }

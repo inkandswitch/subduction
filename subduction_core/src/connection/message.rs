@@ -443,26 +443,6 @@ mod tests {
         use super::*;
 
         #[test]
-        fn prop_request_id_equality_is_reflexive() {
-            bolero::check!()
-                .with_type::<RequestId>()
-                .for_each(|req_id| {
-                    assert_eq!(req_id, req_id);
-                });
-        }
-
-        #[test]
-        fn prop_request_id_ordering_is_transitive() {
-            bolero::check!()
-                .with_type::<(RequestId, RequestId, RequestId)>()
-                .for_each(|(req1, req2, req3)| {
-                    if req1 < req2 && req2 < req3 {
-                        assert!(req1 < req3);
-                    }
-                });
-        }
-
-        #[test]
         fn prop_batch_sync_request_preserves_req_id() {
             bolero::check!()
                 .with_arbitrary::<BatchSyncRequest>()

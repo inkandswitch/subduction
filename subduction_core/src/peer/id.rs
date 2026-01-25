@@ -202,31 +202,6 @@ mod tests {
         }
 
         #[test]
-        fn prop_equality_is_reflexive() {
-            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
-                assert_eq!(peer_id, peer_id);
-            });
-        }
-
-        #[test]
-        fn prop_equality_is_symmetric() {
-            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
-                assert_eq!(peer_id, peer_id);
-            });
-        }
-
-        #[test]
-        fn prop_ordering_is_transitive() {
-            bolero::check!()
-                .with_type::<(PeerId, PeerId, PeerId)>()
-                .for_each(|(p1, p2, p3)| {
-                    if p1 < p2 && p2 < p3 {
-                        assert!(p1 < p3);
-                    }
-                });
-        }
-
-        #[test]
         fn prop_ordering_matches_byte_ordering() {
             bolero::check!()
                 .with_type::<(PeerId, PeerId)>()

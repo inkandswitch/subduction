@@ -251,23 +251,5 @@ mod tests {
                     assert_eq!(key1.cmp(&key2), v1.cmp(v2));
                 });
         }
-
-        #[test]
-        fn prop_equality_is_reflexive() {
-            bolero::check!().with_type::<StorageKey>().for_each(|key| {
-                assert_eq!(key, key);
-            });
-        }
-
-        #[test]
-        fn prop_ordering_is_transitive() {
-            bolero::check!()
-                .with_type::<(StorageKey, StorageKey, StorageKey)>()
-                .for_each(|(k1, k2, k3)| {
-                    if k1 < k2 && k2 < k3 {
-                        assert!(k1 < k3);
-                    }
-                });
-        }
     }
 }

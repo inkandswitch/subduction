@@ -56,7 +56,7 @@ impl<S, P, M, O> Clone for TokioWebSocketServer<S, P, M, O>
 where
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-        M: 'static + Send + Sync + DepthMetric,
+    M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
     S::Error: 'static + Send + Sync,
 {
@@ -74,7 +74,7 @@ where
 impl<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-        M: 'static + Send + Sync + DepthMetric,
+    M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
 > TokioWebSocketServer<S, P, M, O>
 where

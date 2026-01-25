@@ -74,6 +74,7 @@ impl Default for NonceCache {
 
 impl NonceCache {
     /// Create a new cache with the specified bucket duration.
+    #[must_use]
     pub fn new(bucket_duration: Duration) -> Self {
         Self {
             inner: Mutex::new(NonceCacheInner {
@@ -87,10 +88,13 @@ impl NonceCache {
     /// Attempt to claim a nonce from a successful handshake.
     ///
     /// Returns `Ok(())` if the nonce is fresh and has been recorded.
-    /// Returns `Err(NonceReused)` if this `(peer, nonce)` pair was already seen.
     ///
     /// Only call this after signature verification succeeds — failed attempts
-    /// must not fill the cache (DoS vector).
+    /// must not fill the cache (denial-of-service vector).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`NonceReused`] if this `(peer, nonce)` pair was already seen.
     pub async fn try_claim(
         &self,
         peer: PeerId,
@@ -102,7 +106,7 @@ impl NonceCache {
         let mut inner = self.inner.lock().await;
 
         // Advance horizon if needed (clears old buckets)
-        self.advance_horizon(&mut inner, bucket_num);
+        Self::advance_horizon(&mut inner, bucket_num);
 
         // Check all active buckets
         for bucket in &inner.buckets {
@@ -112,25 +116,28 @@ impl NonceCache {
         }
 
         // Insert into appropriate bucket
-        let idx = self.bucket_index(bucket_num);
+        let idx = Self::bucket_index(bucket_num);
+        #[allow(clippy::indexing_slicing)] // idx is always < BUCKET_COUNT (4)
         inner.buckets[idx].insert(key);
 
         Ok(())
     }
 
-    fn bucket_number(&self, ts: TimestampSeconds) -> u64 {
+    const fn bucket_number(&self, ts: TimestampSeconds) -> u64 {
         ts.as_secs() / self.bucket_duration_secs
     }
 
-    fn bucket_index(&self, bucket_num: u64) -> usize {
+    #[allow(clippy::cast_possible_truncation)] // BUCKET_COUNT is 4, so this is always < usize::MAX
+    const fn bucket_index(bucket_num: u64) -> usize {
         (bucket_num % BUCKET_COUNT as u64) as usize
     }
 
-    fn advance_horizon(&self, inner: &mut NonceCacheInner, current_bucket: u64) {
+    fn advance_horizon(inner: &mut NonceCacheInner, current_bucket: u64) {
         // Clear buckets that would be reused (they're now expired)
         let oldest_valid = current_bucket.saturating_sub(BUCKET_COUNT as u64 - 1);
         while inner.horizon < oldest_valid {
-            let idx = self.bucket_index(inner.horizon);
+            let idx = Self::bucket_index(inner.horizon);
+            #[allow(clippy::indexing_slicing)] // idx is always < BUCKET_COUNT (4)
             inner.buckets[idx].clear();
             inner.horizon += 1;
         }
@@ -138,6 +145,7 @@ impl NonceCache {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
 

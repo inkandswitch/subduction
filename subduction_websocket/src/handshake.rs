@@ -25,9 +25,7 @@ use futures_kind::FutureKind;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        handshake::{
-            self, Audience, Challenge, HandshakeError, Nonce, Rejection, RejectionReason,
-        },
+        handshake::{self, Audience, Challenge, HandshakeError, Nonce, Rejection, RejectionReason},
         nonce_cache::NonceCache,
     },
     crypto::{signed::Signed, signer::Signer},
@@ -240,9 +238,7 @@ where
         let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
         ws.send(tungstenite::Message::Binary(bytes.into())).await?;
         return Err(WebSocketHandshakeError::Handshake(
-            HandshakeError::ChallengeValidation(
-                handshake::ChallengeValidationError::ReplayedNonce,
-            ),
+            HandshakeError::ChallengeValidation(handshake::ChallengeValidationError::ReplayedNonce),
         ));
     }
 

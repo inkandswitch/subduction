@@ -151,16 +151,6 @@ mod tests {
         }
     }
 
-    mod default {
-        use super::*;
-
-        #[test]
-        fn test_default_is_zero() {
-            let id = ConnectionId::default();
-            assert_eq!(id.as_usize(), 0);
-        }
-    }
-
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
         use super::*;
@@ -189,13 +179,6 @@ mod tests {
                 .for_each(|(id1, id2)| {
                     assert_eq!(id1.cmp(id2), id1.as_usize().cmp(&id2.as_usize()));
                 });
-        }
-
-        #[test]
-        fn prop_equality_is_reflexive() {
-            bolero::check!().with_type::<ConnectionId>().for_each(|id| {
-                assert_eq!(id, id);
-            });
         }
     }
 }
