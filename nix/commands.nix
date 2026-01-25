@@ -19,6 +19,11 @@
       ''
         set -e
 
+        echo "===> Building sedimentree_wasm..."
+        ${cargo} build --release -p sedimentree_wasm --target wasm32-unknown-unknown
+        cd "$WORKSPACE_ROOT/sedimentree_wasm"
+        ${pnpm} build
+
         echo "===> Building subduction_wasm..."
         ${cargo} build --release -p subduction_wasm --target wasm32-unknown-unknown
         cd "$WORKSPACE_ROOT/subduction_wasm"
@@ -45,6 +50,11 @@
     "build:wasm:all" = cmd "Build all JS-wrapped Wasm libraries"
       ''
         set -e
+
+        echo "===> Building sedimentree_wasm..."
+        ${cargo} build -p sedimentree_wasm --target wasm32-unknown-unknown
+        cd "$WORKSPACE_ROOT/sedimentree_wasm"
+        ${pnpm} build
 
         echo "===> Building subduction_wasm..."
         ${cargo} build -p subduction_wasm --target wasm32-unknown-unknown
@@ -85,6 +95,10 @@
       echo ""
       echo "===> Testing subduction_core with no_std (base)..."
       ${cargo} check --package subduction_core --no-default-features -v
+
+      echo ""
+      echo "===> Testing sedimentree_wasm (no_std with alloc by default)..."
+      ${cargo} check --package sedimentree_wasm --target wasm32-unknown-unknown -v
 
       echo ""
       echo "===> Testing subduction_wasm (no_std with alloc by default)..."
@@ -191,7 +205,7 @@
       }
 
       rows=""
-      for dir in automerge_sedimentree_wasm automerge_subduction_wasm subduction_wasm; do
+      for dir in automerge_sedimentree_wasm automerge_subduction_wasm sedimentree_wasm subduction_wasm; do
         wasm_file="$WORKSPACE_ROOT/$dir/pkg-slim/"*.wasm 2>/dev/null || continue
         if [ -f $wasm_file ]; then
           name=$(basename "$dir")
