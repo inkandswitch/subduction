@@ -6,7 +6,9 @@ This directory contains protocol design documents for Subduction.
 
 | Document                          | Purpose                                      |
 |-----------------------------------|----------------------------------------------|
+| [`assumptions`](./assumptions.md) | Protocol assumptions and invariants          |
 | [`handshake`](./handshake.md)     | Mutual authentication via Ed25519 signatures |
+| [`protocol`](./protocol.md)       | Wire format, versioning, cryptographic choices |
 | [`security/`](./security/)        | Threat model and security rationale          |
 | [`sedimentree`](./sedimentree.md) | Depth-based data partitioning scheme         |
 | [`sync/`](./sync/)                | Sync protocol overview and comparison        |
