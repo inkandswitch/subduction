@@ -239,14 +239,14 @@ async fn batch_sync() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    assert_eq!(client.peer_ids().await.len(), 0);
+    assert_eq!(client.connected_peer_ids().await.len(), 0);
     client.register(client_ws).await?;
-    assert_eq!(client.peer_ids().await.len(), 1);
+    assert_eq!(client.connected_peer_ids().await.len(), 1);
 
     client.add_commit(sed_id, &commit2, blob2).await?;
     client.add_commit(sed_id, &commit3, blob3).await?;
 
-    assert_eq!(server_subduction.peer_ids().await.len(), 1);
+    assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -260,8 +260,8 @@ async fn batch_sync() -> TestResult {
     // SYNC //
     //////////
 
-    assert_eq!(client.peer_ids().await.len(), 1);
-    assert_eq!(server_subduction.peer_ids().await.len(), 1);
+    assert_eq!(client.connected_peer_ids().await.len(), 1);
+    assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
     client
         .request_all_batch_sync_all(Some(Duration::from_millis(100)))

@@ -575,11 +575,11 @@ impl WasmSubduction {
             .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
     }
 
-    /// Get the peer IDs of all connected peers
-    #[wasm_bindgen(js_name = getPeerIds)]
-    pub async fn peer_ids(&self) -> Vec<WasmPeerId> {
+    /// Get the peer IDs of all connected peers.
+    #[wasm_bindgen(js_name = getConnectedPeerIds)]
+    pub async fn connected_peer_ids(&self) -> Vec<WasmPeerId> {
         self.core
-            .peer_ids()
+            .connected_peer_ids()
             .await
             .into_iter()
             .map(WasmPeerId::from)

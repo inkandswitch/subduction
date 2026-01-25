@@ -335,7 +335,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     }
 
     // Verify server sees all clients
-    assert_eq!(server_subduction.peer_ids().await.len(), num_clients);
+    assert_eq!(server_subduction.connected_peer_ids().await.len(), num_clients);
 
     // Sync all clients
     for client in &clients {

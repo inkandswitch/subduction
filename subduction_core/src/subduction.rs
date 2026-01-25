@@ -1515,7 +1515,7 @@ impl<
     }
 
     /// Get the set of all connected peer IDs.
-    pub async fn peer_ids(&self) -> Set<PeerId> {
+    pub async fn connected_peer_ids(&self) -> Set<PeerId> {
         self.conns
             .lock()
             .await
@@ -2028,7 +2028,7 @@ mod tests {
                     TestSpawn,
                 );
 
-            let peer_ids = subduction.peer_ids().await;
+            let peer_ids = subduction.connected_peer_ids().await;
             assert!(peer_ids.is_empty());
         }
     }
@@ -2233,7 +2233,7 @@ mod tests {
                     TestSpawn,
                 );
 
-            let peer_ids = subduction.peer_ids().await;
+            let peer_ids = subduction.connected_peer_ids().await;
             assert_eq!(peer_ids.len(), 0);
         }
 
@@ -2257,7 +2257,7 @@ mod tests {
             let (fresh, _conn_id) = subduction.register(conn).await?;
 
             assert!(fresh);
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             Ok(())
         }
@@ -2286,7 +2286,7 @@ mod tests {
             assert!(!fresh2);
 
             assert_eq!(conn_id1, conn_id2);
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             Ok(())
         }
@@ -2309,11 +2309,11 @@ mod tests {
 
             let conn = MockConnection::new();
             let (_fresh, conn_id) = subduction.register(conn).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             let removed = subduction.unregister(&conn_id).await;
             assert!(removed);
-            assert_eq!(subduction.peer_ids().await.len(), 0);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 0);
 
             Ok(())
         }
@@ -2361,7 +2361,7 @@ mod tests {
             subduction.register(conn1).await?;
             subduction.register(conn2).await?;
 
-            assert_eq!(subduction.peer_ids().await.len(), 2);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 2);
             Ok(())
         }
 
@@ -2386,7 +2386,7 @@ mod tests {
 
             let removed = subduction.disconnect(&conn_id).await?;
             assert!(removed);
-            assert_eq!(subduction.peer_ids().await.len(), 0);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 0);
 
             Ok(())
         }
@@ -2435,10 +2435,10 @@ mod tests {
 
             subduction.register(conn1).await?;
             subduction.register(conn2).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 2);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 2);
 
             subduction.disconnect_all().await?;
-            assert_eq!(subduction.peer_ids().await.len(), 0);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 0);
 
             Ok(())
         }
@@ -2466,13 +2466,13 @@ mod tests {
 
             subduction.register(conn1).await?;
             subduction.register(conn2).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 2);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 2);
 
             let removed = subduction.disconnect_from_peer(&peer_id1).await?;
             assert!(removed);
-            assert_eq!(subduction.peer_ids().await.len(), 1);
-            assert!(!subduction.peer_ids().await.contains(&peer_id1));
-            assert!(subduction.peer_ids().await.contains(&peer_id2));
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
+            assert!(!subduction.connected_peer_ids().await.contains(&peer_id1));
+            assert!(subduction.connected_peer_ids().await.contains(&peer_id2));
 
             Ok(())
         }
@@ -2625,7 +2625,7 @@ mod tests {
             let peer_id = PeerId::new([1u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(peer_id);
             let (_fresh, _conn_id) = subduction.register(conn).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Add a commit - the send will fail
             let id = SedimentreeId::new([1u8; 32]);
@@ -2635,7 +2635,7 @@ mod tests {
 
             // Connection should be unregistered after send failure
             assert_eq!(
-                subduction.peer_ids().await.len(),
+                subduction.connected_peer_ids().await.len(),
                 0,
                 "Connection should be unregistered after send failure"
             );
@@ -2663,7 +2663,7 @@ mod tests {
             let peer_id = PeerId::new([1u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(peer_id);
             let (_fresh, _conn_id) = subduction.register(conn).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Add a fragment - the send will fail
             let id = SedimentreeId::new([1u8; 32]);
@@ -2673,7 +2673,7 @@ mod tests {
 
             // Connection should be unregistered after send failure
             assert_eq!(
-                subduction.peer_ids().await.len(),
+                subduction.connected_peer_ids().await.len(),
                 0,
                 "Connection should be unregistered after send failure"
             );
@@ -2702,7 +2702,7 @@ mod tests {
             let other_peer_id = PeerId::new([2u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
             let (_fresh, _conn_id) = subduction.register(conn).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Receive a commit from a different peer - the propagation send will fail
             let id = SedimentreeId::new([1u8; 32]);
@@ -2714,7 +2714,7 @@ mod tests {
 
             // Connection should be unregistered after send failure during propagation
             assert_eq!(
-                subduction.peer_ids().await.len(),
+                subduction.connected_peer_ids().await.len(),
                 0,
                 "Connection should be unregistered after send failure"
             );
@@ -2743,7 +2743,7 @@ mod tests {
             let other_peer_id = PeerId::new([2u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
             let (_fresh, _conn_id) = subduction.register(conn).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Receive a fragment from a different peer - the propagation send will fail
             let id = SedimentreeId::new([1u8; 32]);
@@ -2755,7 +2755,7 @@ mod tests {
 
             // Connection should be unregistered after send failure during propagation
             assert_eq!(
-                subduction.peer_ids().await.len(),
+                subduction.connected_peer_ids().await.len(),
                 0,
                 "Connection should be unregistered after send failure"
             );
@@ -2783,7 +2783,7 @@ mod tests {
             let peer_id = PeerId::new([1u8; 32]);
             let conn = FailingSendMockConnection::with_peer_id(peer_id);
             let (_fresh, _conn_id) = subduction.register(conn).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 1);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
             // Request blobs - the send will fail
             let digests = vec![Digest::from([1u8; 32])];
@@ -2791,7 +2791,7 @@ mod tests {
 
             // Connection should be unregistered after send failure
             assert_eq!(
-                subduction.peer_ids().await.len(),
+                subduction.connected_peer_ids().await.len(),
                 0,
                 "Connection should be unregistered after send failure"
             );
@@ -2823,7 +2823,7 @@ mod tests {
 
             subduction.register(conn1).await?;
             subduction.register(conn2).await?;
-            assert_eq!(subduction.peer_ids().await.len(), 2);
+            assert_eq!(subduction.connected_peer_ids().await.len(), 2);
 
             // Add a commit - sends will succeed
             let id = SedimentreeId::new([1u8; 32]);
@@ -2833,7 +2833,7 @@ mod tests {
 
             // Both connections should still be registered (sends succeeded)
             assert_eq!(
-                subduction.peer_ids().await.len(),
+                subduction.connected_peer_ids().await.len(),
                 2,
                 "Both connections should remain registered when sends succeed"
             );
