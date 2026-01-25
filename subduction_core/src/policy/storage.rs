@@ -6,7 +6,6 @@ use core::error::Error;
 use futures_kind::FutureKind;
 use sedimentree_core::id::SedimentreeId;
 
-use super::Generation;
 use crate::peer::id::PeerId;
 
 /// A policy for allowing or disallowing storage operations.
@@ -20,12 +19,6 @@ pub trait StoragePolicy<K: FutureKind> {
 
     /// Error type returned when put is disallowed.
     type PutDisallowed: Error;
-
-    /// Get the current permission generation for a sedimentree.
-    ///
-    /// This value should be bumped whenever permissions change (e.g., membership updates).
-    /// Used for capability revocation checking.
-    fn generation(&self, sedimentree_id: SedimentreeId) -> K::Future<'_, Generation>;
 
     /// Authorize fetching data for the given sedimentree.
     ///

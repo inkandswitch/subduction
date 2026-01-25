@@ -17,6 +17,5 @@ pub mod storage;
 
 pub use cached::CachedPolicy;
 pub use connection::ConnectionPolicy;
-pub use error::{CapabilityRevoked, Generation};
 pub use open::OpenPolicy;
 pub use storage::StoragePolicy;

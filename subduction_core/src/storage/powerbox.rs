@@ -17,10 +17,7 @@ use sedimentree_core::{
 };
 
 use super::{destroyer::Destroyer, fetcher::Fetcher, putter::Putter};
-use crate::{
-    peer::id::PeerId,
-    policy::{Generation, StoragePolicy},
-};
+use crate::{peer::id::PeerId, policy::StoragePolicy};
 
 /// A powerbox that wraps storage and policy, only allowing access through capabilities.
 ///
@@ -72,7 +69,7 @@ impl<S, P> StoragePowerbox<S, P> {
     where
         S: Storage<K>,
     {
-        Putter::new(self.storage.clone(), sedimentree_id, Generation::default())
+        Putter::new(self.storage.clone(), sedimentree_id)
     }
 
     /// Create a destroyer for local cleanup operations.
@@ -104,12 +101,7 @@ impl<S, P> StoragePowerbox<S, P> {
         P: StoragePolicy<K>,
     {
         self.policy.authorize_fetch(peer, sedimentree_id).await?;
-        let generation = self.policy.generation(sedimentree_id).await;
-        Ok(Fetcher::new(
-            self.storage.clone(),
-            sedimentree_id,
-            generation,
-        ))
+        Ok(Fetcher::new(self.storage.clone(), sedimentree_id))
     }
 
     /// Create a put capability for a peer to write to a sedimentree.
@@ -132,12 +124,7 @@ impl<S, P> StoragePowerbox<S, P> {
         self.policy
             .authorize_put(requestor, author, sedimentree_id)
             .await?;
-        let generation = self.policy.generation(sedimentree_id).await;
-        Ok(Putter::new(
-            self.storage.clone(),
-            sedimentree_id,
-            generation,
-        ))
+        Ok(Putter::new(self.storage.clone(), sedimentree_id))
     }
 
     /// Load a blob by its digest (content-addressed, local access).

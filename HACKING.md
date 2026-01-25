@@ -96,13 +96,13 @@ pub trait StoragePolicy<K: FutureKind> {
     type FetchDisallowed: Error;
     type PutDisallowed: Error;
 
-    fn generation(&self, id: SedimentreeId) -> K::Future<'_, u64>;
     fn authorize_fetch(&self, peer: PeerId, id: SedimentreeId) -> K::Future<'_, Result<(), Self::FetchDisallowed>>;
     fn authorize_put(&self, requestor: PeerId, author: PeerId, id: SedimentreeId) -> K::Future<'_, Result<(), Self::PutDisallowed>>;
+    fn filter_authorized_fetch(&self, peer: PeerId, ids: Vec<SedimentreeId>) -> K::Future<'_, Vec<SedimentreeId>>;
 }
 ```
 
-**Why separate?** Connection-level auth (is this peer allowed to connect at all?) is different from document-level auth (can this peer read/write this specific document?). The `generation()` method supports capability revocation — if the generation changes, cached capabilities are invalidated.
+**Why separate?** Connection-level auth (is this peer allowed to connect at all?) is different from document-level auth (can this peer read/write this specific document?). The `filter_authorized_fetch` method enables efficient batch authorization for subscription-based forwarding.
 
 **OpenPolicy** is the permissive default (allows everything). **KeyhivePolicy** integrates with the Keyhive access control system for real authorization.
 

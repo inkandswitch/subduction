@@ -1,7 +1,8 @@
-//! A caching wrapper for policies that caches successful authorization results.
+//! A wrapper for policies.
 //!
-//! The cache is keyed by `(peer_id, sedimentree_id, generation)`, so entries
-//! automatically become stale when the generation changes (e.g., membership revocation).
+//! This type is kept for API compatibility but now simply delegates to the inner policy.
+//! Authorization is checked per-forward via `filter_authorized_fetch`, so caching
+//! is not needed for correctness.
 //!
 //! # Example
 //!
@@ -10,46 +11,29 @@
 //!
 //! let policy = CachedPolicy::new(OpenPolicy);
 //! ```
-//!
-//! # Caching Strategy
-//!
-//! - **Connection auth**: Not cached (no generation for invalidation)
-//! - **Fetch auth**: Cached on success, keyed by `(peer, sedimentree_id, generation)`
-//! - **Put auth**: Cached on success, keyed by `(requestor, author, sedimentree_id, generation)`
-//!
-//! Only successful authorizations are cached. Failures are not cached since
-//! the error types may not be cloneable, and re-checking on failure is safer.
 
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::vec::Vec;
 
-use async_lock::Mutex;
 use futures_kind::{FutureKind, Local, Sendable};
 use sedimentree_core::id::SedimentreeId;
 
-use super::{ConnectionPolicy, Generation, StoragePolicy};
+use super::{ConnectionPolicy, StoragePolicy};
 use crate::peer::id::PeerId;
 
-/// A caching wrapper around a policy.
+/// A wrapper around a policy.
 ///
-/// Caches successful authorization results to avoid repeated lookups.
-/// Cache entries are keyed by generation, so they automatically become
-/// stale when permissions change.
+/// This type is kept for API compatibility but now simply delegates
+/// all operations to the inner policy.
 #[derive(Debug)]
 pub struct CachedPolicy<P> {
     inner: P,
-    fetch_cache: Mutex<BTreeSet<(PeerId, SedimentreeId, Generation)>>,
-    put_cache: Mutex<BTreeSet<(PeerId, PeerId, SedimentreeId, Generation)>>,
 }
 
 impl<P> CachedPolicy<P> {
-    /// Create a new caching policy wrapping the given inner policy.
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn new(inner: P) -> Self {
-        Self {
-            inner,
-            fetch_cache: Mutex::new(BTreeSet::new()),
-            put_cache: Mutex::new(BTreeSet::new()),
-        }
+    /// Create a new policy wrapping the given inner policy.
+    #[must_use]
+    pub const fn new(inner: P) -> Self {
+        Self { inner }
     }
 
     /// Get a reference to the inner policy.
@@ -58,22 +42,14 @@ impl<P> CachedPolicy<P> {
         &self.inner
     }
 
-    /// Clear all cached authorizations.
+    /// No-op for API compatibility.
     pub async fn clear_cache(&self) {
-        self.fetch_cache.lock().await.clear();
-        self.put_cache.lock().await.clear();
+        // No caching, nothing to clear
     }
 
-    /// Clear cached authorizations for a specific sedimentree.
-    pub async fn clear_cache_for(&self, sedimentree_id: SedimentreeId) {
-        self.fetch_cache
-            .lock()
-            .await
-            .retain(|(_, id, _)| *id != sedimentree_id);
-        self.put_cache
-            .lock()
-            .await
-            .retain(|(_, _, id, _)| *id != sedimentree_id);
+    /// No-op for API compatibility.
+    pub async fn clear_cache_for(&self, _sedimentree_id: SedimentreeId) {
+        // No caching, nothing to clear
     }
 }
 
@@ -89,8 +65,7 @@ impl<P: Clone> Clone for CachedPolicy<P> {
     }
 }
 
-// Connection auth is not cached (no generation for invalidation)
-// Implement for Sendable
+// ConnectionPolicy for Sendable
 impl<P: ConnectionPolicy<Sendable>> ConnectionPolicy<Sendable> for CachedPolicy<P> {
     type ConnectionDisallowed = P::ConnectionDisallowed;
 
@@ -102,7 +77,7 @@ impl<P: ConnectionPolicy<Sendable>> ConnectionPolicy<Sendable> for CachedPolicy<
     }
 }
 
-// Implement for Local
+// ConnectionPolicy for Local
 impl<P: ConnectionPolicy<Local>> ConnectionPolicy<Local> for CachedPolicy<P> {
     type ConnectionDisallowed = P::ConnectionDisallowed;
 
@@ -123,34 +98,12 @@ where
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
 
-    fn generation(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureKind>::Future<'_, Generation> {
-        self.inner.generation(sedimentree_id)
-    }
-
     fn authorize_fetch(
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::FetchDisallowed>> {
-        Sendable::into_kind(async move {
-            let generation = self.inner.generation(sedimentree_id).await;
-            let cache_key = (peer, sedimentree_id, generation);
-
-            if self.fetch_cache.lock().await.contains(&cache_key) {
-                return Ok(());
-            }
-
-            let result = self.inner.authorize_fetch(peer, sedimentree_id).await;
-
-            if result.is_ok() {
-                self.fetch_cache.lock().await.insert(cache_key);
-            }
-
-            result
-        })
+        self.inner.authorize_fetch(peer, sedimentree_id)
     }
 
     fn authorize_put(
@@ -159,25 +112,7 @@ where
         author: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::PutDisallowed>> {
-        Sendable::into_kind(async move {
-            let generation = self.inner.generation(sedimentree_id).await;
-            let cache_key = (requestor, author, sedimentree_id, generation);
-
-            if self.put_cache.lock().await.contains(&cache_key) {
-                return Ok(());
-            }
-
-            let result = self
-                .inner
-                .authorize_put(requestor, author, sedimentree_id)
-                .await;
-
-            if result.is_ok() {
-                self.put_cache.lock().await.insert(cache_key);
-            }
-
-            result
-        })
+        self.inner.authorize_put(requestor, author, sedimentree_id)
     }
 
     fn filter_authorized_fetch(
@@ -194,34 +129,12 @@ impl<P: StoragePolicy<Local>> StoragePolicy<Local> for CachedPolicy<P> {
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
 
-    fn generation(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureKind>::Future<'_, Generation> {
-        self.inner.generation(sedimentree_id)
-    }
-
     fn authorize_fetch(
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> <Local as FutureKind>::Future<'_, Result<(), Self::FetchDisallowed>> {
-        Local::into_kind(async move {
-            let generation = self.inner.generation(sedimentree_id).await;
-            let cache_key = (peer, sedimentree_id, generation);
-
-            if self.fetch_cache.lock().await.contains(&cache_key) {
-                return Ok(());
-            }
-
-            let result = self.inner.authorize_fetch(peer, sedimentree_id).await;
-
-            if result.is_ok() {
-                self.fetch_cache.lock().await.insert(cache_key);
-            }
-
-            result
-        })
+        self.inner.authorize_fetch(peer, sedimentree_id)
     }
 
     fn authorize_put(
@@ -230,25 +143,7 @@ impl<P: StoragePolicy<Local>> StoragePolicy<Local> for CachedPolicy<P> {
         author: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> <Local as FutureKind>::Future<'_, Result<(), Self::PutDisallowed>> {
-        Local::into_kind(async move {
-            let generation = self.inner.generation(sedimentree_id).await;
-            let cache_key = (requestor, author, sedimentree_id, generation);
-
-            if self.put_cache.lock().await.contains(&cache_key) {
-                return Ok(());
-            }
-
-            let result = self
-                .inner
-                .authorize_put(requestor, author, sedimentree_id)
-                .await;
-
-            if result.is_ok() {
-                self.put_cache.lock().await.insert(cache_key);
-            }
-
-            result
-        })
+        self.inner.authorize_put(requestor, author, sedimentree_id)
     }
 
     fn filter_authorized_fetch(
@@ -300,10 +195,6 @@ mod tests {
         type FetchDisallowed = core::convert::Infallible;
         type PutDisallowed = core::convert::Infallible;
 
-        fn generation(&self, _sedimentree_id: SedimentreeId) -> K::Future<'_, Generation> {
-            K::into_kind(async { Generation::default() })
-        }
-
         fn authorize_fetch(
             &self,
             _peer: PeerId,
@@ -336,13 +227,15 @@ mod tests {
     #[test]
     fn test_wraps_open_policy() {
         let policy: CachedPolicy<OpenPolicy> = CachedPolicy::new(OpenPolicy);
-        assert!(core::mem::size_of_val(&policy) > 0);
+        // Just verify it compiles and inner() returns the wrapped policy
+        let _ = policy.inner();
     }
 
     #[test]
     fn test_default() {
         let policy: CachedPolicy<OpenPolicy> = CachedPolicy::default();
-        assert!(core::mem::size_of_val(&policy) > 0);
+        // Just verify it compiles and inner() returns the wrapped policy
+        let _ = policy.inner();
     }
 
     #[cfg(feature = "std")]
@@ -350,14 +243,14 @@ mod tests {
         use super::*;
 
         #[tokio::test]
-        async fn test_fetch_caching() {
+        async fn test_fetch_delegates() {
             let counting = CountingPolicy::default();
             let policy: CachedPolicy<CountingPolicy> = CachedPolicy::new(counting);
 
             let peer = PeerId::new([1; 32]);
             let sed_id = SedimentreeId::new([2; 32]);
 
-            // First call - cache miss
+            // First call
             let result: Result<(), _> =
                 <CachedPolicy<CountingPolicy> as StoragePolicy<Sendable>>::authorize_fetch(
                     &policy, peer, sed_id,
@@ -366,20 +259,10 @@ mod tests {
             assert!(result.is_ok());
             assert_eq!(policy.inner().fetch_count(), 1);
 
-            // Second call - cache hit
+            // Second call - now delegates directly (no caching)
             let result: Result<(), _> =
                 <CachedPolicy<CountingPolicy> as StoragePolicy<Sendable>>::authorize_fetch(
                     &policy, peer, sed_id,
-                )
-                .await;
-            assert!(result.is_ok());
-            assert_eq!(policy.inner().fetch_count(), 1); // Still 1, cached
-
-            // Different peer - cache miss
-            let other_peer = PeerId::new([3; 32]);
-            let result: Result<(), _> =
-                <CachedPolicy<CountingPolicy> as StoragePolicy<Sendable>>::authorize_fetch(
-                    &policy, other_peer, sed_id,
                 )
                 .await;
             assert!(result.is_ok());
@@ -387,7 +270,7 @@ mod tests {
         }
 
         #[tokio::test]
-        async fn test_put_caching() {
+        async fn test_put_delegates() {
             let counting = CountingPolicy::default();
             let policy: CachedPolicy<CountingPolicy> = CachedPolicy::new(counting);
 
@@ -395,7 +278,7 @@ mod tests {
             let author = PeerId::new([2; 32]);
             let sed_id = SedimentreeId::new([3; 32]);
 
-            // First call - cache miss
+            // First call
             let result: Result<(), _> =
                 <CachedPolicy<CountingPolicy> as StoragePolicy<Sendable>>::authorize_put(
                     &policy, requestor, author, sed_id,
@@ -404,42 +287,14 @@ mod tests {
             assert!(result.is_ok());
             assert_eq!(policy.inner().put_count(), 1);
 
-            // Second call - cache hit
+            // Second call - now delegates directly (no caching)
             let result: Result<(), _> =
                 <CachedPolicy<CountingPolicy> as StoragePolicy<Sendable>>::authorize_put(
                     &policy, requestor, author, sed_id,
                 )
                 .await;
             assert!(result.is_ok());
-            assert_eq!(policy.inner().put_count(), 1); // Still 1, cached
-        }
-
-        #[tokio::test]
-        async fn test_clear_cache() {
-            let counting = CountingPolicy::default();
-            let policy: CachedPolicy<CountingPolicy> = CachedPolicy::new(counting);
-
-            let peer = PeerId::new([1; 32]);
-            let sed_id = SedimentreeId::new([2; 32]);
-
-            // Populate cache
-            let _: Result<(), _> =
-                <CachedPolicy<CountingPolicy> as StoragePolicy<Sendable>>::authorize_fetch(
-                    &policy, peer, sed_id,
-                )
-                .await;
-            assert_eq!(policy.inner().fetch_count(), 1);
-
-            // Clear cache
-            policy.clear_cache().await;
-
-            // Should miss now
-            let _: Result<(), _> =
-                <CachedPolicy<CountingPolicy> as StoragePolicy<Sendable>>::authorize_fetch(
-                    &policy, peer, sed_id,
-                )
-                .await;
-            assert_eq!(policy.inner().fetch_count(), 2);
+            assert_eq!(policy.inner().put_count(), 2);
         }
     }
 }

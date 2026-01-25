@@ -27,7 +27,7 @@ use sedimentree_core::id::SedimentreeId;
 use serde::Deserialize;
 use subduction_core::{
     peer::id::PeerId,
-    policy::{ConnectionPolicy, Generation, StoragePolicy},
+    policy::{ConnectionPolicy, StoragePolicy},
 };
 
 /// Error returned when a connection is not allowed.
@@ -175,12 +175,6 @@ impl<
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
-
-    fn generation(&self, _sedimentree_id: SedimentreeId) -> BoxFuture<'_, Generation> {
-        // TODO: Return the actual membership version from Keyhive document
-        // For now, return 0 (no revocation checking)
-        async { Generation::default() }.boxed()
-    }
 
     fn authorize_fetch(
         &self,

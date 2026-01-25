@@ -14,20 +14,16 @@ use sedimentree_core::{
     storage::Storage,
 };
 
-use crate::policy::Generation;
-
 /// A capability granting fetch access to a specific sedimentree's data.
 ///
 /// This type bundles:
 /// - Proof that fetch access was authorized
 /// - The storage backend to fetch from
-/// - The generation counter for revocation checking
 ///
 /// Created via [`Subduction::authorize_fetch`][crate::subduction::Subduction].
 pub struct Fetcher<K: FutureKind, S: Storage<K>> {
     storage: Arc<S>,
     sedimentree_id: SedimentreeId,
-    generation: Generation,
     _marker: PhantomData<K>,
 }
 
@@ -35,15 +31,10 @@ impl<K: FutureKind, S: Storage<K>> Fetcher<K, S> {
     /// Create a new fetcher capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(crate) const fn new(
-        storage: Arc<S>,
-        sedimentree_id: SedimentreeId,
-        generation: Generation,
-    ) -> Self {
+    pub(crate) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,
             sedimentree_id,
-            generation,
             _marker: PhantomData,
         }
     }
@@ -52,12 +43,6 @@ impl<K: FutureKind, S: Storage<K>> Fetcher<K, S> {
     #[must_use]
     pub const fn sedimentree_id(&self) -> SedimentreeId {
         self.sedimentree_id
-    }
-
-    /// Get the generation counter when this capability was issued.
-    #[must_use]
-    pub const fn generation(&self) -> Generation {
-        self.generation
     }
 
     /// Load all loose commits for this sedimentree.
@@ -87,7 +72,6 @@ impl<K: FutureKind, S: Storage<K>> Clone for Fetcher<K, S> {
         Self {
             storage: self.storage.clone(),
             sedimentree_id: self.sedimentree_id,
-            generation: self.generation,
             _marker: PhantomData,
         }
     }
@@ -97,7 +81,6 @@ impl<K: FutureKind, S: Storage<K>> core::fmt::Debug for Fetcher<K, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Fetcher")
             .field("sedimentree_id", &self.sedimentree_id)
-            .field("generation", &self.generation)
             .finish_non_exhaustive()
     }
 }

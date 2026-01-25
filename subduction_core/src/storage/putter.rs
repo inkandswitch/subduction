@@ -15,14 +15,12 @@ use sedimentree_core::{
 };
 
 use super::fetcher::Fetcher;
-use crate::policy::Generation;
 
 /// A capability granting put access to a specific sedimentree's data.
 ///
 /// This type bundles:
 /// - Proof that put access was authorized
 /// - The storage backend to write to
-/// - The generation counter for revocation checking
 ///
 /// Created via [`Subduction::authorize_put`][crate::subduction::Subduction].
 ///
@@ -30,7 +28,6 @@ use crate::policy::Generation;
 pub struct Putter<K: FutureKind, S: Storage<K>> {
     storage: Arc<S>,
     sedimentree_id: SedimentreeId,
-    generation: Generation,
     _marker: PhantomData<K>,
 }
 
@@ -39,15 +36,10 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
     ///
     /// This should only be called after authorization has been verified.
     #[allow(dead_code)]
-    pub(crate) const fn new(
-        storage: Arc<S>,
-        sedimentree_id: SedimentreeId,
-        generation: Generation,
-    ) -> Self {
+    pub(crate) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,
             sedimentree_id,
-            generation,
             _marker: PhantomData,
         }
     }
@@ -58,18 +50,12 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
         self.sedimentree_id
     }
 
-    /// Get the generation counter when this capability was issued.
-    #[must_use]
-    pub const fn generation(&self) -> Generation {
-        self.generation
-    }
-
     /// Downgrade to a fetch-only capability.
     ///
     /// This is useful when you have put access but only need to fetch.
     #[must_use]
     pub fn as_fetcher(&self) -> Fetcher<K, S> {
-        Fetcher::new(self.storage.clone(), self.sedimentree_id, self.generation)
+        Fetcher::new(self.storage.clone(), self.sedimentree_id)
     }
 
     /// Load all loose commits for this sedimentree.
@@ -128,7 +114,6 @@ impl<K: FutureKind, S: Storage<K>> Clone for Putter<K, S> {
         Self {
             storage: self.storage.clone(),
             sedimentree_id: self.sedimentree_id,
-            generation: self.generation,
             _marker: PhantomData,
         }
     }
@@ -138,7 +123,6 @@ impl<K: FutureKind, S: Storage<K>> core::fmt::Debug for Putter<K, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Putter")
             .field("sedimentree_id", &self.sedimentree_id)
-            .field("generation", &self.generation)
             .finish_non_exhaustive()
     }
 }

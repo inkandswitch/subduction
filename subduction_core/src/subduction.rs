@@ -15,7 +15,7 @@ use crate::{
     },
     crypto::signer::Signer,
     peer::id::PeerId,
-    policy::{ConnectionPolicy, Generation, StoragePolicy},
+    policy::{ConnectionPolicy, StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter},
 };
@@ -1821,10 +1821,6 @@ impl<
 {
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
-
-    fn generation(&self, sedimentree_id: SedimentreeId) -> F::Future<'_, Generation> {
-        self.storage.policy().generation(sedimentree_id)
-    }
 
     fn authorize_fetch(
         &self,

@@ -6,7 +6,7 @@ use core::convert::Infallible;
 use futures_kind::FutureKind;
 use sedimentree_core::id::SedimentreeId;
 
-use super::{ConnectionPolicy, Generation, StoragePolicy};
+use super::{ConnectionPolicy, StoragePolicy};
 use crate::peer::id::PeerId;
 
 /// An open policy that allows all connections and storage operations.
@@ -31,10 +31,6 @@ impl<K: FutureKind> ConnectionPolicy<K> for OpenPolicy {
 impl<K: FutureKind> StoragePolicy<K> for OpenPolicy {
     type FetchDisallowed = Infallible;
     type PutDisallowed = Infallible;
-
-    fn generation(&self, _sedimentree_id: SedimentreeId) -> K::Future<'_, Generation> {
-        K::into_kind(async { Generation::default() })
-    }
 
     fn authorize_fetch(
         &self,
