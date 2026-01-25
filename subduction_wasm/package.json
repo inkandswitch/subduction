@@ -8,7 +8,10 @@
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
     "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
-    "build-slim": "node build_slim.js"
+    "build-slim": "node build_slim.js",
+    "test": "playwright test",
+    "test:install": "playwright install",
+    "test:report": "playwright show-report"
   },
   "keywords": [],
   "author": "",
