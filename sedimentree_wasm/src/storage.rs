@@ -122,8 +122,10 @@ extern "C" {
 
     /// Delete all fragments from storage.
     #[wasm_bindgen(method, js_name = deleteFragments)]
-    fn js_delete_fragments(this: &JsSedimentreeStorage, sedimentree_id: &JsSedimentreeId)
-    -> Promise;
+    fn js_delete_fragments(
+        this: &JsSedimentreeStorage,
+        sedimentree_id: &JsSedimentreeId,
+    ) -> Promise;
 
     /// Delete a blob from storage.
     #[wasm_bindgen(method, js_name = deleteBlob)]

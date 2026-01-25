@@ -335,13 +335,14 @@ async fn multiple_concurrent_clients() -> TestResult {
     }
 
     // Verify server sees all clients
-    assert_eq!(server_subduction.connected_peer_ids().await.len(), num_clients);
+    assert_eq!(
+        server_subduction.connected_peer_ids().await.len(),
+        num_clients
+    );
 
     // Sync all clients
     for client in &clients {
-        client
-            .full_sync(Some(Duration::from_millis(100)))
-            .await?;
+        client.full_sync(Some(Duration::from_millis(100))).await?;
     }
 
     // Give time for sync to complete
@@ -475,9 +476,7 @@ async fn request_with_delayed_response() -> TestResult {
     });
 
     // Make a sync request with a very short timeout
-    let _result = client
-        .full_sync(Some(Duration::from_millis(1)))
-        .await;
+    let _result = client.full_sync(Some(Duration::from_millis(1))).await;
 
     // This might succeed if the network is fast, or fail with timeout
     // The test is to verify the system handles short timeouts gracefully
@@ -617,9 +616,7 @@ async fn large_message_handling() -> TestResult {
     client.add_commit(sed_id, &commit, large_blob).await?;
 
     // Sync with server
-    client
-        .full_sync(Some(Duration::from_secs(5)))
-        .await?;
+    client.full_sync(Some(Duration::from_secs(5))).await?;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -739,9 +736,7 @@ async fn message_ordering() -> TestResult {
     }
 
     // Sync all at once
-    client
-        .full_sync(Some(Duration::from_millis(500)))
-        .await?;
+    client.full_sync(Some(Duration::from_millis(500))).await?;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 

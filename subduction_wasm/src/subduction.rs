@@ -39,8 +39,8 @@ use crate::{
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
     sedimentree::WasmSedimentree,
-    sedimentree_id::WasmSedimentreeId,
     sedimentree_fragment::WasmFragment,
+    sedimentree_id::WasmSedimentreeId,
     signer::JsSigner,
     storage::{JsSedimentreeStorage, JsSedimentreeStorageError},
 };
@@ -253,10 +253,7 @@ impl WasmSubduction {
     ///
     /// Returns a `WasmAttachError` if attaching the connection fails.
     pub async fn attach(&self, conn: JsConnection) -> Result<bool, WasmAttachError> {
-        self.core
-            .attach(conn)
-            .await
-            .map_err(WasmAttachError::from)
+        self.core.attach(conn).await.map_err(WasmAttachError::from)
     }
 
     /// Disconnect a connection.
@@ -482,10 +479,7 @@ impl WasmSubduction {
     ) -> Result<WasmPeerResultMap, WasmIoError> {
         tracing::debug!("WasmSubduction::sync_all");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let peer_map = self
-            .core
-            .sync_all(id.clone().into(), timeout)
-            .await?;
+        let peer_map = self.core.sync_all(id.clone().into(), timeout).await?;
         tracing::debug!("WasmSubduction::sync_all - done");
         Ok(WasmPeerResultMap(
             peer_map

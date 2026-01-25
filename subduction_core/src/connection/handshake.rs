@@ -53,10 +53,7 @@ pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DiscoveryId(
-    #[cbor(with = "minicbor::bytes")]
-    [u8; 32],
-);
+pub struct DiscoveryId(#[cbor(with = "minicbor::bytes")] [u8; 32]);
 
 impl DiscoveryId {
     /// Create a discovery ID from a service identifier.

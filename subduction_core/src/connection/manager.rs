@@ -54,7 +54,7 @@ pub struct ConnectionManager<K: FutureKind, C, S: Spawn<K>> {
     /// Counter for generating internal task IDs.
     next_task_id: AtomicUsize,
 
-    /// Active tasks: maps internal TaskId to (AbortHandle, Connection).
+    /// Active tasks: maps internal `TaskId` to (`AbortHandle`, `Connection`).
     ///
     /// The connection is stored to enable `Remove(C)` lookup via `PartialEq`.
     tasks: Arc<Mutex<Vec<(TaskId, AbortHandle, C)>>>,
@@ -95,7 +95,6 @@ impl<K: FutureKind, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     pub async fn connection_count(&self) -> usize {
         self.tasks.lock().await.len()
     }
-
 }
 
 impl<K: FutureKind, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
@@ -165,7 +164,10 @@ impl<K: FutureKind, C> RunManager<C> for K {
                             // Normal completion cleanup - remove from tasks list
                             let mut tasks_guard = tasks.lock().await;
                             let target_id: TaskId = task_id;
-                            if let Some(pos) = tasks_guard.iter().position(|(id, _, _): &(TaskId, AbortHandle, C)| *id == target_id) {
+                            if let Some(pos) = tasks_guard
+                                .iter()
+                                .position(|(id, _, _): &(TaskId, AbortHandle, C)| *id == target_id)
+                            {
                                 tasks_guard.swap_remove(pos);
                             }
                             let _ = closed.send(conn_clone).await;

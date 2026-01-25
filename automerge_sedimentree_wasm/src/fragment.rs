@@ -4,7 +4,9 @@ use alloc::vec::Vec;
 use sedimentree_core::collections::{Map, Set};
 
 use sedimentree_core::{blob::Digest, commit::FragmentState};
-use subduction_wasm::{digest::WasmDigest, loose_commit::WasmBlobMeta, sedimentree_fragment::WasmFragment};
+use subduction_wasm::{
+    digest::WasmDigest, loose_commit::WasmBlobMeta, sedimentree_fragment::WasmFragment,
+};
 use wasm_bindgen::prelude::*;
 
 /// The state of a fragment while being built.

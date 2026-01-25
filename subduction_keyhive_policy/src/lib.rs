@@ -249,21 +249,18 @@ impl<
         ids: Vec<SedimentreeId>,
     ) -> BoxFuture<'_, Vec<SedimentreeId>> {
         async move {
-            let identifier = match try_peer_id_to_identifier(peer) {
-                Some(id) => id,
-                None => return Vec::new(),
+            let Some(identifier) = try_peer_id_to_identifier(peer) else {
+                return Vec::new();
             };
 
             let mut authorized = Vec::new();
             for sedimentree_id in ids {
-                let doc_id = match try_sedimentree_id_to_document_id(sedimentree_id) {
-                    Some(id) => id,
-                    None => continue,
+                let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
+                    continue;
                 };
 
-                let doc = match self.0.get_document(doc_id).await {
-                    Some(doc) => doc,
-                    None => continue,
+                let Some(doc) = self.0.get_document(doc_id).await else {
+                    continue;
                 };
 
                 let members = doc.lock().await.transitive_members().await;

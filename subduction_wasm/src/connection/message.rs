@@ -12,8 +12,8 @@ use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 use crate::{
-    digest::WasmDigest, loose_commit::WasmLooseCommit,
-    sedimentree_fragment::WasmFragment, sedimentree_id::WasmSedimentreeId,
+    digest::WasmDigest, loose_commit::WasmLooseCommit, sedimentree_fragment::WasmFragment,
+    sedimentree_id::WasmSedimentreeId,
 };
 
 use super::{WasmBatchSyncRequest, WasmBatchSyncResponse};

@@ -107,7 +107,10 @@ use futures::{
 use futures_kind::{FutureKind, Local, Sendable};
 use nonempty::NonEmpty;
 use request::FragmentRequested;
-use sedimentree_core::collections::{Map, Set, nonempty_ext::{NonEmptyExt, RemoveResult}};
+use sedimentree_core::collections::{
+    Map, Set,
+    nonempty_ext::{NonEmptyExt, RemoveResult},
+};
 use sedimentree_core::{
     blob::{Blob, Digest},
     commit::CountLeadingZeroBytes,
@@ -374,11 +377,7 @@ impl<
         Ok(())
     }
 
-    async fn dispatch(
-        &self,
-        conn: &C,
-        message: Message,
-    ) -> Result<(), ListenError<F, S, C>> {
+    async fn dispatch(&self, conn: &C, message: Message) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
         tracing::info!(
             from = %from,
@@ -436,24 +435,19 @@ impl<
 
                 self.recv_batch_sync_response(&from, id, diff).await?;
             }
-            Message::BlobsRequest(digests) => {
-                match self.recv_blob_request(conn, &digests).await {
-                    Ok(()) => {
-                        tracing::info!(
-                            "successfully handled blob request from peer {:?}",
-                            from
-                        );
-                    }
-                    Err(BlobRequestErr::IoError(e)) => Err(e)?,
-                    Err(BlobRequestErr::MissingBlobs(missing)) => {
-                        tracing::warn!(
-                            "missing blobs for request from peer {:?}: {:?}",
-                            from,
-                            missing
-                        );
-                    }
+            Message::BlobsRequest(digests) => match self.recv_blob_request(conn, &digests).await {
+                Ok(()) => {
+                    tracing::info!("successfully handled blob request from peer {:?}", from);
                 }
-            }
+                Err(BlobRequestErr::IoError(e)) => Err(e)?,
+                Err(BlobRequestErr::MissingBlobs(missing)) => {
+                    tracing::warn!(
+                        "missing blobs for request from peer {:?}: {:?}",
+                        from,
+                        missing
+                    );
+                }
+            },
             Message::BlobsResponse(blobs) => {
                 let len = blobs.len();
                 for blob in blobs {
@@ -497,8 +491,7 @@ impl<
         let ids = self.sedimentrees.into_keys().await;
 
         for tree_id in ids {
-            self.sync_with_peer(&peer_id, tree_id, None)
-                .await?;
+            self.sync_with_peer(&peer_id, tree_id, None).await?;
         }
 
         Ok(fresh)
@@ -546,7 +539,7 @@ impl<
             let mut guard = self.connections.lock().await;
             core::mem::take(&mut *guard)
                 .into_values()
-                .flat_map(|ne| ne.into_iter())
+                .flat_map(NonEmpty::into_iter)
                 .collect()
         };
 
@@ -621,10 +614,11 @@ impl<
         let mut connections = self.connections.lock().await;
 
         // Check if this exact connection is already registered
-        if let Some(peer_conns) = connections.get(&peer_id) {
-            if peer_conns.iter().any(|c| c == &conn) {
-                return Ok(false);
-            }
+        if connections
+            .get(&peer_id)
+            .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
+        {
+            return Ok(false);
         }
 
         // Add connection to the peer's connection list
@@ -826,10 +820,7 @@ impl<
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_blobs(
-        &self,
-        id: SedimentreeId,
-    ) -> Result<Option<NonEmpty<Blob>>, S::Error> {
+    pub async fn get_blobs(&self, id: SedimentreeId) -> Result<Option<NonEmpty<Blob>>, S::Error> {
         tracing::debug!("Getting local blobs for sedimentree with id {:?}", id);
         let tree = self.sedimentrees.get_cloned(&id).await;
         if let Some(sedimentree) = tree {
@@ -937,11 +928,7 @@ impl<
         let mut blobs = Vec::new();
         let mut missing = Vec::new();
         for digest in digests {
-            if let Some(blob) = self
-                .get_blob(*digest)
-                .await
-                .map_err(IoError::Storage)?
-            {
+            if let Some(blob) = self.get_blob(*digest).await.map_err(IoError::Storage)? {
                 blobs.push(blob);
             } else {
                 missing.push(*digest);
@@ -1547,10 +1534,7 @@ impl<
                     let mut conn_errs = Vec::new();
 
                     for conn in peer_conns {
-                        tracing::debug!(
-                            "Using connection to peer {}",
-                            conn.peer_id()
-                        );
+                        tracing::debug!("Using connection to peer {}", conn.peer_id());
                         let summary = self
                             .sedimentrees
                             .get_cloned(&id)
@@ -1986,7 +1970,9 @@ pub trait StartListener<
         Sig: Signer<Local> + 'a,
         M: DepthMetric + 'a
 )]
-impl<'a, K: FutureKind, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N> for K {
+impl<'a, K: FutureKind, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N>
+    for K
+{
     fn start_listener(
         subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
         abort_reg: AbortRegistration,

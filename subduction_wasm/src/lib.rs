@@ -18,8 +18,8 @@ pub mod signer;
 pub mod subduction;
 
 // Re-export sedimentree types from sedimentree_wasm
-pub use sedimentree_wasm::{depth, digest, loose_commit, sedimentree, sedimentree_id, storage};
 pub use sedimentree_wasm::fragment as sedimentree_fragment;
+pub use sedimentree_wasm::{depth, digest, loose_commit, sedimentree, sedimentree_id, storage};
 
 pub use signer::WebCryptoSigner;
 pub use subduction::WasmSubduction;

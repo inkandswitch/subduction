@@ -47,6 +47,7 @@ impl<T: PartialEq> NonEmptyExt<T> for NonEmpty<T> {
 }
 
 #[cfg(test)]
+#[allow(clippy::panic, clippy::wildcard_enum_match_arm)]
 mod tests {
     use super::*;
 

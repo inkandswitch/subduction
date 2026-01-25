@@ -357,9 +357,14 @@ where
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let handshake_result =
-            client_handshake(&mut ws_stream, self.subduction.signer(), audience, now, nonce)
-                .await?;
+        let handshake_result = client_handshake(
+            &mut ws_stream,
+            self.subduction.signer(),
+            audience,
+            now,
+            nonce,
+        )
+        .await?;
 
         // Verify we connected to the expected peer
         if handshake_result.server_id != expected_peer_id {
