@@ -12,7 +12,7 @@ test.describe("Subduction", () => {
     test("should create Subduction instance with MemoryStorage", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
         return {
@@ -28,7 +28,7 @@ test.describe("Subduction", () => {
     test("should hydrate Subduction from existing storage", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
 
         const syncer1 = new Subduction(signer, storage);
@@ -71,7 +71,7 @@ test.describe("Subduction", () => {
     test("should return empty array for sedimentreeIds initially", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -112,7 +112,7 @@ test.describe("Subduction", () => {
     test("should get peer IDs", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -132,7 +132,7 @@ test.describe("Subduction", () => {
     test("should disconnect all connections", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -154,7 +154,7 @@ test.describe("Subduction", () => {
     test("should return undefined for non-existent sedimentree commits", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -176,7 +176,7 @@ test.describe("Subduction", () => {
     test("should return undefined for non-existent sedimentree fragments", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -198,7 +198,7 @@ test.describe("Subduction", () => {
     test("should return undefined for non-existent blob", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -220,7 +220,7 @@ test.describe("Subduction", () => {
     test("should return empty map for non-existent blob digests", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -247,8 +247,8 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
 
-        const signer1 = await WebCryptoSigner.generate();
-        const signer2 = await WebCryptoSigner.generate();
+        const signer1 = await WebCryptoSigner.setup();
+        const signer2 = await WebCryptoSigner.setup();
         const storage1 = new MemoryStorage();
         const storage2 = new MemoryStorage();
 
@@ -487,7 +487,7 @@ test.describe("Subduction", () => {
     test("should handle operations on disconnected peers", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, PeerId, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
@@ -510,7 +510,7 @@ test.describe("Subduction", () => {
     test("should call requestBlobs without throwing", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
-        const signer = await WebCryptoSigner.generate();
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
