@@ -2088,7 +2088,7 @@ mod tests {
     use super::*;
     use crate::connection::nonce_cache::NonceCache;
     use crate::connection::test_utils::MockConnection;
-    use crate::crypto::signer::LocalSigner;
+    use crate::crypto::signer::MemorySigner;
     use crate::policy::OpenPolicy;
     use futures::future::{BoxFuture, LocalBoxFuture};
     use sedimentree_core::{
@@ -2098,8 +2098,8 @@ mod tests {
     use testresult::TestResult;
 
     /// Create a test signer with deterministic key bytes.
-    fn test_signer() -> LocalSigner {
-        LocalSigner::from_bytes(&[42u8; 32])
+    fn test_signer() -> MemorySigner {
+        MemorySigner::from_bytes(&[42u8; 32])
     }
 
     /// A spawner that doesn't actually spawn (for tests that don't need task execution).

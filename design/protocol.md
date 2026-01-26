@@ -168,7 +168,7 @@ trait Signer<K: FutureKind> {
 
 Implementations include:
 
-- **LocalSigner** — In-memory keys for testing/development
+- **MemorySigner** — In-memory keys for testing/development
 - **WebCryptoSigner** — Browser WebCrypto API for Wasm
 - **HSM signers** — Hardware security modules (future)
 

@@ -7,7 +7,7 @@ use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
     connection::nonce_cache::NonceCache,
-    crypto::signer::LocalSigner,
+    crypto::signer::MemorySigner,
     policy::OpenPolicy,
     storage::{MetricsStorage, RefreshMetrics},
 };
@@ -115,9 +115,9 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let signer = match &args.key_seed {
         Some(hex_seed) => {
             let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
-            LocalSigner::from_bytes(&seed_bytes)
+            MemorySigner::from_bytes(&seed_bytes)
         }
-        None => LocalSigner::generate(),
+        None => MemorySigner::generate(),
     };
     let peer_id = signer.peer_id();
 
@@ -127,7 +127,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .clone()
         .unwrap_or_else(|| args.socket.clone());
 
-    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, LocalSigner> =
+    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, MemorySigner> =
         TokioWebSocketServer::setup(
             addr,
             FuturesTimerTimeout,

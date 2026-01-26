@@ -351,10 +351,10 @@ where
 mod tests {
     use super::*;
     use future_form::Sendable;
-    use subduction_core::crypto::signer::LocalSigner;
+    use subduction_core::crypto::signer::MemorySigner;
 
-    fn test_signer(seed: u8) -> LocalSigner {
-        LocalSigner::from_bytes(&[seed; 32])
+    fn test_signer(seed: u8) -> MemorySigner {
+        MemorySigner::from_bytes(&[seed; 32])
     }
 
     mod handshake_message {

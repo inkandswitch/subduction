@@ -12,7 +12,7 @@ use crate::peer::id::PeerId;
 /// A trait for signing data with an ed25519 key.
 ///
 /// This abstraction allows different key management strategies:
-/// - In-memory keys via [`LocalSigner`]
+/// - In-memory keys via [`MemorySigner`]
 /// - Hardware security modules
 /// - Remote signing services
 /// - Key derivation schemes
@@ -21,7 +21,7 @@ use crate::peer::id::PeerId;
 /// - `Sendable`: Thread-safe futures for multi-threaded runtimes like Tokio
 /// - `Local`: Single-threaded futures for Wasm and local executors
 ///
-/// For synchronous signers like [`LocalSigner`], the async overhead is negligible.
+/// For synchronous signers like [`MemorySigner`], the async overhead is negligible.
 pub trait Signer<K: FutureForm> {
     /// Sign the given message bytes.
     fn sign(&self, message: &[u8]) -> K::Future<'_, Signature>;
@@ -35,13 +35,13 @@ pub trait Signer<K: FutureForm> {
     }
 }
 
-/// A local signer that holds an ed25519 signing key in memory.
+/// An in-memory signer that holds an ed25519 signing key.
 #[derive(Clone)]
-pub struct LocalSigner {
+pub struct MemorySigner {
     signing_key: SigningKey,
 }
 
-impl LocalSigner {
+impl MemorySigner {
     /// Create a new local signer from a signing key.
     #[must_use]
     pub const fn new(signing_key: SigningKey) -> Self {
@@ -83,7 +83,7 @@ impl LocalSigner {
 }
 
 #[future_form(Sendable, Local)]
-impl<K: FutureForm> Signer<K> for LocalSigner {
+impl<K: FutureForm> Signer<K> for MemorySigner {
     fn sign(&self, message: &[u8]) -> K::Future<'_, Signature> {
         use ed25519_dalek::Signer as _;
         let signature = self.signing_key.sign(message);
@@ -95,9 +95,9 @@ impl<K: FutureForm> Signer<K> for LocalSigner {
     }
 }
 
-impl core::fmt::Debug for LocalSigner {
+impl core::fmt::Debug for MemorySigner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("LocalSigner")
+        f.debug_struct("MemorySigner")
             .field("peer_id", &self.peer_id())
             .finish_non_exhaustive()
     }
@@ -113,10 +113,10 @@ mod tests {
     #[tokio::test]
     async fn local_signer_sign_and_verify() {
         let key_bytes = [42u8; 32];
-        let signer = LocalSigner::from_bytes(&key_bytes);
+        let signer = MemorySigner::from_bytes(&key_bytes);
 
         let message = b"hello world";
-        let signature = <LocalSigner as Signer<Sendable>>::sign(&signer, message).await;
+        let signature = <MemorySigner as Signer<Sendable>>::sign(&signer, message).await;
 
         assert!(signer.verifying_key().verify(message, &signature).is_ok());
     }
@@ -124,7 +124,7 @@ mod tests {
     #[test]
     fn peer_id_matches_verifying_key() {
         let key_bytes = [42u8; 32];
-        let signer = LocalSigner::from_bytes(&key_bytes);
+        let signer = MemorySigner::from_bytes(&key_bytes);
 
         let expected_peer_id = PeerId::from(signer.verifying_key());
         assert_eq!(signer.peer_id(), expected_peer_id);
@@ -133,12 +133,12 @@ mod tests {
     #[test]
     fn debug_does_not_leak_private_key() {
         let key_bytes = [42u8; 32];
-        let signer = LocalSigner::from_bytes(&key_bytes);
+        let signer = MemorySigner::from_bytes(&key_bytes);
 
         let debug_str = format!("{signer:?}");
 
         // Should contain peer_id but not the raw key bytes
-        assert!(debug_str.contains("LocalSigner"));
+        assert!(debug_str.contains("MemorySigner"));
         assert!(debug_str.contains("peer_id"));
         // Raw key bytes as hex would be "2a2a2a..." - should not appear
         assert!(!debug_str.contains("2a2a2a"));

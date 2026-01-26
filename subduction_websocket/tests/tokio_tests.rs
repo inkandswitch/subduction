@@ -14,7 +14,7 @@ use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     Subduction,
     connection::{Connection, Reconnect, message::Message, nonce_cache::NonceCache},
-    crypto::signer::LocalSigner,
+    crypto::signer::MemorySigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
 };
@@ -35,8 +35,8 @@ fn init_tracing() {
 /// Maximum clock drift for handshake tests.
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 
-fn test_signer(seed: u8) -> LocalSigner {
-    LocalSigner::from_bytes(&[seed; 32])
+fn test_signer(seed: u8) -> MemorySigner {
+    MemorySigner::from_bytes(&[seed; 32])
 }
 
 fn random_blob() -> Blob {
@@ -278,9 +278,9 @@ async fn multiple_concurrent_clients() -> TestResult {
         let (client, listener_fut, actor_fut) = Subduction::<
             Sendable,
             MemoryStorage,
-            TokioWebSocketClient<LocalSigner, TimeoutTokio>,
+            TokioWebSocketClient<MemorySigner, TimeoutTokio>,
             OpenPolicy,
-            LocalSigner,
+            MemorySigner,
         >::new(
             None,
             client_signer.clone(),
@@ -426,9 +426,9 @@ async fn request_with_delayed_response() -> TestResult {
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<LocalSigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
         OpenPolicy,
-        LocalSigner,
+        MemorySigner,
     >::new(
         None,
         client_signer.clone(),
@@ -557,9 +557,9 @@ async fn large_message_handling() -> TestResult {
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<LocalSigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
         OpenPolicy,
-        LocalSigner,
+        MemorySigner,
     >::new(
         None,
         client_signer.clone(),
@@ -678,9 +678,9 @@ async fn message_ordering() -> TestResult {
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<LocalSigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
         OpenPolicy,
-        LocalSigner,
+        MemorySigner,
     >::new(
         None,
         client_signer.clone(),

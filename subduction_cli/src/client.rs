@@ -3,7 +3,7 @@
 use crate::fs_storage::FsStorage;
 use anyhow::Result;
 use std::{path::PathBuf, time::Duration};
-use subduction_core::crypto::signer::LocalSigner;
+use subduction_core::crypto::signer::MemorySigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
@@ -47,16 +47,16 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     let signer = match &args.key_seed {
         Some(hex_seed) => {
             let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
-            LocalSigner::from_bytes(&seed_bytes)
+            MemorySigner::from_bytes(&seed_bytes)
         }
-        None => LocalSigner::generate(),
+        None => MemorySigner::generate(),
     };
     let peer_id = signer.peer_id();
 
     let server_peer_id = crate::parse_peer_id(&args.server_peer_id)?;
 
     tracing::info!("Connecting to WebSocket server at {}", uri);
-    let (_client, listen_fut): (TokioWebSocketClient<LocalSigner, _>, _) =
+    let (_client, listen_fut): (TokioWebSocketClient<MemorySigner, _>, _) =
         TokioWebSocketClient::new(
             uri,
             FuturesTimerTimeout,

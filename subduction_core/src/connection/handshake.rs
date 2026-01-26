@@ -684,11 +684,11 @@ mod tests {
 
     mod executor {
         use super::*;
-        use crate::crypto::signer::LocalSigner;
+        use crate::crypto::signer::MemorySigner;
         use future_form::Sendable;
 
-        fn test_signer(seed: u8) -> LocalSigner {
-            LocalSigner::from_bytes(&[seed; 32])
+        fn test_signer(seed: u8) -> MemorySigner {
+            MemorySigner::from_bytes(&[seed; 32])
         }
 
         #[tokio::test]
