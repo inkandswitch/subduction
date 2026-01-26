@@ -17,14 +17,15 @@ pub use automerge_sedimentree_wasm;
 pub use subduction_wasm;
 
 // Re-export wasm-bindgen types so they appear in the generated JS bindings
-pub use subduction_wasm::connection::WasmBatchSyncRequest;
-pub use subduction_wasm::connection::WasmBatchSyncResponse;
-pub use subduction_wasm::connection::WasmMessage;
-pub use subduction_wasm::connection::WasmRequestId;
-pub use subduction_wasm::connection::websocket::WasmWebSocket;
-pub use subduction_wasm::peer_id::WasmPeerId;
-pub use subduction_wasm::signer::WebCryptoSigner;
-pub use subduction_wasm::subduction::WasmSubduction;
+pub use subduction_wasm::{
+    connection::{
+        WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId,
+        websocket::WasmWebSocket,
+    },
+    peer_id::WasmPeerId,
+    signer::WebCryptoSigner,
+    subduction::WasmSubduction,
+};
 
 /// Set a panic hook to get better error messages if the code panics.
 ///

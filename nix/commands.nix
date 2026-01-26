@@ -86,6 +86,20 @@
   };
 
   test = {
+    "test:host" = cmd "Run workspace tests with arbitrary feature" ''
+      set -e
+
+      echo "===> Running workspace tests..."
+      ${cargo} test --features arbitrary
+
+      echo ""
+      echo "===> Running doc tests..."
+      ${cargo} test --doc --workspace
+
+      echo ""
+      echo "✓ All host tests passed"
+    '';
+
     "test:no_std" = cmd "Test no_std compatibility (core crates only)" ''
       set -e
 

@@ -16,8 +16,7 @@
 use criterion::{criterion_group, criterion_main};
 
 mod generators {
-    use rand::rngs::StdRng;
-    use rand::{Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         digest::Digest,

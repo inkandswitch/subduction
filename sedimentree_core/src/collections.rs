@@ -5,8 +5,7 @@ pub mod nonempty_ext;
 
 #[cfg(feature = "std")]
 mod inner {
-    pub use std::collections::HashMap as Map;
-    pub use std::collections::HashSet as Set;
+    pub use std::collections::{HashMap as Map, HashSet as Set};
 }
 
 #[cfg(not(feature = "std"))]
