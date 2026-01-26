@@ -48,6 +48,8 @@ pub struct TokioWebSocketServer<
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
 > where
     S::Error: 'static + Send + Sync,
+    P::PutDisallowed: Send + 'static,
+    P::FetchDisallowed: Send + 'static,
 {
     subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     address: SocketAddr,
@@ -59,6 +61,8 @@ impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
 where
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+    P::PutDisallowed: Send + 'static,
+    P::FetchDisallowed: Send + 'static,
     Sig: 'static + Send + Sync + Signer<Sendable>,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
@@ -83,6 +87,8 @@ impl<
 > TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
+    P::PutDisallowed: Send + 'static,
+    P::FetchDisallowed: Send + 'static,
 {
     /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
     ///

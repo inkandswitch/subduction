@@ -5,7 +5,9 @@ use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
-    subduction::error::{AttachError, HydrationError, IoError, ListenError, RegistrationError},
+    subduction::error::{
+        AttachError, HydrationError, IoError, ListenError, RegistrationError, WriteError,
+    },
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -40,6 +42,24 @@ impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("IoError");
+        js_err.into()
+    }
+}
+
+/// A Wasm wrapper around the [`WriteError`] type.
+///
+/// This includes errors related to write operations,
+/// including policy rejections.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmWriteError(
+    #[from] WriteError<Local, JsSedimentreeStorage, JsConnection, Infallible>,
+);
+
+impl From<WasmWriteError> for JsValue {
+    fn from(err: WasmWriteError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("WriteError");
         js_err.into()
     }
 }

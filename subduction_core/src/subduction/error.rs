@@ -100,6 +100,18 @@ pub enum AttachError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, D>
     Registration(#[from] RegistrationError<D>),
 }
 
+/// An error that can occur during local write operations.
+#[derive(Debug, Error)]
+pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, PutErr> {
+    /// An I/O error occurred.
+    #[error(transparent)]
+    Io(#[from] IoError<F, S, C>),
+
+    /// The storage policy rejected the write.
+    #[error("put disallowed: {0}")]
+    PutDisallowed(PutErr),
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

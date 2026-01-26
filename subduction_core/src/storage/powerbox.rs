@@ -23,9 +23,8 @@ use crate::{peer::id::PeerId, policy::StoragePolicy};
 ///
 /// This struct enforces the capability pattern at compile time: the underlying
 /// storage is not directly accessible. All operations must go through:
-/// - [`local_putter`][Self::local_putter] for local write operations
-/// - [`get_fetcher`][Self::get_fetcher] for authorized peer reads
-/// - [`get_putter`][Self::get_putter] for authorized peer writes
+/// - [`get_fetcher`][Self::get_fetcher] for authorized reads
+/// - [`get_putter`][Self::get_putter] for authorized writes
 /// - [`load_blob`][Self::load_blob] for local content-addressed reads
 ///
 /// The powerbox holds both the storage backend and the authorization policy,
@@ -59,17 +58,6 @@ impl<S, P> StoragePowerbox<S, P> {
     #[must_use]
     pub fn policy_arc(&self) -> Arc<P> {
         self.policy.clone()
-    }
-
-    /// Create a putter for local operations (no authorization check).
-    ///
-    /// Use this for data originating from the local user, not from peers.
-    #[must_use]
-    pub fn local_putter<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Putter<K, S>
-    where
-        S: Storage<K>,
-    {
-        Putter::new(self.storage.clone(), sedimentree_id)
     }
 
     /// Create a destroyer for local cleanup operations.

@@ -33,7 +33,7 @@ use crate::{
     digest::{JsDigest, WasmDigest},
     error::{
         WasmAttachError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
-        WasmRegistrationError,
+        WasmRegistrationError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     loose_commit::WasmLooseCommit,
@@ -213,14 +213,14 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns [`WasmIoError`] if there is a problem with storage or networking.
+    /// Returns [`WasmWriteError`] if there is a problem with storage, networking, or policy.
     #[wasm_bindgen(js_name = addSedimentree)]
     pub async fn add_sedimentree(
         &self,
         id: &WasmSedimentreeId,
         sedimentree: &WasmSedimentree,
         blobs: Vec<Uint8Array>,
-    ) -> Result<(), WasmIoError> {
+    ) -> Result<(), WasmWriteError> {
         self.core
             .add_sedimentree(
                 id.clone().into(),
@@ -379,22 +379,21 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmIoError`] if storage or networking fail.
+    /// Returns a [`WasmWriteError`] if storage, networking, or policy fail.
     #[wasm_bindgen(js_name = addCommit)]
     pub async fn add_commit(
         &self,
         id: &WasmSedimentreeId,
         commit: &WasmLooseCommit,
         blob: &Uint8Array,
-    ) -> Result<Option<WasmFragmentRequested>, WasmIoError> {
+    ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
         let core_id = id.clone().into();
         let core_commit = commit.clone().into();
         let blob: Blob = blob.clone().to_vec().into();
         let maybe_fragment_requested = self
             .core
             .add_commit(core_id, &core_commit, blob)
-            .await
-            .map_err(WasmIoError::from)?;
+            .await?;
 
         Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
     }

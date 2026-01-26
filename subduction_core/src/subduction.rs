@@ -98,7 +98,10 @@ use core::{
     task::{Context, Poll},
     time::Duration,
 };
-use error::{AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError};
+use error::{
+    AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
+    WriteError,
+};
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
     FutureExt, StreamExt,
@@ -950,17 +953,25 @@ impl<
     ///
     /// # Errors
     ///
-    /// * [`IoError`] if a storage or network error occurs.
+    /// * [`WriteError::Io`] if a storage or network error occurs.
+    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
     pub async fn add_sedimentree(
         &self,
         id: SedimentreeId,
         sedimentree: Sedimentree,
         blobs: Vec<Blob>,
-    ) -> Result<(), IoError<F, S, C>> {
-        let putter = self.storage.local_putter(id);
+    ) -> Result<(), WriteError<F, S, C, P::PutDisallowed>> {
+        let self_id = self.peer_id();
+        let putter = self
+            .storage
+            .get_putter::<F>(self_id, self_id, id)
+            .await
+            .map_err(WriteError::PutDisallowed)?;
+
         self.insert_sedimentree_locally(&putter, sedimentree, blobs)
             .await
-            .map_err(IoError::Storage)?;
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
         self.sync_all(id, true, None).await?;
         Ok(())
     }
@@ -1016,23 +1027,30 @@ impl<
     ///
     /// # Errors
     ///
-    /// * [`IoError`] if a storage or network error occurs.
+    /// * [`WriteError::Io`] if a storage or network error occurs.
+    /// * [`WriteError::PutDisallowed`] if the storage policy rejects the write.
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
         commit: &LooseCommit,
         blob: Blob,
-    ) -> Result<Option<FragmentRequested>, IoError<F, S, C>> {
+    ) -> Result<Option<FragmentRequested>, WriteError<F, S, C, P::PutDisallowed>> {
         tracing::debug!(
             "adding commit {:?} to sedimentree {:?}",
             commit.digest(),
             id
         );
 
-        let putter = self.storage.local_putter(id);
+        let self_id = self.peer_id();
+        let putter = self
+            .storage
+            .get_putter::<F>(self_id, self_id, id)
+            .await
+            .map_err(WriteError::PutDisallowed)?;
+
         self.insert_commit_locally(&putter, commit.clone(), blob.clone())
             .await
-            .map_err(IoError::Storage)?;
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
         let msg = Message::LooseCommit {
             id,
@@ -1147,8 +1165,18 @@ impl<
             from
         );
 
-        // TODO: Use get_putter(from, author, id) for authorization when error handling is updated
-        let putter = self.storage.local_putter(id);
+        let putter = match self.storage.get_putter::<F>(*from, *from, id).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "policy rejected commit from peer {:?} for sedimentree {:?}: {e}",
+                    from,
+                    id
+                );
+                return Ok(false);
+            }
+        };
+
         let was_new = self
             .insert_commit_locally(&putter, commit.clone(), blob.clone())
             .await
@@ -1196,8 +1224,18 @@ impl<
             from
         );
 
-        // TODO: Use get_putter(from, author, id) for authorization when error handling is updated
-        let putter = self.storage.local_putter(id);
+        let putter = match self.storage.get_putter::<F>(*from, *from, id).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "policy rejected fragment from peer {:?} for sedimentree {:?}: {e}",
+                    from,
+                    id
+                );
+                return Ok(false);
+            }
+        };
+
         let was_new = self
             .insert_fragment_locally(&putter, fragment.clone(), blob.clone())
             .await
@@ -1353,8 +1391,17 @@ impl<
             diff.missing_fragments.len()
         );
 
-        // TODO: Use get_putter(from, author, id) for authorization when error handling is updated
-        let putter = self.storage.local_putter(id);
+        let putter = match self.storage.get_putter::<F>(*from, *from, id).await {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::warn!(
+                    "policy rejected batch sync from peer {:?} for sedimentree {:?}: {e}",
+                    from,
+                    id
+                );
+                return Ok(());
+            }
+        };
 
         for (commit, blob) in diff.missing_commits {
             self.insert_commit_locally(&putter, commit, blob)
@@ -1460,8 +1507,17 @@ impl<
                         },
                     ..
                 }) => {
-                    // TODO: Use get_putter(to_ask, author, id) for authorization when error handling is updated
-                    let putter = self.storage.local_putter(id);
+                    let putter = match self.storage.get_putter::<F>(*to_ask, *to_ask, id).await {
+                        Ok(p) => p,
+                        Err(e) => {
+                            tracing::warn!(
+                                "policy rejected sync from peer {:?} for sedimentree {:?}: {e}",
+                                to_ask,
+                                id
+                            );
+                            continue;
+                        }
+                    };
 
                     for (commit, blob) in missing_commits {
                         blobs.push(blob.clone());
@@ -1567,8 +1623,19 @@ impl<
                                     },
                                 ..
                             }) => {
-                                // TODO: Use get_putter(peer_id, author, id) for authorization when error handling is updated
-                                let putter = self.storage.local_putter(id);
+                                let putter =
+                                    match self.storage.get_putter::<F>(*peer_id, *peer_id, id).await
+                                    {
+                                        Ok(p) => p,
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "policy rejected sync from peer {:?} for sedimentree {:?}: {e}",
+                                                peer_id,
+                                                id
+                                            );
+                                            continue;
+                                        }
+                                    };
 
                                 for (commit, blob) in missing_commits {
                                     inner_blobs.lock().await.insert(blob.clone());
@@ -1957,6 +2024,8 @@ pub trait StartListener<
         C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
         S: Storage<Sendable> + Send + Sync + 'a,
         P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
+        P::PutDisallowed: Send + 'static,
+        P::FetchDisallowed: Send + 'static,
         Sig: Signer<Sendable> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
         S::Error: Send + 'static,
