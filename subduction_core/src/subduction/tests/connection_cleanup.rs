@@ -1,6 +1,7 @@
 //! Tests for connection cleanup on send failure.
 
-use super::common::{test_signer, TestSpawn};
+use super::common::{TestSpawn, test_signer};
+use crate::Subduction;
 use crate::connection::nonce_cache::NonceCache;
 use crate::connection::test_utils::{FailingSendMockConnection, MockConnection};
 use crate::crypto::signed::Signed;
@@ -8,7 +9,6 @@ use crate::peer::id::PeerId;
 use crate::policy::OpenPolicy;
 use crate::sharded_map::ShardedMap;
 use crate::storage::MemoryStorage;
-use crate::Subduction;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},

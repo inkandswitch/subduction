@@ -127,9 +127,7 @@ impl<K: FutureForm, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(_, _, _, c)| c == conn) {
             let (conn_id, task_id, handle, _) = tasks.swap_remove(pos);
-            tracing::debug!(
-                "ConnectionManager: removing connection {conn_id} (task {task_id})"
-            );
+            tracing::debug!("ConnectionManager: removing connection {conn_id} (task {task_id})");
             handle.abort();
         } else {
             tracing::debug!("ConnectionManager: connection not found for removal");
@@ -140,14 +138,10 @@ impl<K: FutureForm, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(id, _, _, _)| *id == conn_id) {
             let (conn_id, task_id, handle, _) = tasks.swap_remove(pos);
-            tracing::debug!(
-                "ConnectionManager: removing connection {conn_id} (task {task_id})"
-            );
+            tracing::debug!("ConnectionManager: removing connection {conn_id} (task {task_id})");
             handle.abort();
         } else {
-            tracing::debug!(
-                "ConnectionManager: connection {conn_id} not found for removal"
-            );
+            tracing::debug!("ConnectionManager: connection {conn_id} not found for removal");
         }
     }
 }
@@ -210,12 +204,11 @@ impl<K: FutureForm, C> RunManager<C> for K {
                             // Normal completion cleanup - remove from tasks list
                             let mut tasks_guard = tasks.lock().await;
                             let target_id: TaskId = task_id;
-                            if let Some(pos) = tasks_guard
-                                .iter()
-                                .position(|(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, C)| {
+                            if let Some(pos) = tasks_guard.iter().position(
+                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, C)| {
                                     *id == target_id
-                                })
-                            {
+                                },
+                            ) {
                                 tasks_guard.swap_remove(pos);
                             }
                             drop(closed.send((conn_id, conn_clone)).await);
@@ -249,12 +242,11 @@ impl<K: FutureForm, C> RunManager<C> for K {
                             // Normal completion cleanup - remove from tasks list
                             let mut tasks_guard = tasks.lock().await;
                             let target_id: TaskId = task_id;
-                            if let Some(pos) = tasks_guard
-                                .iter()
-                                .position(|(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, C)| {
+                            if let Some(pos) = tasks_guard.iter().position(
+                                |(_, id, _, _): &(ConnectionId, TaskId, AbortHandle, C)| {
                                     *id == target_id
-                                })
-                            {
+                                },
+                            ) {
                                 tasks_guard.swap_remove(pos);
                             }
                             drop(closed.send((conn_id, conn_clone)).await);

@@ -32,4 +32,3 @@ impl core::fmt::Display for StorageId {
         write!(f, "{}", self.0)
     }
 }
-

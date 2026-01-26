@@ -1,5 +1,6 @@
 //! Common test utilities and helpers.
 
+use crate::Subduction;
 use crate::connection::manager::Spawn;
 use crate::connection::nonce_cache::NonceCache;
 use crate::connection::test_utils::MockConnection;
@@ -7,10 +8,9 @@ use crate::crypto::signer::MemorySigner;
 use crate::policy::OpenPolicy;
 use crate::sharded_map::ShardedMap;
 use crate::storage::MemoryStorage;
-use crate::Subduction;
 use alloc::sync::Arc;
-use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
 use future_form::Sendable;
+use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
 use sedimentree_core::commit::CountLeadingZeroBytes;
 
 /// Create a test signer with deterministic key bytes.

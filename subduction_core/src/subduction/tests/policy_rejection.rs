@@ -1,19 +1,19 @@
 //! Tests for policy rejection behavior.
 
-use super::common::{test_signer, TestSpawn};
+use super::common::{TestSpawn, test_signer};
+use crate::Subduction;
 use crate::connection::nonce_cache::NonceCache;
 use crate::connection::test_utils::MockConnection;
 use crate::peer::id::PeerId;
 use crate::policy::{ConnectionPolicy, StoragePolicy};
 use crate::sharded_map::ShardedMap;
 use crate::storage::MemoryStorage;
-use crate::Subduction;
 use alloc::vec;
 use alloc::vec::Vec;
 use core::fmt;
-use futures::future::BoxFuture;
-use futures::FutureExt;
 use future_form::Sendable;
+use futures::FutureExt;
+use futures::future::BoxFuture;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},
     commit::CountLeadingZeroBytes,
@@ -142,7 +142,8 @@ fn make_loose_commit(data: &[u8]) -> (sedimentree_core::loose_commit::LooseCommi
     let blob = make_test_blob(data);
     let blob_meta = BlobMeta::new(blob.as_slice());
     let content_digest = Digest::hash(data);
-    let commit = sedimentree_core::loose_commit::LooseCommit::new(content_digest, vec![], blob_meta);
+    let commit =
+        sedimentree_core::loose_commit::LooseCommit::new(content_digest, vec![], blob_meta);
     (commit, blob)
 }
 

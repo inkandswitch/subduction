@@ -25,8 +25,8 @@
 use criterion::{criterion_group, criterion_main};
 
 mod generators {
-    use futures::executor::block_on;
     use future_form::Sendable;
+    use futures::executor::block_on;
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta, Digest},
@@ -801,9 +801,9 @@ mod cloning {
     use subduction_core::connection::{id::ConnectionId, message::Message};
 
     use super::generators::{
-        batch_sync_response_from_seed, blob_from_seed, request_id_from_seed, sedimentree_id_from_seed,
-        signed_fragment_from_seed, signed_loose_commit_from_seed, storage_key_from_seed,
-        sync_diff_from_seed,
+        batch_sync_response_from_seed, blob_from_seed, request_id_from_seed,
+        sedimentree_id_from_seed, signed_fragment_from_seed, signed_loose_commit_from_seed,
+        storage_key_from_seed, sync_diff_from_seed,
     };
 
     /// Benchmark cloning costs for various protocol types.

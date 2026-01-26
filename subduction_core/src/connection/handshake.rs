@@ -877,11 +877,13 @@ mod tests {
 
         #[test]
         fn prop_audience_cbor_roundtrip() {
-            bolero::check!().with_type::<Audience>().for_each(|audience| {
-                let encoded = minicbor::to_vec(audience).expect("encode");
-                let decoded: Audience = minicbor::decode(&encoded).expect("decode");
-                assert_eq!(audience, &decoded);
-            });
+            bolero::check!()
+                .with_type::<Audience>()
+                .for_each(|audience| {
+                    let encoded = minicbor::to_vec(audience).expect("encode");
+                    let decoded: Audience = minicbor::decode(&encoded).expect("decode");
+                    assert_eq!(audience, &decoded);
+                });
         }
     }
 

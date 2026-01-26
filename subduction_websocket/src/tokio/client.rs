@@ -203,7 +203,8 @@ impl<
             // Handshake errors depend on the specific type
             ClientConnectError::Handshake(handshake_err) => match handshake_err {
                 // Network/transport errors - retry
-                WebSocketHandshakeError::WebSocket(_) | WebSocketHandshakeError::ConnectionClosed => true,
+                WebSocketHandshakeError::WebSocket(_)
+                | WebSocketHandshakeError::ConnectionClosed => true,
 
                 // Protocol violations or explicit rejection - don't retry
                 WebSocketHandshakeError::UnexpectedMessageType(_)

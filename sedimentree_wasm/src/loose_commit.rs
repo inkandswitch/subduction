@@ -129,4 +129,3 @@ extern "C" {
     #[wasm_bindgen(js_name = tryIntoLooseCommitArray, catch)]
     pub fn try_into_js_loose_commit_array(v: &JsValue) -> Result<Vec<WasmLooseCommit>, JsValue>;
 }
-

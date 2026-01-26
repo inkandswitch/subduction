@@ -1,12 +1,12 @@
 //! Tests for Subduction initialization.
 
-use super::common::{new_test_subduction, test_signer, TestSpawn};
+use super::common::{TestSpawn, new_test_subduction, test_signer};
+use crate::Subduction;
 use crate::connection::nonce_cache::NonceCache;
 use crate::connection::test_utils::MockConnection;
 use crate::policy::OpenPolicy;
 use crate::sharded_map::ShardedMap;
 use crate::storage::MemoryStorage;
-use crate::Subduction;
 use future_form::Sendable;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 

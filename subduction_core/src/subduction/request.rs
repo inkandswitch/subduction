@@ -85,5 +85,4 @@ mod tests {
             assert_eq!(req.depth(), &depth);
         }
     }
-
 }
