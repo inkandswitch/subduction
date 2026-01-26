@@ -294,6 +294,95 @@ impl WasmWebSocket {
             .map_err(WebSocketAuthenticatedConnectionError::Setup)
     }
 
+    /// Connect to a WebSocket server using discovery mode.
+    ///
+    /// This method performs a cryptographic handshake using a service name
+    /// instead of a known peer ID. The server's peer ID is discovered during
+    /// the handshake and returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The WebSocket URL to connect to
+    /// * `signer` - The client's signer for authentication
+    /// * `service_name` - The service name for discovery (e.g., `localhost:8080`)
+    /// * `timeout_milliseconds` - Request timeout in milliseconds
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The WebSocket connection could not be established
+    /// - The handshake fails (signature invalid, clock drift, etc.)
+    #[wasm_bindgen(js_name = tryDiscover)]
+    pub async fn try_discover(
+        address: &Url,
+        signer: &JsSigner,
+        service_name: &str,
+        timeout_milliseconds: u32,
+    ) -> Result<WasmWebSocket, WebSocketAuthenticatedConnectionError> {
+        use super::handshake::client_handshake_discover;
+
+        // Create WebSocket
+        let ws = WebSocket::new(&address.href())
+            .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
+        ws.set_binary_type(BinaryType::Arraybuffer);
+
+        // Wait for WebSocket to open
+        let (open_tx, open_rx) = oneshot::channel::<Result<(), String>>();
+        let open_tx_cell = Rc::new(RefCell::new(Some(open_tx)));
+        let open_tx_clone = open_tx_cell.clone();
+
+        let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = open_tx_clone.borrow_mut().take() {
+                drop(tx.send(Ok(())));
+            }
+        });
+
+        let onerror_tx = open_tx_cell.clone();
+        let onerror = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = onerror_tx.borrow_mut().take() {
+                drop(tx.send(Err("WebSocket connection failed".into())));
+            }
+        });
+
+        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+
+        // Handle case where socket is already open
+        if ws.ready_state() == WebSocket::OPEN
+            && let Some(tx) = open_tx_cell.borrow_mut().take()
+        {
+            drop(tx.send(Ok(())));
+        }
+
+        // Wait for open or error
+        open_rx
+            .await
+            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)?
+            .map_err(WebSocketAuthenticatedConnectionError::ConnectionFailed)?;
+
+        // Clear temporary handlers
+        ws.set_onopen(None);
+        ws.set_onerror(None);
+        drop(onopen);
+        drop(onerror);
+
+        // Perform discovery handshake
+        let handshake_result = client_handshake_discover(&ws, signer, service_name)
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
+
+        tracing::info!(
+            "Discovery handshake complete: connected to server {}",
+            handshake_result.server_id
+        );
+
+        // Now set up the normal message handlers using the discovered peer ID
+        let discovered_peer_id = WasmPeerId::from(handshake_result.server_id);
+        Self::setup(&discovered_peer_id, &ws, timeout_milliseconds)
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Setup)
+    }
+
     /// Get the peer ID of the remote peer.
     #[must_use]
     #[wasm_bindgen(js_name = peerId)]

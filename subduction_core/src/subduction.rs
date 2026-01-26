@@ -1405,6 +1405,7 @@ impl<
         to_ask: &PeerId,
         id: SedimentreeId,
         timeout: Option<Duration>,
+        subscribe: Option<bool>,
     ) -> Result<(bool, Vec<Blob>, Vec<(C, C::CallError)>), IoError<F, S, C>> {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from peer {:?}",
@@ -1443,7 +1444,7 @@ impl<
                         id,
                         req_id,
                         sedimentree_summary: summary,
-                        subscribe: false,
+                        subscribe: subscribe.unwrap_or(true),
                     },
                     timeout,
                 )
@@ -1550,7 +1551,7 @@ impl<
                                     id,
                                     req_id,
                                     sedimentree_summary: summary,
-                                    subscribe: false,
+                                    subscribe: true,
                                 },
                                 timeout,
                             )

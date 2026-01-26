@@ -70,8 +70,41 @@ pub(super) async fn client_handshake<S: Signer<Local>>(
     signer: &S,
     expected_peer_id: PeerId,
 ) -> Result<ClientHandshakeResult, WasmHandshakeError> {
-    // Create and send challenge
     let audience = Audience::known(expected_peer_id);
+    client_handshake_with_audience(ws, signer, audience).await
+}
+
+/// Perform the client-side handshake using discovery mode.
+///
+/// # Arguments
+///
+/// * `ws` - The WebSocket (must be in OPEN state)
+/// * `signer` - The client's signer for creating the challenge
+/// * `service_name` - The service name to discover (e.g., `localhost:8080`)
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The WebSocket message could not be sent/received
+/// - The server rejected the handshake
+/// - The response signature is invalid
+/// - The response doesn't match the challenge
+pub(super) async fn client_handshake_discover<S: Signer<Local>>(
+    ws: &WebSocket,
+    signer: &S,
+    service_name: &str,
+) -> Result<ClientHandshakeResult, WasmHandshakeError> {
+    let audience = Audience::discover(service_name.as_bytes());
+    client_handshake_with_audience(ws, signer, audience).await
+}
+
+/// Internal handshake implementation with a given audience.
+async fn client_handshake_with_audience<S: Signer<Local>>(
+    ws: &WebSocket,
+    signer: &S,
+    audience: Audience,
+) -> Result<ClientHandshakeResult, WasmHandshakeError> {
+    // Create and send challenge
     // Get current time from JavaScript's Date.now() (milliseconds since epoch)
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
     let now_secs = (js_sys::Date::now() / 1000.0) as u64;
