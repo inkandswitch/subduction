@@ -23,6 +23,18 @@ jobs:
     - name: Test All Features (Native Cargo)
       run: cargo test --all-features
 
+    - name: Install wasm32 target
+      run: rustup target add wasm32-unknown-unknown
+
+    - name: Check no_std compatibility (sedimentree_core)
+      run: cargo check --package sedimentree_core --no-default-features
+
+    - name: Check no_std compatibility (subduction_core)
+      run: cargo check --package subduction_core --no-default-features
+
+    - name: Check wasm32 target (subduction_wasm)
+      run: cargo check --package subduction_wasm --target wasm32-unknown-unknown
+
   test-nix:
     strategy:
       matrix:

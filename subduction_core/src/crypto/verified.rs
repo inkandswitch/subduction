@@ -42,7 +42,7 @@ pub struct Verified<T: for<'a> minicbor::Decode<'a, ()>> {
 impl<T: for<'a> minicbor::Decode<'a, ()>> Verified<T> {
     /// Returns the verifying key of the issuer who signed this payload.
     #[must_use]
-    pub fn issuer(&self) -> ed25519_dalek::VerifyingKey {
+    pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
         self.signed.issuer()
     }
 

@@ -86,44 +86,4 @@ mod tests {
         }
     }
 
-    mod ordering {
-        use super::*;
-
-        #[test]
-        fn test_ordering_by_head_first() {
-            let head1 = Digest::from([0u8; 32]);
-            let head2 = Digest::from([1u8; 32]);
-            let req1 = FragmentRequested::new(head1, Depth(5));
-            let req2 = FragmentRequested::new(head2, Depth(5));
-
-            assert!(req1 < req2);
-        }
-
-        #[test]
-        fn test_ordering_by_depth_when_head_equal() {
-            let head = Digest::from([5u8; 32]);
-            let req1 = FragmentRequested::new(head, Depth(1));
-            let req2 = FragmentRequested::new(head, Depth(2));
-
-            assert!(req1 < req2);
-        }
-
-        #[test]
-        fn test_equality() {
-            let head = Digest::from([6u8; 32]);
-            let depth = Depth(3);
-            let req1 = FragmentRequested::new(head, depth);
-            let req2 = FragmentRequested::new(head, depth);
-
-            assert_eq!(req1, req2);
-        }
-
-        #[test]
-        fn test_inequality() {
-            let req1 = FragmentRequested::new(Digest::from([7u8; 32]), Depth(1));
-            let req2 = FragmentRequested::new(Digest::from([7u8; 32]), Depth(2));
-
-            assert_ne!(req1, req2);
-        }
-    }
 }

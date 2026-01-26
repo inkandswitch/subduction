@@ -94,6 +94,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         loose_commit: Signed<LooseCommit>,
     ) -> K::Future<'_, Result<Digest, Self::Error>> {
         K::from_future(async move {
+            #[allow(clippy::expect_used)]
             let digest = Self::commit_digest(&loose_commit)
                 .expect("signed commit should decode for digest computation");
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
@@ -186,6 +187,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         fragment: Signed<Fragment>,
     ) -> K::Future<'_, Result<Digest, Self::Error>> {
         K::from_future(async move {
+            #[allow(clippy::expect_used)]
             let digest = Self::fragment_digest(&fragment)
                 .expect("signed fragment should decode for digest computation");
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
@@ -305,6 +307,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             let blob_digest = Digest::hash(blob.contents());
             self.blobs.lock().await.entry(blob_digest).or_insert(blob);
 
+            #[allow(clippy::expect_used)]
             let commit_digest = Self::commit_digest(&commit)
                 .expect("signed commit should decode for digest computation");
             self.commits
@@ -328,6 +331,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             let blob_digest = Digest::hash(blob.contents());
             self.blobs.lock().await.entry(blob_digest).or_insert(blob);
 
+            #[allow(clippy::expect_used)]
             let fragment_digest = Self::fragment_digest(&fragment)
                 .expect("signed fragment should decode for digest computation");
             self.fragments
@@ -363,6 +367,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 let blob_digest = Digest::hash(blob.contents());
                 self.blobs.lock().await.entry(blob_digest).or_insert(blob);
 
+                #[allow(clippy::expect_used)]
                 let commit_digest = Self::commit_digest(&commit)
                     .expect("signed commit should decode for digest computation");
                 self.commits
@@ -378,6 +383,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 let blob_digest = Digest::hash(blob.contents());
                 self.blobs.lock().await.entry(blob_digest).or_insert(blob);
 
+                #[allow(clippy::expect_used)]
                 let fragment_digest = Self::fragment_digest(&fragment)
                     .expect("signed fragment should decode for digest computation");
                 self.fragments

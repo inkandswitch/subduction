@@ -130,14 +130,3 @@ extern "C" {
     pub fn try_into_js_loose_commit_array(v: &JsValue) -> Result<Vec<WasmLooseCommit>, JsValue>;
 }
 
-pub(crate) struct WasmLooseCommitsArray(pub(crate) Vec<WasmLooseCommit>);
-
-impl TryFrom<&JsValue> for WasmLooseCommitsArray {
-    type Error = JsValue;
-
-    fn try_from(js_value: &JsValue) -> Result<Self, Self::Error> {
-        Ok(WasmLooseCommitsArray(try_into_js_loose_commit_array(
-            js_value,
-        )?))
-    }
-}

@@ -343,3 +343,135 @@ pub fn try_sedimentree_id_to_document_id(sedimentree_id: SedimentreeId) -> Optio
     let verifying_key = VerifyingKey::from_bytes(sedimentree_id.as_bytes()).ok()?;
     Some(DocumentId::from(Identifier::from(verifying_key)))
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use ed25519_dalek::SigningKey;
+
+    /// Generate a valid peer ID from a signing key.
+    fn valid_peer_id(seed: u8) -> PeerId {
+        let signing_key = SigningKey::from_bytes(&[seed; 32]);
+        PeerId::new(*signing_key.verifying_key().as_bytes())
+    }
+
+    /// Generate an invalid peer ID (not a valid Ed25519 point).
+    ///
+    /// Finding truly invalid Ed25519 public key bytes is non-trivial since
+    /// ed25519-dalek accepts many byte patterns. This uses a pattern with
+    /// specific bytes known to not represent a valid curve point.
+    fn invalid_peer_id() -> Option<PeerId> {
+        // Try to find bytes that don't represent a valid Ed25519 point
+        // by checking various patterns with the high bit manipulated
+        for i in 0..=255u8 {
+            let mut bytes = [i; 32];
+            // Manipulate to try to create invalid point
+            bytes[0] = 0xFE;
+            bytes[31] = 0x80 | i;
+            if VerifyingKey::from_bytes(&bytes).is_err() {
+                return Some(PeerId::new(bytes));
+            }
+        }
+        None
+    }
+
+    /// Generate a valid sedimentree ID from a signing key.
+    fn valid_sedimentree_id(seed: u8) -> SedimentreeId {
+        let signing_key = SigningKey::from_bytes(&[seed; 32]);
+        SedimentreeId::new(*signing_key.verifying_key().as_bytes())
+    }
+
+    /// Generate an invalid sedimentree ID (not a valid Ed25519 point).
+    fn invalid_sedimentree_id() -> Option<SedimentreeId> {
+        // Reuse the same pattern search as invalid_peer_id
+        for i in 0..=255u8 {
+            let mut bytes = [i; 32];
+            bytes[0] = 0xFE;
+            bytes[31] = 0x80 | i;
+            if VerifyingKey::from_bytes(&bytes).is_err() {
+                return Some(SedimentreeId::new(bytes));
+            }
+        }
+        None
+    }
+
+    mod conversion_functions {
+        use super::*;
+
+        #[test]
+        fn try_peer_id_to_identifier_succeeds_for_valid_key() {
+            let peer_id = valid_peer_id(42);
+            let result = try_peer_id_to_identifier(peer_id);
+            assert!(result.is_some());
+        }
+
+        #[test]
+        fn try_peer_id_to_identifier_fails_for_invalid_key() {
+            let Some(peer_id) = invalid_peer_id() else {
+                // If we can't find an invalid pattern, skip this test
+                // (ed25519-dalek may accept all patterns in some configurations)
+                return;
+            };
+            let result = try_peer_id_to_identifier(peer_id);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn try_peer_id_to_individual_id_succeeds_for_valid_key() {
+            let peer_id = valid_peer_id(42);
+            let result = try_peer_id_to_individual_id(peer_id);
+            assert!(result.is_some());
+        }
+
+        #[test]
+        fn try_peer_id_to_individual_id_fails_for_invalid_key() {
+            let Some(peer_id) = invalid_peer_id() else {
+                return;
+            };
+            let result = try_peer_id_to_individual_id(peer_id);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn try_sedimentree_id_to_document_id_succeeds_for_valid_key() {
+            let sed_id = valid_sedimentree_id(42);
+            let result = try_sedimentree_id_to_document_id(sed_id);
+            assert!(result.is_some());
+        }
+
+        #[test]
+        fn try_sedimentree_id_to_document_id_fails_for_invalid_key() {
+            let Some(sed_id) = invalid_sedimentree_id() else {
+                return;
+            };
+            let result = try_sedimentree_id_to_document_id(sed_id);
+            assert!(result.is_none());
+        }
+
+        #[test]
+        fn different_seeds_produce_different_identifiers() {
+            let peer1 = valid_peer_id(1);
+            let peer2 = valid_peer_id(2);
+
+            let id1 = try_peer_id_to_identifier(peer1);
+            let id2 = try_peer_id_to_identifier(peer2);
+
+            assert!(id1.is_some());
+            assert!(id2.is_some());
+            assert_ne!(id1, id2);
+        }
+
+        #[test]
+        fn same_seed_produces_same_identifier() {
+            let peer1 = valid_peer_id(42);
+            let peer2 = valid_peer_id(42);
+
+            let id1 = try_peer_id_to_identifier(peer1);
+            let id2 = try_peer_id_to_identifier(peer2);
+
+            assert_eq!(id1, id2);
+        }
+    }
+
+}

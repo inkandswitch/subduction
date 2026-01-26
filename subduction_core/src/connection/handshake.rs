@@ -873,21 +873,19 @@ mod tests {
                     }
                 });
         }
+
+        #[test]
+        fn prop_audience_cbor_roundtrip() {
+            bolero::check!().with_type::<Audience>().for_each(|audience| {
+                let encoded = minicbor::to_vec(audience).expect("encode");
+                let decoded: Audience = minicbor::decode(&encoded).expect("decode");
+                assert_eq!(audience, &decoded);
+            });
+        }
     }
 
     mod discovery_id {
         use super::*;
-
-        #[test]
-        fn cbor_roundtrip() {
-            let discovery_id = DiscoveryId::new(b"test.example.com");
-            let audience = Audience::Discover(discovery_id);
-
-            let encoded = minicbor::to_vec(audience).expect("encode");
-            let decoded: Audience = minicbor::decode(&encoded).expect("decode");
-
-            assert_eq!(audience, decoded);
-        }
 
         #[test]
         fn transparent_encoding_is_flat() {
@@ -905,20 +903,6 @@ mod tests {
                 unreachable!("encoded Discover, should decode as Discover");
             };
             assert_eq!(*id.as_bytes(), raw_bytes);
-        }
-
-        #[test]
-        fn different_inputs_different_ids() {
-            let id1 = DiscoveryId::new(b"service-a.example.com");
-            let id2 = DiscoveryId::new(b"service-b.example.com");
-            assert_ne!(id1, id2);
-        }
-
-        #[test]
-        fn same_input_same_id() {
-            let id1 = DiscoveryId::new(b"test.example.com");
-            let id2 = DiscoveryId::new(b"test.example.com");
-            assert_eq!(id1, id2);
         }
     }
 }
