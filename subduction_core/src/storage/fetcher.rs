@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use future_form::FutureForm;
 use sedimentree_core::{
     blob::{Blob, Digest},
+    collections::Set,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -47,17 +48,59 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
         self.sedimentree_id
     }
 
-    /// Load all loose commits for this sedimentree.
+    // ==================== Commits ====================
+
+    /// Load a loose commit by its digest.
     #[must_use]
-    pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<Signed<LooseCommit>>, S::Error>> {
+    pub fn load_loose_commit(
+        &self,
+        digest: Digest,
+    ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, S::Error>> {
+        self.storage.load_loose_commit(self.sedimentree_id, digest)
+    }
+
+    /// List all commit digests for this sedimentree.
+    #[must_use]
+    pub fn list_commit_digests(&self) -> K::Future<'_, Result<Set<Digest>, S::Error>> {
+        self.storage.list_commit_digests(self.sedimentree_id)
+    }
+
+    /// Load all loose commits for this sedimentree.
+    ///
+    /// Returns digests alongside signed data for efficient indexing.
+    #[must_use]
+    pub fn load_loose_commits(
+        &self,
+    ) -> K::Future<'_, Result<Vec<(Digest, Signed<LooseCommit>)>, S::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
-    /// Load all fragments for this sedimentree.
+    // ==================== Fragments ====================
+
+    /// Load a fragment by its digest.
     #[must_use]
-    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Signed<Fragment>>, S::Error>> {
+    pub fn load_fragment(
+        &self,
+        digest: Digest,
+    ) -> K::Future<'_, Result<Option<Signed<Fragment>>, S::Error>> {
+        self.storage.load_fragment(self.sedimentree_id, digest)
+    }
+
+    /// List all fragment digests for this sedimentree.
+    #[must_use]
+    pub fn list_fragment_digests(&self) -> K::Future<'_, Result<Set<Digest>, S::Error>> {
+        self.storage.list_fragment_digests(self.sedimentree_id)
+    }
+
+    /// Load all fragments for this sedimentree.
+    ///
+    /// Returns digests alongside signed data for efficient indexing.
+    #[must_use]
+    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
+
+    // ==================== Blobs ====================
 
     /// Load a blob by its digest.
     ///

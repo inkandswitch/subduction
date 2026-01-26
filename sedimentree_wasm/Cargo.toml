@@ -25,6 +25,7 @@ getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 minicbor = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
+subduction_core = { path = "../subduction_core", default-features = false }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -58,10 +59,11 @@ idb = [
 ]
 std = [
   "async-lock/std",
-  "minicbor/std",
   "futures/std",
   "js-sys/std",
+  "minicbor/std",
   "sedimentree_core/std",
+  "subduction_core/std",
   "thiserror/std",
   "wasm-bindgen/std",
   "wasm-bindgen-futures/std"

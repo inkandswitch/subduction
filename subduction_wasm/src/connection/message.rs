@@ -49,38 +49,6 @@ impl WasmMessage {
         Ok(msg.into())
     }
 
-    /// Create a [`Message::LooseCommit`] message.
-    #[wasm_bindgen(js_name = looseCommit)]
-    #[must_use]
-    pub fn loose_commit(
-        id: &WasmSedimentreeId,
-        commit: &WasmLooseCommit,
-        blob: &Uint8Array,
-    ) -> Self {
-        Message::LooseCommit {
-            id: id.clone().into(),
-            commit: commit.clone().into(),
-            blob: Blob::from(blob.to_vec()),
-        }
-        .into()
-    }
-
-    /// Create a [`Message::Fragment`] message.
-    #[wasm_bindgen(js_name = newFragment)]
-    #[must_use]
-    pub fn new_fragment(
-        id: &WasmSedimentreeId,
-        fragment: &WasmFragment,
-        blob: &Uint8Array,
-    ) -> Self {
-        Message::Fragment {
-            id: id.clone().into(),
-            fragment: fragment.clone().into(),
-            blob: Blob::from(blob.to_vec()),
-        }
-        .into()
-    }
-
     /// Create a [`Message::BlobsRequest`] message.
     #[wasm_bindgen(js_name = blobsRequest)]
     #[must_use]
@@ -126,11 +94,15 @@ impl WasmMessage {
     }
 
     /// The [`LooseCommit`] for a [`Message::LooseCommit`], if applicable.
+    ///
+    /// Decodes the signed payload to extract the underlying commit.
     #[wasm_bindgen(getter, js_name = commit)]
     #[must_use]
     pub fn commit(&self) -> Option<WasmLooseCommit> {
         match &self.0 {
-            Message::LooseCommit { commit, .. } => Some(commit.clone().into()),
+            Message::LooseCommit { commit, .. } => {
+                commit.decode_payload().ok().map(WasmLooseCommit::from)
+            }
             Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
@@ -141,11 +113,15 @@ impl WasmMessage {
     }
 
     /// The [`Fragment`] for a [`Message::Fragment`], if applicable.
+    ///
+    /// Decodes the signed payload to extract the underlying fragment.
     #[wasm_bindgen(getter, js_name = fragment)]
     #[must_use]
     pub fn fragment(&self) -> Option<WasmFragment> {
         match &self.0 {
-            Message::Fragment { fragment, .. } => Some(fragment.clone().into()),
+            Message::Fragment { fragment, .. } => {
+                fragment.decode_payload().ok().map(WasmFragment::from)
+            }
             Message::LooseCommit { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)

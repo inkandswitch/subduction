@@ -8,6 +8,7 @@ use alloc::vec::Vec;
 use future_form::FutureForm;
 use sedimentree_core::{
     blob::{Blob, Digest},
+    collections::Set,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -16,6 +17,7 @@ use sedimentree_core::{
 use super::fetcher::Fetcher;
 use super::traits::Storage;
 use crate::crypto::signed::Signed;
+use crate::crypto::verified::Verified;
 
 /// A capability granting put access to a specific sedimentree's data.
 ///
@@ -58,39 +60,85 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
         Fetcher::new(self.storage.clone(), self.sedimentree_id)
     }
 
-    /// Load all loose commits for this sedimentree.
-    #[must_use]
-    pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<Signed<LooseCommit>>, S::Error>> {
-        self.storage.load_loose_commits(self.sedimentree_id)
-    }
+    // ==================== Commits ====================
 
-    /// Load all fragments for this sedimentree.
-    #[must_use]
-    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Signed<Fragment>>, S::Error>> {
-        self.storage.load_fragments(self.sedimentree_id)
-    }
-
-    /// Load a blob by its digest.
-    #[must_use]
-    pub fn load_blob(&self, digest: Digest) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
-        self.storage.load_blob(digest)
-    }
-
-    /// Save a signed loose commit to this sedimentree.
+    /// Save a verified loose commit, returning its digest.
+    ///
+    /// Takes [`Verified<LooseCommit>`] to enforce that only verified data is stored.
+    /// The underlying [`Signed`] is extracted and persisted.
     #[must_use]
     pub fn save_loose_commit(
         &self,
-        loose_commit: Signed<LooseCommit>,
-    ) -> K::Future<'_, Result<(), S::Error>> {
+        verified: Verified<LooseCommit>,
+    ) -> K::Future<'_, Result<Digest, S::Error>> {
         self.storage
-            .save_loose_commit(self.sedimentree_id, loose_commit)
+            .save_loose_commit(self.sedimentree_id, verified.into_signed())
     }
 
-    /// Save a signed fragment to this sedimentree.
+    /// Load a loose commit by its digest.
     #[must_use]
-    pub fn save_fragment(&self, fragment: Signed<Fragment>) -> K::Future<'_, Result<(), S::Error>> {
-        self.storage.save_fragment(self.sedimentree_id, fragment)
+    pub fn load_loose_commit(
+        &self,
+        digest: Digest,
+    ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, S::Error>> {
+        self.storage.load_loose_commit(self.sedimentree_id, digest)
     }
+
+    /// List all commit digests for this sedimentree.
+    #[must_use]
+    pub fn list_commit_digests(&self) -> K::Future<'_, Result<Set<Digest>, S::Error>> {
+        self.storage.list_commit_digests(self.sedimentree_id)
+    }
+
+    /// Load all loose commits for this sedimentree.
+    ///
+    /// Returns digests alongside signed data for efficient indexing.
+    #[must_use]
+    pub fn load_loose_commits(
+        &self,
+    ) -> K::Future<'_, Result<Vec<(Digest, Signed<LooseCommit>)>, S::Error>> {
+        self.storage.load_loose_commits(self.sedimentree_id)
+    }
+
+    // ==================== Fragments ====================
+
+    /// Save a verified fragment, returning its digest.
+    ///
+    /// Takes [`Verified<Fragment>`] to enforce that only verified data is stored.
+    /// The underlying [`Signed`] is extracted and persisted.
+    #[must_use]
+    pub fn save_fragment(
+        &self,
+        verified: Verified<Fragment>,
+    ) -> K::Future<'_, Result<Digest, S::Error>> {
+        self.storage
+            .save_fragment(self.sedimentree_id, verified.into_signed())
+    }
+
+    /// Load a fragment by its digest.
+    #[must_use]
+    pub fn load_fragment(
+        &self,
+        digest: Digest,
+    ) -> K::Future<'_, Result<Option<Signed<Fragment>>, S::Error>> {
+        self.storage.load_fragment(self.sedimentree_id, digest)
+    }
+
+    /// List all fragment digests for this sedimentree.
+    #[must_use]
+    pub fn list_fragment_digests(&self) -> K::Future<'_, Result<Set<Digest>, S::Error>> {
+        self.storage.list_fragment_digests(self.sedimentree_id)
+    }
+
+    /// Load all fragments for this sedimentree.
+    ///
+    /// Returns digests alongside signed data for efficient indexing.
+    #[must_use]
+    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, S::Error>> {
+        self.storage.load_fragments(self.sedimentree_id)
+    }
+
+    // ==================== Blobs ====================
 
     /// Save a blob and return its digest.
     ///
@@ -99,6 +147,14 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     pub fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest, S::Error>> {
         self.storage.save_blob(blob)
     }
+
+    /// Load a blob by its digest.
+    #[must_use]
+    pub fn load_blob(&self, digest: Digest) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
+        self.storage.load_blob(digest)
+    }
+
+    // ==================== Bookkeeping ====================
 
     /// Register this sedimentree ID as having data stored.
     ///

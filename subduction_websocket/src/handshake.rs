@@ -298,7 +298,7 @@ where
 {
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
-    let signed_challenge = Signed::seal(signer, challenge).await;
+    let signed_challenge = Signed::seal(signer, challenge).await.into_signed();
     let challenge_msg = HandshakeMessage::SignedChallenge(signed_challenge);
     let challenge_bytes =
         minicbor::to_vec(&challenge_msg).expect("challenge encoding should not fail");
@@ -368,7 +368,9 @@ mod tests {
                 TimestampSeconds::new(1000),
                 Nonce::new(42),
             );
-            let signed_challenge = Signed::seal::<Sendable, _>(&test_signer, challenge).await;
+            let signed_challenge = Signed::seal::<Sendable, _>(&test_signer, challenge)
+                .await
+                .into_signed();
             let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());
 
             let bytes = minicbor::to_vec(&msg)

@@ -227,31 +227,44 @@ mod tests {
 
     mod message_request_id {
         use super::*;
+        use crate::crypto::signed::Signed;
+        use crate::crypto::signer::MemorySigner;
+        use future_form::Sendable;
 
-        #[test]
-        fn test_loose_commit_has_no_request_id() {
+        fn test_signer() -> MemorySigner {
+            MemorySigner::from_bytes(&[42u8; 32])
+        }
+
+        #[tokio::test]
+        async fn test_loose_commit_has_no_request_id() {
+            let signer = test_signer();
+            let commit = LooseCommit::new(
+                Digest::from([2u8; 32]),
+                Vec::new(),
+                sedimentree_core::blob::BlobMeta::new(&[]),
+            );
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit).await.into_signed();
             let msg = Message::LooseCommit {
                 id: SedimentreeId::new([1u8; 32]),
-                commit: LooseCommit::new(
-                    Digest::from([2u8; 32]),
-                    Vec::new(),
-                    sedimentree_core::blob::BlobMeta::new(&[]),
-                ),
+                commit: signed_commit,
                 blob: Blob::new(Vec::from([3u8; 16])),
             };
             assert_eq!(msg.request_id(), None);
         }
 
-        #[test]
-        fn test_fragment_has_no_request_id() {
+        #[tokio::test]
+        async fn test_fragment_has_no_request_id() {
+            let signer = test_signer();
+            let fragment = Fragment::new(
+                Digest::from([2u8; 32]),
+                Vec::new(),
+                Vec::new(),
+                sedimentree_core::blob::BlobMeta::new(&[]),
+            );
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment).await.into_signed();
             let msg = Message::Fragment {
                 id: SedimentreeId::new([1u8; 32]),
-                fragment: Fragment::new(
-                    Digest::from([2u8; 32]),
-                    Vec::new(),
-                    Vec::new(),
-                    sedimentree_core::blob::BlobMeta::new(&[]),
-                ),
+                fragment: signed_fragment,
                 blob: Blob::new(Vec::from([3u8; 16])),
             };
             assert_eq!(msg.request_id(), None);
@@ -420,6 +433,13 @@ mod tests {
 
     mod sync_diff {
         use super::*;
+        use crate::crypto::signed::Signed;
+        use crate::crypto::signer::MemorySigner;
+        use future_form::Sendable;
+
+        fn test_signer() -> MemorySigner {
+            MemorySigner::from_bytes(&[42u8; 32])
+        }
 
         #[test]
         fn test_empty_sync_diff() {
@@ -432,17 +452,19 @@ mod tests {
             assert_eq!(diff.missing_fragments.len(), 0);
         }
 
-        #[test]
-        fn test_sync_diff_with_commits() {
+        #[tokio::test]
+        async fn test_sync_diff_with_commits() {
+            let signer = test_signer();
             let commit = LooseCommit::new(
                 Digest::from([1u8; 32]),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([2u8; 16]));
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit).await.into_signed();
 
             let diff = SyncDiff {
-                missing_commits: vec![(commit.clone(), blob.clone())],
+                missing_commits: vec![(signed_commit.clone(), blob.clone())],
                 missing_fragments: Vec::new(),
             };
 
@@ -450,12 +472,13 @@ mod tests {
 
             #[allow(clippy::unwrap_used)]
             {
-                assert_eq!(diff.missing_commits.first().unwrap().0, commit);
+                assert_eq!(diff.missing_commits.first().unwrap().0, signed_commit);
             }
         }
 
-        #[test]
-        fn test_sync_diff_with_fragments() {
+        #[tokio::test]
+        async fn test_sync_diff_with_fragments() {
+            let signer = test_signer();
             let fragment = Fragment::new(
                 Digest::from([2u8; 32]),
                 Vec::new(),
@@ -463,10 +486,11 @@ mod tests {
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([3u8; 16]));
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment).await.into_signed();
 
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
-                missing_fragments: vec![(fragment.clone(), blob.clone())],
+                missing_fragments: vec![(signed_fragment, blob)],
             };
 
             assert_eq!(diff.missing_fragments.len(), 1);

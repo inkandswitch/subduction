@@ -30,11 +30,13 @@ use super::{signer::Signer, verified::Verified};
 /// This type participates in a type-state flow that encodes verification at the type level:
 ///
 /// ```text
-/// T  ──seal──►  Signed<T>  ──try_verify──►  Verified<T>
+/// Local:    T  ──seal──►  Verified<T>  ──into_signed──►  Signed<T> (wire)
+/// Remote:   Signed<T>  ──try_verify──►  Verified<T>
+/// Storage:  Signed<T>  ──decode_payload──►  T  (trusted, no Verified wrapper)
 /// ```
 ///
-/// - [`Signed<T>`] holds a signature that **has not been verified**
-/// - [`Verified<T>`] is a witness that the signature **was checked and is valid**
+/// - [`Signed<T>`] holds a signature that **may not have been verified**
+/// - [`Verified<T>`] is a witness that the signature **is valid** (verified or self-signed)
 ///
 /// # No Direct Payload Access
 ///
@@ -115,24 +117,54 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
     pub const fn encoded_payload(&self) -> &EncodedPayload<T> {
         &self.encoded_payload
     }
+
+    /// Decode the payload without signature verification.
+    ///
+    /// Use this only for data from trusted sources (e.g., local storage
+    /// that was populated via [`Putter`], which enforces verification).
+    ///
+    /// For untrusted data, use [`try_verify`](Self::try_verify) instead.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload cannot be decoded.
+    ///
+    /// [`Putter`]: crate::storage::putter::Putter
+    pub fn decode_payload(&self) -> Result<T, minicbor::decode::Error> {
+        let envelope = minicbor::decode::<Envelope<T>>(self.encoded_payload.as_slice())?;
+        Ok(envelope.into_payload())
+    }
 }
 
 impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
     /// Seal a payload with the given signer's cryptographic signature.
     ///
+    /// Returns a [`Verified<T>`] since we know our own signature is valid.
+    /// Use [`.into_signed()`](Verified::into_signed) to get the [`Signed<T>`]
+    /// for wire transmission.
+    ///
     /// # Panics
     ///
     /// Panics if CBOR encoding fails (should never happen for well-formed types).
     #[allow(clippy::expect_used)]
-    pub async fn seal<K: FutureForm, S: Signer<K>>(signer: &S, payload: T) -> Self {
+    pub async fn seal<K: FutureForm, S: Signer<K>>(signer: &S, payload: T) -> Verified<T> {
         let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
         let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
         let signature = signer.sign(&encoded).await;
 
-        Self {
+        // Decode payload back from encoded bytes (avoids Clone bound)
+        let decoded_envelope =
+            minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
+
+        let signed = Self {
             issuer: signer.verifying_key(),
             signature,
             encoded_payload: EncodedPayload::new(encoded),
+        };
+
+        Verified {
+            signed,
+            payload: decoded_envelope.into_payload(),
         }
     }
 }

@@ -2719,6 +2719,7 @@ dependencies = [
  "js-sys",
  "minicbor",
  "sedimentree_core",
+ "subduction_core",
  "thiserror 2.0.18",
  "tracing",
  "wasm-bindgen",

@@ -6,33 +6,33 @@ use super::signed::Signed;
 
 /// A payload whose signature has been verified.
 ///
-/// This type is a **witness** that [`Signed::try_verify`](super::signed::Signed::try_verify)
-/// succeeded. It provides access to the payload that [`Signed<T>`](super::signed::Signed)
+/// This type is a **witness** that the signature is valid, either because:
+/// - [`Signed::try_verify`](super::signed::Signed::try_verify) succeeded (remote data)
+/// - [`Signed::seal`](super::signed::Signed::seal) created it (local data, self-signed)
+///
+/// It provides access to the payload that [`Signed<T>`](super::signed::Signed)
 /// intentionally withholds, ensuring callers cannot skip verification.
 ///
 /// ```text
-/// T  ──seal──►  Signed<T>  ──try_verify──►  Verified<T>
-///                    │                           │
-///            payload inaccessible          payload exposed
-///                                                │
-///                                          ──signed()──►  Signed<T> (for storage)
+/// Local:    T  ──seal──►  Verified<T>  ──putter──►  Storage
+/// Remote:   Signed<T>  ──try_verify──►  Verified<T>  ──putter──►  Storage
 /// ```
 ///
 /// # Storage Pattern
 ///
 /// `Verified<T>` retains the original [`Signed<T>`] so you can store the signed
-/// version after verification:
+/// version after verification. The [`Putter`] accepts `Verified<T>` to enforce
+/// that only verified data enters storage.
 ///
-/// ```ignore
-/// let verified = signed.try_verify()?;
-/// let payload = verified.payload();  // Use for business logic
-/// storage.save(verified.signed());   // Store the signed version
-/// ```
+/// For loading from storage, use [`Signed::decode_payload`](super::signed::Signed::decode_payload)
+/// to extract the payload directly (storage is trusted).
 ///
 /// # Wire Format
 ///
 /// This type should NEVER be sent over the wire directly. Always transmit
 /// [`Signed<T>`](super::signed::Signed) and have the recipient verify.
+///
+/// [`Putter`]: crate::storage::putter::Putter
 #[derive(Clone, Debug)]
 pub struct Verified<T: for<'a> minicbor::Decode<'a, ()>> {
     pub(super) signed: Signed<T>,
@@ -70,26 +70,6 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Verified<T> {
     #[must_use]
     pub fn into_signed(self) -> Signed<T> {
         self.signed
-    }
-
-    /// Construct a `Verified<T>` from data loaded from trusted storage.
-    ///
-    /// # Safety
-    ///
-    /// This bypasses signature verification. Only use for data that was
-    /// previously verified before being stored. The caller is responsible
-    /// for ensuring the data came from a trusted source.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the payload cannot be decoded from the signed data.
-    pub fn from_trusted(signed: Signed<T>) -> Result<Self, minicbor::decode::Error> {
-        use super::signed::envelope::Envelope;
-        let envelope = minicbor::decode::<Envelope<T>>(signed.encoded_payload().as_slice())?;
-        Ok(Self {
-            signed,
-            payload: envelope.into_payload(),
-        })
     }
 }
 

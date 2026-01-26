@@ -407,7 +407,7 @@ pub async fn create_challenge<K: FutureForm, S: Signer<K>>(
     nonce: Nonce,
 ) -> Signed<Challenge> {
     let challenge = Challenge::new(audience, now, nonce);
-    Signed::seal(signer, challenge).await
+    Signed::seal(signer, challenge).await.into_signed()
 }
 
 /// Result of verifying a challenge on the server side.
@@ -459,7 +459,7 @@ pub async fn create_response<K: FutureForm, S: Signer<K>>(
     now: TimestampSeconds,
 ) -> Signed<Response> {
     let response = Response::for_challenge(challenge, now);
-    Signed::seal(signer, response).await
+    Signed::seal(signer, response).await.into_signed()
 }
 
 /// Result of verifying a response on the client side.

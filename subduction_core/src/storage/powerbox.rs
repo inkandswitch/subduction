@@ -158,11 +158,12 @@ impl<S, P> StoragePowerbox<S, P> {
     /// Load loose commits for a sedimentree (for hydration).
     ///
     /// This is for local initialization, loading our own data.
+    /// Returns digests alongside signed data for efficient indexing.
     #[must_use]
     pub fn load_loose_commits<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<alloc::vec::Vec<Signed<LooseCommit>>, S::Error>>
+    ) -> K::Future<'_, Result<alloc::vec::Vec<(Digest, Signed<LooseCommit>)>, S::Error>>
     where
         S: Storage<K>,
     {
@@ -172,11 +173,12 @@ impl<S, P> StoragePowerbox<S, P> {
     /// Load fragments for a sedimentree (for hydration).
     ///
     /// This is for local initialization, loading our own data.
+    /// Returns digests alongside signed data for efficient indexing.
     #[must_use]
     pub fn load_fragments<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<alloc::vec::Vec<Signed<Fragment>>, S::Error>>
+    ) -> K::Future<'_, Result<alloc::vec::Vec<(Digest, Signed<Fragment>)>, S::Error>>
     where
         S: Storage<K>,
     {
