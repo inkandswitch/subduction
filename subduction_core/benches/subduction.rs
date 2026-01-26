@@ -29,7 +29,8 @@ mod generators {
     use futures::executor::block_on;
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
-        blob::{Blob, BlobMeta, Digest},
+        blob::{Blob, BlobMeta},
+        digest::Digest,
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::LooseCommit,
@@ -42,12 +43,20 @@ mod generators {
         storage::key::StorageKey,
     };
 
-    /// Generate a deterministic digest from a seed.
-    pub(super) fn digest_from_seed(seed: u64) -> Digest {
+    /// Generate a deterministic commit digest from a seed.
+    pub(super) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut bytes = [0u8; 32];
         rng.fill(&mut bytes);
-        Digest::from(bytes)
+        Digest::from_bytes(bytes)
+    }
+
+    /// Generate a deterministic blob digest from a seed.
+    pub(super) fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+        Digest::from_bytes(bytes)
     }
 
     /// Generate a peer ID from a seed.
@@ -91,10 +100,10 @@ mod generators {
         num_members: usize,
     ) -> Fragment {
         let digest = digest_from_seed(seed);
-        let parents: Vec<Digest> = (0..num_parents)
+        let parents: Vec<Digest<LooseCommit>> = (0..num_parents)
             .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
             .collect();
-        let members: Vec<Digest> = (0..num_members)
+        let members: Vec<Digest<LooseCommit>> = (0..num_members)
             .map(|i| digest_from_seed(seed.wrapping_add(200 + i as u64)))
             .collect();
         #[allow(clippy::cast_possible_truncation)]
@@ -335,8 +344,8 @@ mod message {
     use subduction_core::connection::message::Message;
 
     use super::generators::{
-        batch_sync_request_from_seed, batch_sync_response_from_seed, blob_from_seed,
-        digest_from_seed, sedimentree_id_from_seed, signed_fragment_from_seed,
+        batch_sync_request_from_seed, batch_sync_response_from_seed, blob_digest_from_seed,
+        blob_from_seed, digest_from_seed, sedimentree_id_from_seed, signed_fragment_from_seed,
         signed_loose_commit_from_seed,
     };
 
@@ -399,7 +408,7 @@ mod message {
                 BenchmarkId::new("blobs_request", num_digests),
                 &num_digests,
                 |b, &n| {
-                    let digests: Vec<_> = (0..n).map(|i| digest_from_seed(i as u64)).collect();
+                    let digests: Vec<_> = (0..n).map(|i| blob_digest_from_seed(i as u64)).collect();
                     b.iter(|| Message::BlobsRequest(black_box(digests.clone())));
                 },
             );
@@ -443,7 +452,7 @@ mod message {
             b.iter(|| black_box(&msg_loose).request_id());
         });
 
-        let msg_blobs_req = Message::BlobsRequest(vec![digest_from_seed(1)]);
+        let msg_blobs_req = Message::BlobsRequest(vec![blob_digest_from_seed(1)]);
         group.bench_function("blobs_request_none", |b| {
             b.iter(|| black_box(&msg_blobs_req).request_id());
         });

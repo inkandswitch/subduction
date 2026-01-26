@@ -44,6 +44,7 @@ wasm-bindgen-test = "0.2"
 default = []
 # IndexedDB storage backend
 idb = [
+  "web-sys/DomException",
   "web-sys/DomStringList",
   "web-sys/IdbCursorWithValue",
   "web-sys/IdbDatabase",
@@ -53,6 +54,7 @@ idb = [
   "web-sys/IdbObjectStore",
   "web-sys/IdbObjectStoreParameters",
   "web-sys/IdbOpenDbRequest",
+  "web-sys/IdbRequest",
   "web-sys/IdbTransaction",
   "web-sys/IdbTransactionMode",
   "web-sys/IdbVersionChangeEvent"

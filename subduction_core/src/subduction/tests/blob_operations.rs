@@ -1,13 +1,13 @@
 //! Tests for blob operations (`get`, `get_blobs`).
 
 use super::common::new_test_subduction;
-use sedimentree_core::{blob::Digest, id::SedimentreeId};
+use sedimentree_core::{blob::Blob, digest::Digest, id::SedimentreeId};
 
 #[tokio::test]
 async fn test_get_blob_returns_none_for_missing() {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let digest = Digest::from([1u8; 32]);
+    let digest = Digest::<Blob>::from_bytes([1u8; 32]);
     #[allow(clippy::unwrap_used)]
     let blob = subduction.get_blob(digest).await.unwrap();
     assert!(blob.is_none());

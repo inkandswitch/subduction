@@ -16,6 +16,7 @@ rust-version.workspace = true
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-lock = { workspace = true }
 blake3 = { workspace = true }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 futures = { workspace = true }
 future_form = { workspace = true }
 futures-util = { workspace = true }
@@ -41,7 +42,7 @@ harness = false
 [features]
 default = []
 arbitrary = ["dep:arbitrary"]
-bolero = []
+bolero = ["dep:bolero"]
 serde = ["dep:serde"]
 std = [
   "async-lock/std",

@@ -213,6 +213,7 @@ fn fragment_blob_digest(signed: &Signed<Fragment>) -> Option<Digest<Blob>> {
 }
 
 /// Parse a JS array of {digest, signed} objects into Rust tuples.
+#[allow(clippy::type_complexity)]
 fn parse_digest_signed_array<T: for<'a> minicbor::Decode<'a, ()>>(
     js_value: &JsValue,
 ) -> Result<Vec<(Digest<T>, Signed<T>)>, JsSedimentreeStorageError> {

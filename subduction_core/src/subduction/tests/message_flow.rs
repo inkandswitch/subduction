@@ -20,8 +20,9 @@ use crate::storage::MemoryStorage;
 use core::time::Duration;
 use future_form::{Local, Sendable};
 use sedimentree_core::{
-    blob::{Blob, BlobMeta, Digest},
+    blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
+    digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
@@ -30,7 +31,7 @@ use testresult::TestResult;
 async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
-    let digest = Digest::hash(data);
+    let digest = Digest::<LooseCommit>::hash_bytes(data);
     let commit = LooseCommit::new(digest, vec![], blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)

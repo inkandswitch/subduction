@@ -96,14 +96,14 @@ impl WasmDigest {
     }
 }
 
-/// Convert from any typed Digest to WasmDigest.
+/// Convert from any typed `Digest` to `WasmDigest`.
 impl<T> From<Digest<T>> for WasmDigest {
     fn from(digest: Digest<T>) -> Self {
         Self(*digest.as_bytes())
     }
 }
 
-/// Convert from WasmDigest to any typed Digest.
+/// Convert from `WasmDigest` to any typed `Digest`.
 impl<T> From<WasmDigest> for Digest<T> {
     fn from(digest: WasmDigest) -> Self {
         Digest::from_bytes(digest.0)

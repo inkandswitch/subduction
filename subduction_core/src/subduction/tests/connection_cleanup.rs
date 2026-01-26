@@ -11,8 +11,9 @@ use crate::sharded_map::ShardedMap;
 use crate::storage::MemoryStorage;
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta, Digest},
+    blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -23,7 +24,7 @@ fn make_test_commit() -> (LooseCommit, Blob) {
     let contents = vec![0u8; 32];
     let blob = Blob::new(contents.clone());
     let blob_meta = BlobMeta::new(&contents);
-    let digest = Digest::from([0u8; 32]);
+    let digest = Digest::<LooseCommit>::from_bytes([0u8; 32]);
     let commit = LooseCommit::new(digest, vec![], blob_meta);
     (commit, blob)
 }
@@ -38,9 +39,9 @@ fn make_test_fragment() -> (Fragment, Blob) {
     let contents = vec![0u8; 32];
     let blob = Blob::new(contents.clone());
     let blob_meta = BlobMeta::new(&contents);
-    let head = Digest::from([1u8; 32]);
-    let boundary = vec![Digest::from([2u8; 32])];
-    let checkpoints = vec![Digest::from([3u8; 32])];
+    let head = Digest::<LooseCommit>::from_bytes([1u8; 32]);
+    let boundary = vec![Digest::<LooseCommit>::from_bytes([2u8; 32])];
+    let checkpoints = vec![Digest::<LooseCommit>::from_bytes([3u8; 32])];
     let fragment = Fragment::new(head, boundary, checkpoints, blob_meta);
     (fragment, blob)
 }
@@ -243,7 +244,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
     // Request blobs - the send will fail
-    let digests = vec![Digest::from([1u8; 32])];
+    let digests = vec![Digest::<Blob>::from_bytes([1u8; 32])];
     subduction.request_blobs(digests).await;
 
     // Connection should be unregistered after send failure

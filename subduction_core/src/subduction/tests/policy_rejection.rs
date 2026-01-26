@@ -15,8 +15,9 @@ use future_form::Sendable;
 use futures::FutureExt;
 use futures::future::BoxFuture;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta, Digest},
+    blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
+    digest::Digest,
     id::SedimentreeId,
     sedimentree::Sedimentree,
 };
@@ -141,7 +142,7 @@ fn make_test_blob(data: &[u8]) -> Blob {
 fn make_loose_commit(data: &[u8]) -> (sedimentree_core::loose_commit::LooseCommit, Blob) {
     let blob = make_test_blob(data);
     let blob_meta = BlobMeta::new(blob.as_slice());
-    let content_digest = Digest::hash(data);
+    let content_digest = Digest::<sedimentree_core::loose_commit::LooseCommit>::hash_bytes(data);
     let commit =
         sedimentree_core::loose_commit::LooseCommit::new(content_digest, vec![], blob_meta);
     (commit, blob)

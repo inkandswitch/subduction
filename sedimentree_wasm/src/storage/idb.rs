@@ -11,7 +11,8 @@ use core::cell::RefCell;
 use futures::channel::oneshot;
 use js_sys::Uint8Array;
 use sedimentree_core::{
-    blob::Digest,
+    blob::Blob,
+    digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::LooseCommit,
@@ -344,7 +345,7 @@ impl WasmIndexedDbStorage {
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
-            digest,
+            digest: digest.to_string(),
             payload: bytes,
         };
         let req = self
@@ -483,7 +484,7 @@ impl WasmIndexedDbStorage {
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
-            digest,
+            digest: digest.to_string(),
             payload: bytes,
         };
         let req = self
@@ -606,7 +607,7 @@ impl WasmIndexedDbStorage {
     /// or if the blob could not be saved.
     #[wasm_bindgen(js_name = saveBlob)]
     pub async fn wasm_save_blob(&self, bytes: &[u8]) -> Result<WasmDigest, WasmSaveBlobError> {
-        let digest = Digest::hash(bytes);
+        let digest = Digest::<Blob>::hash_bytes(bytes);
         let req = self
             .0
             .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite)
@@ -1185,7 +1186,7 @@ impl From<WasmDeleteLooseCommitsError> for JsValue {
 #[derive(Debug, Clone)]
 pub(crate) struct Record {
     sedimentree_id: SedimentreeId,
-    digest: Digest,
+    digest: String,
     payload: Vec<u8>,
 }
 
@@ -1201,12 +1202,8 @@ impl From<Record> for JsValue {
         .expect("SedimentreeId to string failed");
 
         #[allow(clippy::expect_used)]
-        js_sys::Reflect::set(
-            &obj,
-            &RECORD_FIELD_DIGEST.into(),
-            &record.digest.to_string().into(),
-        )
-        .expect("Digest to bytes failed");
+        js_sys::Reflect::set(&obj, &RECORD_FIELD_DIGEST.into(), &record.digest.into())
+            .expect("Digest to string failed");
 
         #[allow(clippy::expect_used)]
         js_sys::Reflect::set(

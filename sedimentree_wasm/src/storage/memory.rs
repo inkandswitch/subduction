@@ -31,6 +31,7 @@ pub struct MemoryStorage {
 impl MemoryStorage {
     /// Create a new in-memory storage instance.
     #[wasm_bindgen(constructor)]
+    #[must_use]
     pub fn new() -> Self {
         Self {
             inner: CoreMemoryStorage::new(),
