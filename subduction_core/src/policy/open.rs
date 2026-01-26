@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
-use futures_kind::FutureKind;
+use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::id::SedimentreeId;
 
 use super::{ConnectionPolicy, StoragePolicy};
@@ -15,20 +15,20 @@ use crate::peer::id::PeerId;
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OpenPolicy;
 
-#[futures_kind::kinds(Sendable, Local)]
-impl<K: FutureKind> ConnectionPolicy<K> for OpenPolicy {
+#[future_form(Sendable, Local)]
+impl<K: FutureForm> ConnectionPolicy<K> for OpenPolicy {
     type ConnectionDisallowed = core::convert::Infallible;
 
     fn authorize_connect(
         &self,
         _peer: PeerId,
     ) -> K::Future<'_, Result<(), Self::ConnectionDisallowed>> {
-        K::into_kind(async { Ok(()) })
+        K::from_future(async { Ok(()) })
     }
 }
 
-#[futures_kind::kinds(Sendable, Local)]
-impl<K: FutureKind> StoragePolicy<K> for OpenPolicy {
+#[future_form(Sendable, Local)]
+impl<K: FutureForm> StoragePolicy<K> for OpenPolicy {
     type FetchDisallowed = Infallible;
     type PutDisallowed = Infallible;
 
@@ -37,7 +37,7 @@ impl<K: FutureKind> StoragePolicy<K> for OpenPolicy {
         _peer: PeerId,
         _sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::FetchDisallowed>> {
-        K::into_kind(async { Ok(()) })
+        K::from_future(async { Ok(()) })
     }
 
     fn authorize_put(
@@ -46,7 +46,7 @@ impl<K: FutureKind> StoragePolicy<K> for OpenPolicy {
         _author: PeerId,
         _sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::PutDisallowed>> {
-        K::into_kind(async { Ok(()) })
+        K::from_future(async { Ok(()) })
     }
 
     fn filter_authorized_fetch(
@@ -55,6 +55,6 @@ impl<K: FutureKind> StoragePolicy<K> for OpenPolicy {
         ids: Vec<SedimentreeId>,
     ) -> K::Future<'_, Vec<SedimentreeId>> {
         // OpenPolicy allows everything
-        K::into_kind(async { ids })
+        K::from_future(async { ids })
     }
 }

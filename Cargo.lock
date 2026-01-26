@@ -1234,6 +1234,27 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "42703706b716c37f96a77aea830392ad231f44c9e9a67872fa5548707e11b11c"
 
 [[package]]
+name = "future_form"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4159f8f5bb6df8db8bbe94103a577e8275ea0529d8560f0541670e9de0e13d9"
+dependencies = [
+ "future_form_macros",
+ "futures 0.3.31",
+]
+
+[[package]]
+name = "future_form_macros"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cb36d9328dd9609d00322d77d8a8dd51f404328057e374a39d5fbc4ec14745b7"
+dependencies = [
+ "proc-macro2 1.0.106",
+ "quote 1.0.44",
+ "syn 2.0.114",
+]
+
+[[package]]
 name = "futures"
 version = "0.1.31"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1332,27 +1353,6 @@ dependencies = [
  "pin-project-lite",
  "pin-utils",
  "slab",
-]
-
-[[package]]
-name = "futures_kind"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "44172f835c355494d01113fb982a58ff3038f340997f3cdfe5dd04bb663ef73e"
-dependencies = [
- "futures 0.3.31",
- "futures_kind_macros",
-]
-
-[[package]]
-name = "futures_kind_macros"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "229dfb7d49eca986f87a51e8f1ceb0dca6a57f0b69135da85414c6f678e85b23"
-dependencies = [
- "proc-macro2 1.0.106",
- "quote 1.0.44",
- "syn 2.0.114",
 ]
 
 [[package]]
@@ -2692,9 +2692,9 @@ dependencies = [
  "bolero",
  "criterion",
  "dhat",
+ "future_form",
  "futures 0.3.31",
  "futures-util",
- "futures_kind",
  "minicbor",
  "nonempty 0.12.0",
  "num-bigint",
@@ -2712,8 +2712,8 @@ dependencies = [
  "async-lock",
  "base58",
  "from_js_ref",
+ "future_form",
  "futures 0.3.31",
- "futures_kind",
  "js-sys",
  "minicbor",
  "sedimentree_core",
@@ -2949,9 +2949,9 @@ dependencies = [
  "blake3",
  "clap",
  "console-subscriber",
+ "future_form",
  "futures 0.3.31",
  "futures-util",
- "futures_kind",
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
@@ -2979,8 +2979,8 @@ dependencies = [
  "bolero",
  "criterion",
  "ed25519-dalek",
+ "future_form",
  "futures 0.3.31",
- "futures_kind",
  "getrandom 0.2.17",
  "metrics",
  "minicbor",
@@ -3000,8 +3000,8 @@ name = "subduction_keyhive_policy"
 version = "0.1.0"
 dependencies = [
  "ed25519-dalek",
+ "future_form",
  "futures 0.3.31",
- "futures_kind",
  "keyhive_core",
  "rand 0.8.5",
  "sedimentree_core",
@@ -3020,9 +3020,9 @@ dependencies = [
  "console_error_panic_hook",
  "ed25519-dalek",
  "from_js_ref",
+ "future_form",
  "futures 0.3.31",
  "futures-util",
- "futures_kind",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "js-sys",
@@ -3050,10 +3050,10 @@ dependencies = [
  "async-lock",
  "async-tungstenite",
  "blake3",
+ "future_form",
  "futures 0.3.31",
  "futures-timer",
  "futures-util",
- "futures_kind",
  "minicbor",
  "rand 0.8.5",
  "sedimentree_core",

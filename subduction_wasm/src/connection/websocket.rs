@@ -21,7 +21,7 @@ use futures::{
     channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
 };
-use futures_kind::Local;
+use future_form::Local;
 use subduction_core::{
     connection::{
         Connection,

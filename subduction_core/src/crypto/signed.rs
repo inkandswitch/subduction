@@ -14,7 +14,7 @@ pub mod protocol_version;
 
 use core::cmp::Ordering;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use thiserror::Error;
 
 use self::{
@@ -114,7 +114,7 @@ impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
     ///
     /// Panics if CBOR encoding fails (should never happen for well-formed types).
     #[allow(clippy::expect_used)]
-    pub async fn seal<K: FutureKind, S: Signer<K>>(signer: &S, payload: T) -> Self {
+    pub async fn seal<K: FutureForm, S: Signer<K>>(signer: &S, payload: T) -> Self {
         let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
         let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
         let signature = signer.sign(&encoded).await;

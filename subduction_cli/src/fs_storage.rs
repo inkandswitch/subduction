@@ -5,7 +5,7 @@ use futures::{
     FutureExt,
     future::{BoxFuture, LocalBoxFuture},
 };
-use futures_kind::{Local, Sendable};
+use future_form::{Local, Sendable};
 use sedimentree_core::collections::{Map, Set};
 use sedimentree_core::{
     blob::{Blob, Digest},

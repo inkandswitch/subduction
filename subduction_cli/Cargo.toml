@@ -24,7 +24,7 @@ clap = { workspace = true }
 minicbor = { workspace = true }
 console-subscriber = { workspace = true }
 futures = { workspace = true }
-futures_kind = { workspace = true }
+future_form = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
 metrics = { workspace = true }

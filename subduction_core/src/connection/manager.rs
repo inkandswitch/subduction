@@ -15,7 +15,7 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_lock::Mutex;
 use futures::stream::AbortHandle;
-use futures_kind::{FutureKind, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 
 use super::{Connection, message::Message};
 
@@ -37,7 +37,7 @@ pub enum Command<C> {
 /// Trait for spawning connection handler tasks.
 ///
 /// Implement this for your runtime (e.g., tokio, async-std, wasm-bindgen-futures).
-pub trait Spawn<K: FutureKind> {
+pub trait Spawn<K: FutureForm> {
     /// Spawn a future as a background task.
     ///
     /// The future should be driven to completion. The returned [`AbortHandle`]
@@ -49,7 +49,7 @@ pub trait Spawn<K: FutureKind> {
 ///
 /// Unlike [`SelectAll`]-based approaches, each connection runs in its own task,
 /// providing isolation and (on multi-threaded runtimes) true parallelism.
-pub struct ConnectionManager<K: FutureKind, C, S: Spawn<K>> {
+pub struct ConnectionManager<K: FutureForm, C, S: Spawn<K>> {
     spawner: S,
 
     /// Counter for generating internal task IDs.
@@ -72,7 +72,7 @@ pub struct ConnectionManager<K: FutureKind, C, S: Spawn<K>> {
     _marker: core::marker::PhantomData<K>,
 }
 
-impl<K: FutureKind, C, S: Spawn<K>> ConnectionManager<K, C, S> {
+impl<K: FutureForm, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     /// Create a new [`ConnectionManager`].
     #[must_use]
     pub fn new(
@@ -98,7 +98,7 @@ impl<K: FutureKind, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     }
 }
 
-impl<K: FutureKind, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
+impl<K: FutureForm, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
     async fn remove_connection(&self, conn: &C) {
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(_, _, c)| c == conn) {
@@ -115,7 +115,7 @@ impl<K: FutureKind, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
 ///
 /// This trait enables generic code to call `run()` on `ConnectionManager<K, C, S>`
 /// without knowing whether K is Sendable or Local.
-pub trait RunManager<C>: FutureKind + Sized {
+pub trait RunManager<C>: FutureForm + Sized {
     /// Run the manager, processing commands to add/remove connections.
     fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, C, S>,
@@ -124,7 +124,7 @@ pub trait RunManager<C>: FutureKind + Sized {
         C: Connection<Self> + Clone + 'static;
 }
 
-impl<K: FutureKind + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
+impl<K: FutureForm + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
     ConnectionManager<K, C, S>
 {
     /// Run the manager, processing commands to add/remove connections.
@@ -137,15 +137,15 @@ impl<K: FutureKind + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
 }
 
 // Implementations of RunManager for Sendable and Local
-#[futures_kind::kinds(
+#[future_form(
     Sendable where C: Connection<Sendable> + Clone + Send + Sync + 'static, C::RecvError: Send,
     Local where C: Connection<Local> + Clone + 'static
 )]
-impl<K: FutureKind, C> RunManager<C> for K {
+impl<K: FutureForm, C> RunManager<C> for K {
     fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
         manager: ConnectionManager<Self, C, S>,
     ) -> Self::Future<'static, ()> {
-        K::into_kind(async move {
+        K::from_future(async move {
             while let Ok(cmd) = manager.commands.recv().await {
                 match cmd {
                     Command::Add(conn) => {
@@ -159,7 +159,7 @@ impl<K: FutureKind, C> RunManager<C> for K {
                         let conn_clone = conn.clone();
 
                         // Create the connection future inline
-                        let fut = K::into_kind(async move {
+                        let fut = K::from_future(async move {
                             connection_loop(conn_clone.clone(), messages).await;
 
                             // Normal completion cleanup - remove from tasks list
@@ -171,7 +171,7 @@ impl<K: FutureKind, C> RunManager<C> for K {
                             {
                                 tasks_guard.swap_remove(pos);
                             }
-                            let _ = closed.send(conn_clone).await;
+                            drop(closed.send(conn_clone).await);
                             tracing::debug!("connection for peer {peer_id}: closed normally");
                         });
 
@@ -188,7 +188,7 @@ impl<K: FutureKind, C> RunManager<C> for K {
     }
 }
 
-async fn connection_loop<K: FutureKind, C: Connection<K>>(
+async fn connection_loop<K: FutureForm, C: Connection<K>>(
     conn: C,
     messages: async_channel::Sender<(C, Message)>,
 ) {
@@ -210,7 +210,7 @@ async fn connection_loop<K: FutureKind, C: Connection<K>>(
     }
 }
 
-impl<K: FutureKind, C, S: Spawn<K>> core::fmt::Debug for ConnectionManager<K, C, S> {
+impl<K: FutureForm, C, S: Spawn<K>> core::fmt::Debug for ConnectionManager<K, C, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectionManager").finish_non_exhaustive()
     }
@@ -219,11 +219,11 @@ impl<K: FutureKind, C, S: Spawn<K>> core::fmt::Debug for ConnectionManager<K, C,
 /// A future representing the running [`ConnectionManager`].
 ///
 /// This allows the caller to monitor and control the lifecycle of the manager.
-pub struct ManagerFuture<K: FutureKind> {
+pub struct ManagerFuture<K: FutureForm> {
     fut: core::pin::Pin<alloc::boxed::Box<futures::stream::Abortable<K::Future<'static, ()>>>>,
 }
 
-impl<K: FutureKind> ManagerFuture<K> {
+impl<K: FutureForm> ManagerFuture<K> {
     /// Create a new manager future from an abortable future.
     pub fn new(fut: futures::stream::Abortable<K::Future<'static, ()>>) -> Self {
         Self {
@@ -238,7 +238,7 @@ impl<K: FutureKind> ManagerFuture<K> {
     }
 }
 
-impl<K: FutureKind> core::future::Future for ManagerFuture<K> {
+impl<K: FutureForm> core::future::Future for ManagerFuture<K> {
     type Output = Result<(), futures::stream::Aborted>;
 
     fn poll(
@@ -249,9 +249,9 @@ impl<K: FutureKind> core::future::Future for ManagerFuture<K> {
     }
 }
 
-impl<K: FutureKind> Unpin for ManagerFuture<K> {}
+impl<K: FutureForm> Unpin for ManagerFuture<K> {}
 
-impl<K: FutureKind> core::fmt::Debug for ManagerFuture<K> {
+impl<K: FutureForm> core::fmt::Debug for ManagerFuture<K> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ManagerFuture")
             .field("is_aborted", &self.is_aborted())
@@ -264,7 +264,7 @@ mod tests {
     use super::*;
     use crate::connection::test_utils::MockConnection;
     use futures::future::BoxFuture;
-    use futures_kind::Sendable;
+    use future_form::Sendable;
 
     /// A spawner that uses FuturesUnordered for testing (no actual spawning).
     struct TestSpawn;

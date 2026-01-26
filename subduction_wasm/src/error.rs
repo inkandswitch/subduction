@@ -2,7 +2,7 @@
 
 use alloc::string::{String, ToString};
 use core::convert::Infallible;
-use futures_kind::Local;
+use future_form::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
     subduction::error::{AttachError, HydrationError, IoError, ListenError, RegistrationError},

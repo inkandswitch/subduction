@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Instant};
 use alloc::vec::Vec;
 
 use async_lock::Mutex;
-use futures_kind::{FutureKind, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
     blob::{Blob, Digest},
     collections::Set,
@@ -141,15 +141,15 @@ where
     }
 }
 
-#[futures_kind::kinds(Sendable where S: Storage<Sendable> + Send + Sync, Local where S: Storage<Local>)]
-impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
+#[future_form(Sendable where S: Storage<Sendable> + Send + Sync, Local where S: Storage<Local>)]
+impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     type Error = S::Error;
 
     fn save_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_sedimentree_id(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -164,7 +164,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_sedimentree_id(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -176,7 +176,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
     }
 
     fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_all_sedimentree_ids().await;
             metrics::storage_operation_duration(
@@ -192,7 +192,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -207,7 +207,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_loose_commits(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -222,7 +222,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_loose_commits(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -238,7 +238,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         sedimentree_id: SedimentreeId,
         fragment: Fragment,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_fragment(sedimentree_id, fragment).await;
             metrics::storage_operation_duration("save_fragment", start.elapsed().as_secs_f64());
@@ -250,7 +250,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Vec<Fragment>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_fragments(sedimentree_id).await;
             metrics::storage_operation_duration("load_fragments", start.elapsed().as_secs_f64());
@@ -262,7 +262,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_fragments(sedimentree_id).await;
             metrics::storage_operation_duration("delete_fragments", start.elapsed().as_secs_f64());
@@ -271,7 +271,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
     }
 
     fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_blob(blob).await;
             metrics::storage_operation_duration("save_blob", start.elapsed().as_secs_f64());
@@ -280,7 +280,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
     }
 
     fn load_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_blob(blob_digest).await;
             metrics::storage_operation_duration("load_blob", start.elapsed().as_secs_f64());
@@ -289,7 +289,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
     }
 
     fn delete_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_blob(blob_digest).await;
             metrics::storage_operation_duration("delete_blob", start.elapsed().as_secs_f64());
@@ -303,7 +303,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         commit: LooseCommit,
         blob: Blob,
     ) -> K::Future<'_, Result<Digest, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -323,7 +323,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         fragment: Fragment,
         blob: Blob,
     ) -> K::Future<'_, Result<Digest, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -343,7 +343,7 @@ impl<K: FutureKind, S> Storage<K> for MetricsStorage<S> {
         commits: Vec<(LooseCommit, Blob)>,
         fragments: Vec<(Fragment, Blob)>,
     ) -> K::Future<'_, Result<BatchResult, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner

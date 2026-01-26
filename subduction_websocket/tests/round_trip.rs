@@ -4,7 +4,7 @@ use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use testresult::TestResult;
 
 use arbitrary::{Arbitrary, Unstructured};
-use futures_kind::Sendable;
+use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, Digest},

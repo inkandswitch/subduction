@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::error::Error;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use sedimentree_core::id::SedimentreeId;
 
 use crate::peer::id::PeerId;
@@ -13,7 +13,7 @@ use crate::peer::id::PeerId;
 /// This trait performs authorization checks. To get a capability that bundles
 /// authorization with storage access, use [`Subduction::authorize_fetch`] or
 /// [`Subduction::authorize_put`].
-pub trait StoragePolicy<K: FutureKind> {
+pub trait StoragePolicy<K: FutureForm> {
     /// Error type returned when fetch is disallowed.
     type FetchDisallowed: Error;
 

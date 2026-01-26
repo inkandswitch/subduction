@@ -7,7 +7,7 @@ use alloc::sync::Arc;
 
 use sedimentree_core::collections::Set;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use sedimentree_core::{
     blob::{Blob, Digest},
     fragment::Fragment,
@@ -65,7 +65,7 @@ impl<S, P> StoragePowerbox<S, P> {
     ///
     /// Use this for data originating from the local user, not from peers.
     #[must_use]
-    pub fn local_putter<K: FutureKind>(&self, sedimentree_id: SedimentreeId) -> Putter<K, S>
+    pub fn local_putter<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Putter<K, S>
     where
         S: Storage<K>,
     {
@@ -77,7 +77,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// Use this for compaction, garbage collection, and other local-only
     /// delete operations. Never hand this capability to peers.
     #[must_use]
-    pub fn local_destroyer<K: FutureKind>(&self, sedimentree_id: SedimentreeId) -> Destroyer<K, S>
+    pub fn local_destroyer<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> Destroyer<K, S>
     where
         S: Storage<K>,
     {
@@ -91,7 +91,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// # Errors
     ///
     /// Returns the policy's `FetchDisallowed` error if authorization fails.
-    pub async fn get_fetcher<K: FutureKind>(
+    pub async fn get_fetcher<K: FutureForm>(
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
@@ -111,7 +111,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// # Errors
     ///
     /// Returns the policy's `PutDisallowed` error if authorization fails.
-    pub async fn get_putter<K: FutureKind>(
+    pub async fn get_putter<K: FutureForm>(
         &self,
         requestor: PeerId,
         author: PeerId,
@@ -133,7 +133,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// and shared across sedimentrees, so they don't fit the sedimentree-scoped
     /// capability model.
     #[must_use]
-    pub fn load_blob<K: FutureKind>(
+    pub fn load_blob<K: FutureForm>(
         &self,
         digest: Digest,
     ) -> K::Future<'_, Result<Option<Blob>, S::Error>>
@@ -148,7 +148,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// This is for saving blobs received from peers or created locally.
     /// Blobs are content-addressed and shared across sedimentrees.
     #[must_use]
-    pub fn save_blob<K: FutureKind>(&self, blob: Blob) -> K::Future<'_, Result<Digest, S::Error>>
+    pub fn save_blob<K: FutureForm>(&self, blob: Blob) -> K::Future<'_, Result<Digest, S::Error>>
     where
         S: Storage<K>,
     {
@@ -159,7 +159,7 @@ impl<S, P> StoragePowerbox<S, P> {
     ///
     /// This is for local initialization, loading our own data.
     #[must_use]
-    pub fn load_all_sedimentree_ids<K: FutureKind>(
+    pub fn load_all_sedimentree_ids<K: FutureForm>(
         &self,
     ) -> K::Future<'_, Result<Set<SedimentreeId>, S::Error>>
     where
@@ -172,7 +172,7 @@ impl<S, P> StoragePowerbox<S, P> {
     ///
     /// This is for local initialization, loading our own data.
     #[must_use]
-    pub fn load_loose_commits<K: FutureKind>(
+    pub fn load_loose_commits<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<alloc::vec::Vec<LooseCommit>, S::Error>>
@@ -186,7 +186,7 @@ impl<S, P> StoragePowerbox<S, P> {
     ///
     /// This is for local initialization, loading our own data.
     #[must_use]
-    pub fn load_fragments<K: FutureKind>(
+    pub fn load_fragments<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<alloc::vec::Vec<Fragment>, S::Error>>

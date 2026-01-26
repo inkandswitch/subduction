@@ -20,7 +20,7 @@ async-lock = { workspace = true }
 base58 = { workspace = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
-futures_kind = { workspace = true }
+future_form = { workspace = true }
 js-sys = { workspace = true }
 minicbor = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }

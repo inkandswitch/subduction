@@ -5,7 +5,7 @@ use crate::{
     sedimentree_id::WasmSedimentreeId,
 };
 use alloc::vec::Vec;
-use futures_kind::Local;
+use future_form::Local;
 use sedimentree_core::storage::{MemoryStorage, Storage};
 use wasm_bindgen::prelude::*;
 

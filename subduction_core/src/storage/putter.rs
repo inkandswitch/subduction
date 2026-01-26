@@ -5,7 +5,7 @@ use core::marker::PhantomData;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use sedimentree_core::{
     blob::{Blob, Digest},
     fragment::Fragment,
@@ -25,13 +25,13 @@ use super::fetcher::Fetcher;
 /// Created via [`Subduction::authorize_put`][crate::subduction::Subduction].
 ///
 /// A `Putter` also grants fetch access (put implies fetch).
-pub struct Putter<K: FutureKind, S: Storage<K>> {
+pub struct Putter<K: FutureForm, S: Storage<K>> {
     storage: Arc<S>,
     sedimentree_id: SedimentreeId,
     _marker: PhantomData<K>,
 }
 
-impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
+impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     /// Create a new putter capability.
     ///
     /// This should only be called after authorization has been verified.
@@ -108,7 +108,7 @@ impl<K: FutureKind, S: Storage<K>> Putter<K, S> {
     }
 }
 
-impl<K: FutureKind, S: Storage<K>> Clone for Putter<K, S> {
+impl<K: FutureForm, S: Storage<K>> Clone for Putter<K, S> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
@@ -118,7 +118,7 @@ impl<K: FutureKind, S: Storage<K>> Clone for Putter<K, S> {
     }
 }
 
-impl<K: FutureKind, S: Storage<K>> core::fmt::Debug for Putter<K, S> {
+impl<K: FutureForm, S: Storage<K>> core::fmt::Debug for Putter<K, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Putter")
             .field("sedimentree_id", &self.sedimentree_id)

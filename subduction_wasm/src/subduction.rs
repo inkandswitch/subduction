@@ -10,7 +10,7 @@ use futures::{
     future::{Either, select},
     stream::Aborted,
 };
-use futures_kind::Local;
+use future_form::Local;
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::{Blob, Digest},

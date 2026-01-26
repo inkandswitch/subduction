@@ -5,7 +5,7 @@
 //! hardware security modules, remote signing services, etc.).
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use futures_kind::FutureKind;
+use future_form::{FutureForm, Local, Sendable, future_form};
 
 use crate::peer::id::PeerId;
 
@@ -17,12 +17,12 @@ use crate::peer::id::PeerId;
 /// - Remote signing services
 /// - Key derivation schemes
 ///
-/// The trait is generic over [`FutureKind`] to support both:
+/// The trait is generic over [`FutureForm`] to support both:
 /// - `Sendable`: Thread-safe futures for multi-threaded runtimes like Tokio
 /// - `Local`: Single-threaded futures for Wasm and local executors
 ///
 /// For synchronous signers like [`LocalSigner`], the async overhead is negligible.
-pub trait Signer<K: FutureKind> {
+pub trait Signer<K: FutureForm> {
     /// Sign the given message bytes.
     fn sign(&self, message: &[u8]) -> K::Future<'_, Signature>;
 
@@ -82,12 +82,12 @@ impl LocalSigner {
     }
 }
 
-#[futures_kind::kinds(Sendable, Local)]
-impl<K: FutureKind> Signer<K> for LocalSigner {
+#[future_form(Sendable, Local)]
+impl<K: FutureForm> Signer<K> for LocalSigner {
     fn sign(&self, message: &[u8]) -> K::Future<'_, Signature> {
         use ed25519_dalek::Signer as _;
         let signature = self.signing_key.sign(message);
-        K::into_kind(async move { signature })
+        K::from_future(async move { signature })
     }
 
     fn verifying_key(&self) -> VerifyingKey {
@@ -108,7 +108,7 @@ mod tests {
     use super::*;
     use alloc::format;
     use ed25519_dalek::Verifier;
-    use futures_kind::Sendable;
+    use future_form::Sendable;
 
     #[tokio::test]
     async fn local_signer_sign_and_verify() {

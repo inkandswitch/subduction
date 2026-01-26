@@ -8,7 +8,7 @@ use alloc::{string::ToString, vec::Vec};
 use sedimentree_core::collections::Set;
 
 use futures::{FutureExt, future::LocalBoxFuture};
-use futures_kind::Local;
+use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::{Blob, Digest},

@@ -27,7 +27,7 @@
 
 use core::time::Duration;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use sedimentree_core::blob::Digest as RawDigest;
 use thiserror::Error;
 
@@ -400,7 +400,7 @@ impl DriftCorrection {
 ///
 /// The caller must provide the current timestamp and a random nonce.
 /// For `no_std` compatibility, these are not generated internally.
-pub async fn create_challenge<K: FutureKind, S: Signer<K>>(
+pub async fn create_challenge<K: FutureForm, S: Signer<K>>(
     signer: &S,
     audience: Audience,
     now: TimestampSeconds,
@@ -453,7 +453,7 @@ pub fn verify_challenge(
 }
 
 /// Create a signed response for a verified challenge.
-pub async fn create_response<K: FutureKind, S: Signer<K>>(
+pub async fn create_response<K: FutureForm, S: Signer<K>>(
     signer: &S,
     challenge: &Challenge,
     now: TimestampSeconds,
@@ -685,7 +685,7 @@ mod tests {
     mod executor {
         use super::*;
         use crate::crypto::signer::LocalSigner;
-        use futures_kind::Sendable;
+        use future_form::Sendable;
 
         fn test_signer(seed: u8) -> LocalSigner {
             LocalSigner::from_bytes(&[seed; 32])

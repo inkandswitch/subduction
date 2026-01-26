@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use sedimentree_core::{blob::Digest, storage::Storage};
 use thiserror::Error;
 
@@ -10,7 +10,7 @@ use crate::connection::Connection;
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
 #[derive(Debug, Clone, Copy, Error)]
-pub enum HydrationError<F: FutureKind, S: Storage<F>> {
+pub enum HydrationError<F: FutureForm, S: Storage<F>> {
     /// An error occurred while loading all sedimentree IDs.
     #[error("hydration error when loading all sedimentree IDs: {0}")]
     LoadAllIdsError(#[source] S::Error),
@@ -28,7 +28,7 @@ pub enum HydrationError<F: FutureKind, S: Storage<F>> {
 ///
 /// This covers storage and network connection errors.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
-pub enum IoError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// An error occurred while using storage.
     #[error(transparent)]
     Storage(S::Error),
@@ -48,7 +48,7 @@ pub enum IoError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
-pub enum BlobRequestErr<F: FutureKind, S: Storage<F>, C: Connection<F>> {
+pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F>> {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
     IoError(#[from] IoError<F, S, C>),
@@ -60,7 +60,7 @@ pub enum BlobRequestErr<F: FutureKind, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
@@ -90,7 +90,7 @@ pub enum RegistrationError<D> {
 
 /// An error that can occur during attachment.
 #[derive(Debug, Error)]
-pub enum AttachError<F: FutureKind + ?Sized, S: Storage<F>, C: Connection<F>, D> {
+pub enum AttachError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, D> {
     /// An I/O error occurred.
     #[error("I/O error: {0}")]
     Io(#[from] IoError<F, S, C>),

@@ -5,7 +5,7 @@
 //! to `IndexedDB` so they survive page reloads.
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use futures_kind::{FutureKind, Local};
+use future_form::{FutureForm, Local};
 use js_sys::Uint8Array;
 use subduction_core::crypto::signer::Signer;
 use wasm_bindgen::prelude::*;
@@ -302,9 +302,9 @@ impl WebCryptoSigner {
 
 impl Signer<Local> for WebCryptoSigner {
     #[allow(clippy::expect_used)]
-    fn sign(&self, message: &[u8]) -> <Local as FutureKind>::Future<'_, Signature> {
+    fn sign(&self, message: &[u8]) -> <Local as FutureForm>::Future<'_, Signature> {
         let message = message.to_vec();
-        Local::into_kind(async move {
+        Local::from_future(async move {
             let sig_array = WebCryptoSigner::sign(self, &message)
                 .await
                 .expect("WebCrypto signing failed");

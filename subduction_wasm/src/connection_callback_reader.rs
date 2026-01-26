@@ -3,7 +3,7 @@ use core::time::Duration;
 
 use async_lock::Mutex;
 use futures::future::{FutureExt, LocalBoxFuture};
-use futures_kind::Local;
+use future_form::Local;
 use js_sys::Uint8Array;
 use subduction_core::{
     connection::{

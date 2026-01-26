@@ -104,7 +104,7 @@ use futures::{
     future::try_join_all,
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
 };
-use futures_kind::{FutureKind, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::collections::{
@@ -126,7 +126,7 @@ use sedimentree_core::{
 #[derive(Debug, Clone)]
 pub struct Subduction<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -157,7 +157,7 @@ pub struct Subduction<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -1819,7 +1819,7 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -1836,7 +1836,7 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -1857,7 +1857,7 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureKind<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -1904,7 +1904,7 @@ impl<
 ///
 /// Similarly, the trait alias helps us avoid repeating the same complex trait bounds everywhere,
 /// and needing to update them in many places if the constraints change.
-pub trait SubductionFutureKind<
+pub trait SubductionFutureForm<
     'a,
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
@@ -1925,7 +1925,7 @@ impl<
     M: DepthMetric,
     const N: usize,
     U: StartListener<'a, S, C, P, Sig, M, N>,
-> SubductionFutureKind<'a, S, C, P, Sig, M, N> for U
+> SubductionFutureForm<'a, S, C, P, Sig, M, N> for U
 {
 }
 
@@ -1940,7 +1940,7 @@ pub trait StartListener<
     Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
->: FutureKind + RunManager<C> + Sized
+>: FutureForm + RunManager<C> + Sized
 {
     /// Start the listener task for Subduction.
     fn start_listener(
@@ -1951,7 +1951,7 @@ pub trait StartListener<
         Self: Sized;
 }
 
-#[futures_kind::kinds(
+#[future_form(
     Sendable where
         C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
         S: Storage<Sendable> + Send + Sync + 'a,
@@ -1970,7 +1970,7 @@ pub trait StartListener<
         Sig: Signer<Local> + 'a,
         M: DepthMetric + 'a
 )]
-impl<'a, K: FutureKind, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N>
+impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N>
     for K
 {
     fn start_listener(
@@ -1978,7 +1978,7 @@ impl<'a, K: FutureKind, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
-            K::into_kind(async move {
+            K::from_future(async move {
                 if let Err(e) = subduction.listen().await {
                     tracing::error!("Subduction listen error: {}", e.to_string());
                 }
@@ -2111,7 +2111,7 @@ mod tests {
         }
     }
 
-    impl Spawn<futures_kind::Local> for TestSpawn {
+    impl Spawn<future_form::Local> for TestSpawn {
         fn spawn(&self, _fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
             let (handle, _reg) = AbortHandle::new_pair();
             handle
@@ -2130,7 +2130,7 @@ mod tests {
         }
     }
 
-    impl Spawn<futures_kind::Local> for TokioSpawn {
+    impl Spawn<future_form::Local> for TokioSpawn {
         fn spawn(&self, fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
             use futures::future::Abortable;
             let (handle, reg) = AbortHandle::new_pair();
@@ -3057,7 +3057,7 @@ mod tests {
         use crate::connection::test_utils::ChannelMockConnection;
         use crate::peer::id::PeerId;
         use core::time::Duration;
-        use futures_kind::Local;
+        use future_form::Local;
         use sedimentree_core::{
             blob::{Blob, BlobMeta, Digest},
             loose_commit::LooseCommit,

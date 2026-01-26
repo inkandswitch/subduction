@@ -5,7 +5,7 @@ use alloc::{string::String, sync::Arc, vec::Vec};
 use crate::collections::{Map, Set};
 
 use async_lock::Mutex;
-use futures_kind::FutureKind;
+use future_form::{FutureForm, Local, Sendable, future_form};
 
 use crate::{
     blob::{Blob, Digest},
@@ -15,7 +15,7 @@ use crate::{
 };
 
 /// Abstraction over storage for `Sedimentree` data.
-pub trait Storage<K: FutureKind + ?Sized> {
+pub trait Storage<K: FutureForm + ?Sized> {
     /// The error type for storage operations.
     type Error: core::error::Error;
 
@@ -173,15 +173,15 @@ impl MemoryStorage {
     }
 }
 
-#[futures_kind::kinds(Sendable, Local)]
-impl<K: FutureKind> Storage<K> for MemoryStorage {
+#[future_form(Sendable, Local)]
+impl<K: FutureForm> Storage<K> for MemoryStorage {
     type Error = core::convert::Infallible;
 
     fn save_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::save_sedimentree_id");
             self.ids.lock().await.insert(sedimentree_id);
             Ok(())
@@ -192,7 +192,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::delete_sedimentree_id");
             self.ids.lock().await.remove(&sedimentree_id);
             Ok(())
@@ -200,7 +200,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
     }
 
     fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!("MemoryStorage::load_all_sedimentree_ids");
             Ok(self.ids.lock().await.iter().copied().collect())
         })
@@ -211,7 +211,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         sedimentree_id: SedimentreeId,
         loose_commit: LooseCommit,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 ?loose_commit,
@@ -231,7 +231,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_loose_commits");
             let stored = {
                 let locked = self.commits.lock().await;
@@ -249,7 +249,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::delete_loose_commits");
             self.commits.lock().await.remove(&sedimentree_id);
             Ok(())
@@ -261,7 +261,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         sedimentree_id: SedimentreeId,
         fragment: Fragment,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?sedimentree_id, ?fragment, "MemoryStorage::save_fragment");
             self.fragments
                 .lock()
@@ -277,7 +277,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Vec<Fragment>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_fragments");
             let stored = {
                 let locked = self.fragments.lock().await;
@@ -295,7 +295,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::delete_fragments");
             self.fragments.lock().await.remove(&sedimentree_id);
             Ok(())
@@ -303,7 +303,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
     }
 
     fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             let digest = Digest::hash(blob.contents());
             tracing::debug!(?digest, "MemoryStorage::save_blob");
             self.blobs.lock().await.entry(digest).or_insert(blob);
@@ -312,14 +312,14 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
     }
 
     fn load_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?blob_digest, "MemoryStorage::load_blob");
             Ok(self.blobs.lock().await.get(&blob_digest).cloned())
         })
     }
 
     fn delete_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<(), Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(?blob_digest, "MemoryStorage::delete_blob");
             self.blobs.lock().await.remove(&blob_digest);
             Ok(())
@@ -332,7 +332,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         commit: LooseCommit,
         blob: Blob,
     ) -> K::Future<'_, Result<Digest, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 ?commit,
@@ -356,7 +356,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         fragment: Fragment,
         blob: Blob,
     ) -> K::Future<'_, Result<Digest, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 ?fragment,
@@ -380,7 +380,7 @@ impl<K: FutureKind> Storage<K> for MemoryStorage {
         commits: Vec<(LooseCommit, Blob)>,
         fragments: Vec<(Fragment, Blob)>,
     ) -> K::Future<'_, Result<BatchResult, Self::Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             tracing::debug!(
                 ?sedimentree_id,
                 num_commits = commits.len(),

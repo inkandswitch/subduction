@@ -10,7 +10,7 @@ use alloc::{
 };
 
 use futures::channel::oneshot;
-use futures_kind::Local;
+use future_form::Local;
 use subduction_core::{
     connection::handshake::{self, Audience, Challenge, Nonce, Rejection, RejectionReason},
     crypto::{signed::Signed, signer::Signer},

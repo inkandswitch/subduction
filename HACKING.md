@@ -10,14 +10,14 @@ This document explains the key engineering patterns and abstractions used in Sub
 
 ## Core Abstractions
 
-### FutureKind: Portable Async Without Runtime Lock-in
+### FutureForm: Portable Async Without Runtime Lock-in
 
-The `FutureKind` trait (from `futures_kind`) is the foundation for making Subduction work across both native Rust (with Tokio) and WebAssembly (single-threaded, no Send/Sync).
+The `FutureForm` trait (from `future_form`) is the foundation for making Subduction work across both native Rust (with Tokio) and WebAssembly (single-threaded, no Send/Sync).
 
 ```
                     ┌───────────────────────────┐
-                    │        FutureKind         │
-                    │  (trait from futures_kind)│
+                    │        FutureForm         │
+                    │  (trait from future_form) │
                     └────────────┬───────────────┘
                                  │
               ┌──────────────────┴────────────────┐
@@ -34,28 +34,28 @@ The `FutureKind` trait (from `futures_kind`) is the foundation for making Subduc
         Multi-threaded                     JS event loop
 ```
 
-**Why?** JavaScript's single-threaded model means futures can't be `Send`. But we want the same core logic to work in both environments. `FutureKind` lets us write generic code that works with either.
+**Why?** JavaScript's single-threaded model means futures can't be `Send`. But we want the same core logic to work in both environments. `FutureForm` lets us write generic code that works with either.
 
 **Usage pattern:**
 
 ```rust
-// Trait definition - generic over FutureKind
-pub trait Storage<K: FutureKind> {
+// Trait definition - generic over FutureForm
+pub trait Storage<K: FutureForm> {
     fn load(&self, id: Id) -> K::Future<'_, Result<Data, Error>>;
 }
 
-// Implementation for both kinds using the macro
-#[futures_kind::kinds(Sendable, Local)]
-impl<K: FutureKind> Storage<K> for MyStorage {
+// Implementation for both forms using the macro
+#[future_form::future_form(Sendable, Local)]
+impl<K: FutureForm> Storage<K> for MyStorage {
     fn load(&self, id: Id) -> K::Future<'_, Result<Data, Error>> {
-        K::into_kind(async move {
+        K::from_future(async move {
             // async implementation
         })
     }
 }
 ```
 
-The `#[futures_kind::kinds(Sendable, Local)]` macro generates two impl blocks — one for each kind. `K::into_kind()` wraps the async block in the appropriate future type.
+The `#[future_form::future_form(Sendable, Local)]` macro generates two impl blocks — one for each form. `K::from_future()` wraps the async block in the appropriate future type.
 
 ### Generic Parameters on Subduction
 
@@ -64,7 +64,7 @@ The main `Subduction` struct has many generic parameters:
 ```rust
 pub struct Subduction<
     'a,
-    F: FutureKind,           // Sendable or Local
+    F: FutureForm,           // Sendable or Local
     S: Storage<F>,           // Storage backend
     C: Connection<F>,        // Network connection type
     P: ConnectionPolicy<F> + StoragePolicy<F>,  // Access control
@@ -87,12 +87,12 @@ This looks intimidating but serves a purpose: *compile-time configuration*. The 
 Access control is split into two traits:
 
 ```rust
-pub trait ConnectionPolicy<K: FutureKind> {
+pub trait ConnectionPolicy<K: FutureForm> {
     type ConnectionDisallowed: Error;
     fn authorize_connect(&self, peer: PeerId) -> K::Future<'_, Result<(), Self::ConnectionDisallowed>>;
 }
 
-pub trait StoragePolicy<K: FutureKind> {
+pub trait StoragePolicy<K: FutureForm> {
     type FetchDisallowed: Error;
     type PutDisallowed: Error;
 
@@ -138,7 +138,7 @@ Uses time-based buckets for efficient expiry with lazy cleanup:
 ### Spawn Trait: Task-per-Connection Parallelism
 
 ```rust
-pub trait Spawn<K: FutureKind> {
+pub trait Spawn<K: FutureForm> {
     fn spawn<F>(&self, future: F) -> AbortHandle
     where
         F: Future<Output = ()> + 'static;
@@ -196,12 +196,12 @@ Authenticated                              Authenticated
 Errors use associated types on traits, not concrete types:
 
 ```rust
-pub trait Storage<K: FutureKind> {
+pub trait Storage<K: FutureForm> {
     type Error: std::error::Error;
     // ...
 }
 
-pub trait Connection<K: FutureKind> {
+pub trait Connection<K: FutureForm> {
     type SendError: std::error::Error;
     type RecvError: std::error::Error;
     type CallError: std::error::Error;

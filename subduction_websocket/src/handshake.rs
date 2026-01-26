@@ -21,7 +21,7 @@
 use core::time::Duration;
 
 use async_tungstenite::WebSocketStream;
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
@@ -148,7 +148,7 @@ pub async fn server_handshake<T, S, K>(
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Signer<K>,
-    K: FutureKind,
+    K: FutureForm,
 {
     // Receive the challenge
     let challenge_msg = ws
@@ -294,7 +294,7 @@ pub async fn client_handshake<T, S, K>(
 where
     T: AsyncRead + AsyncWrite + Unpin,
     S: Signer<K>,
-    K: FutureKind,
+    K: FutureForm,
 {
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
@@ -350,7 +350,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use futures_kind::Sendable;
+    use future_form::Sendable;
     use subduction_core::crypto::signer::LocalSigner;
 
     fn test_signer(seed: u8) -> LocalSigner {

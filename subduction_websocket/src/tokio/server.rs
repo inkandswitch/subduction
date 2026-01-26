@@ -11,7 +11,7 @@ use crate::{
 use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
-use futures_kind::Sendable;
+use future_form::Sendable;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
     storage::Storage,

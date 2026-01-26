@@ -7,7 +7,7 @@ use futures::{
     future::BoxFuture,
     stream::{AbortHandle, Abortable},
 };
-use futures_kind::Sendable;
+use future_form::Sendable;
 use subduction_core::connection::manager::Spawn;
 
 use crate::timeout::{TimedOut, Timeout};

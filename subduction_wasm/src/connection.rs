@@ -10,7 +10,7 @@ use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
 use futures::{FutureExt, future::LocalBoxFuture};
-use futures_kind::Local;
+use future_form::Local;
 use js_sys::Promise;
 use subduction_core::{
     connection::{

@@ -2,10 +2,10 @@
 
 use core::time::Duration;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 
 #[cfg(feature = "futures-timer")]
-use futures_kind::{Local, Sendable};
+use future_form::{Local, Sendable};
 use thiserror::Error;
 
 #[cfg(feature = "futures-timer")]
@@ -18,7 +18,7 @@ use futures::{
 use futures_timer::Delay;
 
 /// A trait for time-limiting futures.
-pub trait Timeout<K: FutureKind + ?Sized> {
+pub trait Timeout<K: FutureForm + ?Sized> {
     /// Wrap a future with a timeout.
     fn timeout<'a, T: 'a>(
         &'a self,

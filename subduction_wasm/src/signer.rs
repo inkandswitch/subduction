@@ -12,7 +12,7 @@ pub use webcrypto::WebCryptoSigner;
 use alloc::vec::Vec;
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use futures_kind::{FutureKind, Local};
+use future_form::{FutureForm, Local};
 use js_sys::Uint8Array;
 use subduction_core::crypto::signer::Signer;
 use wasm_bindgen::prelude::*;
@@ -52,13 +52,13 @@ impl Signer<Local> for JsSigner {
     ///
     /// Panics if the JavaScript signer returns an invalid signature (not 64 bytes).
     #[allow(clippy::expect_used)]
-    fn sign(&self, message: &[u8]) -> <Local as FutureKind>::Future<'_, Signature> {
+    fn sign(&self, message: &[u8]) -> <Local as FutureForm>::Future<'_, Signature> {
         let sig_bytes: Vec<u8> = self.js_sign(message).to_vec();
         let sig_array: [u8; 64] = sig_bytes
             .try_into()
             .expect("JsSigner.sign must return exactly 64 bytes");
         let signature = Signature::from_bytes(&sig_array);
-        Local::into_kind(async move { signature })
+        Local::from_future(async move { signature })
     }
 
     /// Get the verifying key from the JavaScript signer.

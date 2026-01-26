@@ -9,7 +9,7 @@ use core::marker::PhantomData;
 
 use alloc::sync::Arc;
 
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use sedimentree_core::{blob::Digest, id::SedimentreeId, storage::Storage};
 
 /// A capability granting delete access to a specific sedimentree's data.
@@ -21,13 +21,13 @@ use sedimentree_core::{blob::Digest, id::SedimentreeId, storage::Storage};
 /// - Administrative cleanup
 ///
 /// Created via [`StoragePowerbox::local_destroyer`][crate::storage::powerbox::StoragePowerbox::local_destroyer].
-pub struct Destroyer<K: FutureKind, S: Storage<K>> {
+pub struct Destroyer<K: FutureForm, S: Storage<K>> {
     storage: Arc<S>,
     sedimentree_id: SedimentreeId,
     _marker: PhantomData<K>,
 }
 
-impl<K: FutureKind, S: Storage<K>> Destroyer<K, S> {
+impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
     /// Create a new destroyer capability.
     ///
     /// This should only be called for local operations, never for peer requests.
@@ -64,7 +64,7 @@ impl<K: FutureKind, S: Storage<K>> Destroyer<K, S> {
     }
 }
 
-impl<K: FutureKind, S: Storage<K>> Clone for Destroyer<K, S> {
+impl<K: FutureForm, S: Storage<K>> Clone for Destroyer<K, S> {
     fn clone(&self) -> Self {
         Self {
             storage: self.storage.clone(),
@@ -74,7 +74,7 @@ impl<K: FutureKind, S: Storage<K>> Clone for Destroyer<K, S> {
     }
 }
 
-impl<K: FutureKind, S: Storage<K>> core::fmt::Debug for Destroyer<K, S> {
+impl<K: FutureForm, S: Storage<K>> core::fmt::Debug for Destroyer<K, S> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Destroyer")
             .field("sedimentree_id", &self.sedimentree_id)

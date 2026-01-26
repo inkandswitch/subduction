@@ -15,7 +15,7 @@ use futures::{
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
 };
-use futures_kind::{FutureKind, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable};
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
@@ -32,7 +32,7 @@ use crate::{
 
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]
-pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> {
+pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
     chan_id: u64,
     peer_id: PeerId,
     req_id_counter: Arc<AtomicU64>,
@@ -172,7 +172,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> WebSocket<T, K, O> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
     /// Create a new WebSocket connection.
     pub fn new(
         ws: WebSocketStream<T>,
@@ -467,7 +467,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K> + Clone> Clone
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K> + Clone> Clone
     for WebSocket<T, K, O>
 {
     fn clone(&self) -> Self {
@@ -487,7 +487,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K> + Clone> Cl
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> PartialEq
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
     for WebSocket<T, K, O>
 {
     fn eq(&self, other: &Self) -> bool {

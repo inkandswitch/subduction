@@ -14,14 +14,14 @@ use core::time::Duration;
 
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use crate::peer::id::PeerId;
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use thiserror::Error;
 
 /// A trait representing a connection to a peer in the network.
 ///
 /// It is assumed that a [`Connection`] is authenticated to a particular peer.
 /// Encrypting this channel is also strongly recommended.
-pub trait Connection<K: FutureKind + ?Sized>: Clone + PartialEq {
+pub trait Connection<K: FutureForm + ?Sized>: Clone + PartialEq {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 
@@ -57,7 +57,7 @@ pub trait Connection<K: FutureKind + ?Sized>: Clone + PartialEq {
     ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>>;
 }
 
-impl<T: Connection<K>, K: FutureKind> Connection<K> for Arc<T> {
+impl<T: Connection<K>, K: FutureForm> Connection<K> for Arc<T> {
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = T::RecvError;
@@ -93,7 +93,7 @@ impl<T: Connection<K>, K: FutureKind> Connection<K> for Arc<T> {
 }
 
 /// A trait for connections that can be re-established if they drop.
-pub trait Reconnect<K: FutureKind>: Connection<K> {
+pub trait Reconnect<K: FutureForm>: Connection<K> {
     /// A problem when creating the connection.
     type ConnectError: core::error::Error;
 
