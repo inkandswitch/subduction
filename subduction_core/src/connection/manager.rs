@@ -14,8 +14,8 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_lock::Mutex;
-use futures::stream::AbortHandle;
 use future_form::{FutureForm, Local, Sendable, future_form};
+use futures::stream::AbortHandle;
 
 use super::{Connection, message::Message};
 
@@ -263,8 +263,8 @@ impl<K: FutureForm> core::fmt::Debug for ManagerFuture<K> {
 mod tests {
     use super::*;
     use crate::connection::test_utils::MockConnection;
-    use futures::future::BoxFuture;
     use future_form::Sendable;
+    use futures::future::BoxFuture;
 
     /// A spawner that uses FuturesUnordered for testing (no actual spawning).
     struct TestSpawn;

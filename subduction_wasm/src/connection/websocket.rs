@@ -16,12 +16,12 @@ use core::{
 use sedimentree_core::collections::Map;
 
 use async_lock::Mutex;
+use future_form::Local;
 use futures::{
     FutureExt,
     channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
 };
-use future_form::Local;
 use subduction_core::{
     connection::{
         Connection,

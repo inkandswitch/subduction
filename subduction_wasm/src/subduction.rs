@@ -5,12 +5,12 @@ use core::{fmt::Debug, time::Duration};
 use sedimentree_core::collections::Map;
 
 use from_js_ref::FromJsRef;
+use future_form::Local;
 use futures::{
     FutureExt,
     future::{Either, select},
     stream::Aborted,
 };
-use future_form::Local;
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::{Blob, Digest},
@@ -454,7 +454,12 @@ impl WasmSubduction {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let (success, blobs, conn_errors) = self
             .core
-            .sync_with_peer(&to_ask.clone().into(), id.clone().into(), subscribe, timeout)
+            .sync_with_peer(
+                &to_ask.clone().into(),
+                id.clone().into(),
+                subscribe,
+                timeout,
+            )
             .await
             .map_err(WasmIoError::from)?;
 
@@ -494,7 +499,10 @@ impl WasmSubduction {
     ) -> Result<WasmPeerResultMap, WasmIoError> {
         tracing::debug!("WasmSubduction::sync_all");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let peer_map = self.core.sync_all(id.clone().into(), subscribe, timeout).await?;
+        let peer_map = self
+            .core
+            .sync_all(id.clone().into(), subscribe, timeout)
+            .await?;
         tracing::debug!("WasmSubduction::sync_all - done");
         Ok(WasmPeerResultMap(
             peer_map

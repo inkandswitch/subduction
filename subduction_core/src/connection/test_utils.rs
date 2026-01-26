@@ -4,8 +4,8 @@
 
 use core::time::Duration;
 
-use futures::FutureExt;
 use future_form::{FutureForm, Local, Sendable};
+use futures::FutureExt;
 
 use super::{
     Connection,

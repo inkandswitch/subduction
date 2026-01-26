@@ -11,9 +11,9 @@ use alloc::vec::Vec;
 use core::fmt;
 
 use ed25519_dalek::VerifyingKey;
+use future_form::Sendable;
 use futures::FutureExt;
 use futures::future::BoxFuture;
-use future_form::Sendable;
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,

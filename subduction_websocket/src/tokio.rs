@@ -2,12 +2,12 @@
 
 use core::time::Duration;
 
+use future_form::Sendable;
 use futures::{
     FutureExt,
     future::BoxFuture,
     stream::{AbortHandle, Abortable},
 };
-use future_form::Sendable;
 use subduction_core::connection::manager::Spawn;
 
 use crate::timeout::{TimedOut, Timeout};

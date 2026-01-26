@@ -9,8 +9,8 @@ use crate::{
 };
 use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
 use core::time::Duration;
-use futures::{FutureExt, future::BoxFuture};
 use future_form::Sendable;
+use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
         Connection, Reconnect,

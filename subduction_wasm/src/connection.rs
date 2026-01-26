@@ -9,8 +9,8 @@ use alloc::string::ToString;
 use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
-use futures::{FutureExt, future::LocalBoxFuture};
 use future_form::Local;
+use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::Promise;
 use subduction_core::{
     connection::{
