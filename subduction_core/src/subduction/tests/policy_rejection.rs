@@ -135,7 +135,7 @@ impl StoragePolicy<Sendable> for AllowSpecificIdPolicy {
 }
 
 fn make_test_blob(data: &[u8]) -> Blob {
-    Blob::new(data.to_vec().into())
+    Blob::new(data.to_vec())
 }
 
 fn make_loose_commit(data: &[u8]) -> (sedimentree_core::loose_commit::LooseCommit, Blob) {
@@ -309,8 +309,8 @@ async fn multiple_rejections_all_fail_cleanly() {
         );
 
     // Try multiple operations - all should fail
-    for i in 0..5 {
-        let id = SedimentreeId::new([i as u8; 32]);
+    for i in 0..5u8 {
+        let id = SedimentreeId::new([i; 32]);
         let tree = Sedimentree::default();
         let result = subduction.add_sedimentree(id, tree, Vec::new()).await;
         assert!(result.is_err(), "Attempt {i} should be rejected");

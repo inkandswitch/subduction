@@ -868,6 +868,7 @@ mod tests {
                 .for_each(|(server_ts, client_ts)| {
                     let mut dc = DriftCorrection::new();
                     if dc.adjust(*server_ts, *client_ts) {
+                        #[allow(clippy::cast_possible_truncation)]
                         let max_drift = MAX_PLAUSIBLE_DRIFT.as_secs() as i32;
                         assert!(dc.offset_secs().abs() <= max_drift);
                     }

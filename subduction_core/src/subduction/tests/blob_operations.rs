@@ -1,4 +1,4 @@
-//! Tests for blob operations (get, get_blobs).
+//! Tests for blob operations (`get`, `get_blobs`).
 
 use super::common::new_test_subduction;
 use sedimentree_core::{blob::Digest, id::SedimentreeId};

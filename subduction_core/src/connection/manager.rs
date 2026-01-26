@@ -266,7 +266,7 @@ mod tests {
     use future_form::Sendable;
     use futures::future::BoxFuture;
 
-    /// A spawner that uses FuturesUnordered for testing (no actual spawning).
+    /// A spawner that uses `FuturesUnordered` for testing (no actual spawning).
     struct TestSpawn;
 
     impl Spawn<Sendable> for TestSpawn {

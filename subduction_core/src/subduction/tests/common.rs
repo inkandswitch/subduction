@@ -35,7 +35,7 @@ impl Spawn<future_form::Local> for TestSpawn {
     }
 }
 
-/// A spawner that uses tokio::spawn for tests that need actual task execution.
+/// A spawner that uses `tokio::spawn` for tests that need actual task execution.
 pub(super) struct TokioSpawn;
 
 impl Spawn<Sendable> for TokioSpawn {
