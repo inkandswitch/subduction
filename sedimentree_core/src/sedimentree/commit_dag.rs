@@ -501,10 +501,14 @@ mod tests {
     use crate::{
         blob::BlobMeta,
         collections::{Map, Set},
-        commit::CountLeadingZeroBytes,
         digest::Digest,
         loose_commit::LooseCommit,
     };
+
+    /// Simple deterministic byte generator for tests (no rand dependency needed).
+    fn deterministic_bytes(seed: u64) -> [u8; 32] {
+        *blake3::hash(&seed.to_le_bytes()).as_bytes()
+    }
 
     fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest<LooseCommit> {
         let mut byte_arr: [u8; 32] = rng.r#gen::<[u8; 32]>();
@@ -706,10 +710,9 @@ mod tests {
     // }
 
     #[test]
-    #[cfg(feature = "std")]
     fn simplify_block_boundaries_without_fragments() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut SmallRng::seed_from_u64(42),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   0   |,
@@ -722,10 +725,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "std")]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut SmallRng::seed_from_u64(43),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   2   |,
@@ -738,9 +740,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "std")]
     fn test_parents() {
-        let mut rng = rand::thread_rng();
+        let mut rng = SmallRng::seed_from_u64(44);
         let a = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let c = LooseCommit::new(

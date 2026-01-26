@@ -32,7 +32,7 @@ arbitrary = { workspace = true, optional = false, features = ["derive"] }
 bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
 dhat = { workspace = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["small_rng"] }
 tracing-subscriber = { workspace = true }
 
 [[bench]]

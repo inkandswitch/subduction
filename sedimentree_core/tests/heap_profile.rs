@@ -18,28 +18,28 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 mod generators {
     use super::*;
 
     pub(crate) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
         Digest::from_bytes(bytes)
     }
 
     fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
         let mut bytes = [0u8; 32];
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
         Digest::from_bytes(bytes)
     }
 
     fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         #[allow(clippy::indexing_slicing)]
         rng.fill(&mut bytes[zeros..]);
         #[allow(clippy::indexing_slicing)]
