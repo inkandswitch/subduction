@@ -34,12 +34,18 @@ sequenceDiagram
 
     A->>B: BatchSyncRequest { summary }
     Note right of B: ✓ Check authorization
-    B->>A: BatchSyncResponse { diff }
+    B->>A: BatchSyncResponse { Signed<Commit>, Signed<Fragment> }
+    Note left of A: ✓ Verify signatures
+    Note left of A: ✓ Author from signature
+    Note left of A: ✓ Authorize by author
 ```
 
 **Security properties:**
 - Authorization checked before returning data
-- Content-addressed integrity (hash verification)
+- **Signed payloads** — Commits and fragments are `Signed<T>` with author signature
+- **Author verification** — Author identity comes from cryptographic signature, not sender claim
+- Content-addressed integrity (BLAKE3 hash verification)
+- CAS storage keyed by digest — prevents tampering
 - No information leak on unauthorized request (empty diff)
 
 ## Incremental Sync
@@ -49,12 +55,20 @@ sequenceDiagram
     participant A as Sender
     participant B as Receiver
 
-    A->>B: LooseCommit { commit, blob }
-    Note right of B: ✓ Check authorization
+    A->>B: LooseCommit { Signed<Commit>, blob }
+    Note right of B: ✓ Verify Ed25519 signature
+    Note right of B: ✓ Extract author from signature
+    Note right of B: ✓ Authorize by author (not sender)
     Note right of B: ✓ Verify content hash
 ```
 
 **Security properties:**
-- Authorization checked before accepting
+- **Signature verification** — Ed25519 signature verified before processing
+- **Author from signature** — Author identity is cryptographic, not trusted from sender
+- **Authorization by author** — Policy checks author identity, sender is just transport
 - Content integrity via BLAKE3 digest
+- CAS storage keyed by digest — deduplication and tamper detection
 - Idempotent (duplicates harmless)
+
+> [!NOTE]
+> The sender (connection peer) may differ from the author (signature issuer). A peer can relay data signed by others. Authorization is always checked against the _author_, not the _sender_. This enables multi-hop forwarding while maintaining authorship accountability.

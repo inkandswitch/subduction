@@ -56,12 +56,12 @@ struct BatchSyncResponse {
 }
 
 struct SyncDiff {
-    missing_commits: Vec<(LooseCommit, Blob)>, // Commits requester lacks
-    missing_fragments: Vec<(Fragment, Blob)>,  // Fragments requester lacks
+    missing_commits: Vec<(Signed<LooseCommit>, Blob)>,  // Commits requester lacks
+    missing_fragments: Vec<(Signed<Fragment>, Blob)>,   // Fragments requester lacks
 }
 ```
 
-The response includes both metadata and blob data, so the requester can store everything immediately.
+The response includes signed metadata and blob data, so the requester can verify authorship and store everything immediately. See [protocol.md](../protocol.md) for the `Signed<T>` envelope format.
 
 ## Sync Flow
 
@@ -163,14 +163,22 @@ let response = conn.call(
     Some(timeout),
 ).await?;
 
-// Store the received data
-for (commit, blob) in response.diff.missing_commits {
-    storage.save_loose_commit(id, commit).await?;
-    storage.save_blob(blob).await?;
+// Verify and store the received data
+for (signed_commit, blob) in response.diff.missing_commits {
+    // Verify signature; author extracted from signature, not sender
+    let verified = signed_commit.verify()?;
+    let putter = policy.authorize_put(sender, verified.author(), id).await?;
+
+    // CAS storage: returns digest, keyed by content hash
+    putter.save_loose_commit(verified).await?;
+    putter.save_blob(blob).await?;
 }
-for (fragment, blob) in response.diff.missing_fragments {
-    storage.save_fragment(id, fragment).await?;
-    storage.save_blob(blob).await?;
+for (signed_fragment, blob) in response.diff.missing_fragments {
+    let verified = signed_fragment.verify()?;
+    let putter = policy.authorize_put(sender, verified.author(), id).await?;
+
+    putter.save_fragment(verified).await?;
+    putter.save_blob(blob).await?;
 }
 // If subscribe: true, we're now subscribed for incremental updates
 ```

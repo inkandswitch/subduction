@@ -35,24 +35,26 @@ Changes propagate only to peers who have subscribed to that sedimentree.
 
 ```rust
 Message::LooseCommit {
-    id: SedimentreeId,     // Which sedimentree this commit belongs to
-    commit: LooseCommit,   // The commit metadata
-    blob: Blob,            // The commit's data
+    id: SedimentreeId,             // Which sedimentree this commit belongs to
+    commit: Signed<LooseCommit>,   // Signed commit metadata
+    blob: Blob,                    // The commit's data
 }
 ```
 
-A loose commit is a change that hasn't yet been rolled into a fragment. It includes:
-- Content digest (BLAKE3 hash of the blob)
-- Parent commit references
-- Blob metadata (size, etc.)
+A loose commit is a change that hasn't yet been rolled into a fragment. The `Signed<LooseCommit>` envelope includes:
+- Ed25519 signature from the author
+- Author's verifying key (used for authorization)
+- CBOR-encoded commit payload (content digest, parent references, blob metadata)
+
+See [protocol.md](../protocol.md) for the `Signed<T>` envelope format.
 
 ### Fragment (Sender → Receivers)
 
 ```rust
 Message::Fragment {
-    id: SedimentreeId,    // Which sedimentree this fragment belongs to
-    fragment: Fragment,   // The fragment metadata
-    blob: Blob,           // The fragment's data
+    id: SedimentreeId,          // Which sedimentree this fragment belongs to
+    fragment: Signed<Fragment>, // Signed fragment metadata
+    blob: Blob,                 // The fragment's data
 }
 ```
 
@@ -188,16 +190,18 @@ if depth > Depth(0) {
 ### Receiving a Commit
 
 ```rust
-let Message::LooseCommit { id, commit, blob } = msg;
+let Message::LooseCommit { id, signed_commit, blob } = msg;
 
-// Check authorization
-let author = /* extract from signed payload or sender */;
-policy.authorize_put(sender_peer_id, author, id).await?;
+// Verify signature; author extracted from signature, not sender
+let verified = signed_commit.verify()?;
+let author = verified.author();
 
-// Store locally
-storage.save_loose_commit(id, commit.clone()).await?;
-storage.save_blob(blob.clone()).await?;
-sedimentree.add_commit(commit);
+// Check authorization (author from signature, not sender)
+let putter = policy.authorize_put(sender_peer_id, author, id).await?;
+
+// CAS storage: keyed by digest
+putter.save_loose_commit(verified).await?;
+putter.save_blob(blob.clone()).await?;
 
 // Forward to subscribed and authorized peers (excluding sender)
 let subscriber_conns = get_authorized_subscriber_conns(id, &sender_peer_id).await;
@@ -209,18 +213,21 @@ for conn in subscriber_conns {
 ### Receiving a Fragment
 
 ```rust
-let Message::Fragment { id, fragment, blob } = msg;
+let Message::Fragment { id, signed_fragment, blob } = msg;
+
+// Verify signature; author extracted from signature
+let verified = signed_fragment.verify()?;
+let author = verified.author();
 
 // Check authorization
-policy.authorize_put(sender_peer_id, author, id).await?;
+let putter = policy.authorize_put(sender_peer_id, author, id).await?;
 
-// Store fragment
-storage.save_fragment(id, fragment.clone()).await?;
-storage.save_blob(blob.clone()).await?;
-sedimentree.add_fragment(fragment);
+// CAS storage: keyed by digest
+putter.save_fragment(verified).await?;
+putter.save_blob(blob.clone()).await?;
 
 // Prune loose commits that are now covered by this fragment
-sedimentree.prune_commits_covered_by(&fragment);
+sedimentree.prune_commits_covered_by(&verified.payload());
 
 // Forward to subscribed and authorized peers (excluding sender)
 let subscriber_conns = get_authorized_subscriber_conns(id, &sender_peer_id).await;
