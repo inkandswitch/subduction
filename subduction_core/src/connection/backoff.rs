@@ -110,7 +110,7 @@ impl Backoff {
     /// isn't uniform but is sufficient for jitter purposes.
     #[allow(clippy::cast_precision_loss)] // Acceptable for jitter calculation
     fn pseudo_random(&self) -> f64 {
-        // Linear congruential generator step
+        // Linear congruential generator step using POSIX-style LCG constants
         let hash = self.attempt.wrapping_mul(1_103_515_245).wrapping_add(12345);
         (hash % 100) as f64 / 100.0
     }
