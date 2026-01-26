@@ -7,12 +7,17 @@ use alloc::sync::Arc;
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
     collections::Set,
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+
+type CommitDigest = Digest<LooseCommit>;
+type FragmentDigest = Digest<Fragment>;
+type BlobDigest = Digest<Blob>;
 
 use super::traits::Storage;
 use super::{destroyer::Destroyer, fetcher::Fetcher, putter::Putter};
@@ -122,7 +127,7 @@ impl<S, P> StoragePowerbox<S, P> {
     #[must_use]
     pub fn load_blob<K: FutureForm>(
         &self,
-        digest: Digest,
+        digest: BlobDigest,
     ) -> K::Future<'_, Result<Option<Blob>, S::Error>>
     where
         S: Storage<K>,
@@ -135,7 +140,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// This is for saving blobs received from peers or created locally.
     /// Blobs are content-addressed and shared across sedimentrees.
     #[must_use]
-    pub fn save_blob<K: FutureForm>(&self, blob: Blob) -> K::Future<'_, Result<Digest, S::Error>>
+    pub fn save_blob<K: FutureForm>(&self, blob: Blob) -> K::Future<'_, Result<BlobDigest, S::Error>>
     where
         S: Storage<K>,
     {
@@ -164,7 +169,7 @@ impl<S, P> StoragePowerbox<S, P> {
     pub fn load_loose_commits<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<alloc::vec::Vec<(Digest, Signed<LooseCommit>)>, S::Error>>
+    ) -> K::Future<'_, Result<alloc::vec::Vec<(CommitDigest, Signed<LooseCommit>)>, S::Error>>
     where
         S: Storage<K>,
     {
@@ -180,7 +185,7 @@ impl<S, P> StoragePowerbox<S, P> {
     pub fn load_fragments<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<alloc::vec::Vec<(Digest, Signed<Fragment>)>, S::Error>>
+    ) -> K::Future<'_, Result<alloc::vec::Vec<(FragmentDigest, Signed<Fragment>)>, S::Error>>
     where
         S: Storage<K>,
     {

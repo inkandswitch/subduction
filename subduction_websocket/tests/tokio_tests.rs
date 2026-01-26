@@ -4,8 +4,9 @@ use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta, Digest},
+    blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
+    digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
@@ -46,7 +47,7 @@ fn random_blob() -> Blob {
     Blob::arbitrary(&mut Unstructured::new(&bytes)).expect("arbitrary blob")
 }
 
-fn random_digest() -> Digest {
+fn random_digest() -> Digest<LooseCommit> {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     #[allow(clippy::expect_used)]

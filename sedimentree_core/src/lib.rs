@@ -25,6 +25,7 @@ pub mod cbor;
 pub mod collections;
 pub mod commit;
 pub mod depth;
+pub mod digest;
 pub mod fragment;
 pub mod hex;
 pub mod id;

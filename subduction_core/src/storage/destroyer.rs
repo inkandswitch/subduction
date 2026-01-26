@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 use alloc::sync::Arc;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Digest, id::SedimentreeId};
+use sedimentree_core::{blob::Blob, digest::Digest, id::SedimentreeId};
 
 use super::traits::Storage;
 
@@ -61,7 +61,7 @@ impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
 
     /// Delete a blob by its digest.
     #[must_use]
-    pub fn delete_blob(&self, digest: Digest) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn delete_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.delete_blob(digest)
     }
 }

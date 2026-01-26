@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 
-use crate::blob::Digest;
+use crate::{digest::Digest, loose_commit::LooseCommit};
 
 /// The maximum depth of strata that a [`Sedimentree`] can go to.
 pub const MAX_STRATA_DEPTH: Depth = Depth(2);
@@ -44,17 +44,19 @@ impl core::fmt::Display for Depth {
 /// A strategy for determining the depth of a commit based on its digest.
 pub trait DepthMetric {
     /// Calculates the depth of a digest using this strategy.
-    fn to_depth(&self, digest: Digest) -> Depth;
+    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth;
 }
 
-impl<Digestish: From<Digest>, Depthish: Into<Depth>> DepthMetric for fn(Digestish) -> Depthish {
-    fn to_depth(&self, digest: Digest) -> Depth {
+impl<Digestish: From<Digest<LooseCommit>>, Depthish: Into<Depth>> DepthMetric
+    for fn(Digestish) -> Depthish
+{
+    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
         self(Digestish::from(digest)).into()
     }
 }
 
 impl<T: DepthMetric> DepthMetric for Box<T> {
-    fn to_depth(&self, digest: Digest) -> Depth {
+    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
         T::to_depth(self, digest)
     }
 }

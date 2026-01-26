@@ -3,7 +3,8 @@
 use alloc::vec::Vec;
 
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -52,7 +53,7 @@ pub enum Message {
 
     /// A request for blobs by their [`Digest`]s.
     #[n(2)]
-    BlobsRequest(#[n(0)] Vec<Digest>),
+    BlobsRequest(#[n(0)] Vec<Digest<Blob>>),
 
     /// A response to a [`BlobRequest`].
     #[n(3)]
@@ -243,7 +244,7 @@ mod tests {
         async fn test_loose_commit_has_no_request_id() {
             let signer = test_signer();
             let commit = LooseCommit::new(
-                Digest::from([2u8; 32]),
+                Digest::from_bytes([2u8; 32]),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
@@ -262,7 +263,7 @@ mod tests {
         async fn test_fragment_has_no_request_id() {
             let signer = test_signer();
             let fragment = Fragment::new(
-                Digest::from([2u8; 32]),
+                Digest::from_bytes([2u8; 32]),
                 Vec::new(),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
@@ -280,7 +281,7 @@ mod tests {
 
         #[test]
         fn test_blobs_request_has_no_request_id() {
-            let msg = Message::BlobsRequest(vec![Digest::from([1u8; 32])]);
+            let msg = Message::BlobsRequest(vec![Digest::from_bytes([1u8; 32])]);
             assert_eq!(msg.request_id(), None);
         }
 
@@ -464,7 +465,7 @@ mod tests {
         async fn test_sync_diff_with_commits() {
             let signer = test_signer();
             let commit = LooseCommit::new(
-                Digest::from([1u8; 32]),
+                Digest::from_bytes([1u8; 32]),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
@@ -490,7 +491,7 @@ mod tests {
         async fn test_sync_diff_with_fragments() {
             let signer = test_signer();
             let fragment = Fragment::new(
-                Digest::from([2u8; 32]),
+                Digest::from_bytes([2u8; 32]),
                 Vec::new(),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),

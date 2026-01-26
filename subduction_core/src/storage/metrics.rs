@@ -10,12 +10,18 @@ use alloc::vec::Vec;
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
     collections::Set,
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+
+// Type aliases for clarity
+type CommitDigest = Digest<LooseCommit>;
+type FragmentDigest = Digest<Fragment>;
+type BlobDigest = Digest<Blob>;
 
 use crate::{
     crypto::signed::Signed,
@@ -202,7 +208,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         loose_commit: Signed<LooseCommit>,
-    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+    ) -> K::Future<'_, Result<CommitDigest, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self
@@ -217,7 +223,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: CommitDigest,
     ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
@@ -230,7 +236,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn list_commit_digests(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<Digest>, Self::Error>> {
+    ) -> K::Future<'_, Result<Set<CommitDigest>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.list_commit_digests(sedimentree_id).await;
@@ -245,7 +251,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest, Signed<LooseCommit>)>, Self::Error>> {
+    ) -> K::Future<'_, Result<Vec<(CommitDigest, Signed<LooseCommit>)>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_loose_commits(sedimentree_id).await;
@@ -260,7 +266,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: CommitDigest,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
@@ -294,7 +300,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         &self,
         sedimentree_id: SedimentreeId,
         fragment: Signed<Fragment>,
-    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+    ) -> K::Future<'_, Result<FragmentDigest, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_fragment(sedimentree_id, fragment).await;
@@ -306,7 +312,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: FragmentDigest,
     ) -> K::Future<'_, Result<Option<Signed<Fragment>>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
@@ -319,7 +325,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn list_fragment_digests(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Set<Digest>, Self::Error>> {
+    ) -> K::Future<'_, Result<Set<FragmentDigest>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.list_fragment_digests(sedimentree_id).await;
@@ -334,7 +340,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, Self::Error>> {
+    ) -> K::Future<'_, Result<Vec<(FragmentDigest, Signed<Fragment>)>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_fragments(sedimentree_id).await;
@@ -346,7 +352,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: FragmentDigest,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
@@ -370,7 +376,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
 
     // ==================== Blobs (CAS) ====================
 
-    fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest, Self::Error>> {
+    fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<BlobDigest, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_blob(blob).await;
@@ -379,7 +385,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         })
     }
 
-    fn load_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
+    fn load_blob(&self, blob_digest: BlobDigest) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_blob(blob_digest).await;
@@ -388,7 +394,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         })
     }
 
-    fn delete_blob(&self, blob_digest: Digest) -> K::Future<'_, Result<(), Self::Error>> {
+    fn delete_blob(&self, blob_digest: BlobDigest) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_blob(blob_digest).await;
@@ -404,7 +410,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         sedimentree_id: SedimentreeId,
         commit: Signed<LooseCommit>,
         blob: Blob,
-    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+    ) -> K::Future<'_, Result<BlobDigest, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self
@@ -424,7 +430,7 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         sedimentree_id: SedimentreeId,
         fragment: Signed<Fragment>,
         blob: Blob,
-    ) -> K::Future<'_, Result<Digest, Self::Error>> {
+    ) -> K::Future<'_, Result<BlobDigest, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self

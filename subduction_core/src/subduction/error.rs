@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
-use sedimentree_core::blob::Digest;
+use sedimentree_core::{blob::Blob, digest::Digest};
 use thiserror::Error;
 
 use crate::{connection::Connection, storage::Storage};
@@ -55,7 +55,7 @@ pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F>> {
 
     /// Some requested blobs were missing locally.
     #[error("Missing blobs: {0:?}")]
-    MissingBlobs(Vec<Digest>),
+    MissingBlobs(Vec<Digest<Blob>>),
 }
 
 /// An error that can occur while handling a batch sync request.
@@ -67,7 +67,7 @@ pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
 
     /// Missing blobs associated with local fragments or commits.
     #[error("Missing blobs associated to local fragments & commits: {0:?}")]
-    MissingBlobs(Vec<Digest>),
+    MissingBlobs(Vec<Digest<Blob>>),
 
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]

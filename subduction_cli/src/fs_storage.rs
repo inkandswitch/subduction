@@ -7,7 +7,8 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use sedimentree_core::collections::Set;
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -19,6 +20,10 @@ use subduction_core::{
     storage::{BatchResult, Storage},
 };
 use thiserror::Error;
+
+type CommitDigest = Digest<LooseCommit>;
+type FragmentDigest = Digest<Fragment>;
+type BlobDigest = Digest<Blob>;
 
 /// Errors that can occur during filesystem storage operations.
 #[derive(Debug, Error)]
@@ -109,36 +114,48 @@ impl FsStorage {
         self.tree_path(id).join("fragments")
     }
 
-    fn commit_path(&self, id: SedimentreeId, digest: Digest) -> PathBuf {
+    fn commit_path(&self, id: SedimentreeId, digest: CommitDigest) -> PathBuf {
         self.commits_dir(id)
             .join(format!("{}.cbor", hex::encode(digest.as_bytes())))
     }
 
-    fn fragment_path(&self, id: SedimentreeId, digest: Digest) -> PathBuf {
+    fn fragment_path(&self, id: SedimentreeId, digest: FragmentDigest) -> PathBuf {
         self.fragments_dir(id)
             .join(format!("{}.cbor", hex::encode(digest.as_bytes())))
     }
 
-    fn blob_path(&self, digest: Digest) -> PathBuf {
+    fn blob_path(&self, digest: BlobDigest) -> PathBuf {
         let hex = hex::encode(digest.as_bytes());
         self.root.join("blobs").join(hex)
     }
 
-    fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest> {
+    fn commit_digest(signed: &Signed<LooseCommit>) -> Option<CommitDigest> {
         signed.decode_payload().ok().map(|c| c.digest())
     }
 
-    fn fragment_digest(signed: &Signed<Fragment>) -> Option<Digest> {
+    fn fragment_digest(signed: &Signed<Fragment>) -> Option<FragmentDigest> {
         signed.decode_payload().ok().map(|f| f.digest())
     }
 
-    fn parse_digest_from_filename(name: &str) -> Option<Digest> {
+    fn parse_commit_digest_from_filename(name: &str) -> Option<CommitDigest> {
         let hex_str = name.strip_suffix(".cbor")?;
         let bytes = hex::decode(hex_str).ok()?;
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
-            Some(Digest::from(arr))
+            Some(Digest::from_bytes(arr))
+        } else {
+            None
+        }
+    }
+
+    fn parse_fragment_digest_from_filename(name: &str) -> Option<FragmentDigest> {
+        let hex_str = name.strip_suffix(".cbor")?;
+        let bytes = hex::decode(hex_str).ok()?;
+        if bytes.len() == 32 {
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            Some(Digest::from_bytes(arr))
         } else {
             None
         }
@@ -203,7 +220,7 @@ impl Storage<Sendable> for FsStorage {
         &self,
         sedimentree_id: SedimentreeId,
         loose_commit: Signed<LooseCommit>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<CommitDigest, Self::Error>> {
         Sendable::from_future(async move {
             let digest = Self::commit_digest(&loose_commit)
                 .ok_or(FsStorageError::DigestComputationFailed)?;
@@ -230,7 +247,7 @@ impl Storage<Sendable> for FsStorage {
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: CommitDigest,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Signed<LooseCommit>>, Self::Error>>
     {
         Sendable::from_future(async move {
@@ -252,7 +269,7 @@ impl Storage<Sendable> for FsStorage {
     fn list_commit_digests(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<Digest>, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<CommitDigest>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::list_commit_digests");
 
@@ -267,7 +284,7 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Some(name) = entry.file_name().to_str()
-                    && let Some(digest) = Self::parse_digest_from_filename(name)
+                    && let Some(digest) = Self::parse_commit_digest_from_filename(name)
                 {
                     digests.insert(digest);
                 }
@@ -280,7 +297,7 @@ impl Storage<Sendable> for FsStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest, Signed<LooseCommit>)>, Self::Error>>
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(CommitDigest, Signed<LooseCommit>)>, Self::Error>>
     {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::load_loose_commits");
@@ -296,7 +313,7 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Some(name) = entry.file_name().to_str()
-                    && let Some(digest) = Self::parse_digest_from_filename(name)
+                    && let Some(digest) = Self::parse_commit_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
                     let signed: Signed<LooseCommit> = minicbor::decode(&data)
@@ -312,7 +329,7 @@ impl Storage<Sendable> for FsStorage {
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: CommitDigest,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, ?digest, "FsStorage::delete_loose_commit");
@@ -352,7 +369,7 @@ impl Storage<Sendable> for FsStorage {
         &self,
         sedimentree_id: SedimentreeId,
         fragment: Signed<Fragment>,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<FragmentDigest, Self::Error>> {
         Sendable::from_future(async move {
             let digest =
                 Self::fragment_digest(&fragment).ok_or(FsStorageError::DigestComputationFailed)?;
@@ -379,7 +396,7 @@ impl Storage<Sendable> for FsStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: FragmentDigest,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Signed<Fragment>>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, ?digest, "FsStorage::load_fragment");
@@ -400,7 +417,7 @@ impl Storage<Sendable> for FsStorage {
     fn list_fragment_digests(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<Digest>, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Set<FragmentDigest>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::list_fragment_digests");
 
@@ -415,7 +432,7 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Some(name) = entry.file_name().to_str()
-                    && let Some(digest) = Self::parse_digest_from_filename(name)
+                    && let Some(digest) = Self::parse_fragment_digest_from_filename(name)
                 {
                     digests.insert(digest);
                 }
@@ -428,7 +445,7 @@ impl Storage<Sendable> for FsStorage {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, Self::Error>>
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(FragmentDigest, Signed<Fragment>)>, Self::Error>>
     {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::load_fragments");
@@ -444,7 +461,7 @@ impl Storage<Sendable> for FsStorage {
 
             while let Some(entry) = entries.next_entry().await? {
                 if let Some(name) = entry.file_name().to_str()
-                    && let Some(digest) = Self::parse_digest_from_filename(name)
+                    && let Some(digest) = Self::parse_fragment_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
                     let signed: Signed<Fragment> = minicbor::decode(&data)
@@ -460,7 +477,7 @@ impl Storage<Sendable> for FsStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: FragmentDigest,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, ?digest, "FsStorage::delete_fragment");
@@ -499,9 +516,9 @@ impl Storage<Sendable> for FsStorage {
     fn save_blob(
         &self,
         blob: Blob,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<BlobDigest, Self::Error>> {
         Sendable::from_future(async move {
-            let digest = Digest::hash(blob.contents());
+            let digest: BlobDigest = Digest::hash_bytes(blob.contents());
             tracing::debug!(?digest, "FsStorage::save_blob");
 
             let blob_path = self.blob_path(digest);
@@ -519,7 +536,7 @@ impl Storage<Sendable> for FsStorage {
 
     fn load_blob(
         &self,
-        blob_digest: Digest,
+        blob_digest: BlobDigest,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?blob_digest, "FsStorage::load_blob");
@@ -535,7 +552,7 @@ impl Storage<Sendable> for FsStorage {
 
     fn delete_blob(
         &self,
-        blob_digest: Digest,
+        blob_digest: BlobDigest,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?blob_digest, "FsStorage::delete_blob");
@@ -558,7 +575,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
         commit: Signed<LooseCommit>,
         blob: Blob,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<BlobDigest, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::save_commit_with_blob");
             let blob_digest = Storage::<Sendable>::save_blob(self, blob).await?;
@@ -572,7 +589,7 @@ impl Storage<Sendable> for FsStorage {
         sedimentree_id: SedimentreeId,
         fragment: Signed<Fragment>,
         blob: Blob,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<BlobDigest, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::save_fragment_with_blob");
             let blob_digest = Storage::<Sendable>::save_blob(self, blob).await?;
@@ -655,7 +672,7 @@ impl Storage<Local> for FsStorage {
         &self,
         sedimentree_id: SedimentreeId,
         loose_commit: Signed<LooseCommit>,
-    ) -> <Local as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<CommitDigest, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::save_loose_commit(
             self,
             sedimentree_id,
@@ -666,7 +683,7 @@ impl Storage<Local> for FsStorage {
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: CommitDigest,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<Signed<LooseCommit>>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_loose_commit(
             self,
@@ -678,7 +695,7 @@ impl Storage<Local> for FsStorage {
     fn list_commit_digests(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Set<Digest>, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<Set<CommitDigest>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::list_commit_digests(
             self,
             sedimentree_id,
@@ -688,7 +705,7 @@ impl Storage<Local> for FsStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest, Signed<LooseCommit>)>, Self::Error>>
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(CommitDigest, Signed<LooseCommit>)>, Self::Error>>
     {
         Local::from_future(<Self as Storage<Sendable>>::load_loose_commits(
             self,
@@ -699,7 +716,7 @@ impl Storage<Local> for FsStorage {
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: CommitDigest,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::delete_loose_commit(
             self,
@@ -722,7 +739,7 @@ impl Storage<Local> for FsStorage {
         &self,
         sedimentree_id: SedimentreeId,
         fragment: Signed<Fragment>,
-    ) -> <Local as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<FragmentDigest, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::save_fragment(
             self,
             sedimentree_id,
@@ -733,7 +750,7 @@ impl Storage<Local> for FsStorage {
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: FragmentDigest,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<Signed<Fragment>>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_fragment(
             self,
@@ -745,7 +762,7 @@ impl Storage<Local> for FsStorage {
     fn list_fragment_digests(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Set<Digest>, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<Set<FragmentDigest>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::list_fragment_digests(
             self,
             sedimentree_id,
@@ -755,7 +772,7 @@ impl Storage<Local> for FsStorage {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, Self::Error>>
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(FragmentDigest, Signed<Fragment>)>, Self::Error>>
     {
         Local::from_future(<Self as Storage<Sendable>>::load_fragments(
             self,
@@ -766,7 +783,7 @@ impl Storage<Local> for FsStorage {
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        digest: Digest,
+        digest: FragmentDigest,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::delete_fragment(
             self,
@@ -788,20 +805,20 @@ impl Storage<Local> for FsStorage {
     fn save_blob(
         &self,
         blob: Blob,
-    ) -> <Local as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<BlobDigest, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::save_blob(self, blob))
     }
 
     fn load_blob(
         &self,
-        blob_digest: Digest,
+        blob_digest: BlobDigest,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_blob(self, blob_digest))
     }
 
     fn delete_blob(
         &self,
-        blob_digest: Digest,
+        blob_digest: BlobDigest,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::delete_blob(self, blob_digest))
     }
@@ -811,7 +828,7 @@ impl Storage<Local> for FsStorage {
         sedimentree_id: SedimentreeId,
         commit: Signed<LooseCommit>,
         blob: Blob,
-    ) -> <Local as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<BlobDigest, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::save_commit_with_blob(
             self,
             sedimentree_id,
@@ -825,7 +842,7 @@ impl Storage<Local> for FsStorage {
         sedimentree_id: SedimentreeId,
         fragment: Signed<Fragment>,
         blob: Blob,
-    ) -> <Local as FutureForm>::Future<'_, Result<Digest, Self::Error>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<BlobDigest, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::save_fragment_with_blob(
             self,
             sedimentree_id,

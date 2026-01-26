@@ -7,25 +7,27 @@ use core::{error::Error, mem::take, num::NonZero};
 use thiserror::Error;
 
 use crate::{
-    blob::{BlobMeta, Digest},
+    blob::BlobMeta,
     depth::{Depth, DepthMetric},
+    digest::Digest,
     fragment::Fragment,
+    loose_commit::LooseCommit,
 };
 
 /// An error indicating that a commit is missing from the store.
 #[derive(Debug, Clone, Copy, Error, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[error("missing commit: {0}")]
-pub struct MissingCommitError(Digest);
+pub struct MissingCommitError(Digest<LooseCommit>);
 
 /// A trait for types that have parent hashes.
 pub trait Parents {
     /// The parent digests of this node.
-    fn parents(&self) -> Set<Digest>;
+    fn parents(&self) -> Set<Digest<LooseCommit>>;
 }
 
 #[allow(clippy::implicit_hasher)]
-impl Parents for Set<Digest> {
-    fn parents(&self) -> Set<Digest> {
+impl Parents for Set<Digest<LooseCommit>> {
+    fn parents(&self) -> Set<Digest<LooseCommit>> {
         self.clone()
     }
 }
@@ -55,7 +57,7 @@ pub trait CommitStore<'a> {
     /// # Errors
     ///
     /// Returns a [`Self::LookupError`] if the lookup fails.
-    fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError>;
+    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError>;
 
     /// Constructs a fragment of the commit history starting from the given head digest,
     ///
@@ -64,23 +66,23 @@ pub trait CommitStore<'a> {
     /// Returns a [`Self::LookupError`] if any lookup fails.
     fn fragment<D: DepthMetric>(
         &self,
-        head_digest: Digest,
-        known_fragment_states: &Map<Digest, FragmentState<Self::Node>>,
+        head_digest: Digest<LooseCommit>,
+        known_fragment_states: &Map<Digest<LooseCommit>, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<FragmentState<Self::Node>, FragmentError<'a, Self>> {
         let min_depth = strategy.to_depth(head_digest);
 
-        let mut visited: Set<Digest> = Set::from([head_digest]);
-        let mut members: Set<Digest> = Set::from([head_digest]);
+        let mut visited: Set<Digest<LooseCommit>> = Set::from([head_digest]);
+        let mut members: Set<Digest<LooseCommit>> = Set::from([head_digest]);
 
-        let mut boundary: Map<Digest, Self::Node> = Map::new();
-        let mut checkpoints: Set<Digest> = Set::new();
+        let mut boundary: Map<Digest<LooseCommit>, Self::Node> = Map::new();
+        let mut checkpoints: Set<Digest<LooseCommit>> = Set::new();
 
         let head_change = self
             .lookup(head_digest)
             .map_err(|e| FragmentError::LookupError(e))?
             .ok_or_else(|| FragmentError::MissingCommit(MissingCommitError(head_digest)))?;
-        let mut horizon: Set<Digest> = head_change.parents();
+        let mut horizon: Set<Digest<LooseCommit>> = head_change.parents();
 
         while !horizon.is_empty() {
             let local_horizon = take(&mut horizon);
@@ -111,7 +113,7 @@ pub trait CommitStore<'a> {
 
         // Cleanup
 
-        let mut cleanup_horizon: Vec<Digest> = Vec::new();
+        let mut cleanup_horizon: Vec<Digest<LooseCommit>> = Vec::new();
         for (boundary_hash, boundary_change) in &boundary {
             members.remove(boundary_hash);
 
@@ -164,8 +166,8 @@ pub trait CommitStore<'a> {
     /// Returns a [`FragmentError`] if any lookup fails.
     fn build_fragment_store<'b, D: DepthMetric>(
         &self,
-        head_digests: &[Digest],
-        known_fragment_states: &'b mut Map<Digest, FragmentState<Self::Node>>,
+        head_digests: &[Digest<LooseCommit>],
+        known_fragment_states: &'b mut Map<Digest<LooseCommit>, FragmentState<Self::Node>>,
         strategy: &D,
     ) -> Result<Vec<&'b FragmentState<Self::Node>>, FragmentError<'a, Self>> {
         let mut fresh_heads = Vec::new();
@@ -201,7 +203,7 @@ pub trait CommitStore<'a> {
 pub struct CountLeadingZeroBytes;
 
 impl DepthMetric for CountLeadingZeroBytes {
-    fn to_depth(&self, digest: Digest) -> Depth {
+    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
         let mut acc = 0;
         for &byte in digest.as_bytes() {
             if byte == 0 {
@@ -249,7 +251,7 @@ impl From<CountTrailingZerosInBase> for u8 {
 }
 
 impl DepthMetric for CountTrailingZerosInBase {
-    fn to_depth(&self, digest: Digest) -> Depth {
+    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
         let arr = digest.as_bytes();
         let inner_depth: u8 = self.0.into();
         let (_, bytes) = num_bigint::BigInt::from_bytes_be(num_bigint::Sign::Plus, arr)
@@ -272,20 +274,20 @@ impl DepthMetric for CountTrailingZerosInBase {
 /// and so should not be used in production just yet.
 #[derive(Debug, Clone)]
 pub struct FragmentState<T> {
-    head_digest: Digest,
-    members: Set<Digest>,
-    checkpoints: Set<Digest>,
-    boundary: Map<Digest, T>,
+    head_digest: Digest<LooseCommit>,
+    members: Set<Digest<LooseCommit>>,
+    checkpoints: Set<Digest<LooseCommit>>,
+    boundary: Map<Digest<LooseCommit>, T>,
 }
 
 impl<T> FragmentState<T> {
     /// Create a new `FragmentState`.
     #[must_use]
     pub const fn new(
-        head_digest: Digest,
-        members: Set<Digest>,
-        checkpoints: Set<Digest>,
-        boundary: Map<Digest, T>,
+        head_digest: Digest<LooseCommit>,
+        members: Set<Digest<LooseCommit>>,
+        checkpoints: Set<Digest<LooseCommit>>,
+        boundary: Map<Digest<LooseCommit>, T>,
     ) -> Self {
         Self {
             head_digest,
@@ -300,7 +302,7 @@ impl<T> FragmentState<T> {
     /// This digest provides a stable point from which
     /// the rest of the fragment is built.
     #[must_use]
-    pub const fn head_digest(&self) -> Digest {
+    pub const fn head_digest(&self) -> Digest<LooseCommit> {
         self.head_digest
     }
 
@@ -309,7 +311,7 @@ impl<T> FragmentState<T> {
     /// This includes all history between the `head_digest`
     /// and the `boundary` (not including the boundary elements).
     #[must_use]
-    pub const fn members(&self) -> &Set<Digest> {
+    pub const fn members(&self) -> &Set<Digest<LooseCommit>> {
         &self.members
     }
 
@@ -319,13 +321,13 @@ impl<T> FragmentState<T> {
     /// below the target, so that it is possible to know which other fragments
     /// this one covers.
     #[must_use]
-    pub const fn checkpoints(&self) -> &Set<Digest> {
+    pub const fn checkpoints(&self) -> &Set<Digest<LooseCommit>> {
         &self.checkpoints
     }
 
     /// The boundary from which the next set of fragments would be built.
     #[must_use]
-    pub const fn boundary(&self) -> &Map<Digest, T> {
+    pub const fn boundary(&self) -> &Map<Digest<LooseCommit>, T> {
         &self.boundary
     }
 

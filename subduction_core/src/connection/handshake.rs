@@ -28,7 +28,7 @@
 use core::time::Duration;
 
 use future_form::FutureForm;
-use sedimentree_core::blob::Digest as RawDigest;
+use sedimentree_core::digest::Digest as RawDigest;
 use thiserror::Error;
 
 use crate::{
@@ -61,7 +61,7 @@ impl DiscoveryId {
     /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
     #[must_use]
     pub fn new(service_identifier: &[u8]) -> Self {
-        let digest = RawDigest::hash(service_identifier);
+        let digest = RawDigest::<()>::hash_bytes(service_identifier);
         Self(*digest.as_bytes())
     }
 

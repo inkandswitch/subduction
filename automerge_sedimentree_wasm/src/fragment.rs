@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use sedimentree_core::collections::{Map, Set};
 
-use sedimentree_core::{blob::Digest, commit::FragmentState};
+use sedimentree_core::{commit::FragmentState, digest::Digest, loose_commit::LooseCommit};
 use subduction_wasm::{
     digest::WasmDigest, loose_commit::WasmBlobMeta, sedimentree_fragment::WasmFragment,
 };
@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 /// The state of a fragment while being built.
 #[derive(Debug, Clone)]
 #[wasm_bindgen(js_name = FragmentState)]
-pub struct WasmFragmentState(pub(crate) FragmentState<Set<Digest>>);
+pub struct WasmFragmentState(pub(crate) FragmentState<Set<Digest<LooseCommit>>>);
 
 #[wasm_bindgen(js_class = FragmentState)]
 impl WasmFragmentState {
@@ -76,8 +76,8 @@ impl WasmFragmentState {
     }
 }
 
-impl From<FragmentState<Set<Digest>>> for WasmFragmentState {
-    fn from(state: FragmentState<Set<Digest>>) -> Self {
+impl From<FragmentState<Set<Digest<LooseCommit>>>> for WasmFragmentState {
+    fn from(state: FragmentState<Set<Digest<LooseCommit>>>) -> Self {
         WasmFragmentState(state)
     }
 }
@@ -111,7 +111,7 @@ impl From<Map<WasmDigest, Set<WasmDigest>>> for WasmBoundary {
 /// A store for fragment states.
 #[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
-pub struct WasmFragmentStateStore(pub(crate) Map<Digest, FragmentState<Set<Digest>>>);
+pub struct WasmFragmentStateStore(pub(crate) Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>);
 
 #[wasm_bindgen(js_class = FragmentStateStore)]
 impl WasmFragmentStateStore {
@@ -137,7 +137,7 @@ impl WasmFragmentStateStore {
 }
 
 #[allow(clippy::implicit_hasher)]
-impl From<WasmFragmentStateStore> for Map<Digest, FragmentState<Set<Digest>>> {
+impl From<WasmFragmentStateStore> for Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>> {
     fn from(store: WasmFragmentStateStore) -> Self {
         store.0
     }

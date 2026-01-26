@@ -7,8 +7,9 @@ use alloc::vec::Vec;
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
     collections::Set,
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -54,14 +55,14 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     #[must_use]
     pub fn load_loose_commit(
         &self,
-        digest: Digest,
+        digest: Digest<LooseCommit>,
     ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, S::Error>> {
         self.storage.load_loose_commit(self.sedimentree_id, digest)
     }
 
     /// List all commit digests for this sedimentree.
     #[must_use]
-    pub fn list_commit_digests(&self) -> K::Future<'_, Result<Set<Digest>, S::Error>> {
+    pub fn list_commit_digests(&self) -> K::Future<'_, Result<Set<Digest<LooseCommit>>, S::Error>> {
         self.storage.list_commit_digests(self.sedimentree_id)
     }
 
@@ -72,7 +73,7 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     #[allow(clippy::type_complexity)]
     pub fn load_loose_commits(
         &self,
-    ) -> K::Future<'_, Result<Vec<(Digest, Signed<LooseCommit>)>, S::Error>> {
+    ) -> K::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, S::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
@@ -82,14 +83,14 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     #[must_use]
     pub fn load_fragment(
         &self,
-        digest: Digest,
+        digest: Digest<Fragment>,
     ) -> K::Future<'_, Result<Option<Signed<Fragment>>, S::Error>> {
         self.storage.load_fragment(self.sedimentree_id, digest)
     }
 
     /// List all fragment digests for this sedimentree.
     #[must_use]
-    pub fn list_fragment_digests(&self) -> K::Future<'_, Result<Set<Digest>, S::Error>> {
+    pub fn list_fragment_digests(&self) -> K::Future<'_, Result<Set<Digest<Fragment>>, S::Error>> {
         self.storage.list_fragment_digests(self.sedimentree_id)
     }
 
@@ -100,7 +101,7 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     #[allow(clippy::type_complexity)]
     pub fn load_fragments(
         &self,
-    ) -> K::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, S::Error>> {
+    ) -> K::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
 
@@ -111,7 +112,7 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     /// Note: Blob storage is content-addressed and not per-sedimentree,
     /// but this capability implies access to blobs referenced by the sedimentree's commits.
     #[must_use]
-    pub fn load_blob(&self, digest: Digest) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
+    pub fn load_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
         self.storage.load_blob(digest)
     }
 }

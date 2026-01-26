@@ -117,14 +117,19 @@ use sedimentree_core::collections::{
     nonempty_ext::{NonEmptyExt, RemoveResult},
 };
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::{RemoteDiff, Sedimentree, SedimentreeSummary},
 };
+
+type CommitDigest = Digest<LooseCommit>;
+type FragmentDigest = Digest<Fragment>;
+type BlobDigest = Digest<Blob>;
 
 use crate::storage::Storage;
 
@@ -920,7 +925,7 @@ impl<
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_blob(&self, digest: Digest) -> Result<Option<Blob>, S::Error> {
+    pub async fn get_blob(&self, digest: BlobDigest) -> Result<Option<Blob>, S::Error> {
         tracing::debug!("Looking for blob with digest {:?}", digest);
         if let Some(data) = self.storage.load_blob(digest).await? {
             Ok(Some(data))
@@ -1042,7 +1047,7 @@ impl<
     pub async fn recv_blob_request(
         &self,
         conn: &C,
-        digests: &[Digest],
+        digests: &[BlobDigest],
     ) -> Result<(), BlobRequestErr<F, S, C>> {
         let mut blobs = Vec::new();
         let mut missing = Vec::new();
@@ -1473,9 +1478,9 @@ impl<
             .map_err(IoError::Storage)?;
 
         // Storage returns (Digest, Signed<T>) tuples — no decoding needed for lookup
-        let commit_by_digest: Map<Digest, Signed<LooseCommit>> =
+        let commit_by_digest: Map<CommitDigest, Signed<LooseCommit>> =
             signed_commits.into_iter().collect();
-        let fragment_by_digest: Map<Digest, Signed<Fragment>> =
+        let fragment_by_digest: Map<FragmentDigest, Signed<Fragment>> =
             signed_fragments.into_iter().collect();
 
         let sync_diff = {
@@ -1637,7 +1642,7 @@ impl<
     }
 
     /// Find blobs from connected peers.
-    pub async fn request_blobs(&self, digests: Vec<Digest>) {
+    pub async fn request_blobs(&self, digests: Vec<BlobDigest>) {
         let msg = Message::BlobsRequest(digests);
         let conns = self.all_connections().await;
         for conn in conns {

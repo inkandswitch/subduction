@@ -13,9 +13,11 @@ use futures::{
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
+    digest::Digest,
+    loose_commit::LooseCommit,
 };
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
@@ -735,7 +737,7 @@ impl WasmHashMetric {
 }
 
 impl DepthMetric for WasmHashMetric {
-    fn to_depth(&self, digest: Digest) -> Depth {
+    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
         if let Some(func) = &self.0 {
             let wasm_digest = WasmDigest::from(digest);
 

@@ -2,9 +2,9 @@
 
 use core::cmp::min;
 
-use alloc::{format, str::FromStr, vec::Vec};
+use alloc::vec::Vec;
 
-use crate::hex::decode_hex;
+use crate::digest::Digest;
 
 /// A binary object.
 ///
@@ -134,7 +134,7 @@ impl From<Blob> for Vec<u8> {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlobMeta {
     #[n(0)]
-    digest: Digest,
+    digest: Digest<Blob>,
 
     #[n(1)]
     size_bytes: u64,
@@ -144,7 +144,7 @@ impl BlobMeta {
     /// Generate metadata for the given contents.
     #[must_use]
     pub fn new(contents: &[u8]) -> Self {
-        let digest = Digest::hash(contents);
+        let digest = Digest::hash_bytes(contents);
         let size_bytes = contents.len() as u64;
         Self { digest, size_bytes }
     }
@@ -153,13 +153,13 @@ impl BlobMeta {
     ///
     /// Since this is manual, it may be incorrect.
     #[must_use]
-    pub const fn from_digest_size(digest: Digest, size_bytes: u64) -> Self {
+    pub const fn from_digest_size(digest: Digest<Blob>, size_bytes: u64) -> Self {
         BlobMeta { digest, size_bytes }
     }
 
     /// The digest of the blob.
     #[must_use]
-    pub const fn digest(&self) -> Digest {
+    pub const fn digest(&self) -> Digest<Blob> {
         self.digest
     }
 
@@ -167,117 +167,5 @@ impl BlobMeta {
     #[must_use]
     pub const fn size_bytes(&self) -> u64 {
         self.size_bytes
-    }
-}
-
-/// A 32-byte digest.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct Digest(
-    #[n(0)]
-    #[cbor(with = "minicbor::bytes")]
-    [u8; 32],
-);
-
-impl core::fmt::Debug for Digest {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        let mut hexed = Vec::new();
-        for byte in self.0 {
-            hexed.push(format!("{byte:02x}"));
-        }
-        write!(f, "Digest({})", hexed.join(""))
-    }
-}
-
-impl Digest {
-    /// Create a new digest for the given data.
-    #[must_use]
-    pub fn hash(data: &[u8]) -> Self {
-        let b3_digest = blake3::hash(data);
-        let mut bytes = [0; 32];
-        bytes.copy_from_slice(b3_digest.as_bytes());
-        Self(bytes)
-    }
-
-    /// Get the raw bytes of the digest.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-
-    /// Create a digest from raw bytes.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`InvalidDigest`] if the input is not exactly 32 bytes.
-    pub fn from_bytes(bytes: &[u8]) -> Result<Self, error::InvalidDigest> {
-        if bytes.len() < 32 {
-            return Err(error::InvalidDigest::NotEnoughInput);
-        }
-        if bytes.len() > 32 {
-            return Err(error::InvalidDigest::InvalidLength);
-        }
-        let mut hash = [0; 32];
-        hash.copy_from_slice(bytes.get(..32).ok_or(error::InvalidDigest::InvalidLength)?);
-        Ok(Digest(hash))
-    }
-}
-
-impl From<[u8; 32]> for Digest {
-    fn from(bytes: [u8; 32]) -> Self {
-        Self(bytes)
-    }
-}
-
-impl core::fmt::Display for Digest {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        for byte in self.0 {
-            write!(f, "{byte:02x}")?;
-        }
-        Ok(())
-    }
-}
-
-impl FromStr for Digest {
-    type Err = error::InvalidDigest;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let bytes = decode_hex(s).ok_or(error::InvalidDigest::InvalidHex)?;
-        if bytes.len() != 32 {
-            return Err(error::InvalidDigest::InvalidLength);
-        }
-        bytes
-            .try_into()
-            .map(Digest)
-            .map_err(|_| error::InvalidDigest::InvalidLength)
-    }
-}
-
-/// Errors related to digest parsing.
-pub mod error {
-    use thiserror::Error;
-
-    /// An error parsing a digest.
-    #[derive(Clone, Copy, PartialEq, Error)]
-    pub enum InvalidDigest {
-        /// Not enough input.
-        #[error("Not enough input")]
-        NotEnoughInput,
-
-        /// Invalid hex encoding.
-        #[error("Invalid hex")]
-        InvalidHex,
-
-        /// Invalid length.
-        #[error("Invalid length")]
-        InvalidLength,
-    }
-
-    impl core::fmt::Debug for InvalidDigest {
-        fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-            core::fmt::Display::fmt(self, f)
-        }
     }
 }

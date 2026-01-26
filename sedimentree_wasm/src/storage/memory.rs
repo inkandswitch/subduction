@@ -4,7 +4,8 @@ use alloc::{format, string::ToString};
 use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
+    digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -113,7 +114,7 @@ impl MemoryStorage {
     pub fn load_commit(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest = digest.clone().into();
+        let digest: Digest<LooseCommit> = digest.clone().into();
         future_to_promise(async move {
             let result = Storage::<Local>::load_loose_commit(&inner, id, digest)
                 .await
@@ -173,7 +174,7 @@ impl MemoryStorage {
     pub fn delete_commit(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest = digest.clone().into();
+        let digest: Digest<LooseCommit> = digest.clone().into();
         future_to_promise(async move {
             Storage::<Local>::delete_loose_commit(&inner, id, digest)
                 .await
@@ -224,7 +225,7 @@ impl MemoryStorage {
     pub fn load_fragment(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest = digest.clone().into();
+        let digest: Digest<Fragment> = digest.clone().into();
         future_to_promise(async move {
             let result = Storage::<Local>::load_fragment(&inner, id, digest)
                 .await
@@ -284,7 +285,7 @@ impl MemoryStorage {
     pub fn delete_fragment(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let digest: Digest = digest.clone().into();
+        let digest: Digest<Fragment> = digest.clone().into();
         future_to_promise(async move {
             Storage::<Local>::delete_fragment(&inner, id, digest)
                 .await
@@ -326,7 +327,7 @@ impl MemoryStorage {
     #[wasm_bindgen(js_name = loadBlob)]
     pub fn load_blob(&self, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
-        let digest: Digest = digest.clone().into();
+        let digest: Digest<Blob> = digest.clone().into();
         future_to_promise(async move {
             let result = Storage::<Local>::load_blob(&inner, digest)
                 .await
@@ -342,7 +343,7 @@ impl MemoryStorage {
     #[wasm_bindgen(js_name = deleteBlob)]
     pub fn delete_blob(&self, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
-        let digest: Digest = digest.clone().into();
+        let digest: Digest<Blob> = digest.clone().into();
         future_to_promise(async move {
             Storage::<Local>::delete_blob(&inner, digest)
                 .await

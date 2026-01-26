@@ -2,7 +2,8 @@
 
 use alloc::vec::Vec;
 
-use crate::blob::{BlobMeta, Digest};
+use crate::blob::BlobMeta;
+use crate::digest::Digest;
 
 /// The smallest unit of metadata in a Sedimentree.
 ///
@@ -14,10 +15,10 @@ use crate::blob::{BlobMeta, Digest};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
     #[n(0)]
-    digest: Digest,
+    digest: Digest<LooseCommit>,
 
     #[n(1)]
-    parents: Vec<Digest>,
+    parents: Vec<Digest<LooseCommit>>,
 
     #[n(2)]
     blob_meta: BlobMeta,
@@ -26,7 +27,7 @@ pub struct LooseCommit {
 impl LooseCommit {
     /// Constructor for a [`LooseCommit`].
     #[must_use]
-    pub const fn new(digest: Digest, parents: Vec<Digest>, blob_meta: BlobMeta) -> Self {
+    pub const fn new(digest: Digest<LooseCommit>, parents: Vec<Digest<LooseCommit>>, blob_meta: BlobMeta) -> Self {
         Self {
             digest,
             parents,
@@ -36,13 +37,13 @@ impl LooseCommit {
 
     /// The unique [`Digest`] of this [`LooseCommit`], derived from its content.
     #[must_use]
-    pub const fn digest(&self) -> Digest {
+    pub const fn digest(&self) -> Digest<LooseCommit> {
         self.digest
     }
 
     /// The (possibly empty) list of parent commits.
     #[must_use]
-    pub const fn parents(&self) -> &Vec<Digest> {
+    pub const fn parents(&self) -> &Vec<Digest<LooseCommit>> {
         &self.parents
     }
 

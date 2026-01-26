@@ -2,7 +2,8 @@
 
 use alloc::{borrow::ToOwned, vec::Vec};
 use sedimentree_core::{
-    blob::{BlobMeta, Digest},
+    blob::BlobMeta,
+    digest::Digest,
     loose_commit::LooseCommit,
 };
 use wasm_bindgen::prelude::*;
@@ -23,7 +24,7 @@ impl WasmLooseCommit {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(digest: &WasmDigest, parents: Vec<JsDigest>, blob_meta: &WasmBlobMeta) -> Self {
-        let core_parents: Vec<Digest> =
+        let core_parents: Vec<Digest<LooseCommit>> =
             parents.iter().map(|d| WasmDigest::from(d).into()).collect();
 
         let core_commit = LooseCommit::new(
