@@ -345,7 +345,7 @@ mod message {
 
     use super::generators::{
         batch_sync_request_from_seed, batch_sync_response_from_seed, blob_digest_from_seed,
-        blob_from_seed, digest_from_seed, sedimentree_id_from_seed, signed_fragment_from_seed,
+        blob_from_seed, sedimentree_id_from_seed, signed_fragment_from_seed,
         signed_loose_commit_from_seed,
     };
 
