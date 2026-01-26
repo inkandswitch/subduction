@@ -25,9 +25,12 @@
 use criterion::{criterion_group, criterion_main};
 
 mod generators {
-    use rand::{rngs::StdRng, Rng, SeedableRng};
+    use future_form::Sendable;
+    use futures::executor::block_on;
+    use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
-        blob::{Blob, BlobMeta, Digest},
+        blob::{Blob, BlobMeta},
+        digest::Digest,
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::LooseCommit,
@@ -35,16 +38,25 @@ mod generators {
     };
     use subduction_core::{
         connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncDiff},
+        crypto::{signed::Signed, signer::MemorySigner},
         peer::id::PeerId,
         storage::key::StorageKey,
     };
 
-    /// Generate a deterministic digest from a seed.
-    pub(super) fn digest_from_seed(seed: u64) -> Digest {
+    /// Generate a deterministic commit digest from a seed.
+    pub(super) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut bytes = [0u8; 32];
         rng.fill(&mut bytes);
-        Digest::from(bytes)
+        Digest::from_bytes(bytes)
+    }
+
+    /// Generate a deterministic blob digest from a seed.
+    pub(super) fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+        Digest::from_bytes(bytes)
     }
 
     /// Generate a peer ID from a seed.
@@ -82,12 +94,16 @@ mod generators {
 
     /// Generate a fragment from a seed.
     #[allow(clippy::cast_sign_loss)]
-    pub(super) fn fragment_from_seed(seed: u64, num_parents: usize, num_members: usize) -> Fragment {
+    pub(super) fn fragment_from_seed(
+        seed: u64,
+        num_parents: usize,
+        num_members: usize,
+    ) -> Fragment {
         let digest = digest_from_seed(seed);
-        let parents: Vec<Digest> = (0..num_parents)
+        let parents: Vec<Digest<LooseCommit>> = (0..num_parents)
             .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
             .collect();
-        let members: Vec<Digest> = (0..num_members)
+        let members: Vec<Digest<LooseCommit>> = (0..num_members)
             .map(|i| digest_from_seed(seed.wrapping_add(200 + i as u64)))
             .collect();
         #[allow(clippy::cast_possible_truncation)]
@@ -109,6 +125,28 @@ mod generators {
         StorageKey::new(segments)
     }
 
+    /// Generate a signer from a seed.
+    pub(super) fn signer_from_seed(seed: u64) -> MemorySigner {
+        let mut rng = StdRng::seed_from_u64(seed);
+        let mut bytes = [0u8; 32];
+        rng.fill(&mut bytes);
+        MemorySigner::from_bytes(&bytes)
+    }
+
+    /// Generate a signed loose commit from a seed.
+    pub(super) fn signed_loose_commit_from_seed(seed: u64) -> Signed<LooseCommit> {
+        let signer = signer_from_seed(seed);
+        let commit = loose_commit_from_seed(seed);
+        block_on(Signed::seal::<Sendable, _>(&signer, commit)).into_signed()
+    }
+
+    /// Generate a signed fragment from a seed.
+    pub(super) fn signed_fragment_from_seed(seed: u64) -> Signed<Fragment> {
+        let signer = signer_from_seed(seed);
+        let fragment = fragment_from_seed(seed, 3, 10);
+        block_on(Signed::seal::<Sendable, _>(&signer, fragment)).into_signed()
+    }
+
     /// Generate a sync diff with commits and fragments.
     pub(super) fn sync_diff_from_seed(
         seed: u64,
@@ -116,19 +154,23 @@ mod generators {
         num_fragments: usize,
         blob_size: usize,
     ) -> SyncDiff {
-        let missing_commits: Vec<(LooseCommit, Blob)> = (0..num_commits)
+        let signer = signer_from_seed(seed);
+
+        let missing_commits: Vec<(Signed<LooseCommit>, Blob)> = (0..num_commits)
             .map(|i| {
                 let commit = loose_commit_from_seed(seed.wrapping_add(i as u64));
+                let verified = block_on(Signed::seal::<Sendable, _>(&signer, commit));
                 let blob = blob_from_seed(seed.wrapping_add(1000 + i as u64), blob_size);
-                (commit, blob)
+                (verified.into_signed(), blob)
             })
             .collect();
 
-        let missing_fragments: Vec<(Fragment, Blob)> = (0..num_fragments)
+        let missing_fragments: Vec<(Signed<Fragment>, Blob)> = (0..num_fragments)
             .map(|i| {
                 let fragment = fragment_from_seed(seed.wrapping_add(2000 + i as u64), 3, 10);
+                let verified = block_on(Signed::seal::<Sendable, _>(&signer, fragment));
                 let blob = blob_from_seed(seed.wrapping_add(3000 + i as u64), blob_size * 4);
-                (fragment, blob)
+                (verified.into_signed(), blob)
             })
             .collect();
 
@@ -144,6 +186,7 @@ mod generators {
             id: sedimentree_id_from_seed(seed),
             req_id: request_id_from_seed(seed.wrapping_add(1), seed),
             sedimentree_summary: SedimentreeSummary::default(),
+            subscribe: false,
         }
     }
 
@@ -163,7 +206,7 @@ mod generators {
 }
 
 mod id {
-    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::{id::ConnectionId, message::RequestId},
@@ -297,12 +340,13 @@ mod id {
 }
 
 mod message {
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use subduction_core::connection::message::Message;
 
     use super::generators::{
-        batch_sync_request_from_seed, batch_sync_response_from_seed, blob_from_seed,
-        digest_from_seed, fragment_from_seed, loose_commit_from_seed, sedimentree_id_from_seed,
+        batch_sync_request_from_seed, batch_sync_response_from_seed, blob_digest_from_seed,
+        blob_from_seed, sedimentree_id_from_seed, signed_fragment_from_seed,
+        signed_loose_commit_from_seed,
     };
 
     /// Benchmark Message enum construction with various payloads.
@@ -324,7 +368,7 @@ mod message {
                 &blob_size,
                 |b, &size| {
                     let id = sedimentree_id_from_seed(12345);
-                    let commit = loose_commit_from_seed(12345);
+                    let commit = signed_loose_commit_from_seed(12345);
                     let blob = blob_from_seed(12345, size);
                     b.iter(|| Message::LooseCommit {
                         id: black_box(id),
@@ -344,7 +388,7 @@ mod message {
                 &blob_size,
                 |b, &size| {
                     let id = sedimentree_id_from_seed(12345);
-                    let fragment = fragment_from_seed(12345, 3, 10);
+                    let fragment = signed_fragment_from_seed(12345);
                     let blob = blob_from_seed(12345, size);
                     b.iter(|| Message::Fragment {
                         id: black_box(id),
@@ -364,7 +408,7 @@ mod message {
                 BenchmarkId::new("blobs_request", num_digests),
                 &num_digests,
                 |b, &n| {
-                    let digests: Vec<_> = (0..n).map(|i| digest_from_seed(i as u64)).collect();
+                    let digests: Vec<_> = (0..n).map(|i| blob_digest_from_seed(i as u64)).collect();
                     b.iter(|| Message::BlobsRequest(black_box(digests.clone())));
                 },
             );
@@ -401,14 +445,14 @@ mod message {
         // Messages without request IDs (should return None quickly)
         let msg_loose = Message::LooseCommit {
             id: sedimentree_id_from_seed(1),
-            commit: loose_commit_from_seed(1),
+            commit: signed_loose_commit_from_seed(1),
             blob: blob_from_seed(1, 64),
         };
         group.bench_function("loose_commit_none", |b| {
             b.iter(|| black_box(&msg_loose).request_id());
         });
 
-        let msg_blobs_req = Message::BlobsRequest(vec![digest_from_seed(1)]);
+        let msg_blobs_req = Message::BlobsRequest(vec![blob_digest_from_seed(1)]);
         group.bench_function("blobs_request_none", |b| {
             b.iter(|| black_box(&msg_blobs_req).request_id());
         });
@@ -430,7 +474,7 @@ mod message {
 }
 
 mod sync {
-    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
+    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::sedimentree::SedimentreeSummary;
     use subduction_core::connection::message::{BatchSyncRequest, BatchSyncResponse, Message};
 
@@ -515,6 +559,7 @@ mod sync {
                 id: black_box(id),
                 req_id: black_box(req_id),
                 sedimentree_summary: black_box(summary.clone()),
+                subscribe: false,
             });
         });
 
@@ -576,7 +621,7 @@ mod sync {
 mod collections {
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{connection::id::ConnectionId, peer::id::PeerId};
 
@@ -761,12 +806,13 @@ mod collections {
 }
 
 mod cloning {
-    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
+    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
     use subduction_core::connection::{id::ConnectionId, message::Message};
 
     use super::generators::{
-        batch_sync_response_from_seed, blob_from_seed, fragment_from_seed, loose_commit_from_seed,
-        request_id_from_seed, sedimentree_id_from_seed, storage_key_from_seed, sync_diff_from_seed,
+        batch_sync_response_from_seed, blob_from_seed, request_id_from_seed,
+        sedimentree_id_from_seed, signed_fragment_from_seed, signed_loose_commit_from_seed,
+        storage_key_from_seed, sync_diff_from_seed,
     };
 
     /// Benchmark cloning costs for various protocol types.
@@ -830,7 +876,7 @@ mod cloning {
         // Message variants
         let msg_loose = Message::LooseCommit {
             id: sedimentree_id_from_seed(1),
-            commit: loose_commit_from_seed(1),
+            commit: signed_loose_commit_from_seed(1),
             blob: blob_from_seed(1, 256),
         };
         group.bench_function("message/loose_commit_256b", |b| {
@@ -839,7 +885,7 @@ mod cloning {
 
         let msg_fragment = Message::Fragment {
             id: sedimentree_id_from_seed(1),
-            fragment: fragment_from_seed(1, 3, 10),
+            fragment: signed_fragment_from_seed(1),
             blob: blob_from_seed(1, 1024),
         };
         group.bench_function("message/fragment_1kb", |b| {
@@ -864,7 +910,7 @@ mod cloning {
 }
 
 mod display {
-    use criterion::{black_box, Criterion};
+    use criterion::{Criterion, black_box};
     use subduction_core::storage::id::StorageId;
 
     use super::generators::{digest_from_seed, peer_id_from_seed, sedimentree_id_from_seed};

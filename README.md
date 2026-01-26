@@ -18,6 +18,10 @@
 - **Multi-Platform**: Runs on native Rust, WebAssembly (browser & Node.js), and provides a CLI tool
 - **Automerge Integration**: While not the only data that can be synced via Subduction, [Automerge] was the original target.
 
+## Documentation
+
+The [`design/`](./design/) directory contains protocol design documents including message formats, threat model, and so on.
+
 ## Architecture
 
 Subduction is organized as a Rust workspace with multiple crates:
@@ -32,8 +36,9 @@ graph TD
     automerge_sedimentree
     subduction_websocket
     subduction_cli
+    subduction_keyhive_policy
 
-    subgraph Wasm 
+    subgraph Wasm
         subduction_wasm
         automerge_sedimentree_wasm
         automerge_subduction_wasm
@@ -44,6 +49,7 @@ graph TD
 
     subduction_core --> subduction_websocket
     subduction_core --> subduction_wasm
+    subduction_core --> subduction_keyhive_policy
 
     subduction_websocket --> subduction_cli
 
@@ -68,6 +74,12 @@ graph TD
 | `automerge_sedimentree`      | Sedimentree adapter for Automerge documents                |
 | `automerge_sedimentree_wasm` | Wasm bindings for Automerge + Sedimentree                  |
 | `automerge_subduction_wasm`  | Wasm bindings for Automerge + Subduction (full sync stack) |
+
+### Integrations
+
+| Crate                       | Description                                            |
+|-----------------------------|--------------------------------------------------------|
+| `subduction_keyhive_policy` | Keyhive-based authorization policy for connections     |
 
 ### Tools
 

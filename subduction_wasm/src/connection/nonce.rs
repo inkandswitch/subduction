@@ -31,7 +31,7 @@ impl WasmNonce {
     pub fn random() -> Self {
         let mut bytes = [0u8; 8];
         #[allow(clippy::expect_used)]
-        getrandom::fill(&mut bytes).expect("getrandom failed");
+        getrandom::getrandom(&mut bytes).expect("getrandom failed");
         Self(u64::from_be_bytes(bytes))
     }
 

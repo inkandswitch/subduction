@@ -1,23 +1,26 @@
 //! Error types.
 
 use alloc::string::{String, ToString};
-use futures_kind::Local;
+use core::convert::Infallible;
+use future_form::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
-    subduction::error::{HydrationError, IoError, ListenError, RegistrationError},
+    subduction::error::{
+        AttachError, HydrationError, IoError, ListenError, RegistrationError, WriteError,
+    },
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    connection::{websocket::CallError, JsConnection},
-    storage::JsSubductionStorage,
+    connection::{JsConnection, websocket::CallError},
+    storage::JsSedimentreeStorage,
 };
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmHydrationError(#[from] HydrationError<Local, JsSubductionStorage>);
+pub struct WasmHydrationError(#[from] HydrationError<Local, JsSedimentreeStorage>);
 
 impl From<WasmHydrationError> for JsValue {
     fn from(err: WasmHydrationError) -> Self {
@@ -33,12 +36,45 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsSubductionStorage, JsConnection>);
+pub struct WasmIoError(#[from] IoError<Local, JsSedimentreeStorage, JsConnection>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("IoError");
+        js_err.into()
+    }
+}
+
+/// A Wasm wrapper around the [`WriteError`] type.
+///
+/// This includes errors related to write operations,
+/// including policy rejections.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmWriteError(
+    #[from] WriteError<Local, JsSedimentreeStorage, JsConnection, Infallible>,
+);
+
+impl From<WasmWriteError> for JsValue {
+    fn from(err: WasmWriteError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("WriteError");
+        js_err.into()
+    }
+}
+
+/// A Wasm wrapper around the [`AttachError`] type.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmAttachError(
+    #[from] AttachError<Local, JsSedimentreeStorage, JsConnection, Infallible>,
+);
+
+impl From<WasmAttachError> for JsValue {
+    fn from(err: WasmAttachError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("AttachError");
         js_err.into()
     }
 }
@@ -60,7 +96,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsSubductionStorage, JsConnection>);
+pub struct WasmListenError(#[from] ListenError<Local, JsSedimentreeStorage, JsConnection>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
@@ -139,10 +175,10 @@ impl From<&CallError> for WasmCallErrorInner {
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
 #[error(transparent)]
 #[allow(missing_copy_implementations)]
-pub struct WasmRegistrationError(RegistrationError);
+pub struct WasmRegistrationError(RegistrationError<Infallible>);
 
-impl From<RegistrationError> for WasmRegistrationError {
-    fn from(err: RegistrationError) -> Self {
+impl From<RegistrationError<Infallible>> for WasmRegistrationError {
+    fn from(err: RegistrationError<Infallible>) -> Self {
         WasmRegistrationError(err)
     }
 }
@@ -166,5 +202,37 @@ impl From<WasmDisconnectionError> for JsValue {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("DisconnectionError");
         err.into()
+    }
+}
+
+/// Error returned when a handshake fails.
+#[derive(Debug, Error)]
+pub enum WasmHandshakeError {
+    /// WebSocket error during handshake.
+    #[error("WebSocket error: {0}")]
+    WebSocket(String),
+
+    /// Invalid message received during handshake.
+    #[error("invalid handshake message: {0}")]
+    InvalidMessage(String),
+
+    /// Server rejected the handshake.
+    #[error("handshake rejected: {0}")]
+    Rejected(String),
+
+    /// Signature verification failed.
+    #[error("signature verification failed")]
+    InvalidSignature,
+
+    /// Response doesn't match our challenge.
+    #[error("response doesn't match challenge")]
+    ChallengeMismatch,
+}
+
+impl From<WasmHandshakeError> for JsValue {
+    fn from(err: WasmHandshakeError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("HandshakeError");
+        js_err.into()
     }
 }

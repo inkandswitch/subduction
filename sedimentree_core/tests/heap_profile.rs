@@ -1,34 +1,43 @@
 //! Heap allocation profiling for sedimentree operations.
 //!
-//! Run with: `cargo test --package sedimentree_core --test heap_profile -- --nocapture`
+//! Run with: `cargo test --package sedimentree_core --test heap_profile --features std -- --nocapture`
 //!
 //! This will output allocation statistics for key operations.
 
+#![cfg(feature = "std")]
 #![allow(missing_docs)]
 
 #[global_allocator]
 static ALLOC: dhat::Alloc = dhat::Alloc;
 
 use sedimentree_core::{
-    blob::{BlobMeta, Digest},
+    blob::{Blob, BlobMeta},
+    digest::Digest,
     fragment::Fragment,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,
 };
 
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 
 mod generators {
     use super::*;
 
-    pub(crate) fn digest_from_seed(seed: u64) -> Digest {
+    pub(crate) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
         let mut rng = StdRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
-        Digest::from(bytes)
+        Digest::from_bytes(bytes)
     }
 
-    fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest {
+    fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
+        let mut bytes = [0u8; 32];
+        let mut rng = StdRng::seed_from_u64(seed);
+        rng.fill(&mut bytes);
+        Digest::from_bytes(bytes)
+    }
+
+    fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
         let mut rng = StdRng::seed_from_u64(seed);
         #[allow(clippy::indexing_slicing)]
@@ -37,14 +46,14 @@ mod generators {
         if zeros < 32 && bytes[zeros] == 0 {
             bytes[zeros] = 1;
         }
-        Digest::from(bytes)
+        Digest::from_bytes(bytes)
     }
 
     fn synthetic_blob_meta(seed: u64, size: u64) -> BlobMeta {
-        BlobMeta::from_digest_size(digest_from_seed(seed), size)
+        BlobMeta::from_digest_size(blob_digest_from_seed(seed), size)
     }
 
-    fn synthetic_commit(seed: u64, parents: Vec<Digest>) -> LooseCommit {
+    fn synthetic_commit(seed: u64, parents: Vec<Digest<LooseCommit>>) -> LooseCommit {
         let digest = digest_from_seed(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
         LooseCommit::new(digest, parents, blob_meta)
@@ -57,10 +66,10 @@ mod generators {
         leading_zeros: usize,
     ) -> Fragment {
         let head = digest_with_leading_zeros(leading_zeros, head_seed);
-        let boundary: Vec<Digest> = (0..boundary_count)
+        let boundary: Vec<Digest<LooseCommit>> = (0..boundary_count)
             .map(|i| digest_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
             .collect();
-        let checkpoints: Vec<Digest> = (0..checkpoint_count)
+        let checkpoints: Vec<Digest<LooseCommit>> = (0..checkpoint_count)
             .map(|i| digest_from_seed(head_seed + 200 + i as u64))
             .collect();
         let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
@@ -155,9 +164,7 @@ where
 fn heap_profile_all() {
     let output_path = "dhat-heap.json";
 
-    let _profiler = dhat::Profiler::builder()
-        .file_name(output_path)
-        .build();
+    let _profiler = dhat::Profiler::builder().file_name(output_path).build();
 
     println!("\n");
     println!("================================================================================");

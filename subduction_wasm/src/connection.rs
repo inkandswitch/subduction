@@ -1,5 +1,6 @@
 //! JS [`Connection`] interface for Subduction.
 
+mod handshake;
 pub mod message;
 pub mod nonce;
 pub mod websocket;
@@ -8,13 +9,13 @@ use alloc::string::ToString;
 use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
-use futures::{future::LocalBoxFuture, FutureExt};
-use futures_kind::Local;
+use future_form::Local;
+use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::Promise;
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,
 };
@@ -41,7 +42,7 @@ export interface Connection {
 
 #[wasm_bindgen]
 extern "C" {
-    /// A duck-typed connection interface.
+    /// Connection interface.
     #[wasm_bindgen(js_name = Connection, typescript_type = "Connection")]
     pub type JsConnection;
 
@@ -259,6 +260,12 @@ impl WasmBatchSyncRequest {
     #[must_use]
     pub fn request_id(&self) -> WasmRequestId {
         self.0.req_id.into()
+    }
+
+    /// Whether this request subscribes to future updates.
+    #[must_use]
+    pub fn subscribe(&self) -> bool {
+        self.0.subscribe
     }
 }
 

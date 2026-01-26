@@ -119,7 +119,8 @@ pub fn set_storage_sedimentrees(count: usize) {
 #[inline]
 #[allow(clippy::cast_precision_loss)]
 pub fn set_storage_loose_commits(sedimentree_id: String, count: usize) {
-    metrics::gauge!(names::STORAGE_LOOSE_COMMITS, "sedimentree_id" => sedimentree_id).set(count as f64);
+    metrics::gauge!(names::STORAGE_LOOSE_COMMITS, "sedimentree_id" => sedimentree_id)
+        .set(count as f64);
 }
 
 /// Set the current number of fragments for a sedimentree.

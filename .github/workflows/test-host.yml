@@ -28,6 +28,9 @@ jobs:
     - name: Test Default (Native Cargo)
       run: cargo test --features arbitrary
 
+    - name: Run Doc Tests
+      run: cargo test --doc --workspace
+
   test-nix:
     strategy:
       matrix:

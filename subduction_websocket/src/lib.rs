@@ -10,6 +10,7 @@ extern crate std;
 extern crate alloc;
 
 pub mod error;
+pub mod handshake;
 pub mod timeout;
 pub mod websocket;
 

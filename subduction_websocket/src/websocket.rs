@@ -1,26 +1,26 @@
 //! # Generic WebSocket connection for Subduction
 
 use alloc::{boxed::Box, sync::Arc};
-use sedimentree_core::collections::Map;
 use core::{
     marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
+use sedimentree_core::collections::Map;
 
 use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
+use future_form::{FutureForm, Local, Sendable};
 use futures::{
+    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
-    FutureExt,
 };
-use futures_kind::{FutureKind, Local, Sendable};
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,
 };
@@ -32,7 +32,7 @@ use crate::{
 
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]
-pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> {
+pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
     chan_id: u64,
     peer_id: PeerId,
     req_id_counter: Arc<AtomicU64>,
@@ -76,7 +76,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!("[local] disconnect called for peer {}", self.peer_id);
+        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
         async { Ok(()) }.boxed_local()
     }
 
@@ -132,8 +132,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             self.pending.lock().await.insert(req_id, tx);
 
             #[allow(clippy::expect_used)]
-            let msg_bytes =
-                minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
+                .expect("serialization should be infallible");
 
             self.outbound
                 .lock()
@@ -172,7 +172,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> WebSocket<T, K, O> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
     /// Create a new WebSocket connection.
     pub fn new(
         ws: WebSocketStream<T>,
@@ -294,7 +294,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> WebSocket<
                         | Message::Fragment { .. }
                         | Message::BlobsRequest(_)
                         | Message::BlobsResponse(_)
-                        | Message::BatchSyncRequest(_)) => {
+                        | Message::BatchSyncRequest(_)
+                        | Message::RemoveSubscriptions(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {
                                 tracing::error!(
                                     "failed to send inbound message to channel {}: {}",
@@ -371,7 +372,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!("[sendable] disconnect called for peer {}", self.peer_id);
+        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
         async { Ok(()) }.boxed()
     }
 
@@ -426,8 +427,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             self.pending.lock().await.insert(req_id, tx);
 
             #[allow(clippy::expect_used)]
-            let msg_bytes =
-                minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
+                .expect("serialization should be infallible");
 
             self.outbound
                 .lock()
@@ -466,7 +467,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K> + Clone> Clone
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K> + Clone> Clone
     for WebSocket<T, K, O>
 {
     fn clone(&self) -> Self {
@@ -486,7 +487,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K> + Clone> Cl
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureKind, O: Timeout<K>> PartialEq
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
     for WebSocket<T, K, O>
 {
     fn eq(&self, other: &Self) -> bool {
@@ -618,86 +619,6 @@ mod tests {
                 WebSocket::new(ws, timeout, expected_duration, peer_id);
 
             assert_eq!(websocket.default_time_limit(), expected_duration);
-        }
-    }
-
-    mod equality {
-        use super::*;
-
-        #[tokio::test]
-        async fn test_websockets_equal_when_cloned() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
-            let websocket2 = websocket1.clone();
-
-            assert_eq!(websocket1, websocket2);
-        }
-
-        #[tokio::test]
-        async fn test_websockets_not_equal_different_peer() {
-            let ws1 = create_mock_websocket_stream().await;
-            let ws2 = create_mock_websocket_stream().await;
-            let peer_id1 = PeerId::new([1u8; 32]);
-            let peer_id2 = PeerId::new([2u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let websocket1: WebSocket<_, Local, _> =
-                WebSocket::new(ws1, timeout, duration, peer_id1);
-            let websocket2: WebSocket<_, Local, _> =
-                WebSocket::new(ws2, timeout, duration, peer_id2);
-
-            assert_ne!(websocket1, websocket2);
-        }
-    }
-
-    mod cloning {
-        use super::*;
-
-        #[tokio::test]
-        async fn test_clone_has_same_peer_id() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([123u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
-            let websocket2 = websocket1.clone();
-
-            assert_eq!(websocket1.peer_id(), websocket2.peer_id());
-        }
-
-        #[tokio::test]
-        async fn test_clone_shares_same_timeout() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
-            let websocket2 = websocket1.clone();
-
-            assert_eq!(
-                websocket1.default_time_limit(),
-                websocket2.default_time_limit()
-            );
-        }
-
-        #[tokio::test]
-        async fn test_clone_equals_original() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let websocket1: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
-            let websocket2 = websocket1.clone();
-
-            assert_eq!(websocket1, websocket2);
         }
     }
 

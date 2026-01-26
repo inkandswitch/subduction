@@ -59,7 +59,7 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
         let mut key_bytes = [0u8; 16];
 
         #[allow(clippy::expect_used)]
-        getrandom::fill(&mut key_bytes).expect("getrandom failed");
+        getrandom::getrandom(&mut key_bytes).expect("getrandom failed");
 
         #[allow(clippy::expect_used)]
         let key0 = u64::from_le_bytes(
@@ -325,6 +325,7 @@ impl<K: Hash + Ord, V, const N: usize> Default for ShardedMap<K, V, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
     use sedimentree_core::id::SedimentreeId;
     use testresult::TestResult;
 
@@ -364,8 +365,7 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<(u64, u64, [u8; 32], [u8; 32], [u8; 32], [u8; 32])>()
                 .for_each(|(key0, key1, id0, id1, id2, id3)| {
-                    let map: ShardedMap<SedimentreeId, (), 16> =
-                        ShardedMap::with_key(*key0, *key1);
+                    let map: ShardedMap<SedimentreeId, (), 16> = ShardedMap::with_key(*key0, *key1);
 
                     // With 4 random IDs into 16 shards, we should usually see multiple shards used
                     let ids = [

@@ -5,9 +5,9 @@ mod commit_dag;
 use alloc::vec::Vec;
 
 use crate::{
-    blob::Digest,
     collections::{Map, Set},
     depth::{DepthMetric, MAX_STRATA_DEPTH},
+    digest::Digest,
     fragment::{Fragment, FragmentSpec, FragmentSummary},
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -173,16 +173,12 @@ impl Sedimentree {
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
     pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
-        let fragment_by_summary: Map<&FragmentSummary, &Fragment> = self
-            .fragments
-            .iter()
-            .map(|f| (f.summary(), f))
-            .collect();
+        let fragment_by_summary: Map<&FragmentSummary, &Fragment> =
+            self.fragments.iter().map(|f| (f.summary(), f)).collect();
 
         let our_fragments_meta: Set<&FragmentSummary> =
             fragment_by_summary.keys().copied().collect();
-        let their_fragments: Set<&FragmentSummary> =
-            remote.fragment_summaries.iter().collect();
+        let their_fragments: Set<&FragmentSummary> = remote.fragment_summaries.iter().collect();
 
         let local_fragments: Vec<&Fragment> = our_fragments_meta
             .difference(&their_fragments)
@@ -216,7 +212,7 @@ impl Sedimentree {
 
     /// Returns true if this [`Sedimentree`] has a fragment with the given digest.
     #[must_use]
-    pub fn has_loose_commit(&self, digest: Digest) -> bool {
+    pub fn has_loose_commit(&self, digest: Digest<LooseCommit>) -> bool {
         self.loose_commits().any(|c| c.digest() == digest)
     }
 
@@ -224,7 +220,7 @@ impl Sedimentree {
     #[must_use]
     pub fn has_fragment_starting_with<M: DepthMetric>(
         &self,
-        digest: Digest,
+        digest: Digest<LooseCommit>,
         depth_metric: &M,
     ) -> bool {
         self.heads(depth_metric).contains(&digest)
@@ -289,10 +285,10 @@ impl Sedimentree {
     /// and which do not appear in the [`LooseCommit`] graph, plus the heads of
     /// the loose commit graph.
     #[must_use]
-    pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<Digest> {
+    pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<Digest<LooseCommit>> {
         let minimized = self.minimize(depth_metric);
         let dag = commit_dag::CommitDag::from_commits(minimized.commits.iter());
-        let mut heads = Vec::<Digest>::new();
+        let mut heads = Vec::<Digest<LooseCommit>>::new();
         for fragment in &minimized.fragments {
             if !minimized
                 .fragments
@@ -328,7 +324,8 @@ impl Sedimentree {
         use alloc::vec;
 
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
-        let mut runs_by_level = Map::<crate::depth::Depth, (Digest, Vec<Digest>)>::new();
+        let mut runs_by_level =
+            Map::<crate::depth::Depth, (Digest<LooseCommit>, Vec<Digest<LooseCommit>>)>::new();
         let mut all_bundles = Vec::new();
         for commit_hash in dag.canonical_sequence(self.fragments.iter(), depth_metric) {
             let level = depth_metric.to_depth(commit_hash);
@@ -337,7 +334,9 @@ impl Sedimentree {
                     checkpoints.push(commit_hash);
                 }
             }
-            if level >= MAX_STRATA_DEPTH && let Some((head, checkpoints)) = runs_by_level.remove(&level) {
+            if level >= MAX_STRATA_DEPTH
+                && let Some((head, checkpoints)) = runs_by_level.remove(&level)
+            {
                 if self.fragments.iter().any(|s| s.supports_block(commit_hash)) {
                     runs_by_level.insert(level, (commit_hash, Vec::new()));
                 } else {
@@ -404,7 +403,11 @@ impl From<[u8; 32]> for MinimalTreeHash {
 }
 
 /// Checks if any of the given commits has a commit boundary.
-pub fn has_commit_boundary<I: IntoIterator<Item = D>, D: Into<Digest>, M: DepthMetric>(
+pub fn has_commit_boundary<
+    I: IntoIterator<Item = D>,
+    D: Into<Digest<LooseCommit>>,
+    M: DepthMetric,
+>(
     commits: I,
     depth_metric: &M,
 ) -> bool {
@@ -424,7 +427,7 @@ mod tests {
     fn make_commit(seed: u8) -> LooseCommit {
         let mut bytes = [0u8; 32];
         bytes[0] = seed;
-        let digest = Digest::from(bytes);
+        let digest = Digest::from_bytes(bytes);
         let blob_meta = BlobMeta::new(&[seed]);
         LooseCommit::new(digest, vec![], blob_meta)
     }
@@ -437,8 +440,8 @@ mod tests {
         boundary_bytes[1] = 1;
         let blob_meta = BlobMeta::new(&[seed]);
         Fragment::new(
-            Digest::from(head_bytes),
-            vec![Digest::from(boundary_bytes)],
+            Digest::from_bytes(head_bytes),
+            vec![Digest::from_bytes(boundary_bytes)],
             vec![],
             blob_meta,
         )
@@ -603,6 +606,7 @@ mod tests {
         assert_eq!(diff.remote_commits.len(), 2);
     }
 
+    #[cfg(feature = "std")]
     mod proptests {
         use alloc::vec;
 
@@ -612,8 +616,8 @@ mod tests {
 
         use super::super::*;
 
-        fn hash_with_leading_zeros(zeros_count: u32) -> Digest {
-            let mut byte_arr: [u8; 32] = rand::rng().random::<[u8; 32]>();
+        fn hash_with_leading_zeros(zeros_count: u32) -> Digest<LooseCommit> {
+            let mut byte_arr: [u8; 32] = rand::thread_rng().r#gen::<[u8; 32]>();
             for slot in byte_arr.iter_mut().take(zeros_count as usize) {
                 *slot = 0;
             }
@@ -626,7 +630,7 @@ mod tests {
                     byte_arr[idx] = 1; // Make it non-zero
                 }
             }
-            Digest::from(byte_arr)
+            Digest::from_bytes(byte_arr)
         }
 
         #[test]
@@ -649,9 +653,9 @@ mod tests {
                     let start_hash = hash_with_leading_zeros(10);
                     let deeper_boundary_hash = hash_with_leading_zeros(10);
 
-                    let shallower_start_hash: Digest;
-                    let shallower_boundary_hash: Digest;
-                    let mut checkpoints = Vec::<Digest>::arbitrary(u)?;
+                    let shallower_start_hash: Digest<LooseCommit>;
+                    let shallower_boundary_hash: Digest<LooseCommit>;
+                    let mut checkpoints = Vec::<Digest<LooseCommit>>::arbitrary(u)?;
                     let lower_level_type = ShallowerDepthType::arbitrary(u)?;
                     match lower_level_type {
                         ShallowerDepthType::StartsAtStartBoundaryAtCheckpoint => {
@@ -687,11 +691,11 @@ mod tests {
                     Ok(Self { deeper, shallower })
                 }
             }
-            bolero::check!()
-                .with_arbitrary::<Scenario>()
-                .for_each(|Scenario { deeper, shallower }| {
+            bolero::check!().with_arbitrary::<Scenario>().for_each(
+                |Scenario { deeper, shallower }| {
                     assert!(deeper.supports(shallower, &CountLeadingZeroBytes));
-                });
+                },
+            );
         }
 
         #[test]
@@ -702,13 +706,13 @@ mod tests {
             }
             impl<'a> arbitrary::Arbitrary<'a> for Scenario {
                 fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-                    let mut frontier: Vec<Digest> = Vec::new();
+                    let mut frontier: Vec<Digest<LooseCommit>> = Vec::new();
                     let num_commits: u32 = u.int_in_range(1..=20)?;
                     let mut result = Vec::with_capacity(num_commits as usize);
                     for _ in 0..num_commits {
                         let contents = Vec::<u8>::arbitrary(u)?;
                         let blob_meta = BlobMeta::new(&contents);
-                        let hash = Digest::arbitrary(u)?;
+                        let hash = Digest::<LooseCommit>::arbitrary(u)?;
                         let mut parents = Vec::new();
                         let mut num_parents = u.int_in_range(0..=frontier.len())?;
                         let mut parent_choices = frontier.iter().collect::<Vec<_>>();
@@ -859,7 +863,10 @@ mod tests {
                         b_updated.add_commit(commit.clone());
                     }
 
-                    assert_eq!(a_updated, b_updated, "after applying diff, trees should be equal");
+                    assert_eq!(
+                        a_updated, b_updated,
+                        "after applying diff, trees should be equal"
+                    );
                 });
         }
     }

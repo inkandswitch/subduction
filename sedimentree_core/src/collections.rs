@@ -1,6 +1,8 @@
 //! Conditional collection types that use `HashMap`/`HashSet` when `std` is enabled,
 //! and fall back to `BTreeMap`/`BTreeSet` for `no_std` environments.
 
+pub mod nonempty_ext;
+
 #[cfg(feature = "std")]
 mod inner {
     pub use std::collections::HashMap as Map;

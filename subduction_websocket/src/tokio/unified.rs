@@ -8,12 +8,12 @@ use crate::{
 
 use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
 use core::time::Duration;
+use future_form::Sendable;
 use futures::future::BoxFuture;
-use futures_kind::Sendable;
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,
 };

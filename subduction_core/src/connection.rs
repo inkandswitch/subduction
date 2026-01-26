@@ -1,9 +1,11 @@
 //! Manage connections to peers in the network.
 
-pub mod actor;
+pub mod backoff;
+pub mod handshake;
 pub mod id;
+pub mod manager;
 pub mod message;
-pub mod stream;
+pub mod nonce_cache;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
@@ -13,15 +15,14 @@ use core::time::Duration;
 
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use crate::peer::id::PeerId;
-use futures::Future;
-use futures_kind::FutureKind;
+use future_form::FutureForm;
 use thiserror::Error;
 
 /// A trait representing a connection to a peer in the network.
 ///
 /// It is assumed that a [`Connection`] is authenticated to a particular peer.
 /// Encrypting this channel is also strongly recommended.
-pub trait Connection<K: FutureKind + ?Sized>: Clone {
+pub trait Connection<K: FutureForm + ?Sized>: Clone + PartialEq {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 
@@ -57,7 +58,7 @@ pub trait Connection<K: FutureKind + ?Sized>: Clone {
     ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>>;
 }
 
-impl<T: Connection<K>, K: FutureKind> Connection<K> for Arc<T> {
+impl<T: Connection<K>, K: FutureForm> Connection<K> for Arc<T> {
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = T::RecvError;
@@ -93,25 +94,31 @@ impl<T: Connection<K>, K: FutureKind> Connection<K> for Arc<T> {
 }
 
 /// A trait for connections that can be re-established if they drop.
-pub trait Reconnect<K: FutureKind>: Connection<K> {
-    /// A problem when creating the connection.
-    type ConnectError: core::error::Error;
+///
+/// Connections implementing this trait can be automatically reconnected
+/// by the connection manager when they drop unexpectedly.
+pub trait Reconnect<K: FutureForm>: Connection<K> {
+    /// A problem when reconnecting.
+    type ReconnectionError: core::error::Error + Send + 'static;
 
-    /// Setup the connection, but don't run it.
-    fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ConnectError>>;
-}
+    /// Attempt to reconnect to the same peer.
+    ///
+    /// This should:
+    /// 1. Close any existing connection resources
+    /// 2. Establish a fresh connection
+    /// 3. Complete the handshake
+    fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ReconnectionError>>;
 
-/// A policy for allowing or disallowing connections from peers.
-pub trait ConnectionPolicy {
-    /// Check if a connection from the given peer is allowed.
+    /// Classify whether an error is retryable.
     ///
-    /// # Errors
+    /// Return `false` for fatal errors that should not be retried (e.g.,
+    /// authentication rejection, policy violation). Return `true` for
+    /// transient errors like network timeouts.
     ///
-    /// * Returns [`ConnectionDisallowed`] if the connection is not allowed.
-    fn allowed_to_connect(
-        &self,
-        peer: &PeerId,
-    ) -> impl Future<Output = Result<(), ConnectionDisallowed>>;
+    /// The default implementation considers all errors retryable.
+    fn should_retry(&self, _error: &Self::ReconnectionError) -> bool {
+        true
+    }
 }
 
 /// An error indicating that a connection is disallowed.

@@ -1,11 +1,18 @@
 //! [`IndexedDB`] storage backend for Sedimentree.
 
-use alloc::{boxed::Box, rc::Rc, str::FromStr, string::{String, ToString}, vec::Vec};
-use core::{cell::RefCell};
-use futures::{channel::oneshot};
+use alloc::{
+    boxed::Box,
+    rc::Rc,
+    str::FromStr,
+    string::{String, ToString},
+    vec::Vec,
+};
+use core::cell::RefCell;
+use futures::channel::oneshot;
 use js_sys::Uint8Array;
 use sedimentree_core::{
-    blob::Digest,
+    blob::Blob,
+    digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::LooseCommit,
@@ -13,11 +20,14 @@ use sedimentree_core::{
 use thiserror::Error;
 use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use web_sys::{
-    Event, IdbDatabase,IdbFactory, IdbOpenDbRequest, IdbRequest, IdbTransactionMode,
-    IdbVersionChangeEvent, IdbObjectStoreParameters, 
+    Event, IdbDatabase, IdbFactory, IdbObjectStoreParameters, IdbOpenDbRequest, IdbRequest,
+    IdbTransactionMode, IdbVersionChangeEvent,
 };
 
-use crate::{digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit, sedimentree_id::WasmSedimentreeId};
+use crate::{
+    digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit,
+    sedimentree_id::WasmSedimentreeId,
+};
 
 /// The version number of the [`IndexedDB`] database schema.
 pub const DB_VERSION: u32 = 1;
@@ -52,7 +62,7 @@ pub const RECORD_FIELD_PAYLOAD: &str = "payload";
 /// `IndexedDB` storage backend.
 #[wasm_bindgen(js_name = IndexedDbStorage)]
 #[derive(Debug, Clone)]
-pub struct WasmIndexedDbStorage(IdbDatabase); 
+pub struct WasmIndexedDbStorage(IdbDatabase);
 
 #[wasm_bindgen(js_class = "IndexedDbStorage")]
 impl WasmIndexedDbStorage {
@@ -62,6 +72,7 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns a `JsValue` if the database could not be opened.
     #[wasm_bindgen]
+    #[allow(clippy::too_many_lines)]
     pub async fn setup(factory: &IdbFactory) -> Result<Self, JsValue> {
         let span = tracing::debug_span!("IndexedDbStorage::setup");
         let _enter = span.enter();
@@ -77,88 +88,106 @@ impl WasmIndexedDbStorage {
                     .target()
                     .and_then(|t| t.dyn_into::<IdbOpenDbRequest>().ok())
                     && let Ok(db_val) = req.result()
-                    && let Ok(db) = db_val.dyn_into::<IdbDatabase>() {
-                        let params = IdbObjectStoreParameters::new();
-                        let key_path = js_sys::Array::of2(&RECORD_FIELD_SEDIMENTREE_ID.into(), &RECORD_FIELD_DIGEST.into());
-                        params.set_key_path(&key_path.into());
-                        params.set_auto_increment(false);
+                    && let Ok(db) = db_val.dyn_into::<IdbDatabase>()
+                {
+                    let params = IdbObjectStoreParameters::new();
+                    let key_path = js_sys::Array::of2(
+                        &RECORD_FIELD_SEDIMENTREE_ID.into(),
+                        &RECORD_FIELD_DIGEST.into(),
+                    );
+                    params.set_key_path(&key_path.into());
+                    params.set_auto_increment(false);
 
-                        let names = db.object_store_names();
+                    let names = db.object_store_names();
 
-                        if !names.contains(SEDIMENTREE_ID_STORE_NAME) {
-                            match db.create_object_store(SEDIMENTREE_ID_STORE_NAME) {
-                                Ok(_) => {},
-                                Err(e) => {
-                                    tracing::error!(
-                                        "failed to create object store '{}': {:?}",
-                                        SEDIMENTREE_ID_STORE_NAME,
-                                        e
-                                    );
-                                }
+                    if !names.contains(SEDIMENTREE_ID_STORE_NAME) {
+                        match db.create_object_store(SEDIMENTREE_ID_STORE_NAME) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::error!(
+                                    "failed to create object store '{}': {:?}",
+                                    SEDIMENTREE_ID_STORE_NAME,
+                                    e
+                                );
                             }
                         }
+                    }
 
-                        if !names.contains(BLOB_STORE_NAME) {
-                            match db.create_object_store(BLOB_STORE_NAME) {
-                                Ok(_) => {},
-                                Err(e) => {
-                                    tracing::error!(
-                                        "failed to create object store '{}': {:?}",
-                                        BLOB_STORE_NAME,
-                                        e
-                                    );
-                                }
+                    if !names.contains(BLOB_STORE_NAME) {
+                        match db.create_object_store(BLOB_STORE_NAME) {
+                            Ok(_) => {}
+                            Err(e) => {
+                                tracing::error!(
+                                    "failed to create object store '{}': {:?}",
+                                    BLOB_STORE_NAME,
+                                    e
+                                );
                             }
                         }
+                    }
 
-                        if !names.contains(LOOSE_COMMIT_STORE_NAME) {
-                            match db.create_object_store_with_optional_parameters(LOOSE_COMMIT_STORE_NAME, &params) {
-                                Ok(store) => {
-                                    let idx_names = store.index_names();
-                                    if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID)
-                                        && let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
-                                            tracing::error!(
-                                                "failed to create index '{}' on object store '{}': {:?}",
-                                                INDEX_BY_SEDIMENTREE_ID,
-                                                LOOSE_COMMIT_STORE_NAME,
-                                                e
-                                            );
-                                        }
-                                }
-                                Err(e) => {
+                    if !names.contains(LOOSE_COMMIT_STORE_NAME) {
+                        match db.create_object_store_with_optional_parameters(
+                            LOOSE_COMMIT_STORE_NAME,
+                            &params,
+                        ) {
+                            Ok(store) => {
+                                let idx_names = store.index_names();
+                                if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID)
+                                    && let Err(e) = store.create_index_with_str(
+                                        INDEX_BY_SEDIMENTREE_ID,
+                                        "sedimentree_id",
+                                    )
+                                {
                                     tracing::error!(
-                                        "failed to create object store '{}': {:?}",
+                                        "failed to create index '{}' on object store '{}': {:?}",
+                                        INDEX_BY_SEDIMENTREE_ID,
                                         LOOSE_COMMIT_STORE_NAME,
                                         e
                                     );
                                 }
                             }
+                            Err(e) => {
+                                tracing::error!(
+                                    "failed to create object store '{}': {:?}",
+                                    LOOSE_COMMIT_STORE_NAME,
+                                    e
+                                );
+                            }
                         }
+                    }
 
-                        if !names.contains(FRAGMENT_STORE_NAME) {
-                            match db.create_object_store_with_optional_parameters(FRAGMENT_STORE_NAME, &params) {
-                                Ok(store) => {
-                                    let idx_names = store.index_names();
-                                    if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID)
-                                        && let Err(e) = store.create_index_with_str(INDEX_BY_SEDIMENTREE_ID, "sedimentree_id") {
-                                            tracing::error!(
-                                                "failed to create index '{}' on object store '{}': {:?}",
-                                                INDEX_BY_SEDIMENTREE_ID,
-                                                FRAGMENT_STORE_NAME,
-                                                e
-                                            );
-                                        }
-                                }
-                                Err(e) => {
+                    if !names.contains(FRAGMENT_STORE_NAME) {
+                        match db.create_object_store_with_optional_parameters(
+                            FRAGMENT_STORE_NAME,
+                            &params,
+                        ) {
+                            Ok(store) => {
+                                let idx_names = store.index_names();
+                                if !idx_names.contains(INDEX_BY_SEDIMENTREE_ID)
+                                    && let Err(e) = store.create_index_with_str(
+                                        INDEX_BY_SEDIMENTREE_ID,
+                                        "sedimentree_id",
+                                    )
+                                {
                                     tracing::error!(
-                                        "failed to create object store '{}': {:?}",
+                                        "failed to create index '{}' on object store '{}': {:?}",
+                                        INDEX_BY_SEDIMENTREE_ID,
                                         FRAGMENT_STORE_NAME,
                                         e
                                     );
                                 }
                             }
+                            Err(e) => {
+                                tracing::error!(
+                                    "failed to create object store '{}': {:?}",
+                                    FRAGMENT_STORE_NAME,
+                                    e
+                                );
+                            }
                         }
                     }
+                }
             }) as Box<dyn FnMut(_)>);
             open_req.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
             onupgradeneeded.forget();
@@ -208,14 +237,23 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns [`WasmSaveSedimentreeIdError`] if saving a [`SedimentreeId`] fails.
     #[wasm_bindgen(js_name = saveSedimentreeId)]
-    pub async fn wasm_save_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Result<(), WasmSaveSedimentreeIdError> {
-        let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveSedimentreeIdError::TransactionError)?;
-        let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmSaveSedimentreeIdError::ObjectStoreError)?;
+    pub async fn wasm_save_sedimentree_id(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+    ) -> Result<(), WasmSaveSedimentreeIdError> {
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmSaveSedimentreeIdError::TransactionError)?;
+        let store = tx
+            .object_store(SEDIMENTREE_ID_STORE_NAME)
+            .map_err(WasmSaveSedimentreeIdError::ObjectStoreError)?;
         let req = store
             .put_with_key(
                 &JsValue::from(1u8), // Recommended as smallest unambiguous dummy value for key-as-set-like semantcis
                 &JsValue::from_str(&sedimentree_id.to_string()),
-            ).map_err(WasmSaveSedimentreeIdError::PutError)?;
+            )
+            .map_err(WasmSaveSedimentreeIdError::PutError)?;
 
         drop(await_idb(&req).await?);
         Ok(())
@@ -227,9 +265,17 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns [`WasmDeleteSedimentreeIdError`] if deletion failed.
     #[wasm_bindgen(js_name = deleteSedimentreeId)]
-    pub async fn wasm_delete_sedimentree_id(&self, sedimentree_id: &WasmSedimentreeId) -> Result<(), WasmDeleteSedimentreeIdError> {
-        let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteSedimentreeIdError::TransactionError)?;
-        let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmDeleteSedimentreeIdError::ObjectStoreError)?;
+    pub async fn wasm_delete_sedimentree_id(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+    ) -> Result<(), WasmDeleteSedimentreeIdError> {
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmDeleteSedimentreeIdError::TransactionError)?;
+        let store = tx
+            .object_store(SEDIMENTREE_ID_STORE_NAME)
+            .map_err(WasmDeleteSedimentreeIdError::ObjectStoreError)?;
         let req = store
             .delete(&JsValue::from_str(&sedimentree_id.to_string()))
             .map_err(WasmDeleteSedimentreeIdError::DeleteError)?;
@@ -244,18 +290,31 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns [`WasmLoadAllSedimentreeIdsError`] if there was a problem loading.
     #[wasm_bindgen(js_name = loadAllSedimentreeIds)]
-    pub async fn wasm_load_all_sedimentree_ids(&self) -> Result<Vec<WasmSedimentreeId>, WasmLoadAllSedimentreeIdsError> {
-        let tx = self.0.transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadAllSedimentreeIdsError::TransactionError)?;
-        let store = tx.object_store(SEDIMENTREE_ID_STORE_NAME).map_err(WasmLoadAllSedimentreeIdsError::ObjectStoreError)?;
-        let req = store.get_all_keys().map_err(WasmLoadAllSedimentreeIdsError::GetAllKeysError)?;
+    pub async fn wasm_load_all_sedimentree_ids(
+        &self,
+    ) -> Result<Vec<WasmSedimentreeId>, WasmLoadAllSedimentreeIdsError> {
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(SEDIMENTREE_ID_STORE_NAME, IdbTransactionMode::Readonly)
+            .map_err(WasmLoadAllSedimentreeIdsError::TransactionError)?;
+        let store = tx
+            .object_store(SEDIMENTREE_ID_STORE_NAME)
+            .map_err(WasmLoadAllSedimentreeIdsError::ObjectStoreError)?;
+        let req = store
+            .get_all_keys()
+            .map_err(WasmLoadAllSedimentreeIdsError::GetAllKeysError)?;
 
         let js_value = await_idb(&req).await?;
-        let array = js_sys::Array::try_from_js_value_ref(&js_value).ok_or_else(||WasmLoadAllSedimentreeIdsError::NotAnArray(js_value))?;
+        let array = js_sys::Array::try_from_js_value_ref(&js_value)
+            .ok_or_else(|| WasmLoadAllSedimentreeIdsError::NotAnArray(js_value))?;
 
         let mut xs = Vec::new();
         for js_val in array.iter() {
-            let s = js_val.as_string().ok_or_else(|| WasmLoadAllSedimentreeIdsError::StoredElementNotAString(js_val.clone()))?;
-            let sedimentree_id = SedimentreeId::from_str(&s).map_err(WasmLoadAllSedimentreeIdsError::BadSedimentreeId)?;
+            let s = js_val.as_string().ok_or_else(|| {
+                WasmLoadAllSedimentreeIdsError::StoredElementNotAString(js_val.clone())
+            })?;
+            let sedimentree_id = SedimentreeId::from_str(&s)
+                .map_err(WasmLoadAllSedimentreeIdsError::BadSedimentreeId)?;
             xs.push(sedimentree_id.into());
         }
 
@@ -281,17 +340,20 @@ impl WasmIndexedDbStorage {
         let digest = core_commit.digest();
 
         #[allow(clippy::expect_used)]
-        let bytes = minicbor::to_vec(&core_commit).expect("CBOR serialization should be infallible");
+        let bytes =
+            minicbor::to_vec(&core_commit).expect("CBOR serialization should be infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
-            digest,
+            digest: digest.to_string(),
             payload: bytes,
         };
         let req = self
             .0
-            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveLooseCommitError::TransactionError)?
-            .object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmSaveLooseCommitError::ObjectStoreError)?
+            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmSaveLooseCommitError::TransactionError)?
+            .object_store(LOOSE_COMMIT_STORE_NAME)
+            .map_err(WasmSaveLooseCommitError::ObjectStoreError)?
             .put(&record.into())
             .map_err(WasmSaveLooseCommitError::UnableToStoreLooseCommit)?;
 
@@ -305,14 +367,25 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns a [`WasmLoadLooseCommitsError`] if loose commits could not be loaded.
     #[wasm_bindgen( js_name = loadLooseCommits)]
-    pub async fn wasm_load_loose_commits(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<WasmLooseCommit>, WasmLoadLooseCommitsError> {
-        let tx = self.0
-                     .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadLooseCommitsError::TransactionError)?;
-        let store = tx.object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmLoadLooseCommitsError::ObjectStoreError)?;
-        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmLoadLooseCommitsError::ObjectStoreError)?;
+    pub async fn wasm_load_loose_commits(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+    ) -> Result<Vec<WasmLooseCommit>, WasmLoadLooseCommitsError> {
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readonly)
+            .map_err(WasmLoadLooseCommitsError::TransactionError)?;
+        let store = tx
+            .object_store(LOOSE_COMMIT_STORE_NAME)
+            .map_err(WasmLoadLooseCommitsError::ObjectStoreError)?;
+        let idx = store
+            .index(INDEX_BY_SEDIMENTREE_ID)
+            .map_err(WasmLoadLooseCommitsError::ObjectStoreError)?;
 
         let key = JsValue::from_str(&sedimentree_id.to_string());
-        let req = idx.get_all_with_key(&key).map_err(WasmLoadLooseCommitsError::UnableToGetLooseCommits)?;
+        let req = idx
+            .get_all_with_key(&key)
+            .map_err(WasmLoadLooseCommitsError::UnableToGetLooseCommits)?;
 
         let vals = await_idb(&req).await?;
         let arr = js_sys::Array::from(&vals);
@@ -322,8 +395,8 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadLooseCommitsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let commit: LooseCommit = minicbor::decode(&bytes)
-                .map_err(|_| WasmLoadLooseCommitsError::DecodeError)?;
+            let commit: LooseCommit =
+                minicbor::decode(&bytes).map_err(|_| WasmLoadLooseCommitsError::DecodeError)?;
             out.push(commit.into());
         }
 
@@ -340,16 +413,24 @@ impl WasmIndexedDbStorage {
         &self,
         sedimentree_id: &WasmSedimentreeId,
     ) -> Result<(), WasmDeleteLooseCommitsError> {
-        let tx = self.0
-                     .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteLooseCommitsError::TransactionError)?;
-        let store = tx.object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmDeleteLooseCommitsError::ObjectStoreError)?;
-        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmDeleteLooseCommitsError::ObjectStoreError)?;
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmDeleteLooseCommitsError::TransactionError)?;
+        let store = tx
+            .object_store(LOOSE_COMMIT_STORE_NAME)
+            .map_err(WasmDeleteLooseCommitsError::ObjectStoreError)?;
+        let idx = store
+            .index(INDEX_BY_SEDIMENTREE_ID)
+            .map_err(WasmDeleteLooseCommitsError::ObjectStoreError)?;
 
         let key = JsValue::from_str(&sedimentree_id.to_string());
-        let range = web_sys::IdbKeyRange::only(&key).map_err(WasmDeleteLooseCommitsError::KeyRangeError)?;
+        let range =
+            web_sys::IdbKeyRange::only(&key).map_err(WasmDeleteLooseCommitsError::KeyRangeError)?;
 
-        let req = idx.open_key_cursor_with_range(&range)
-                     .map_err(WasmDeleteLooseCommitsError::UnableToOpenCursor)?;
+        let req = idx
+            .open_key_cursor_with_range(&range)
+            .map_err(WasmDeleteLooseCommitsError::UnableToOpenCursor)?;
 
         let mut cursor_val = await_idb(&req).await?;
         if cursor_val.is_undefined() || cursor_val.is_null() {
@@ -389,22 +470,29 @@ impl WasmIndexedDbStorage {
     ///
     /// Panics if the fragment is not serializable to CBOR.
     #[wasm_bindgen(js_name = saveFragment)]
-   pub async fn wasm_save_fragment(&self, sedimentree_id: &WasmSedimentreeId, fragment: &WasmFragment) -> Result<(), WasmSaveFragmentError> {
+    pub async fn wasm_save_fragment(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        fragment: &WasmFragment,
+    ) -> Result<(), WasmSaveFragmentError> {
         let core_fragment = Fragment::from(fragment.clone());
         let digest = core_fragment.digest();
 
-       #[allow(clippy::expect_used)]
-       let bytes = minicbor::to_vec(&core_fragment).expect("CBOR serialization should be infallible");
+        #[allow(clippy::expect_used)]
+        let bytes =
+            minicbor::to_vec(&core_fragment).expect("CBOR serialization should be infallible");
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
-            digest,
+            digest: digest.to_string(),
             payload: bytes,
         };
         let req = self
             .0
-            .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveFragmentError::TransactionError)?
-            .object_store(FRAGMENT_STORE_NAME).map_err(WasmSaveFragmentError::ObjectStoreError)?
+            .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmSaveFragmentError::TransactionError)?
+            .object_store(FRAGMENT_STORE_NAME)
+            .map_err(WasmSaveFragmentError::ObjectStoreError)?
             .put(&record.into())
             .map_err(WasmSaveFragmentError::UnableToStoreFragment)?;
 
@@ -418,14 +506,25 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns a [`WasmLoadFragmentsError`] if fragments could not be loaded.
     #[wasm_bindgen(js_name = loadFragments)]
-    pub async fn wasm_load_fragments(&self, sedimentree_id: &WasmSedimentreeId) -> Result<Vec<WasmFragment>, WasmLoadFragmentsError> {
-        let tx = self.0
-                     .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadFragmentsError::TransactionError)?;
-        let store = tx.object_store(FRAGMENT_STORE_NAME).map_err(WasmLoadFragmentsError::ObjectStoreError)?;
-        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmLoadFragmentsError::ObjectStoreError)?;
+    pub async fn wasm_load_fragments(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+    ) -> Result<Vec<WasmFragment>, WasmLoadFragmentsError> {
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readonly)
+            .map_err(WasmLoadFragmentsError::TransactionError)?;
+        let store = tx
+            .object_store(FRAGMENT_STORE_NAME)
+            .map_err(WasmLoadFragmentsError::ObjectStoreError)?;
+        let idx = store
+            .index(INDEX_BY_SEDIMENTREE_ID)
+            .map_err(WasmLoadFragmentsError::ObjectStoreError)?;
 
         let key = JsValue::from_str(&sedimentree_id.to_string());
-        let req = idx.get_all_with_key(&key).map_err(WasmLoadFragmentsError::UnableToGetFragments)?;
+        let req = idx
+            .get_all_with_key(&key)
+            .map_err(WasmLoadFragmentsError::UnableToGetFragments)?;
 
         let vals = await_idb(&req).await?;
         let arr = js_sys::Array::from(&vals);
@@ -435,8 +534,8 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadFragmentsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let commit: Fragment = minicbor::decode(&bytes)
-                .map_err(|_| WasmLoadFragmentsError::DecodeError)?;
+            let commit: Fragment =
+                minicbor::decode(&bytes).map_err(|_| WasmLoadFragmentsError::DecodeError)?;
             out.push(commit.into());
         }
 
@@ -453,16 +552,24 @@ impl WasmIndexedDbStorage {
         &self,
         sedimentree_id: &WasmSedimentreeId,
     ) -> Result<(), WasmDeleteFragmentsError> {
-        let tx = self.0
-                     .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteFragmentsError::TransactionError)?;
-        let store = tx.object_store(LOOSE_COMMIT_STORE_NAME).map_err(WasmDeleteFragmentsError::ObjectStoreError)?;
-        let idx = store.index(INDEX_BY_SEDIMENTREE_ID).map_err(WasmDeleteFragmentsError::ObjectStoreError)?;
+        let tx = self
+            .0
+            .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmDeleteFragmentsError::TransactionError)?;
+        let store = tx
+            .object_store(LOOSE_COMMIT_STORE_NAME)
+            .map_err(WasmDeleteFragmentsError::ObjectStoreError)?;
+        let idx = store
+            .index(INDEX_BY_SEDIMENTREE_ID)
+            .map_err(WasmDeleteFragmentsError::ObjectStoreError)?;
 
         let key = JsValue::from_str(&sedimentree_id.to_string());
-        let range = web_sys::IdbKeyRange::only(&key).map_err(WasmDeleteFragmentsError::KeyRangeError)?;
+        let range =
+            web_sys::IdbKeyRange::only(&key).map_err(WasmDeleteFragmentsError::KeyRangeError)?;
 
-        let req = idx.open_key_cursor_with_range(&range)
-                     .map_err(WasmDeleteFragmentsError::UnableToOpenCursor)?;
+        let req = idx
+            .open_key_cursor_with_range(&range)
+            .map_err(WasmDeleteFragmentsError::UnableToOpenCursor)?;
 
         let mut cursor_val = await_idb(&req).await?;
         if cursor_val.is_undefined() || cursor_val.is_null() {
@@ -500,15 +607,18 @@ impl WasmIndexedDbStorage {
     /// or if the blob could not be saved.
     #[wasm_bindgen(js_name = saveBlob)]
     pub async fn wasm_save_blob(&self, bytes: &[u8]) -> Result<WasmDigest, WasmSaveBlobError> {
-        let digest = Digest::hash(bytes);
+        let digest = Digest::<Blob>::hash_bytes(bytes);
         let req = self
             .0
-            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmSaveBlobError::TransactionError)?
-            .object_store(BLOB_STORE_NAME).map_err(WasmSaveBlobError::ObjectStoreError)?
+            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmSaveBlobError::TransactionError)?
+            .object_store(BLOB_STORE_NAME)
+            .map_err(WasmSaveBlobError::ObjectStoreError)?
             .put_with_key(
                 &Uint8Array::from(bytes).into(),
                 &JsValue::from_str(&digest.to_string()), // Hex
-            ).map_err(WasmSaveBlobError::UnableToStoreBlob)?;
+            )
+            .map_err(WasmSaveBlobError::UnableToStoreBlob)?;
 
         drop(await_idb(&req).await?);
         Ok(digest.into())
@@ -520,19 +630,27 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns a `JsValue` if the blob could not be loaded.
     #[wasm_bindgen(js_name = loadBlob)]
-    pub async fn wasm_load_blob(&self, wasm_digest: WasmDigest) -> Result<Option<Vec<u8>>, WasmLoadBlobError> {
+    pub async fn wasm_load_blob(
+        &self,
+        wasm_digest: WasmDigest,
+    ) -> Result<Option<Vec<u8>>, WasmLoadBlobError> {
         let req = self
             .0
-            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readonly).map_err(WasmLoadBlobError::TransactionError)?
-            .object_store(BLOB_STORE_NAME).map_err(WasmLoadBlobError::ObjectStoreError)?
-            .get(&JsValue::from_str(&wasm_digest.to_hex_string())).map_err(WasmLoadBlobError::UnableToGetBlob)?;
+            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readonly)
+            .map_err(WasmLoadBlobError::TransactionError)?
+            .object_store(BLOB_STORE_NAME)
+            .map_err(WasmLoadBlobError::ObjectStoreError)?
+            .get(&JsValue::from_str(&wasm_digest.to_hex_string()))
+            .map_err(WasmLoadBlobError::UnableToGetBlob)?;
 
         let js_value = await_idb(&req).await?;
         if js_value.is_undefined() || js_value.is_null() {
             return Ok(None);
         }
 
-        let u8s = if js_value.is_instance_of::<Uint8Array>() || js_value.is_instance_of::<js_sys::ArrayBuffer>() {
+        let u8s = if js_value.is_instance_of::<Uint8Array>()
+            || js_value.is_instance_of::<js_sys::ArrayBuffer>()
+        {
             Uint8Array::new(&js_value)
         } else {
             return Err(WasmLoadBlobError::NotABlob);
@@ -547,12 +665,18 @@ impl WasmIndexedDbStorage {
     ///
     /// Returns a [`WasmDeleteBlobError`] if the blob could not be deleted.
     #[wasm_bindgen(js_name = deleteBlob)]
-    pub async fn wasm_delete_blob(&self, wasm_digest: WasmDigest) -> Result<(), WasmDeleteBlobError> {
+    pub async fn wasm_delete_blob(
+        &self,
+        wasm_digest: WasmDigest,
+    ) -> Result<(), WasmDeleteBlobError> {
         let req = self
             .0
-            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite).map_err(WasmDeleteBlobError::TransactionError)?
-            .object_store(BLOB_STORE_NAME).map_err(WasmDeleteBlobError::ObjectStoreError)?
-            .delete(&JsValue::from_str(&wasm_digest.to_hex_string())).map_err(WasmDeleteBlobError::UnableToDeleteBlob)?;
+            .transaction_with_str_and_mode(BLOB_STORE_NAME, IdbTransactionMode::Readwrite)
+            .map_err(WasmDeleteBlobError::TransactionError)?
+            .object_store(BLOB_STORE_NAME)
+            .map_err(WasmDeleteBlobError::ObjectStoreError)?
+            .delete(&JsValue::from_str(&wasm_digest.to_hex_string()))
+            .map_err(WasmDeleteBlobError::UnableToDeleteBlob)?;
 
         drop(await_idb(&req).await?);
         Ok(())
@@ -604,7 +728,9 @@ async fn await_idb(req: &IdbRequest) -> Result<JsValue, AwaitIdbError> {
     req.set_onerror(Some(error.as_ref().unchecked_ref()));
     error.forget();
 
-    rx.await.map_err(AwaitIdbError::Canceled)?.map_err(AwaitIdbError::JsPromiseRejected)
+    rx.await
+        .map_err(AwaitIdbError::Canceled)?
+        .map_err(AwaitIdbError::JsPromiseRejected)
 }
 
 /// Error indicating that a `JsValue` was expected to be a `Uint8Array` but was not.
@@ -736,7 +862,6 @@ impl From<WasmDeleteBlobError> for JsValue {
         err.into()
     }
 }
-
 
 /// Error types for `saveSedimentreeId`.
 #[derive(Debug, Error)]
@@ -1061,7 +1186,7 @@ impl From<WasmDeleteLooseCommitsError> for JsValue {
 #[derive(Debug, Clone)]
 pub(crate) struct Record {
     sedimentree_id: SedimentreeId,
-    digest: Digest,
+    digest: String,
     payload: Vec<u8>,
 }
 
@@ -1069,13 +1194,24 @@ impl From<Record> for JsValue {
     fn from(record: Record) -> Self {
         let obj = js_sys::Object::new();
         #[allow(clippy::expect_used)]
-        js_sys::Reflect::set(&obj, &RECORD_FIELD_SEDIMENTREE_ID.into(), &record.sedimentree_id.to_string().into()).expect("SedimentreeId to string failed");
+        js_sys::Reflect::set(
+            &obj,
+            &RECORD_FIELD_SEDIMENTREE_ID.into(),
+            &record.sedimentree_id.to_string().into(),
+        )
+        .expect("SedimentreeId to string failed");
 
         #[allow(clippy::expect_used)]
-        js_sys::Reflect::set(&obj, &RECORD_FIELD_DIGEST.into(), &record.digest.to_string().into()).expect("Digest to bytes failed");
+        js_sys::Reflect::set(&obj, &RECORD_FIELD_DIGEST.into(), &record.digest.into())
+            .expect("Digest to string failed");
 
         #[allow(clippy::expect_used)]
-        js_sys::Reflect::set(&obj, &RECORD_FIELD_PAYLOAD.into(), &js_sys::Uint8Array::from(record.payload.as_slice())).expect("Payload to Uint8Array failed");
+        js_sys::Reflect::set(
+            &obj,
+            &RECORD_FIELD_PAYLOAD.into(),
+            &js_sys::Uint8Array::from(record.payload.as_slice()),
+        )
+        .expect("Payload to Uint8Array failed");
         obj.into()
     }
 }

@@ -20,14 +20,20 @@ jobs:
     steps:
     - uses: actions/checkout@v4
 
-    - name: Build
-      run: cargo build --verbose
+    - name: Build workspace
+      run: cargo build --workspace --verbose
 
-    - name: Build with Test Utils
-      run: cargo build --verbose --all-features
+    - name: Build workspace with all features
+      run: cargo build --workspace --verbose --all-features
 
-    - name: Check
-      run: cargo check --verbose --all-features
+    - name: Check workspace
+      run: cargo check --workspace --verbose --all-features
+
+    - name: Install Nightly Toolchain
+      run: rustup toolchain install nightly --component rustfmt
+
+    - name: Formatting
+      run: cargo +nightly fmt --all -- --check
 
     - name: Clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings

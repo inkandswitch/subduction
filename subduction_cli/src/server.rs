@@ -6,12 +6,14 @@ use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
-    peer::id::PeerId,
+    connection::nonce_cache::NonceCache,
+    crypto::signer::MemorySigner,
+    policy::OpenPolicy,
     storage::{MetricsStorage, RefreshMetrics},
 };
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
-use tungstenite::http::Uri;
 use tokio_util::sync::CancellationToken;
+use tungstenite::http::Uri;
 
 /// Arguments for the server command.
 #[derive(Debug, clap::Parser)]
@@ -24,9 +26,22 @@ pub(crate) struct ServerArgs {
     #[arg(short, long)]
     pub(crate) data_dir: Option<PathBuf>,
 
-    /// Peer ID (64 hex characters)
+    /// Key seed (64 hex characters) for deterministic key generation.
+    /// If not provided, a random key will be generated.
     #[arg(short, long)]
-    pub(crate) peer_id: Option<String>,
+    pub(crate) key_seed: Option<String>,
+
+    /// Maximum clock drift allowed during handshake (in seconds)
+    #[arg(long, default_value = "60")]
+    pub(crate) handshake_max_drift: u64,
+
+    /// Service name for discovery mode (e.g., `sync.example.com`).
+    /// Clients can connect without knowing the server's peer ID.
+    /// The name is hashed to a 32-byte identifier for the handshake.
+    /// Defaults to the socket address if not specified.
+    /// Omit the protocol so the same name works across `wss://`, `https://`, etc.
+    #[arg(long)]
+    pub(crate) service_name: Option<String>,
 
     /// Request timeout in seconds
     #[arg(short, long, default_value = "5")]
@@ -53,6 +68,7 @@ pub(crate) struct ServerArgs {
 const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
 
 /// Run the WebSocket server.
+#[allow(clippy::too_many_lines)]
 pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()> {
     let addr: SocketAddr = args.socket.parse()?;
     let data_dir = args.data_dir.unwrap_or_else(|| PathBuf::from("./data"));
@@ -96,21 +112,35 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
     }
 
-    let peer_id = args
-        .peer_id
-        .map(|s| crate::parse_peer_id(&s))
-        .transpose()?
-        .unwrap_or_else(|| PeerId::new([0; 32]));
+    let signer = match &args.key_seed {
+        Some(hex_seed) => {
+            let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
+            MemorySigner::from_bytes(&seed_bytes)
+        }
+        None => MemorySigner::generate(),
+    };
+    let peer_id = signer.peer_id();
 
-    let server: TokioWebSocketServer<MetricsStorage<FsStorage>> = TokioWebSocketServer::setup(
-        addr,
-        FuturesTimerTimeout,
-        Duration::from_secs(args.timeout),
-        peer_id,
-        storage,
-        CountLeadingZeroBytes,
-    )
-    .await?;
+    // Default service name to socket address if not specified
+    let service_name = args
+        .service_name
+        .clone()
+        .unwrap_or_else(|| args.socket.clone());
+
+    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, MemorySigner> =
+        TokioWebSocketServer::setup(
+            addr,
+            FuturesTimerTimeout,
+            Duration::from_secs(args.timeout),
+            Duration::from_secs(args.handshake_max_drift),
+            signer.clone(),
+            Some(service_name.as_str()),
+            storage,
+            OpenPolicy,
+            NonceCache::default(),
+            CountLeadingZeroBytes,
+        )
+        .await?;
 
     tracing::info!("WebSocket server started on {}", addr);
     tracing::info!("Peer ID: {}", peer_id);
@@ -125,24 +155,23 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             }
         };
 
-        // Generate a peer ID from the URI (temporary until proper peer authentication)
-        let remote_peer_id = {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(uri.to_string().as_bytes());
-            PeerId::new(*hasher.finalize().as_bytes())
-        };
-
         let timeout_duration = Duration::from_secs(args.timeout);
         let peer_server = server.clone();
+        let peer_service_name = service_name.clone();
 
         // Spawn connection attempt in background to avoid blocking startup
         tokio::spawn(async move {
             match peer_server
-                .connect_to_peer(uri.clone(), FuturesTimerTimeout, timeout_duration, remote_peer_id)
+                .try_connect_discover(
+                    uri.clone(),
+                    FuturesTimerTimeout,
+                    timeout_duration,
+                    &peer_service_name,
+                )
                 .await
             {
-                Ok(conn_id) => {
-                    tracing::info!("Connected to peer at {} (connection ID: {:?})", uri, conn_id);
+                Ok(peer_id) => {
+                    tracing::info!("Connected to peer at {} (peer ID: {})", uri, peer_id);
                 }
                 Err(e) => {
                     tracing::error!("Failed to connect to peer at {}: {}", uri, e);

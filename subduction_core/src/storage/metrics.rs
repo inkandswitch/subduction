@@ -8,21 +8,17 @@ use std::{sync::Arc, time::Instant};
 use alloc::vec::Vec;
 
 use async_lock::Mutex;
-use futures::{
-    future::{BoxFuture, LocalBoxFuture},
-    FutureExt,
-};
-use futures_kind::{Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
-    blob::{Blob, Digest},
-    collections::Set,
-    fragment::Fragment,
-    id::SedimentreeId,
+    blob::Blob, collections::Set, digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
-    storage::Storage,
 };
 
-use crate::metrics;
+use crate::{
+    crypto::signed::Signed,
+    metrics,
+    storage::{BatchResult, Storage},
+};
 
 /// A storage wrapper that records metrics for all operations.
 ///
@@ -31,6 +27,7 @@ use crate::metrics;
 #[derive(Debug, Clone)]
 pub struct MetricsStorage<S> {
     inner: S,
+
     /// Track previously-seen sedimentree IDs to clean up stale gauges on refresh.
     previous_ids: Arc<Mutex<Set<SedimentreeId>>>,
 }
@@ -67,12 +64,12 @@ impl<S> MetricsStorage<S> {
 /// Record metrics for a sedimentree's contents.
 fn record_sedimentree_metrics(
     sedimentree_id: SedimentreeId,
-    loose_commits: &[LooseCommit],
-    fragments: &[Fragment],
+    loose_commit_count: usize,
+    fragment_count: usize,
 ) {
     let label = sedimentree_id.to_string();
-    metrics::set_storage_loose_commits(label.clone(), loose_commits.len());
-    metrics::set_storage_fragments(label, fragments.len());
+    metrics::set_storage_loose_commits(label.clone(), loose_commit_count);
+    metrics::set_storage_fragments(label, fragment_count);
 }
 
 /// Trait for refreshing metrics from storage state.
@@ -85,9 +82,7 @@ pub trait RefreshMetrics {
     /// This queries storage to count existing sedimentrees, loose commits,
     /// and fragments, then sets the gauge values accordingly. Call this
     /// periodically to ensure metrics reflect the actual storage state.
-    fn refresh_metrics(
-        &self,
-    ) -> impl Future<Output = Result<(), Self::Error>> + Send;
+    fn refresh_metrics(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
 impl<S> RefreshMetrics for MetricsStorage<S>
@@ -118,15 +113,19 @@ where
         let mut total_fragments = 0;
 
         for sedimentree_id in &sedimentree_ids {
-            let loose_commits =
-                Storage::<Sendable>::load_loose_commits(&self.inner, *sedimentree_id).await?;
-            let fragments =
-                Storage::<Sendable>::load_fragments(&self.inner, *sedimentree_id).await?;
+            // Use list_*_digests for efficient counting (no decoding needed)
+            let commit_digests =
+                Storage::<Sendable>::list_commit_digests(&self.inner, *sedimentree_id).await?;
+            let fragment_digests =
+                Storage::<Sendable>::list_fragment_digests(&self.inner, *sedimentree_id).await?;
 
-            total_loose_commits += loose_commits.len();
-            total_fragments += fragments.len();
+            let commit_count = commit_digests.len();
+            let fragment_count = fragment_digests.len();
 
-            record_sedimentree_metrics(*sedimentree_id, &loose_commits, &fragments);
+            total_loose_commits += commit_count;
+            total_fragments += fragment_count;
+
+            record_sedimentree_metrics(*sedimentree_id, commit_count, fragment_count);
         }
 
         // Update previous IDs for next refresh
@@ -146,17 +145,17 @@ where
     }
 }
 
-impl<S> Storage<Local> for MetricsStorage<S>
-where
-    S: Storage<Local>,
-{
+#[future_form(Sendable where S: Storage<Sendable> + Send + Sync, Local where S: Storage<Local>)]
+impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
     type Error = S::Error;
+
+    // ==================== Sedimentree IDs ====================
 
     fn save_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_sedimentree_id(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -164,15 +163,14 @@ where
                 start.elapsed().as_secs_f64(),
             );
             result
-        }
-        .boxed_local()
+        })
     }
 
     fn delete_sedimentree_id(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_sedimentree_id(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -180,14 +178,11 @@ where
                 start.elapsed().as_secs_f64(),
             );
             result
-        }
-        .boxed_local()
+        })
     }
 
-    fn load_all_sedimentree_ids(
-        &self,
-    ) -> LocalBoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        async move {
+    fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_all_sedimentree_ids().await;
             metrics::storage_operation_duration(
@@ -195,16 +190,17 @@ where
                 start.elapsed().as_secs_f64(),
             );
             result
-        }
-        .boxed_local()
+        })
     }
+
+    // ==================== Loose Commits (CAS) ====================
 
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        loose_commit: LooseCommit,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+        loose_commit: Signed<LooseCommit>,
+    ) -> K::Future<'_, Result<Digest<LooseCommit>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
@@ -212,15 +208,42 @@ where
                 .await;
             metrics::storage_operation_duration("save_loose_commit", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed_local()
+        })
+    }
+
+    fn load_loose_commit(
+        &self,
+        sedimentree_id: SedimentreeId,
+        digest: Digest<LooseCommit>,
+    ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, Self::Error>> {
+        K::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.load_loose_commit(sedimentree_id, digest).await;
+            metrics::storage_operation_duration("load_loose_commit", start.elapsed().as_secs_f64());
+            result
+        })
+    }
+
+    fn list_commit_digests(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> K::Future<'_, Result<Set<Digest<LooseCommit>>, Self::Error>> {
+        K::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.list_commit_digests(sedimentree_id).await;
+            metrics::storage_operation_duration(
+                "list_commit_digests",
+                start.elapsed().as_secs_f64(),
+            );
+            result
+        })
     }
 
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        async move {
+    ) -> K::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_loose_commits(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -228,15 +251,30 @@ where
                 start.elapsed().as_secs_f64(),
             );
             result
-        }
-        .boxed_local()
+        })
+    }
+
+    fn delete_loose_commit(
+        &self,
+        sedimentree_id: SedimentreeId,
+        digest: Digest<LooseCommit>,
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.delete_loose_commit(sedimentree_id, digest).await;
+            metrics::storage_operation_duration(
+                "delete_loose_commit",
+                start.elapsed().as_secs_f64(),
+            );
+            result
+        })
     }
 
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_loose_commits(sedimentree_id).await;
             metrics::storage_operation_duration(
@@ -244,251 +282,177 @@ where
                 start.elapsed().as_secs_f64(),
             );
             result
-        }
-        .boxed_local()
+        })
     }
+
+    // ==================== Fragments (CAS) ====================
 
     fn save_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment: Fragment,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+        fragment: Signed<Fragment>,
+    ) -> K::Future<'_, Result<Digest<Fragment>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_fragment(sedimentree_id, fragment).await;
             metrics::storage_operation_duration("save_fragment", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed_local()
+        })
+    }
+
+    fn load_fragment(
+        &self,
+        sedimentree_id: SedimentreeId,
+        digest: Digest<Fragment>,
+    ) -> K::Future<'_, Result<Option<Signed<Fragment>>, Self::Error>> {
+        K::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.load_fragment(sedimentree_id, digest).await;
+            metrics::storage_operation_duration("load_fragment", start.elapsed().as_secs_f64());
+            result
+        })
+    }
+
+    fn list_fragment_digests(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> K::Future<'_, Result<Set<Digest<Fragment>>, Self::Error>> {
+        K::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.list_fragment_digests(sedimentree_id).await;
+            metrics::storage_operation_duration(
+                "list_fragment_digests",
+                start.elapsed().as_secs_f64(),
+            );
+            result
+        })
     }
 
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
-        async move {
+    ) -> K::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_fragments(sedimentree_id).await;
             metrics::storage_operation_duration("load_fragments", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed_local()
+        })
+    }
+
+    fn delete_fragment(
+        &self,
+        sedimentree_id: SedimentreeId,
+        digest: Digest<Fragment>,
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.delete_fragment(sedimentree_id, digest).await;
+            metrics::storage_operation_duration("delete_fragment", start.elapsed().as_secs_f64());
+            result
+        })
     }
 
     fn delete_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+    ) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_fragments(sedimentree_id).await;
             metrics::storage_operation_duration("delete_fragments", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed_local()
+        })
     }
 
-    fn save_blob(&self, blob: Blob) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
-        async move {
+    // ==================== Blobs (CAS) ====================
+
+    fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.save_blob(blob).await;
             metrics::storage_operation_duration("save_blob", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed_local()
+        })
     }
 
     fn load_blob(
         &self,
-        blob_digest: Digest,
-    ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
-        async move {
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_blob(blob_digest).await;
             metrics::storage_operation_duration("load_blob", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed_local()
+        })
     }
 
-    fn delete_blob(&self, blob_digest: Digest) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+    fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.delete_blob(blob_digest).await;
             metrics::storage_operation_duration("delete_blob", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed_local()
+        })
     }
-}
 
-impl<S> Storage<Sendable> for MetricsStorage<S>
-where
-    S: Storage<Sendable> + Send + Sync,
-{
-    type Error = S::Error;
+    // ==================== Convenience Methods ====================
 
-    fn save_sedimentree_id(
+    fn save_commit_with_blob(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.save_sedimentree_id(sedimentree_id).await;
-            metrics::storage_operation_duration(
-                "save_sedimentree_id",
-                start.elapsed().as_secs_f64(),
-            );
-            result
-        }
-        .boxed()
-    }
-
-    fn delete_sedimentree_id(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.delete_sedimentree_id(sedimentree_id).await;
-            metrics::storage_operation_duration(
-                "delete_sedimentree_id",
-                start.elapsed().as_secs_f64(),
-            );
-            result
-        }
-        .boxed()
-    }
-
-    fn load_all_sedimentree_ids(&self) -> BoxFuture<'_, Result<Set<SedimentreeId>, Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.load_all_sedimentree_ids().await;
-            metrics::storage_operation_duration(
-                "load_all_sedimentree_ids",
-                start.elapsed().as_secs_f64(),
-            );
-            result
-        }
-        .boxed()
-    }
-
-    fn save_loose_commit(
-        &self,
-        sedimentree_id: SedimentreeId,
-        loose_commit: LooseCommit,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+        commit: Signed<LooseCommit>,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
             let result = self
                 .inner
-                .save_loose_commit(sedimentree_id, loose_commit)
+                .save_commit_with_blob(sedimentree_id, commit, blob)
                 .await;
-            metrics::storage_operation_duration("save_loose_commit", start.elapsed().as_secs_f64());
-            result
-        }
-        .boxed()
-    }
-
-    fn load_loose_commits(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<Vec<LooseCommit>, Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.load_loose_commits(sedimentree_id).await;
             metrics::storage_operation_duration(
-                "load_loose_commits",
+                "save_commit_with_blob",
                 start.elapsed().as_secs_f64(),
             );
             result
-        }
-        .boxed()
+        })
     }
 
-    fn delete_loose_commits(
+    fn save_fragment_with_blob(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+        fragment: Signed<Fragment>,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
-            let result = self.inner.delete_loose_commits(sedimentree_id).await;
+            let result = self
+                .inner
+                .save_fragment_with_blob(sedimentree_id, fragment, blob)
+                .await;
             metrics::storage_operation_duration(
-                "delete_loose_commits",
+                "save_fragment_with_blob",
                 start.elapsed().as_secs_f64(),
             );
             result
-        }
-        .boxed()
+        })
     }
 
-    fn save_fragment(
+    fn save_batch(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment: Fragment,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
+        commits: Vec<(Signed<LooseCommit>, Blob)>,
+        fragments: Vec<(Signed<Fragment>, Blob)>,
+    ) -> K::Future<'_, Result<BatchResult, Self::Error>> {
+        K::from_future(async move {
             let start = Instant::now();
-            let result = self.inner.save_fragment(sedimentree_id, fragment).await;
-            metrics::storage_operation_duration("save_fragment", start.elapsed().as_secs_f64());
+            let result = self
+                .inner
+                .save_batch(sedimentree_id, commits, fragments)
+                .await;
+            metrics::storage_operation_duration("save_batch", start.elapsed().as_secs_f64());
             result
-        }
-        .boxed()
-    }
-
-    fn load_fragments(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<Vec<Fragment>, Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.load_fragments(sedimentree_id).await;
-            metrics::storage_operation_duration("load_fragments", start.elapsed().as_secs_f64());
-            result
-        }
-        .boxed()
-    }
-
-    fn delete_fragments(
-        &self,
-        sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.delete_fragments(sedimentree_id).await;
-            metrics::storage_operation_duration("delete_fragments", start.elapsed().as_secs_f64());
-            result
-        }
-        .boxed()
-    }
-
-    fn save_blob(&self, blob: Blob) -> BoxFuture<'_, Result<Digest, Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.save_blob(blob).await;
-            metrics::storage_operation_duration("save_blob", start.elapsed().as_secs_f64());
-            result
-        }
-        .boxed()
-    }
-
-    fn load_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<Option<Blob>, Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.load_blob(blob_digest).await;
-            metrics::storage_operation_duration("load_blob", start.elapsed().as_secs_f64());
-            result
-        }
-        .boxed()
-    }
-
-    fn delete_blob(&self, blob_digest: Digest) -> BoxFuture<'_, Result<(), Self::Error>> {
-        async move {
-            let start = Instant::now();
-            let result = self.inner.delete_blob(blob_digest).await;
-            metrics::storage_operation_duration("delete_blob", start.elapsed().as_secs_f64());
-            result
-        }
-        .boxed()
+        })
     }
 }

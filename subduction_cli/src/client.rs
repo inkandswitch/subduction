@@ -3,7 +3,7 @@
 use crate::fs_storage::FsStorage;
 use anyhow::Result;
 use std::{path::PathBuf, time::Duration};
-use subduction_core::peer::id::PeerId;
+use subduction_core::crypto::signer::MemorySigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
@@ -19,9 +19,15 @@ pub(crate) struct ClientArgs {
     #[arg(short, long)]
     pub(crate) data_dir: Option<PathBuf>,
 
-    /// Peer ID (64 hex characters)
+    /// Key seed (64 hex characters) for deterministic key generation.
+    /// If not provided, a random key will be generated.
     #[arg(short, long)]
-    pub(crate) peer_id: Option<String>,
+    pub(crate) key_seed: Option<String>,
+
+    /// Expected server peer ID (64 hex characters).
+    /// Required to verify the server's identity during handshake.
+    #[arg(long)]
+    pub(crate) server_peer_id: String,
 
     /// Request timeout in seconds
     #[arg(short, long, default_value = "5")]
@@ -31,32 +37,38 @@ pub(crate) struct ClientArgs {
 /// Run the WebSocket client.
 pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()> {
     let uri: Uri = args.server.parse()?;
-    let data_dir = args.data_dir.unwrap_or_else(|| PathBuf::from("./client-data"));
+    let data_dir = args
+        .data_dir
+        .unwrap_or_else(|| PathBuf::from("./client-data"));
 
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
     let _storage = FsStorage::new(data_dir)?;
 
-    let peer_id = args
-        .peer_id
-        .map(|s| crate::parse_peer_id(&s))
-        .transpose()?
-        .unwrap_or_else(|| {
-            let mut bytes = [0u8; 32];
-            bytes[0] = 1; // Differentiate from server default
-            PeerId::new(bytes)
-        });
+    let signer = match &args.key_seed {
+        Some(hex_seed) => {
+            let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
+            MemorySigner::from_bytes(&seed_bytes)
+        }
+        None => MemorySigner::generate(),
+    };
+    let peer_id = signer.peer_id();
+
+    let server_peer_id = crate::parse_peer_id(&args.server_peer_id)?;
 
     tracing::info!("Connecting to WebSocket server at {}", uri);
-    let (_client, listen_fut): (TokioWebSocketClient<_>, _) = TokioWebSocketClient::new(
-        uri,
-        FuturesTimerTimeout,
-        Duration::from_secs(args.timeout),
-        peer_id,
-    )
-    .await?;
+    let (_client, listen_fut): (TokioWebSocketClient<MemorySigner, _>, _) =
+        TokioWebSocketClient::new(
+            uri,
+            FuturesTimerTimeout,
+            Duration::from_secs(args.timeout),
+            signer,
+            server_peer_id,
+        )
+        .await?;
 
     tracing::info!("WebSocket client connected");
-    tracing::info!("Peer ID: {}", peer_id);
+    tracing::info!("Client Peer ID: {}", peer_id);
+    tracing::info!("Server Peer ID: {}", server_peer_id);
 
     // Spawn the listener task
     let listener_token = token.clone();

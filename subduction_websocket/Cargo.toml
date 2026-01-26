@@ -20,7 +20,7 @@ async-tungstenite = { workspace = true }
 blake3 = { workspace = true }
 minicbor = { workspace = true }
 futures = { workspace = true }
-futures_kind = { workspace = true }
+future_form = { workspace = true }
 futures-timer = { workspace = true, optional = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
@@ -53,6 +53,7 @@ std = [
   "futures-util/io",
   "futures-util/std",
   "rand/std",
+  "rand/std_rng",
   "sedimentree_core/std",
   "subduction_core/std",
   "thiserror/std",

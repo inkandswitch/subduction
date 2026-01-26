@@ -1,10 +1,7 @@
 //! Individual/"loose" commits.
 
 use alloc::{borrow::ToOwned, vec::Vec};
-use sedimentree_core::{
-    blob::{BlobMeta, Digest},
-    loose_commit::LooseCommit,
-};
+use sedimentree_core::{blob::BlobMeta, digest::Digest, loose_commit::LooseCommit};
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
@@ -23,7 +20,7 @@ impl WasmLooseCommit {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(digest: &WasmDigest, parents: Vec<JsDigest>, blob_meta: &WasmBlobMeta) -> Self {
-        let core_parents: Vec<Digest> =
+        let core_parents: Vec<Digest<LooseCommit>> =
             parents.iter().map(|d| WasmDigest::from(d).into()).collect();
 
         let core_commit = LooseCommit::new(
@@ -128,16 +125,4 @@ extern "C" {
     /// Try to convert a `JsValue` into an array of `WasmLooseCommit`.
     #[wasm_bindgen(js_name = tryIntoLooseCommitArray, catch)]
     pub fn try_into_js_loose_commit_array(v: &JsValue) -> Result<Vec<WasmLooseCommit>, JsValue>;
-}
-
-pub(crate) struct WasmLooseCommitsArray(pub(crate) Vec<WasmLooseCommit>);
-
-impl TryFrom<&JsValue> for WasmLooseCommitsArray {
-    type Error = JsValue;
-
-    fn try_from(js_value: &JsValue) -> Result<Self, Self::Error> {
-        Ok(WasmLooseCommitsArray(try_into_js_loose_commit_array(
-            js_value,
-        )?))
-    }
 }

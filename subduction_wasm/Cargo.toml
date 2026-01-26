@@ -19,17 +19,19 @@ crate-type = ["cdylib", "rlib"]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
+ed25519-dalek = { workspace = true }
 minicbor = { workspace = true }
 build_info = { path = "../build_info" }
 console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
-futures_kind = { workspace = true }
+future_form = { workspace = true }
 futures-util = { workspace = true }
-getrandom = { workspace = true, features = ["wasm_js"] }
+getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
+sedimentree_wasm = { path = "../sedimentree_wasm", default-features = false }
 subduction_core = { path = "../subduction_core", default-features = false, features = ["getrandom"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -42,13 +44,28 @@ version = "0.3.81"
 default-features = false
 features = [
   "BinaryType",
+  "Crypto",
+  "CryptoKey",
   "DomException",
+  "DomStringList",
+  "IdbDatabase",
+  "IdbFactory",
+  "IdbObjectStore",
+  "IdbOpenDbRequest",
+  "IdbRequest",
+  "IdbTransaction",
+  "IdbTransactionMode",
+  "IdbVersionChangeEvent",
   "MessageEvent",
   "ServiceWorkerGlobalScope",
+  "SubtleCrypto",
   "Url",
   "WebSocket",
   "Window"
 ]
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [dev-dependencies]
 wasm-bindgen-test = "0.2"
@@ -58,20 +75,7 @@ default = []
 # Enable for better panic messages in dev builds (adds ~30KB due to std)
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 # IndexedDB storage backend
-idb = [
-  "web-sys/DomStringList",
-  "web-sys/IdbCursorWithValue",
-  "web-sys/IdbDatabase",
-  "web-sys/IdbFactory",
-  "web-sys/IdbIndex",
-  "web-sys/IdbKeyRange",
-  "web-sys/IdbObjectStore",
-  "web-sys/IdbObjectStoreParameters",
-  "web-sys/IdbOpenDbRequest",
-  "web-sys/IdbTransaction",
-  "web-sys/IdbTransactionMode",
-  "web-sys/IdbVersionChangeEvent"
-]
+idb = ["sedimentree_wasm/idb"]
 std = [
   "async-channel/std",
   "async-lock/std",
@@ -81,6 +85,7 @@ std = [
   "js-sys/std",
   "rand/std",
   "sedimentree_core/std",
+  "sedimentree_wasm/std",
   "subduction_core/std",
   "thiserror/std",
   "wasm-bindgen/std",

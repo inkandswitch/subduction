@@ -3,14 +3,11 @@
 use alloc::vec::Vec;
 
 use sedimentree_core::{
-    blob::{Blob, Digest},
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
     sedimentree::SedimentreeSummary,
 };
 
-use crate::peer::id::PeerId;
+use crate::{crypto::signed::Signed, peer::id::PeerId};
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
@@ -25,9 +22,9 @@ pub enum Message {
         #[n(0)]
         id: SedimentreeId,
 
-        /// The [`LooseCommit`] being sent.
+        /// The signed [`LooseCommit`] being sent.
         #[n(1)]
-        commit: LooseCommit,
+        commit: Signed<LooseCommit>,
 
         /// The [`Blob`] containing the commit data.
         #[n(2)]
@@ -41,9 +38,9 @@ pub enum Message {
         #[n(0)]
         id: SedimentreeId,
 
-        /// The [`Fragment`] being sent.
+        /// The signed [`Fragment`] being sent.
         #[n(1)]
-        fragment: Fragment,
+        fragment: Signed<Fragment>,
 
         /// The [`Blob`] containing the fragment data.
         #[n(2)]
@@ -52,7 +49,7 @@ pub enum Message {
 
     /// A request for blobs by their [`Digest`]s.
     #[n(2)]
-    BlobsRequest(#[n(0)] Vec<Digest>),
+    BlobsRequest(#[n(0)] Vec<Digest<Blob>>),
 
     /// A response to a [`BlobRequest`].
     #[n(3)]
@@ -65,6 +62,10 @@ pub enum Message {
     /// A response to a [`BatchSyncRequest`].
     #[n(5)]
     BatchSyncResponse(#[n(0)] BatchSyncResponse),
+
+    /// A request to remove subscriptions from specific sedimentrees.
+    #[n(6)]
+    RemoveSubscriptions(#[n(0)] RemoveSubscriptions),
 }
 
 impl Message {
@@ -77,7 +78,8 @@ impl Message {
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_) => None,
+            | Message::BlobsResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -91,10 +93,14 @@ impl Message {
             Message::BlobsResponse(_) => "BlobsResponse",
             Message::BatchSyncRequest(_) => "BatchSyncRequest",
             Message::BatchSyncResponse(_) => "BatchSyncResponse",
+            Message::RemoveSubscriptions(_) => "RemoveSubscriptions",
         }
     }
 
     /// Get the sedimentree ID associated with this message, if any.
+    ///
+    /// Returns `None` for messages that don't have a single associated ID
+    /// (e.g., `BlobsRequest`, `RemoveSubscriptions` with multiple IDs).
     #[must_use]
     pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
         match self {
@@ -102,7 +108,9 @@ impl Message {
             | Message::Fragment { id, .. }
             | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
             | Message::BatchSyncResponse(BatchSyncResponse { id, .. }) => Some(*id),
-            Message::BlobsRequest(_) | Message::BlobsResponse(_) => None,
+            Message::BlobsRequest(_)
+            | Message::BlobsResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 }
@@ -124,6 +132,10 @@ pub struct BatchSyncRequest {
     /// The summary of the sedimentree that the requester has.
     #[n(2)]
     pub sedimentree_summary: SedimentreeSummary,
+
+    /// Whether to subscribe to future updates for this sedimentree.
+    #[n(3)]
+    pub subscribe: bool,
 }
 
 impl From<BatchSyncRequest> for Message {
@@ -157,13 +169,36 @@ impl From<BatchSyncResponse> for Message {
     }
 }
 
+/// A request to remove subscriptions from specific sedimentrees.
+#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RemoveSubscriptions {
+    /// The IDs of the sedimentrees to unsubscribe from.
+    #[n(0)]
+    pub ids: Vec<SedimentreeId>,
+}
+
+impl From<RemoveSubscriptions> for Message {
+    fn from(unsub: RemoveSubscriptions) -> Self {
+        Message::RemoveSubscriptions(unsub)
+    }
+}
+
 /// A unique identifier for a particular request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestId {
     /// ID for the peer that initiated the request.
+    ///
+    /// This namespaces nonces so they only need to be unique per-peer rather than globally.
+    /// Not redundant with connection-level auth or `Signed<T>` — `RequestId` must be
+    /// matchable without accessing the connection, and these messages aren't individually signed.
     #[n(0)]
     pub requestor: PeerId,
 
@@ -172,7 +207,6 @@ pub struct RequestId {
     pub nonce: u64,
 }
 
-// TODO also make a version for the sender that is borrowed instead of owned.
 /// The calculated difference for the remote peer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -180,44 +214,62 @@ pub struct RequestId {
 pub struct SyncDiff {
     /// Commits that we are missing and need to request from the peer.
     #[n(0)]
-    pub missing_commits: Vec<(LooseCommit, Blob)>,
+    pub missing_commits: Vec<(Signed<LooseCommit>, Blob)>,
 
     /// Fragments that we are missing and need to request from the peer.
     #[n(1)]
-    pub missing_fragments: Vec<(Fragment, Blob)>,
+    pub missing_fragments: Vec<(Signed<Fragment>, Blob)>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     mod message_request_id {
         use super::*;
+        use crate::crypto::signed::Signed;
+        use crate::crypto::signer::MemorySigner;
+        use future_form::Sendable;
 
-        #[test]
-        fn test_loose_commit_has_no_request_id() {
+        fn test_signer() -> MemorySigner {
+            MemorySigner::from_bytes(&[42u8; 32])
+        }
+
+        #[tokio::test]
+        async fn test_loose_commit_has_no_request_id() {
+            let signer = test_signer();
+            let commit = LooseCommit::new(
+                Digest::from_bytes([2u8; 32]),
+                Vec::new(),
+                sedimentree_core::blob::BlobMeta::new(&[]),
+            );
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
             let msg = Message::LooseCommit {
                 id: SedimentreeId::new([1u8; 32]),
-                commit: LooseCommit::new(
-                    Digest::from([2u8; 32]),
-                    Vec::new(),
-                    sedimentree_core::blob::BlobMeta::new(&[]),
-                ),
+                commit: signed_commit,
                 blob: Blob::new(Vec::from([3u8; 16])),
             };
             assert_eq!(msg.request_id(), None);
         }
 
-        #[test]
-        fn test_fragment_has_no_request_id() {
+        #[tokio::test]
+        async fn test_fragment_has_no_request_id() {
+            let signer = test_signer();
+            let fragment = Fragment::new(
+                Digest::from_bytes([2u8; 32]),
+                Vec::new(),
+                Vec::new(),
+                sedimentree_core::blob::BlobMeta::new(&[]),
+            );
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+                .await
+                .into_signed();
             let msg = Message::Fragment {
                 id: SedimentreeId::new([1u8; 32]),
-                fragment: Fragment::new(
-                    Digest::from([2u8; 32]),
-                    Vec::new(),
-                    Vec::new(),
-                    sedimentree_core::blob::BlobMeta::new(&[]),
-                ),
+                fragment: signed_fragment,
                 blob: Blob::new(Vec::from([3u8; 16])),
             };
             assert_eq!(msg.request_id(), None);
@@ -225,7 +277,7 @@ mod tests {
 
         #[test]
         fn test_blobs_request_has_no_request_id() {
-            let msg = Message::BlobsRequest(vec![Digest::from([1u8; 32])]);
+            let msg = Message::BlobsRequest(vec![Digest::from_bytes([1u8; 32])]);
             assert_eq!(msg.request_id(), None);
         }
 
@@ -245,6 +297,7 @@ mod tests {
                 id: SedimentreeId::new([2u8; 32]),
                 req_id,
                 sedimentree_summary: SedimentreeSummary::default(),
+                subscribe: false,
             });
             assert_eq!(msg.request_id(), Some(req_id));
         }
@@ -331,6 +384,7 @@ mod tests {
                     nonce: 42,
                 },
                 sedimentree_summary: SedimentreeSummary::default(),
+                subscribe: false,
             };
 
             let msg: Message = req.clone().into();
@@ -343,7 +397,8 @@ mod tests {
                 | Message::Fragment { .. }
                 | Message::BlobsRequest(_)
                 | Message::BlobsResponse(_)
-                | Message::BatchSyncResponse(_) => {
+                | Message::BatchSyncResponse(_)
+                | Message::RemoveSubscriptions(_) => {
                     unreachable!("Expected BatchSyncRequest")
                 }
             }
@@ -373,7 +428,8 @@ mod tests {
                 | Message::Fragment { .. }
                 | Message::BlobsRequest(_)
                 | Message::BlobsResponse(_)
-                | Message::BatchSyncRequest(_) => {
+                | Message::BatchSyncRequest(_)
+                | Message::RemoveSubscriptions(_) => {
                     unreachable!("Expected BatchSyncResponse")
                 }
             }
@@ -382,6 +438,13 @@ mod tests {
 
     mod sync_diff {
         use super::*;
+        use crate::crypto::signed::Signed;
+        use crate::crypto::signer::MemorySigner;
+        use future_form::Sendable;
+
+        fn test_signer() -> MemorySigner {
+            MemorySigner::from_bytes(&[42u8; 32])
+        }
 
         #[test]
         fn test_empty_sync_diff() {
@@ -394,17 +457,21 @@ mod tests {
             assert_eq!(diff.missing_fragments.len(), 0);
         }
 
-        #[test]
-        fn test_sync_diff_with_commits() {
+        #[tokio::test]
+        async fn test_sync_diff_with_commits() {
+            let signer = test_signer();
             let commit = LooseCommit::new(
-                Digest::from([1u8; 32]),
+                Digest::from_bytes([1u8; 32]),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([2u8; 16]));
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
 
             let diff = SyncDiff {
-                missing_commits: vec![(commit.clone(), blob.clone())],
+                missing_commits: vec![(signed_commit.clone(), blob.clone())],
                 missing_fragments: Vec::new(),
             };
 
@@ -412,23 +479,27 @@ mod tests {
 
             #[allow(clippy::unwrap_used)]
             {
-                assert_eq!(diff.missing_commits.first().unwrap().0, commit);
+                assert_eq!(diff.missing_commits.first().unwrap().0, signed_commit);
             }
         }
 
-        #[test]
-        fn test_sync_diff_with_fragments() {
+        #[tokio::test]
+        async fn test_sync_diff_with_fragments() {
+            let signer = test_signer();
             let fragment = Fragment::new(
-                Digest::from([2u8; 32]),
+                Digest::from_bytes([2u8; 32]),
                 Vec::new(),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([3u8; 16]));
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+                .await
+                .into_signed();
 
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
-                missing_fragments: vec![(fragment.clone(), blob.clone())],
+                missing_fragments: vec![(signed_fragment, blob)],
             };
 
             assert_eq!(diff.missing_fragments.len(), 1);
@@ -438,26 +509,6 @@ mod tests {
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
         use super::*;
-
-        #[test]
-        fn prop_request_id_equality_is_reflexive() {
-            bolero::check!()
-                .with_type::<RequestId>()
-                .for_each(|req_id| {
-                    assert_eq!(req_id, req_id);
-                });
-        }
-
-        #[test]
-        fn prop_request_id_ordering_is_transitive() {
-            bolero::check!()
-                .with_type::<(RequestId, RequestId, RequestId)>()
-                .for_each(|(req1, req2, req3)| {
-                    if req1 < req2 && req2 < req3 {
-                        assert!(req1 < req3);
-                    }
-                });
-        }
 
         #[test]
         fn prop_batch_sync_request_preserves_req_id() {

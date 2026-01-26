@@ -10,9 +10,9 @@
 use alloc::{vec, vec::Vec};
 
 use crate::{
-    blob::Digest,
     collections::{Map, Set},
     depth::{DepthMetric, MAX_STRATA_DEPTH},
+    digest::Digest,
     fragment::Fragment,
     loose_commit::LooseCommit,
 };
@@ -22,13 +22,13 @@ use crate::{
 #[derive(Debug, Clone)]
 pub(crate) struct CommitDag {
     nodes: Vec<Node>,
-    node_map: Map<Digest, NodeIdx>,
+    node_map: Map<Digest<LooseCommit>, NodeIdx>,
     edges: Vec<Edge>,
 }
 
 #[derive(Debug, Clone)]
 struct Node {
-    hash: Digest,
+    hash: Digest<LooseCommit>,
     parents: Option<EdgeIdx>,
     children: Option<EdgeIdx>,
 }
@@ -36,8 +36,6 @@ struct Node {
 #[derive(Debug, Clone)]
 struct Edge {
     source: NodeIdx,
-    #[allow(dead_code)]
-    target: NodeIdx,
     next: Option<EdgeIdx>,
 }
 
@@ -90,11 +88,7 @@ impl CommitDag {
     fn add_edge(&mut self, source: NodeIdx, target: NodeIdx) {
         // Add an edge in the child node
         let new_edge_idx = EdgeIdx(self.edges.len());
-        let new_edge = Edge {
-            source,
-            target,
-            next: None,
-        };
+        let new_edge = Edge { source, next: None };
         self.edges.push(new_edge);
 
         #[allow(clippy::expect_used)]
@@ -124,11 +118,7 @@ impl CommitDag {
 
         // Now add an edge in the parent node
         let new_edge_idx = EdgeIdx(self.edges.len());
-        let new_edge = Edge {
-            source,
-            target,
-            next: None,
-        };
+        let new_edge = Edge { source, next: None };
         self.edges.push(new_edge);
 
         #[allow(clippy::expect_used)]
@@ -223,7 +213,7 @@ impl CommitDag {
         });
 
         for tip in tips {
-            let mut block: Option<(Digest, Vec<Digest>)> = None;
+            let mut block: Option<(Digest<LooseCommit>, Vec<Digest<LooseCommit>>)> = None;
             for hash in self.reverse_topo(tip) {
                 let depth = strategy.to_depth(hash);
                 if depth >= MAX_STRATA_DEPTH {
@@ -323,7 +313,10 @@ impl CommitDag {
         Parents::new(self, node)
     }
 
-    fn parents_of_hash(&self, hash: Digest) -> impl Iterator<Item = Digest> + '_ {
+    fn parents_of_hash(
+        &self,
+        hash: Digest<LooseCommit>,
+    ) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
         self.node_map
             .get(&hash)
             .map(|idx| {
@@ -339,15 +332,15 @@ impl CommitDag {
             .flatten()
     }
 
-    fn reverse_topo(&self, start: NodeIdx) -> impl Iterator<Item = Digest> + '_ {
+    fn reverse_topo(&self, start: NodeIdx) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
         ReverseTopo::new(self, start)
     }
 
-    pub(crate) fn contains_commit(&self, commit: &Digest) -> bool {
+    pub(crate) fn contains_commit(&self, commit: &Digest<LooseCommit>) -> bool {
         self.node_map.contains_key(commit)
     }
 
-    pub(crate) fn heads(&self) -> impl Iterator<Item = Digest> + '_ {
+    pub(crate) fn heads(&self) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
         self.nodes.iter().filter_map(|node| {
             if node.children.is_none() {
                 Some(node.hash)
@@ -367,7 +360,7 @@ impl CommitDag {
         &'a self,
         fragments: I,
         hash_metric: &'a M,
-    ) -> impl Iterator<Item = Digest> + 'a {
+    ) -> impl Iterator<Item = Digest<LooseCommit>> + 'a {
         // First find the tips of the DAG, which is the heads of the commit DAG,
         // plus the end hashes of any fragments which are not contained in the
         // commit DAG
@@ -426,7 +419,7 @@ impl CommitDag {
     }
 
     #[cfg(test)]
-    fn commit_hashes(&self) -> impl Iterator<Item = Digest> + '_ {
+    fn commit_hashes(&self) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
         self.nodes.iter().map(|node| node.hash)
     }
 }
@@ -449,7 +442,7 @@ impl<'a> ReverseTopo<'a> {
 }
 
 impl Iterator for ReverseTopo<'_> {
-    type Item = Digest;
+    type Item = Digest<LooseCommit>;
 
     fn next(&mut self) -> Option<Self::Item> {
         while let Some(node) = self.stack.pop() {
@@ -499,27 +492,33 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::{
+        string::{String, ToString},
+        vec::Vec,
+    };
+
     use super::CommitDag;
     use crate::{
-        blob::{BlobMeta, Digest},
+        blob::BlobMeta,
         collections::{Map, Set},
         commit::CountLeadingZeroBytes,
+        digest::Digest,
         loose_commit::LooseCommit,
     };
 
-    fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest {
-        let mut byte_arr: [u8; 32] = rng.random::<[u8; 32]>();
+    fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest<LooseCommit> {
+        let mut byte_arr: [u8; 32] = rng.r#gen::<[u8; 32]>();
         for slot in byte_arr.iter_mut().take(zeros_count as usize) {
             *slot = 0;
         }
-        Digest::from(byte_arr)
+        Digest::from_bytes(byte_arr)
     }
 
     #[derive(Debug)]
     struct TestGraph {
-        nodes: Map<String, Digest>,
-        parents: Map<Digest, Vec<Digest>>,
-        commits: Map<Digest, BlobMeta>,
+        nodes: Map<String, Digest<LooseCommit>>,
+        parents: Map<Digest<LooseCommit>, Vec<Digest<LooseCommit>>>,
+        commits: Map<Digest<LooseCommit>, BlobMeta>,
     }
 
     impl TestGraph {
@@ -568,7 +567,7 @@ mod tests {
             commits
         }
 
-        fn node_hash(&self, node: &str) -> Digest {
+        fn node_hash(&self, node: &str) -> Digest<LooseCommit> {
             #[allow(clippy::unwrap_used)]
             *self.nodes.get(node).unwrap()
         }
@@ -584,7 +583,7 @@ mod tests {
     fn make_commit_hashes<R: rand::Rng>(
         rng: &mut R,
         names: Vec<(&'static str, usize)>,
-    ) -> Map<String, Digest> {
+    ) -> Map<String, Digest<LooseCommit>> {
         let mut commits = Map::new();
         let mut last_commit = None;
         for (name, level) in names {
@@ -607,10 +606,10 @@ mod tests {
         commits
     }
 
-    fn random_commit_hash<R: rand::Rng>(rng: &mut R) -> Digest {
+    fn random_commit_hash<R: rand::Rng>(rng: &mut R) -> Digest<LooseCommit> {
         let mut hash = [0; 32];
         rng.fill_bytes(&mut hash);
-        Digest::from(hash)
+        Digest::from_bytes(hash)
     }
 
     fn random_blob<R: rand::Rng>(rng: &mut R) -> BlobMeta {
@@ -636,7 +635,7 @@ mod tests {
                 random_blob($rng),
             ),)*];
             let dag = graph.as_dag();
-            let mut commit_name_map = Map::<Digest, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
+            let mut commit_name_map = Map::<Digest<LooseCommit>, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
             $(
                 commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
             )*
@@ -648,7 +647,10 @@ mod tests {
         };
     }
 
-    fn pretty_hashes(name_map: &Map<Digest, &'_ str>, hashes: &Set<Digest>) -> Set<String> {
+    fn pretty_hashes(
+        name_map: &Map<Digest<LooseCommit>, &'_ str>,
+        hashes: &Set<Digest<LooseCommit>>,
+    ) -> Set<String> {
         hashes
             .iter()
             .map(|h| {
@@ -662,7 +664,7 @@ mod tests {
     // #[test]
     // fn simplify_basic() {
     //     simplify_test!(
-    //         rng => &mut rand::rng(),
+    //         rng => &mut rand::thread_rng(),
     //         nodes => | node | level |
     //                  |   a  |   2   |
     //                  |   b  |   0   |
@@ -685,7 +687,7 @@ mod tests {
     // #[test]
     // fn simplify_multiple_heads() {
     //     simplify_test!(
-    //         rng => &mut rand::rng(),
+    //         rng => &mut rand::thread_rng(),
     //         nodes => | node | level |
     //                  |   a  |   0   |
     //                  |   b  |   0   |
@@ -704,9 +706,10 @@ mod tests {
     // }
 
     #[test]
+    #[cfg(feature = "std")]
     fn simplify_block_boundaries_without_fragments() {
         simplify_test!(
-            rng => &mut rand::rng(),
+            rng => &mut rand::thread_rng(),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   0   |,
@@ -719,9 +722,10 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
         simplify_test!(
-            rng => &mut rand::rng(),
+            rng => &mut rand::thread_rng(),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   2   |,
@@ -734,8 +738,9 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_parents() {
-        let mut rng = rand::rng();
+        let mut rng = rand::thread_rng();
         let a = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let c = LooseCommit::new(

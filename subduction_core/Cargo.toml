@@ -18,7 +18,7 @@ async-lock = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures = { workspace = true }
-futures_kind = { workspace = true }
+future_form = { workspace = true }
 getrandom = { workspace = true, optional = true }
 metrics = { workspace = true, optional = true }
 minicbor = { workspace = true }
@@ -44,9 +44,9 @@ harness = false
 default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
 getrandom = ["dep:getrandom"]
-bolero = ["dep:bolero", "arbitrary"]
+bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero"]
 metrics = ["dep:metrics", "std"]
-serde = ["dep:serde"]
+serde = ["dep:serde", "ed25519-dalek/serde"]
 serde-std = ["serde/std"]
 std = [
   "async-channel/std",

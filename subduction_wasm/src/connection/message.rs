@@ -12,7 +12,7 @@ use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 use crate::{
-    digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit,
+    digest::WasmDigest, loose_commit::WasmLooseCommit, sedimentree_fragment::WasmFragment,
     sedimentree_id::WasmSedimentreeId,
 };
 
@@ -47,38 +47,6 @@ impl WasmMessage {
     pub fn from_cbor_bytes(bytes: &[u8]) -> Result<Self, JsMessageDeserializationError> {
         let msg: Message = minicbor::decode(bytes).map_err(JsMessageDeserializationError)?;
         Ok(msg.into())
-    }
-
-    /// Create a [`Message::LooseCommit`] message.
-    #[wasm_bindgen(js_name = looseCommit)]
-    #[must_use]
-    pub fn loose_commit(
-        id: &WasmSedimentreeId,
-        commit: &WasmLooseCommit,
-        blob: &Uint8Array,
-    ) -> Self {
-        Message::LooseCommit {
-            id: id.clone().into(),
-            commit: commit.clone().into(),
-            blob: Blob::from(blob.to_vec()),
-        }
-        .into()
-    }
-
-    /// Create a [`Message::Fragment`] message.
-    #[wasm_bindgen(js_name = newFragment)]
-    #[must_use]
-    pub fn new_fragment(
-        id: &WasmSedimentreeId,
-        fragment: &WasmFragment,
-        blob: &Uint8Array,
-    ) -> Self {
-        Message::Fragment {
-            id: id.clone().into(),
-            fragment: fragment.clone().into(),
-            blob: Blob::from(blob.to_vec()),
-        }
-        .into()
     }
 
     /// Create a [`Message::BlobsRequest`] message.
@@ -126,30 +94,40 @@ impl WasmMessage {
     }
 
     /// The [`LooseCommit`] for a [`Message::LooseCommit`], if applicable.
+    ///
+    /// Decodes the signed payload to extract the underlying commit.
     #[wasm_bindgen(getter, js_name = commit)]
     #[must_use]
     pub fn commit(&self) -> Option<WasmLooseCommit> {
         match &self.0 {
-            Message::LooseCommit { commit, .. } => Some(commit.clone().into()),
+            Message::LooseCommit { commit, .. } => {
+                commit.decode_payload().ok().map(WasmLooseCommit::from)
+            }
             Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
     /// The [`Fragment`] for a [`Message::Fragment`], if applicable.
+    ///
+    /// Decodes the signed payload to extract the underlying fragment.
     #[wasm_bindgen(getter, js_name = fragment)]
     #[must_use]
     pub fn fragment(&self) -> Option<WasmFragment> {
         match &self.0 {
-            Message::Fragment { fragment, .. } => Some(fragment.clone().into()),
+            Message::Fragment { fragment, .. } => {
+                fragment.decode_payload().ok().map(WasmFragment::from)
+            }
             Message::LooseCommit { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -164,7 +142,8 @@ impl WasmMessage {
             Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -180,7 +159,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsResponse(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -199,7 +179,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BatchSyncRequest(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -213,7 +194,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
-            | Message::BatchSyncResponse(_) => None,
+            | Message::BatchSyncResponse(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 
@@ -227,7 +209,8 @@ impl WasmMessage {
             | Message::Fragment { .. }
             | Message::BlobsRequest(_)
             | Message::BlobsResponse(_)
-            | Message::BatchSyncRequest(_) => None,
+            | Message::BatchSyncRequest(_)
+            | Message::RemoveSubscriptions(_) => None,
         }
     }
 }

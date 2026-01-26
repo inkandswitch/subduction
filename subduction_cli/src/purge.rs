@@ -77,7 +77,5 @@ fn count_items(dir: &PathBuf) -> usize {
         return 0;
     }
 
-    std::fs::read_dir(dir)
-        .map(Iterator::count)
-        .unwrap_or(0)
+    std::fs::read_dir(dir).map(Iterator::count).unwrap_or(0)
 }

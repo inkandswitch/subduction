@@ -1,55 +1,85 @@
 //! Subduction node.
 
-use alloc::{format, sync::Arc, vec::Vec};
+use alloc::{format, string::String, sync::Arc, vec::Vec};
 use core::{fmt::Debug, time::Duration};
 use sedimentree_core::collections::Map;
 
 use from_js_ref::FromJsRef;
+use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
-use futures_kind::Local;
 use js_sys::Uint8Array;
 use sedimentree_core::{
-    blob::{Blob, Digest},
+    blob::Blob,
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
+    digest::Digest,
+    loose_commit::LooseCommit,
 };
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
-use subduction_core::{peer::id::PeerId, sharded_map::ShardedMap, Subduction};
+use subduction_core::{
+    Subduction,
+    connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
+    peer::id::PeerId,
+    policy::OpenPolicy,
+    sharded_map::ShardedMap,
+};
 use wasm_bindgen::prelude::*;
 
 use crate::{
     connection::{JsConnection, JsConnectionError},
-    connection_id::WasmConnectionId,
     depth::JsToDepth,
     digest::{JsDigest, WasmDigest},
-    error::{WasmDisconnectionError, WasmHydrationError, WasmIoError, WasmRegistrationError},
-    fragment::{WasmFragment, WasmFragmentRequested},
+    error::{
+        WasmAttachError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
+        WasmRegistrationError, WasmWriteError,
+    },
+    fragment::WasmFragmentRequested,
     loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
     sedimentree::WasmSedimentree,
+    sedimentree_fragment::WasmFragment,
     sedimentree_id::WasmSedimentreeId,
-    storage::{JsSubductionStorage, JsSubductionStorageError},
+    signer::JsSigner,
+    storage::{JsSedimentreeStorage, JsSedimentreeStorageError},
 };
 
 use super::depth::WasmDepth;
 
+use futures::future::LocalBoxFuture;
+use futures::stream::{AbortHandle, Abortable};
+
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 const WASM_SHARD_COUNT: usize = 4;
 
+/// A spawner that uses wasm-bindgen-futures to spawn local tasks.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct WasmSpawn;
+
+impl Spawn<Local> for WasmSpawn {
+    fn spawn(&self, fut: LocalBoxFuture<'static, ()>) -> AbortHandle {
+        let (handle, reg) = AbortHandle::new_pair();
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = Abortable::new(fut, reg).await;
+        });
+        handle
+    }
+}
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
-#[derive(Debug)]
 pub struct WasmSubduction {
     core: Arc<
         Subduction<
             'static,
             Local,
-            JsSubductionStorage,
+            JsSedimentreeStorage,
             JsConnection,
+            OpenPolicy,
+            JsSigner,
             WasmHashMetric,
             WASM_SHARD_COUNT,
         >,
@@ -57,28 +87,58 @@ pub struct WasmSubduction {
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
 }
 
+impl core::fmt::Debug for WasmSubduction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WasmSubduction")
+            .field("js_storage", &self.js_storage)
+            .finish_non_exhaustive()
+    }
+}
+
 #[wasm_bindgen(js_class = Subduction)]
 impl WasmSubduction {
     /// Create a new [`Subduction`] instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `signer` - The cryptographic signer for this node's identity
+    /// * `storage` - Storage backend for persisting data
+    /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
+    ///   When set, clients can connect without knowing the server's peer ID.
+    /// * `hash_metric_override` - Optional custom depth metric function
     #[must_use]
     #[wasm_bindgen(constructor)]
-    pub fn new(storage: JsSubductionStorage, hash_metric_override: Option<JsToDepth>) -> Self {
+    pub fn new(
+        signer: JsSigner,
+        storage: JsSedimentreeStorage,
+        service_name: Option<String>,
+        hash_metric_override: Option<JsToDepth>,
+    ) -> Self {
         tracing::debug!("new Subduction node");
-        let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
+        let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let (core, listener_fut, actor_fut) =
-            Subduction::new(storage, WasmHashMetric(raw_fn), sedimentrees);
+        let (core, listener_fut, manager_fut) = Subduction::new(
+            discovery_id,
+            signer,
+            storage,
+            OpenPolicy,
+            NonceCache::default(),
+            WasmHashMetric(raw_fn),
+            sedimentrees,
+            WasmSpawn,
+        );
 
         wasm_bindgen_futures::spawn_local(async move {
-            let actor = actor_fut.fuse();
+            let manager = manager_fut.fuse();
             let listener = listener_fut.fuse();
 
-            match select(actor, listener).await {
-                Either::Left((actor_result, _pin)) => {
-                    if let Err(Aborted) = actor_result {
-                        tracing::error!("Subduction actor aborted");
+            match select(manager, listener).await {
+                Either::Left((manager_result, _pin)) => {
+                    if let Err(Aborted) = manager_result {
+                        tracing::error!("Subduction manager aborted");
                     }
                 }
                 Either::Right((listener_result, _pin)) => {
@@ -94,30 +154,50 @@ impl WasmSubduction {
 
     /// Hydrate a [`Subduction`] instance from external storage.
     ///
+    /// # Arguments
+    ///
+    /// * `signer` - The cryptographic signer for this node's identity
+    /// * `storage` - Storage backend for persisting data
+    /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
+    ///   When set, clients can connect without knowing the server's peer ID.
+    /// * `hash_metric_override` - Optional custom depth metric function
+    ///
     /// # Errors
     ///
     /// Returns [`WasmHydrationError`] if hydration fails.
     #[wasm_bindgen]
     pub async fn hydrate(
-        storage: JsSubductionStorage,
+        signer: JsSigner,
+        storage: JsSedimentreeStorage,
+        service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
     ) -> Result<Self, WasmHydrationError> {
         tracing::debug!("hydrating new Subduction node");
-        let js_storage = <JsSubductionStorage as AsRef<JsValue>>::as_ref(&storage).clone();
+        let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let (core, listener_fut, actor_fut) =
-            Subduction::hydrate(storage, WasmHashMetric(raw_fn), sedimentrees).await?;
+        let (core, listener_fut, manager_fut) = Subduction::hydrate(
+            discovery_id,
+            signer,
+            storage,
+            OpenPolicy,
+            NonceCache::default(),
+            WasmHashMetric(raw_fn),
+            sedimentrees,
+            WasmSpawn,
+        )
+        .await?;
 
         wasm_bindgen_futures::spawn_local(async move {
-            let actor = actor_fut.fuse();
+            let manager = manager_fut.fuse();
             let listener = listener_fut.fuse();
 
-            match select(actor, listener).await {
-                Either::Left((actor_result, _pin)) => {
-                    if let Err(Aborted) = actor_result {
-                        tracing::error!("Subduction actor aborted");
+            match select(manager, listener).await {
+                Either::Left((manager_result, _pin)) => {
+                    if let Err(Aborted) = manager_result {
+                        tracing::error!("Subduction manager aborted");
                     }
                 }
                 Either::Right((listener_result, _pin)) => {
@@ -135,14 +215,14 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns [`WasmIoError`] if there is a problem with storage or networking.
+    /// Returns [`WasmWriteError`] if there is a problem with storage, networking, or policy.
     #[wasm_bindgen(js_name = addSedimentree)]
     pub async fn add_sedimentree(
         &self,
         id: &WasmSedimentreeId,
         sedimentree: &WasmSedimentree,
         blobs: Vec<Uint8Array>,
-    ) -> Result<(), WasmIoError> {
+    ) -> Result<(), WasmWriteError> {
         self.core
             .add_sedimentree(
                 id.clone().into(),
@@ -169,21 +249,18 @@ impl WasmSubduction {
 
     /// Attach a connection.
     ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
     /// # Errors
     ///
-    /// Returns a `WasmIoError` if attaching the connection fails.
-    pub async fn attach(&self, conn: JsConnection) -> Result<Registered, WasmIoError> {
-        let (is_new, conn_id) = self.core.attach(conn).await.map_err(WasmIoError::from)?;
-
-        Ok(Registered {
-            is_new,
-            conn_id: conn_id.into(),
-        })
+    /// Returns a `WasmAttachError` if attaching the connection fails.
+    pub async fn attach(&self, conn: JsConnection) -> Result<bool, WasmAttachError> {
+        self.core.attach(conn).await.map_err(WasmAttachError::from)
     }
 
-    /// Disconnect a connection by its ID.
-    pub async fn disconnect(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core.disconnect(&conn_id.clone().into()).await.is_ok()
+    /// Disconnect a connection.
+    pub async fn disconnect(&self, conn: &JsConnection) -> bool {
+        self.core.disconnect(conn).await.is_ok()
     }
 
     /// Disconnect from all peers.
@@ -214,38 +291,38 @@ impl WasmSubduction {
 
     /// Register a new connection.
     ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
     /// # Errors
     ///
     /// Returns [`WasmRegistrationError`] if the connection is not allowed.
-    pub async fn register(&self, conn: JsConnection) -> Result<Registered, WasmRegistrationError> {
-        let (is_new, conn_id) = self.core.register(conn).await?;
-        Ok(Registered {
-            is_new,
-            conn_id: conn_id.into(),
-        })
+    pub async fn register(&self, conn: JsConnection) -> Result<bool, WasmRegistrationError> {
+        self.core.register(conn).await.map_err(Into::into)
     }
 
-    /// Unregister a connection by its ID.
+    /// Unregister a connection.
     ///
-    /// Returns `true` if the connection was found and unregistered, and `false` otherwise.
+    /// Returns `Some(true)` if this was the last connection for the peer,
+    /// `Some(false)` if the peer still has other connections,
+    /// or `None` if the connection was not found.
     #[must_use]
-    pub async fn unregister(&self, conn_id: &WasmConnectionId) -> bool {
-        self.core.unregister(&conn_id.clone().into()).await
+    pub async fn unregister(&self, conn: &JsConnection) -> Option<bool> {
+        self.core.unregister(conn).await
     }
 
     /// Get a local blob by its digest.
     ///
     /// # Errors
     ///
-    /// Returns a [`JsSubductionStorageError`] if JS storage fails.
-    #[wasm_bindgen(js_name = getLocalBlob)]
-    pub async fn get_local_blob(
+    /// Returns a [`JsSedimentreeStorageError`] if JS storage fails.
+    #[wasm_bindgen(js_name = getBlob)]
+    pub async fn get_blob(
         &self,
         digest: &WasmDigest,
-    ) -> Result<Option<Uint8Array>, JsSubductionStorageError> {
+    ) -> Result<Option<Uint8Array>, JsSedimentreeStorageError> {
         Ok(self
             .core
-            .get_local_blob(digest.clone().into())
+            .get_blob(digest.clone().into())
             .await?
             .map(|blob| Uint8Array::from(blob.as_slice())))
     }
@@ -254,14 +331,14 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`JsSubductionStorageError`] if JS storage fails.
-    #[wasm_bindgen(js_name = getLocalBlobs)]
-    pub async fn get_local_blobs(
+    /// Returns a [`JsSedimentreeStorageError`] if JS storage fails.
+    #[wasm_bindgen(js_name = getBlobs)]
+    pub async fn get_blobs(
         &self,
         id: &WasmSedimentreeId,
-    ) -> Result<Vec<Uint8Array>, JsSubductionStorageError> {
+    ) -> Result<Vec<Uint8Array>, JsSedimentreeStorageError> {
         #[allow(clippy::expect_used)]
-        if let Some(blobs) = self.core.get_local_blobs(id.clone().into()).await? {
+        if let Some(blobs) = self.core.get_blobs(id.clone().into()).await? {
             Ok(blobs
                 .into_iter()
                 .map(|blob| Uint8Array::from(blob.as_slice()))
@@ -304,22 +381,18 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmIoError`] if storage or networking fail.
+    /// Returns a [`WasmWriteError`] if storage, networking, or policy fail.
     #[wasm_bindgen(js_name = addCommit)]
     pub async fn add_commit(
         &self,
         id: &WasmSedimentreeId,
         commit: &WasmLooseCommit,
         blob: &Uint8Array,
-    ) -> Result<Option<WasmFragmentRequested>, WasmIoError> {
+    ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
         let core_id = id.clone().into();
         let core_commit = commit.clone().into();
         let blob: Blob = blob.clone().to_vec().into();
-        let maybe_fragment_requested = self
-            .core
-            .add_commit(core_id, &core_commit, blob)
-            .await
-            .map_err(WasmIoError::from)?;
+        let maybe_fragment_requested = self.core.add_commit(core_id, &core_commit, blob).await?;
 
         Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
     }
@@ -358,20 +431,33 @@ impl WasmSubduction {
 
     /// Request batch sync for a given Sedimentree ID from a specific peer.
     ///
+    /// # Arguments
+    ///
+    /// * `to_ask` - The peer ID to sync with
+    /// * `id` - The sedimentree ID to sync
+    /// * `subscribe` - Whether to subscribe for incremental updates
+    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = requestPeerBatchSync)]
-    pub async fn request_peer_batch_sync(
+    #[wasm_bindgen(js_name = syncWithPeer)]
+    pub async fn sync_with_peer(
         &self,
         to_ask: &WasmPeerId,
         id: &WasmSedimentreeId,
+        subscribe: bool,
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let (success, blobs, conn_errors) = self
             .core
-            .request_peer_batch_sync(&to_ask.clone().into(), id.clone().into(), timeout)
+            .sync_with_peer(
+                &to_ask.clone().into(),
+                id.clone().into(),
+                subscribe,
+                timeout,
+            )
             .await
             .map_err(WasmIoError::from)?;
 
@@ -393,22 +479,29 @@ impl WasmSubduction {
 
     /// Request batch sync for a given Sedimentree ID from all connected peers.
     ///
+    /// # Arguments
+    ///
+    /// * `id` - The sedimentree ID to sync
+    /// * `subscribe` - Whether to subscribe for incremental updates
+    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = requestAllBatchSync)]
-    pub async fn request_all_batch_sync(
+    #[wasm_bindgen(js_name = syncAll)]
+    pub async fn sync_all(
         &self,
         id: &WasmSedimentreeId,
+        subscribe: bool,
         timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
-        tracing::debug!("WasmSubduction::request_all_batch_sync");
+        tracing::debug!("WasmSubduction::sync_all");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let peer_map = self
             .core
-            .request_all_batch_sync(id.clone().into(), timeout)
+            .sync_all(id.clone().into(), subscribe, timeout)
             .await?;
-        tracing::debug!("WasmSubduction::request_all_batch_sync - done");
+        tracing::debug!("WasmSubduction::sync_all - done");
         Ok(WasmPeerResultMap(
             peer_map
                 .into_iter()
@@ -434,15 +527,15 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = requestAllBatchSyncAll)]
-    pub async fn request_all_batch_sync_all(
+    #[wasm_bindgen(js_name = fullSync)]
+    pub async fn full_sync(
         &self,
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let (success, blobs, errs) = self
             .core
-            .request_all_batch_sync_all(timeout)
+            .full_sync(timeout)
             .await
             .map_err(WasmIoError::from)?;
 
@@ -493,11 +586,11 @@ impl WasmSubduction {
             .map(|fragments| fragments.into_iter().map(WasmFragment::from).collect())
     }
 
-    /// Get the peer IDs of all connected peers
-    #[wasm_bindgen(js_name = getPeerIds)]
-    pub async fn peer_ids(&self) -> Vec<WasmPeerId> {
+    /// Get the peer IDs of all connected peers.
+    #[wasm_bindgen(js_name = getConnectedPeerIds)]
+    pub async fn connected_peer_ids(&self) -> Vec<WasmPeerId> {
         self.core
-            .peer_ids()
+            .connected_peer_ids()
             .await
             .into_iter()
             .map(WasmPeerId::from)
@@ -509,33 +602,6 @@ impl WasmSubduction {
     #[wasm_bindgen(getter, js_name = storage)]
     pub fn storage(&self) -> JsValue {
         self.js_storage.clone()
-    }
-}
-
-/// Result of registering a connection.
-#[wasm_bindgen(js_name = Registered)]
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[allow(missing_copy_implementations)]
-pub struct Registered {
-    is_new: bool,
-    conn_id: WasmConnectionId,
-}
-
-#[wasm_bindgen(js_class = Registered)]
-impl Registered {
-    /// Whether the connection was newly registered.
-    #[must_use]
-    #[wasm_bindgen(getter)]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn is_new(&self) -> bool {
-        self.is_new
-    }
-
-    /// The connection ID of the registered connection.
-    #[must_use]
-    #[wasm_bindgen(getter)]
-    pub fn conn_id(&self) -> WasmConnectionId {
-        self.conn_id.clone()
     }
 }
 
@@ -671,7 +737,7 @@ impl WasmHashMetric {
 }
 
 impl DepthMetric for WasmHashMetric {
-    fn to_depth(&self, digest: Digest) -> Depth {
+    fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
         if let Some(func) = &self.0 {
             let wasm_digest = WasmDigest::from(digest);
 

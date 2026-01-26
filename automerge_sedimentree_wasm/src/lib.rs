@@ -19,7 +19,9 @@ use base58::FromBase58;
 use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
 use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
-use sedimentree_core::{blob::Digest, commit::CommitStore, hex::decode_hex};
+use sedimentree_core::{
+    commit::CommitStore, digest::Digest, hex::decode_hex, loose_commit::LooseCommit,
+};
 use subduction_wasm::{
     digest::{JsDigest, WasmDigest},
     subduction::WasmHashMetric,
@@ -72,7 +74,7 @@ impl WasmSedimentreeAutomerge {
         known_fragment_states: &mut WasmFragmentStateStore,
         strategy: &WasmHashMetric,
     ) -> Result<Vec<WasmFragmentState>, WasmFragmentError> {
-        let heads: Vec<Digest> = head_digests
+        let heads: Vec<Digest<LooseCommit>> = head_digests
             .into_iter()
             .map(|js_digest| WasmDigest::from(&js_digest).into())
             .collect();
@@ -95,10 +97,10 @@ impl core::fmt::Debug for WasmSedimentreeAutomerge {
 }
 
 impl CommitStore<'static> for WasmSedimentreeAutomerge {
-    type Node = Set<Digest>;
+    type Node = Set<Digest<LooseCommit>>;
     type LookupError = WasmLookupError;
 
-    fn lookup(&self, digest: Digest) -> Result<Option<Self::Node>, Self::LookupError> {
+    fn lookup(&self, digest: Digest<LooseCommit>) -> Result<Option<Self::Node>, Self::LookupError> {
         let mut hexes = Vec::with_capacity(32);
         for byte in digest.as_bytes() {
             hexes.push(alloc::format!("{byte:02x}"));
@@ -163,7 +165,9 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
             deps.push(automerge::ChangeHash(arr32));
         }
 
-        Ok(Some(deps.into_iter().map(|h| Digest::from(h.0)).collect()))
+        Ok(Some(
+            deps.into_iter().map(|h| Digest::from_bytes(h.0)).collect(),
+        ))
     }
 }
 
@@ -176,12 +180,12 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
 pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, WasmFromBase58Error> {
     let decoded = b58_str.from_base58()?;
     let raw: [u8; 32] = blake3::hash(&decoded).into();
-    Ok(Digest::from(raw).into())
+    Ok(Digest::<LooseCommit>::from_bytes(raw).into())
 }
 
 #[wasm_bindgen]
 extern "C" {
-    /// Duck-typed interface for `Automerge`.
+    /// JS interface for `Automerge`.
     pub type JsAutomerge;
 
     /// Get change metadata by its hash.

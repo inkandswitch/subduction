@@ -3,22 +3,24 @@
 //! This server implements the automerge-repo `NetworkSubsystem` protocol handshake
 //! and then broadcasts messages between connected peers.
 //!
-//! ## Performance and Security
+//! # Protocol Compatibility
+//!
+//! This implementation follows the current automerge-repo ephemeral message protocol,
+//! which does not include message authentication or timestamps. Any security
+//! improvements (replay protection, message authentication) would require
+//! coordinated changes to the automerge-repo protocol. Revisit this design when
+//! upstream is ready to address these concerns.
+//!
+//! # Performance
 //!
 //! Uses `AHash` (keyed) for DoS-resistant sharding and dedup keying; faster than
 //! `SipHash` in practice on short inputs; not used as a cryptographic primitive.
-//!
-//! TODO: Add message authentication to prevent malicious peers from sending
-//! forged ephemeral messages.
-//!
-//! TODO: Add timestamp validation to prevent replay attacks (reject messages
-//! with timestamps too far in the past or future).
 
 use ahash::RandomState;
 use anyhow::Result;
 use async_tungstenite::{
     tokio::accept_async_with_config,
-    tungstenite::{protocol::WebSocketConfig, Message as WsMessage},
+    tungstenite::{Message as WsMessage, protocol::WebSocketConfig},
 };
 use futures_util::StreamExt;
 use std::{
@@ -171,9 +173,10 @@ impl MessageDeduplicator {
         self.order.push_back(message_key);
 
         if self.order.len() > self.capacity
-            && let Some(old_key) = self.order.pop_front() {
-                self.seen.remove(&old_key);
-            }
+            && let Some(old_key) = self.order.pop_front()
+        {
+            self.seen.remove(&old_key);
+        }
 
         true
     }
@@ -207,7 +210,8 @@ impl<const N: usize> ShardedDeduplicator<N> {
             rand::random::<u64>(),
         );
 
-        let shards = core::array::from_fn(|_| Mutex::new(MessageDeduplicator::new(capacity_per_shard)));
+        let shards =
+            core::array::from_fn(|_| Mutex::new(MessageDeduplicator::new(capacity_per_shard)));
 
         Self {
             shards,
@@ -239,19 +243,24 @@ impl<const N: usize> ShardedDeduplicator<N> {
     }
 }
 
-
 /// Join message from client (automerge-repo protocol)
 #[derive(Debug)]
 struct JoinMessage {
     msg_type: String,
     sender_id: String,
+
     /// Raw CBOR bytes for `peer_metadata` (passed through without interpretation).
     peer_metadata_raw: Vec<u8>,
 }
 
 impl<'b, C> minicbor::Decode<'b, C> for JoinMessage {
-    fn decode(d: &mut minicbor::Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
-        let len = d.map()?.ok_or_else(|| minicbor::decode::Error::message("expected definite-length map"))?;
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        _ctx: &mut C,
+    ) -> Result<Self, minicbor::decode::Error> {
+        let len = d
+            .map()?
+            .ok_or_else(|| minicbor::decode::Error::message("expected definite-length map"))?;
 
         let mut msg_type = None;
         let mut sender_id = None;
@@ -276,8 +285,10 @@ impl<'b, C> minicbor::Decode<'b, C> for JoinMessage {
         }
 
         Ok(JoinMessage {
-            msg_type: msg_type.ok_or_else(|| minicbor::decode::Error::message("missing 'type' field"))?,
-            sender_id: sender_id.ok_or_else(|| minicbor::decode::Error::message("missing 'senderId' field"))?,
+            msg_type: msg_type
+                .ok_or_else(|| minicbor::decode::Error::message("missing 'type' field"))?,
+            sender_id: sender_id
+                .ok_or_else(|| minicbor::decode::Error::message("missing 'senderId' field"))?,
             peer_metadata_raw: peer_metadata_raw.unwrap_or_default(),
         })
     }
@@ -288,18 +299,25 @@ impl<'b, C> minicbor::Decode<'b, C> for JoinMessage {
 struct PeerMessage {
     msg_type: String,
     sender_id: String,
+
     /// Raw CBOR bytes for `peer_metadata` (embedded without interpretation).
     peer_metadata_raw: Vec<u8>,
 }
 
 impl<C> minicbor::Encode<C> for PeerMessage {
-    fn encode<W: minicbor::encode::Write>(&self, e: &mut minicbor::Encoder<W>, _ctx: &mut C) -> Result<(), minicbor::encode::Error<W::Error>> {
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+        _ctx: &mut C,
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
         e.map(3)?;
         e.str("type")?.str(&self.msg_type)?;
         e.str("senderId")?.str(&self.sender_id)?;
         e.str("peerMetadata")?;
         // Embed raw CBOR bytes directly
-        e.writer_mut().write_all(&self.peer_metadata_raw).map_err(minicbor::encode::Error::write)?;
+        e.writer_mut()
+            .write_all(&self.peer_metadata_raw)
+            .map_err(minicbor::encode::Error::write)?;
         Ok(())
     }
 }
@@ -313,8 +331,13 @@ struct EphemeralMessageHeader {
 }
 
 impl<'b, C> minicbor::Decode<'b, C> for EphemeralMessageHeader {
-    fn decode(d: &mut minicbor::Decoder<'b>, _ctx: &mut C) -> Result<Self, minicbor::decode::Error> {
-        let len = d.map()?.ok_or_else(|| minicbor::decode::Error::message("expected definite-length map"))?;
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        _ctx: &mut C,
+    ) -> Result<Self, minicbor::decode::Error> {
+        let len = d
+            .map()?
+            .ok_or_else(|| minicbor::decode::Error::message("expected definite-length map"))?;
 
         let mut sender_id = None;
         let mut session_id = None;
@@ -331,9 +354,12 @@ impl<'b, C> minicbor::Decode<'b, C> for EphemeralMessageHeader {
         }
 
         Ok(EphemeralMessageHeader {
-            sender_id: sender_id.ok_or_else(|| minicbor::decode::Error::message("missing 'senderId' field"))?,
-            session_id: session_id.ok_or_else(|| minicbor::decode::Error::message("missing 'sessionId' field"))?,
-            count: count.ok_or_else(|| minicbor::decode::Error::message("missing 'count' field"))?,
+            sender_id: sender_id
+                .ok_or_else(|| minicbor::decode::Error::message("missing 'senderId' field"))?,
+            session_id: session_id
+                .ok_or_else(|| minicbor::decode::Error::message("missing 'sessionId' field"))?,
+            count: count
+                .ok_or_else(|| minicbor::decode::Error::message("missing 'count' field"))?,
         })
     }
 }
@@ -358,7 +384,11 @@ pub(crate) async fn run(args: EphemeralRelayArgs, token: CancellationToken) -> R
 
     tracing::info!("Ephemeral relay server listening on {}", addr);
     tracing::info!("This server relays presence/awareness messages between peers");
-    tracing::info!("Maximum message size: {} bytes ({} MB)", max_message_size, max_message_size / (1024 * 1024));
+    tracing::info!(
+        "Maximum message size: {} bytes ({} MB)",
+        max_message_size,
+        max_message_size / (1024 * 1024)
+    );
 
     let peers = PeerConnections::new();
 
@@ -429,7 +459,8 @@ async fn handle_connection(
                     peer_metadata_raw: join_msg.peer_metadata_raw,
                 };
 
-                let response = minicbor::to_vec(&peer_msg).map_err(|e| anyhow::anyhow!("failed to encode peer message: {e}"))?;
+                let response = minicbor::to_vec(&peer_msg)
+                    .map_err(|e| anyhow::anyhow!("failed to encode peer message: {e}"))?;
                 ws_sender.send(WsMessage::Binary(response.into())).await?;
 
                 peer_id

@@ -4,12 +4,12 @@
 
 use core::time::Duration;
 
+use future_form::{FutureForm, Local, Sendable};
 use futures::FutureExt;
-use futures_kind::{FutureKind, Local, Sendable};
 
 use super::{
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     Connection,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use crate::peer::id::PeerId;
 
@@ -61,22 +61,22 @@ impl Connection<Sendable> for MockConnection {
 
     fn disconnect(
         &self,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
         Box::pin(async { Ok(()) })
     }
 
     fn send(
         &self,
         _message: &Message,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         Box::pin(async { Ok(()) })
     }
 
-    fn recv(&self) -> <Sendable as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
 
-    fn next_request_id(&self) -> <Sendable as FutureKind>::Future<'_, RequestId> {
+    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
         Box::pin(async move {
             RequestId {
@@ -90,7 +90,7 @@ impl Connection<Sendable> for MockConnection {
         &self,
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
 }
@@ -137,22 +137,22 @@ impl Connection<Sendable> for FailingSendMockConnection {
 
     fn disconnect(
         &self,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
         Box::pin(async { Ok(()) })
     }
 
     fn send(
         &self,
         _message: &Message,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
 
-    fn recv(&self) -> <Sendable as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
 
-    fn next_request_id(&self) -> <Sendable as FutureKind>::Future<'_, RequestId> {
+    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
         Box::pin(async move {
             RequestId {
@@ -166,7 +166,7 @@ impl Connection<Sendable> for FailingSendMockConnection {
         &self,
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         Box::pin(async { Err(core::fmt::Error) })
     }
 }
@@ -178,13 +178,17 @@ impl Connection<Sendable> for FailingSendMockConnection {
 #[derive(Clone, Debug)]
 pub struct ChannelMockConnection {
     peer_id: PeerId,
+
     /// Sender for outbound messages (from Subduction to "remote")
     outbound_tx: async_channel::Sender<Message>,
+
     /// Receiver for inbound messages (from "remote" to Subduction)
     inbound_rx: async_channel::Receiver<Message>,
+
     /// Sender for inbound messages (kept for potential direct access in complex tests)
     #[allow(dead_code)]
     inbound_tx: async_channel::Sender<Message>,
+
     /// Request ID counter
     request_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
@@ -200,6 +204,7 @@ impl PartialEq for ChannelMockConnection {
 pub struct ChannelMockConnectionHandle {
     /// Receiver for outbound messages (messages Subduction sends)
     pub outbound_rx: async_channel::Receiver<Message>,
+
     /// Sender for inbound messages (inject messages to Subduction)
     pub inbound_tx: async_channel::Sender<Message>,
 }
@@ -250,25 +255,25 @@ impl Connection<Sendable> for ChannelMockConnection {
 
     fn disconnect(
         &self,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
         Box::pin(async { Ok(()) })
     }
 
     fn send(
         &self,
         message: &Message,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         let message = message.clone();
         Box::pin(async move { tx.send(message).await })
     }
 
-    fn recv(&self) -> <Sendable as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
         Box::pin(async move { rx.recv().await })
     }
 
-    fn next_request_id(&self) -> <Sendable as FutureKind>::Future<'_, RequestId> {
+    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
         let counter = self
             .request_counter
@@ -285,7 +290,7 @@ impl Connection<Sendable> for ChannelMockConnection {
         &self,
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         // For now, call always fails. Tests can implement response handling if needed.
         async { Err(core::fmt::Error) }.boxed()
     }
@@ -303,25 +308,25 @@ impl Connection<Local> for ChannelMockConnection {
 
     fn disconnect(
         &self,
-    ) -> <Local as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed_local()
     }
 
     fn send(
         &self,
         message: &Message,
-    ) -> <Local as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         let message = message.clone();
         async move { tx.send(message).await }.boxed_local()
     }
 
-    fn recv(&self) -> <Local as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
         async move { rx.recv().await }.boxed_local()
     }
 
-    fn next_request_id(&self) -> <Local as FutureKind>::Future<'_, RequestId> {
+    fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
         let counter = self
             .request_counter
@@ -339,7 +344,7 @@ impl Connection<Local> for ChannelMockConnection {
         &self,
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
-    ) -> <Local as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         async { Err(core::fmt::Error) }.boxed_local()
     }
 }
@@ -353,6 +358,7 @@ impl Connection<Local> for ChannelMockConnection {
 #[derive(Clone, Debug)]
 pub struct CallbackOnRecvConnection<C> {
     inner: C,
+
     /// Channel to send observation results from callback
     callback_result_tx: async_channel::Sender<CallbackObservation>,
 }
@@ -362,8 +368,10 @@ pub struct CallbackOnRecvConnection<C> {
 pub struct CallbackObservation {
     /// The sedimentree ID from the message.
     pub sedimentree_id: sedimentree_core::id::SedimentreeId,
+
     /// Whether the sedimentree was visible when callback fired.
     pub was_visible: bool,
+
     /// Number of commits visible when callback fired.
     pub commit_count: usize,
 }
@@ -417,25 +425,25 @@ where
 
     fn disconnect(
         &self,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }
 
     fn send(
         &self,
         message: &Message,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
 
-    fn recv(&self) -> <Sendable as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         // Note: This mimics WASM behavior where callbacks would fire here,
         // but we can't actually fire callbacks here without access to Subduction.
         // The test will inject a callback-like check separately.
         self.inner.recv()
     }
 
-    fn next_request_id(&self) -> <Sendable as FutureKind>::Future<'_, RequestId> {
+    fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         self.inner.next_request_id()
     }
 
@@ -443,7 +451,7 @@ where
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
-    ) -> <Sendable as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         self.inner.call(req, timeout)
     }
 }
@@ -460,22 +468,22 @@ impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
 
     fn disconnect(
         &self,
-    ) -> <Local as FutureKind>::Future<'_, Result<(), Self::DisconnectionError>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }
 
     fn send(
         &self,
         message: &Message,
-    ) -> <Local as FutureKind>::Future<'_, Result<(), Self::SendError>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
 
-    fn recv(&self) -> <Local as FutureKind>::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         self.inner.recv()
     }
 
-    fn next_request_id(&self) -> <Local as FutureKind>::Future<'_, RequestId> {
+    fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
         self.inner.next_request_id()
     }
 
@@ -483,7 +491,7 @@ impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
-    ) -> <Local as FutureKind>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> <Local as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         self.inner.call(req, timeout)
     }
 }

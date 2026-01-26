@@ -3,41 +3,45 @@
 use alloc::{
     boxed::Box,
     rc::Rc,
-    string::ToString,
+    string::{String, ToString},
     sync::Arc,
-    vec::Vec
+    vec::Vec,
 };
-use sedimentree_core::collections::Map;
 use core::{
     cell::RefCell,
     convert::Infallible,
     sync::atomic::{AtomicU64, Ordering},
-    time::Duration
+    time::Duration,
 };
+use sedimentree_core::collections::Map;
 
 use async_lock::Mutex;
+use future_form::Local;
 use futures::{
+    FutureExt,
     channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
-    FutureExt,
 };
-use futures_kind::Local;
 use subduction_core::{
     connection::{
+        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, Reconnect,
     },
     peer::id::PeerId,
 };
 use thiserror::Error;
-use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
+use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
-    js_sys::{self, Promise}, BinaryType, Event, MessageEvent, Url, WebSocket
+    BinaryType, Event, MessageEvent, Url, WebSocket,
+    js_sys::{self, Promise},
 };
 
+use super::handshake::client_handshake;
+use super::{WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId};
+use crate::error::WasmHandshakeError;
 use crate::peer_id::WasmPeerId;
-use super::{WasmMessage, WasmRequestId, WasmBatchSyncRequest, WasmBatchSyncResponse};
+use crate::signer::JsSigner;
 
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.
 #[wasm_bindgen(js_name = SubductionWebSocket)]
@@ -62,7 +66,11 @@ impl WasmWebSocket {
     /// Returns [`WasmWebSocketSetupCanceled`] if the setup was canceled.
     #[allow(clippy::too_many_lines)]
     #[wasm_bindgen]
-    pub async fn setup(peer_id: &WasmPeerId, ws: &WebSocket, timeout_milliseconds: u32) -> Result<Self, WasmWebSocketSetupCanceled> {
+    pub async fn setup(
+        peer_id: &WasmPeerId,
+        ws: &WebSocket,
+        timeout_milliseconds: u32,
+    ) -> Result<Self, WasmWebSocketSetupCanceled> {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(64);
 
         let pending = Arc::new(Mutex::new(Map::<
@@ -91,26 +99,35 @@ impl WasmWebSocket {
                                     debug_assert!(result.is_ok());
                                     if result.is_err() {
                                         tracing::error!(
-                                                "oneshot channel closed before sending response for req_id {:?}",
-                                                req_id
-                                            );
+                                            "oneshot channel closed before sending response for req_id {:?}",
+                                            req_id
+                                        );
                                     }
                                 } else {
                                     tracing::info!(
                                         "dispatching to inbound channel {:?}",
                                         resp.req_id
                                     );
-                                    if let Err(e) = inner_inbound_writer.clone().send(Message::BatchSyncResponse(resp)).await {
-                                            tracing::error!("failed to send inbound message: {e}");
-                                        }
-                                }
-                            }
-                            other @ (Message::LooseCommit { .. } | Message::Fragment { .. } | Message::BlobsRequest(_) | Message::BlobsResponse(_) | Message::BatchSyncRequest(_)) => {
-                                    if let Err(e) = inner_inbound_writer.clone().send(other).await {
+                                    if let Err(e) = inner_inbound_writer
+                                        .clone()
+                                        .send(Message::BatchSyncResponse(resp))
+                                        .await
+                                    {
                                         tracing::error!("failed to send inbound message: {e}");
                                     }
                                 }
                             }
+                            other @ (Message::LooseCommit { .. }
+                            | Message::Fragment { .. }
+                            | Message::BlobsRequest(_)
+                            | Message::BlobsResponse(_)
+                            | Message::BatchSyncRequest(_)
+                            | Message::RemoveSubscriptions(_)) => {
+                                if let Err(e) = inner_inbound_writer.clone().send(other).await {
+                                    tracing::error!("failed to send inbound message: {e}");
+                                }
+                            }
+                        }
                     });
                 } else {
                     tracing::error!("failed to decode message: {:?}", event.data());
@@ -123,7 +140,7 @@ impl WasmWebSocket {
         let onclose = Closure::<dyn FnMut(_)>::new(move |event: Event| {
             tracing::warn!("WebSocket connection closed: {:?}", event);
         });
-        
+
         let ws_clone = ws.clone();
         let (tx, rx) = oneshot::channel();
         let maybe_tx = Rc::new(RefCell::new(Some(tx)));
@@ -131,7 +148,8 @@ impl WasmWebSocket {
 
         // HACK: keeps the `onopen` closure alive until called
         #[allow(clippy::type_complexity)]
-        let keep_closure_alive: Rc<RefCell<Option<Closure<dyn FnMut(Event)>>>> = Rc::new(RefCell::new(None));
+        let keep_closure_alive: Rc<RefCell<Option<Closure<dyn FnMut(Event)>>>> =
+            Rc::new(RefCell::new(None));
         let keep_closure_alive_clone = keep_closure_alive.clone();
         let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             tracing::info!("WebSocket connection opened");
@@ -189,22 +207,180 @@ impl WasmWebSocket {
         })
     }
 
-    /// Connect to a WebSocket server at the given address.
+    /// Connect to a WebSocket server with mutual authentication via handshake.
+    ///
+    /// This method performs a cryptographic handshake to verify both parties'
+    /// identities before establishing the connection. The server's peer ID is
+    /// verified against `expected_peer_id`.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The WebSocket URL to connect to
+    /// * `signer` - The client's signer for authentication
+    /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
+    /// * `timeout_milliseconds` - Request timeout in milliseconds
     ///
     /// # Errors
     ///
-    /// Returns [`WebSocketConnectionError`] if establishing the connection fails.
-    pub async fn connect(
+    /// Returns an error if:
+    /// - The WebSocket connection could not be established
+    /// - The handshake fails (signature invalid, wrong server, clock drift, etc.)
+    #[wasm_bindgen(js_name = tryConnect)]
+    pub async fn try_connect(
         address: &Url,
-        peer_id: &WasmPeerId,
+        signer: &JsSigner,
+        expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<Self, WebSocketConnectionError> {
-        Ok(Self::setup(
-            peer_id,
-            &WebSocket::new(&address.href())
-                .map_err(WebSocketConnectionError::SocketCreationFailed)?,
-            timeout_milliseconds,
-        ).await?)
+    ) -> Result<WasmWebSocket, WebSocketAuthenticatedConnectionError> {
+        // Create WebSocket
+        let ws = WebSocket::new(&address.href())
+            .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
+        ws.set_binary_type(BinaryType::Arraybuffer);
+
+        // Wait for WebSocket to open
+        let (open_tx, open_rx) = oneshot::channel::<Result<(), String>>();
+        let open_tx_cell = Rc::new(RefCell::new(Some(open_tx)));
+        let open_tx_clone = open_tx_cell.clone();
+
+        let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = open_tx_clone.borrow_mut().take() {
+                drop(tx.send(Ok(())));
+            }
+        });
+
+        let onerror_tx = open_tx_cell.clone();
+        let onerror = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = onerror_tx.borrow_mut().take() {
+                drop(tx.send(Err("WebSocket connection failed".into())));
+            }
+        });
+
+        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+
+        // Handle case where socket is already open
+        if ws.ready_state() == WebSocket::OPEN
+            && let Some(tx) = open_tx_cell.borrow_mut().take()
+        {
+            drop(tx.send(Ok(())));
+        }
+
+        // Wait for open or error
+        open_rx
+            .await
+            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)?
+            .map_err(WebSocketAuthenticatedConnectionError::ConnectionFailed)?;
+
+        // Clear temporary handlers
+        ws.set_onopen(None);
+        ws.set_onerror(None);
+        drop(onopen);
+        drop(onerror);
+
+        // Perform handshake
+        let handshake_result = client_handshake(&ws, signer, expected_peer_id.clone().into())
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
+
+        tracing::info!(
+            "Handshake complete: connected to server {}",
+            handshake_result.server_id
+        );
+
+        // Now set up the normal message handlers using the verified peer ID
+        let verified_peer_id = WasmPeerId::from(handshake_result.server_id);
+        Self::setup(&verified_peer_id, &ws, timeout_milliseconds)
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Setup)
+    }
+
+    /// Connect to a WebSocket server using discovery mode.
+    ///
+    /// This method performs a cryptographic handshake using a service name
+    /// instead of a known peer ID. The server's peer ID is discovered during
+    /// the handshake and returned.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The WebSocket URL to connect to
+    /// * `signer` - The client's signer for authentication
+    /// * `service_name` - The service name for discovery (e.g., `localhost:8080`)
+    /// * `timeout_milliseconds` - Request timeout in milliseconds
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The WebSocket connection could not be established
+    /// - The handshake fails (signature invalid, clock drift, etc.)
+    #[wasm_bindgen(js_name = tryDiscover)]
+    pub async fn try_discover(
+        address: &Url,
+        signer: &JsSigner,
+        service_name: &str,
+        timeout_milliseconds: u32,
+    ) -> Result<WasmWebSocket, WebSocketAuthenticatedConnectionError> {
+        use super::handshake::client_handshake_discover;
+
+        // Create WebSocket
+        let ws = WebSocket::new(&address.href())
+            .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
+        ws.set_binary_type(BinaryType::Arraybuffer);
+
+        // Wait for WebSocket to open
+        let (open_tx, open_rx) = oneshot::channel::<Result<(), String>>();
+        let open_tx_cell = Rc::new(RefCell::new(Some(open_tx)));
+        let open_tx_clone = open_tx_cell.clone();
+
+        let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = open_tx_clone.borrow_mut().take() {
+                drop(tx.send(Ok(())));
+            }
+        });
+
+        let onerror_tx = open_tx_cell.clone();
+        let onerror = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
+            if let Some(tx) = onerror_tx.borrow_mut().take() {
+                drop(tx.send(Err("WebSocket connection failed".into())));
+            }
+        });
+
+        ws.set_onopen(Some(onopen.as_ref().unchecked_ref()));
+        ws.set_onerror(Some(onerror.as_ref().unchecked_ref()));
+
+        // Handle case where socket is already open
+        if ws.ready_state() == WebSocket::OPEN
+            && let Some(tx) = open_tx_cell.borrow_mut().take()
+        {
+            drop(tx.send(Ok(())));
+        }
+
+        // Wait for open or error
+        open_rx
+            .await
+            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)?
+            .map_err(WebSocketAuthenticatedConnectionError::ConnectionFailed)?;
+
+        // Clear temporary handlers
+        ws.set_onopen(None);
+        ws.set_onerror(None);
+        drop(onopen);
+        drop(onerror);
+
+        // Perform discovery handshake
+        let handshake_result = client_handshake_discover(&ws, signer, service_name)
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
+
+        tracing::info!(
+            "Discovery handshake complete: connected to server {}",
+            handshake_result.server_id
+        );
+
+        // Now set up the normal message handlers using the discovered peer ID
+        let discovered_peer_id = WasmPeerId::from(handshake_result.server_id);
+        Self::setup(&discovered_peer_id, &ws, timeout_milliseconds)
+            .await
+            .map_err(WebSocketAuthenticatedConnectionError::Setup)
     }
 
     /// Get the peer ID of the remote peer.
@@ -267,7 +443,10 @@ impl WasmWebSocket {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             Duration::from_millis(f64_ms as u64)
         });
-        self.call(request.into(), optional_duration).await.map(Into::into).map_err(Into::into)
+        self.call(request.into(), optional_duration)
+            .await
+            .map(Into::into)
+            .map_err(Into::into)
     }
 }
 
@@ -325,7 +504,11 @@ impl Connection<Local> for WasmWebSocket {
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         async {
             tracing::debug!("waiting for inbound message");
-            let msg = self.inbound_reader.recv().await.map_err(|_| ReadFromClosedChannel)?;
+            let msg = self
+                .inbound_reader
+                .recv()
+                .await
+                .map_err(|_| ReadFromClosedChannel)?;
             tracing::info!("received inbound message id {:?}", msg.request_id());
             Ok(msg)
         }
@@ -343,10 +526,13 @@ impl Connection<Local> for WasmWebSocket {
 
             // Pre-register channel
             let (tx, rx) = oneshot::channel();
-            { self.pending.lock().await.insert(req_id, tx); }
+            {
+                self.pending.lock().await.insert(req_id, tx);
+            }
 
             #[allow(clippy::expect_used)]
-            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req)).expect("serialization should be infallible");
+            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
+                .expect("serialization should be infallible");
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
@@ -377,24 +563,9 @@ impl Connection<Local> for WasmWebSocket {
     }
 }
 
-impl Reconnect<Local> for WasmWebSocket {
-    type ConnectError = WebSocketConnectionError;
-
-    fn reconnect(&mut self) -> LocalBoxFuture<'_, Result<(), Self::ConnectError>> {
-        async {
-            let address = self.socket.url();
-            let peer_id = self.peer_id;
-
-            *self = WasmWebSocket::connect(
-                &Url::new(&address).map_err(WebSocketConnectionError::InvalidUrl)?,
-                &peer_id.into(),
-                self.timeout_ms,
-            ).await?;
-            Ok(())
-        }
-        .boxed_local()
-    }
-}
+// NOTE: Reconnect is not implemented for WasmWebSocket because handshake
+// requires the signer, which is not stored in the struct. Applications should
+// handle reconnection by calling connect again.
 
 #[derive(Debug)]
 struct WasmTimeout {
@@ -467,9 +638,10 @@ impl WasmTimeout {
         let global = js_sys::global();
         if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
             .and_then(JsCast::dyn_into::<js_sys::Function>)
-            && let Err(e) = clear_timeout.call1(&global, &self.id) {
-                tracing::error!("failed to clear timeout: {:?}", e);
-            }
+            && let Err(e) = clear_timeout.call1(&global, &self.id)
+        {
+            tracing::error!("failed to clear timeout: {:?}", e);
+        }
     }
 }
 
@@ -549,6 +721,38 @@ impl From<WebSocketConnectionError> for JsValue {
     }
 }
 
+/// Error connecting to a WebSocket server with handshake authentication.
+#[derive(Debug, Error)]
+pub enum WebSocketAuthenticatedConnectionError {
+    /// Problem creating the WebSocket.
+    #[error("WebSocket creation failed: {0:?}")]
+    SocketCreationFailed(JsValue),
+
+    /// WebSocket connection failed.
+    #[error("connection failed: {0}")]
+    ConnectionFailed(alloc::string::String),
+
+    /// Connection was canceled.
+    #[error("connection canceled")]
+    Canceled,
+
+    /// Handshake failed.
+    #[error("handshake failed: {0}")]
+    Handshake(#[from] WasmHandshakeError),
+
+    /// WebSocket setup failed after handshake.
+    #[error("setup failed: {0}")]
+    Setup(#[from] WasmWebSocketSetupCanceled),
+}
+
+impl From<WebSocketAuthenticatedConnectionError> for JsValue {
+    fn from(err: WebSocketAuthenticatedConnectionError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("WebSocketAuthenticatedConnectionError");
+        js_err.into()
+    }
+}
+
 /// WebSocket setup was canceled.
 #[derive(Debug, Clone, Error)]
 #[error("WebSocket setup was canceled")]
@@ -594,4 +798,3 @@ impl From<WasmCallError> for JsValue {
         js_err.into()
     }
 }
-

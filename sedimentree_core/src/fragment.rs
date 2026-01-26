@@ -3,10 +3,12 @@
 use alloc::vec::Vec;
 
 use crate::{
-    blob::{BlobMeta, Digest},
+    blob::BlobMeta,
     collections::Set,
     depth::{Depth, DepthMetric},
+    digest::Digest,
     id::SedimentreeId,
+    loose_commit::LooseCommit,
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -16,25 +18,27 @@ use crate::{
 /// read the content in a particular fragment (e.g. because it's in
 /// an arbitrary format or is encrypted), it maintains some basic
 /// metadata about the the content to aid in deduplication and synchronization.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fragment {
     #[n(0)]
     summary: FragmentSummary,
     #[n(1)]
-    checkpoints: Vec<Digest>,
+    checkpoints: Vec<Digest<LooseCommit>>,
     #[n(2)]
-    digest: Digest,
+    digest: Digest<Fragment>,
 }
 
 impl Fragment {
     /// Constructor for a [`Fragment`].
     #[must_use]
     pub fn new(
-        head: Digest,
-        boundary: Vec<Digest>,
-        checkpoints: Vec<Digest>,
+        head: Digest<LooseCommit>,
+        boundary: Vec<Digest<LooseCommit>>,
+        checkpoints: Vec<Digest<LooseCommit>>,
         blob_meta: BlobMeta,
     ) -> Self {
         let digest = {
@@ -50,7 +54,7 @@ impl Fragment {
                 hasher.update(checkpoint.as_bytes());
             }
 
-            Digest::from(*hasher.finalize().as_bytes())
+            Digest::from_bytes(*hasher.finalize().as_bytes())
         };
 
         Self {
@@ -110,7 +114,7 @@ impl Fragment {
 
     /// Returns true if this [`Fragment`] covers the given [`Digest`].
     #[must_use]
-    pub fn supports_block(&self, fragment_end: Digest) -> bool {
+    pub fn supports_block(&self, fragment_end: Digest<LooseCommit>) -> bool {
         self.checkpoints.contains(&fragment_end) || self.summary.boundary.contains(&fragment_end)
     }
 
@@ -128,38 +132,40 @@ impl Fragment {
 
     /// The head of the fragment.
     #[must_use]
-    pub const fn head(&self) -> Digest {
+    pub const fn head(&self) -> Digest<LooseCommit> {
         self.summary.head
     }
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &[Digest] {
+    pub const fn boundary(&self) -> &[Digest<LooseCommit>] {
         self.summary.boundary.as_slice()
     }
 
     /// The inner checkpoints of the fragment.
     #[must_use]
-    pub const fn checkpoints(&self) -> &Vec<Digest> {
+    pub const fn checkpoints(&self) -> &Vec<Digest<LooseCommit>> {
         &self.checkpoints
     }
 
     /// The unique [`Digest`] of this [`Fragment`], derived from its content.
     #[must_use]
-    pub const fn digest(&self) -> Digest {
+    pub const fn digest(&self) -> Digest<Fragment> {
         self.digest
     }
 }
 
 /// The minimal data for a [`Fragment`].
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
+)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FragmentSummary {
     #[n(0)]
-    head: Digest,
+    head: Digest<LooseCommit>,
     #[n(1)]
-    boundary: Vec<Digest>,
+    boundary: Vec<Digest<LooseCommit>>,
     #[n(2)]
     blob_meta: BlobMeta,
 }
@@ -167,7 +173,11 @@ pub struct FragmentSummary {
 impl FragmentSummary {
     /// Constructor for a [`FragmentSummary`].
     #[must_use]
-    pub const fn new(head: Digest, boundary: Vec<Digest>, blob_meta: BlobMeta) -> Self {
+    pub const fn new(
+        head: Digest<LooseCommit>,
+        boundary: Vec<Digest<LooseCommit>>,
+        blob_meta: BlobMeta,
+    ) -> Self {
         Self {
             head,
             boundary,
@@ -177,13 +187,13 @@ impl FragmentSummary {
 
     /// The head of the fragment.
     #[must_use]
-    pub const fn head(&self) -> Digest {
+    pub const fn head(&self) -> Digest<LooseCommit> {
         self.head
     }
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &[Digest] {
+    pub const fn boundary(&self) -> &[Digest<LooseCommit>] {
         self.boundary.as_slice()
     }
 
@@ -204,9 +214,9 @@ impl FragmentSummary {
 #[derive(Debug, Clone)]
 pub struct FragmentSpec {
     id: SedimentreeId,
-    head: Digest,
-    checkpoints: Vec<Digest>,
-    boundary: Vec<Digest>,
+    head: Digest<LooseCommit>,
+    checkpoints: Vec<Digest<LooseCommit>>,
+    boundary: Vec<Digest<LooseCommit>>,
 }
 
 impl FragmentSpec {
@@ -214,9 +224,9 @@ impl FragmentSpec {
     #[must_use]
     pub const fn new(
         id: SedimentreeId,
-        head: Digest,
-        checkpoints: Vec<Digest>,
-        boundary: Vec<Digest>,
+        head: Digest<LooseCommit>,
+        checkpoints: Vec<Digest<LooseCommit>>,
+        boundary: Vec<Digest<LooseCommit>>,
     ) -> Self {
         Self {
             id,
@@ -234,19 +244,19 @@ impl FragmentSpec {
 
     /// The head of the fragment.
     #[must_use]
-    pub const fn head(&self) -> Digest {
+    pub const fn head(&self) -> Digest<LooseCommit> {
         self.head
     }
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &[Digest] {
+    pub const fn boundary(&self) -> &[Digest<LooseCommit>] {
         self.boundary.as_slice()
     }
 
     /// The inner checkpoints of the fragment.
     #[must_use]
-    pub const fn checkpoints(&self) -> &Vec<Digest> {
+    pub const fn checkpoints(&self) -> &Vec<Digest<LooseCommit>> {
         &self.checkpoints
     }
 }

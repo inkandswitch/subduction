@@ -17,17 +17,17 @@ pnpm install
 
 Install Playwright's browser binaries:
 ```
-npx playwright install
+pnpm run test:install
 ```
 
 Run tests:
 ```
-npx playwright test
+pnpm test
 ```
 
 View Playwright report:
 ```
-npx playwright show-report
+pnpm run test:report
 ```
 
 ## Naming Conventions
