@@ -16,7 +16,7 @@
 use criterion::{criterion_group, criterion_main};
 
 mod generators {
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{Rng, SeedableRng, rngs::SmallRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         digest::Digest,
@@ -28,7 +28,7 @@ mod generators {
     /// Generate a deterministic commit digest from a seed.
     pub(super) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
         Digest::from_bytes(bytes)
     }
@@ -36,7 +36,7 @@ mod generators {
     /// Generate a deterministic blob digest from a seed.
     fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
         let mut bytes = [0u8; 32];
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
         Digest::from_bytes(bytes)
     }
@@ -46,7 +46,7 @@ mod generators {
     /// to ensure exact depth control.
     pub(super) fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
-        let mut rng = StdRng::seed_from_u64(seed);
+        let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(
             #[allow(clippy::expect_used)]
             bytes
