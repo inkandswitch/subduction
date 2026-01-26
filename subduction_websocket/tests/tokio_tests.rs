@@ -103,7 +103,6 @@ async fn client_reconnect() -> TestResult {
     let bound = server.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
 
-    // Create initial client connection
     let (mut client_ws, socket_listener) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
@@ -750,6 +749,166 @@ async fn message_ordering() -> TestResult {
     for commit in &commits {
         assert!(server_commits.contains(commit), "Server should have commit");
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_try_connect_known_peer() -> TestResult {
+    init_tracing();
+
+    let server1_signer = test_signer(0);
+    let server2_signer = test_signer(1);
+    let server2_peer_id = server2_signer.peer_id();
+
+    let addr1: SocketAddr = "127.0.0.1:0".parse()?;
+    let server1 = TokioWebSocketServer::setup(
+        addr1,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        HANDSHAKE_MAX_DRIFT,
+        server1_signer,
+        None, // No discovery mode
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+    )
+    .await?;
+
+    let addr2: SocketAddr = "127.0.0.1:0".parse()?;
+    let server2 = TokioWebSocketServer::setup(
+        addr2,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        HANDSHAKE_MAX_DRIFT,
+        server2_signer,
+        None, // No discovery mode
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+    )
+    .await?;
+
+    let server2_addr = server2.address();
+    let uri: Uri = format!("ws://{}:{}", server2_addr.ip(), server2_addr.port()).parse()?;
+
+    let connected_peer_id = server1
+        .try_connect(uri, TimeoutTokio, Duration::from_secs(5), server2_peer_id)
+        .await?;
+
+    assert_eq!(connected_peer_id, server2_peer_id);
+
+    let peers = server1.subduction().connected_peer_ids().await;
+    assert!(peers.contains(&server2_peer_id));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_try_connect_discover() -> TestResult {
+    init_tracing();
+
+    let server1_signer = test_signer(0);
+    let server2_signer = test_signer(1);
+    let server2_peer_id = server2_signer.peer_id();
+
+    let service_name = "test.subduction.local";
+
+    let addr1: SocketAddr = "127.0.0.1:0".parse()?;
+    let server1 = TokioWebSocketServer::setup(
+        addr1,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        HANDSHAKE_MAX_DRIFT,
+        server1_signer,
+        Some(service_name),
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+    )
+    .await?;
+
+    let addr2: SocketAddr = "127.0.0.1:0".parse()?;
+    let server2 = TokioWebSocketServer::setup(
+        addr2,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        HANDSHAKE_MAX_DRIFT,
+        server2_signer,
+        Some(service_name),
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+    )
+    .await?;
+
+    let server2_addr = server2.address();
+    let uri: Uri = format!("ws://{}:{}", server2_addr.ip(), server2_addr.port()).parse()?;
+
+    let connected_peer_id = server1
+        .try_connect_discover(uri, TimeoutTokio, Duration::from_secs(5), service_name)
+        .await?;
+
+    assert_eq!(connected_peer_id, server2_peer_id);
+
+    let peers = server1.subduction().connected_peer_ids().await;
+    assert!(peers.contains(&server2_peer_id));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn server_try_connect_discover_wrong_service_name() -> TestResult {
+    init_tracing();
+
+    let server1_signer = test_signer(0);
+    let server2_signer = test_signer(1);
+
+    let addr1: SocketAddr = "127.0.0.1:0".parse()?;
+    let server1 = TokioWebSocketServer::setup(
+        addr1,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        HANDSHAKE_MAX_DRIFT,
+        server1_signer,
+        Some("service-a.local"),
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+    )
+    .await?;
+
+    let addr2: SocketAddr = "127.0.0.1:0".parse()?;
+    let server2 = TokioWebSocketServer::setup(
+        addr2,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        HANDSHAKE_MAX_DRIFT,
+        server2_signer,
+        Some("service-b.local"),
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+    )
+    .await?;
+
+    let server2_addr = server2.address();
+    let uri: Uri = format!("ws://{}:{}", server2_addr.ip(), server2_addr.port()).parse()?;
+
+    let result = server1
+        .try_connect_discover(uri, TimeoutTokio, Duration::from_secs(5), "service-a.local")
+        .await;
+
+    assert!(
+        result.is_err(),
+        "Should fail to connect with mismatched service name"
+    );
 
     Ok(())
 }

@@ -303,6 +303,12 @@ where
         self.address
     }
 
+    /// Get a reference to the underlying [`Subduction`] instance.
+    #[must_use]
+    pub const fn subduction(&self) -> &TokioWebSocketSubduction<S, P, Sig, O, M> {
+        &self.subduction
+    }
+
     /// Register a new WebSocket connection with the server.
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.

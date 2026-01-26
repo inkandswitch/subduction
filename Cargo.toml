@@ -50,6 +50,7 @@ future_form = "0.2.0"
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
+keyhive_core = { git = "https://github.com/inkandswitch/keyhive", branch = "main" }
 metrics = "0.24"
 minicbor = { version = "2.1", default-features = false, features = ["alloc", "derive"] }
 minicbor-serde = { version = "0.6", default-features = false, features = ["alloc"] }

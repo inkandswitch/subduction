@@ -17,7 +17,7 @@ rust-version.workspace = true
 ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
-keyhive_core = { path = "../../keyhive/keyhive_core" }
+keyhive_core = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
 serde = { workspace = true }
