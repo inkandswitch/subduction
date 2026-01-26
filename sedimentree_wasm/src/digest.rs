@@ -31,7 +31,7 @@ impl WasmDigest {
     pub fn new(bytes: &[u8]) -> Result<WasmDigest, WasmInvalidDigest> {
         let arr: [u8; 32] = bytes
             .try_into()
-            .map_err(|_| InternalWasmInvalidDigest::InvalidDigest(InvalidDigest::WrongLength))?;
+            .map_err(|_| WasmInvalidDigest::InvalidDigest(InvalidDigest::WrongLength))?;
         Ok(WasmDigest(arr))
     }
 
@@ -54,10 +54,10 @@ impl WasmDigest {
     pub fn from_base58(s: &str) -> Result<WasmDigest, WasmInvalidDigest> {
         let bytes: Vec<u8> = s
             .from_base58()
-            .map_err(InternalWasmInvalidDigest::Base58DecodeError)?;
+            .map_err(WasmInvalidDigest::Base58DecodeError)?;
         let arr: [u8; 32] = bytes
             .try_into()
-            .map_err(|_| InternalWasmInvalidDigest::InvalidDigest(InvalidDigest::WrongLength))?;
+            .map_err(|_| WasmInvalidDigest::InvalidDigest(InvalidDigest::WrongLength))?;
         Ok(WasmDigest(arr))
     }
 
@@ -78,7 +78,7 @@ impl WasmDigest {
         // Parse as Digest<()> for validation, then extract bytes
         let digest: Digest<()> = s
             .parse()
-            .map_err(InternalWasmInvalidDigest::InvalidDigest)?;
+            .map_err(WasmInvalidDigest::InvalidDigest)?;
         Ok(WasmDigest(*digest.as_bytes()))
     }
 
@@ -113,21 +113,21 @@ impl<T> From<WasmDigest> for Digest<T> {
 }
 
 /// An error indicating an invalid [`Digest`].
-#[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
-#[error(transparent)]
-pub struct WasmInvalidDigest(#[from] InternalWasmInvalidDigest);
-
-/// An internal error indicating an invalid [`Digest`].
-#[derive(Debug, Error)]
-pub enum InternalWasmInvalidDigest {
+pub enum WasmInvalidDigest {
     /// The digest is invalid.
-    #[error(transparent)]
-    InvalidDigest(#[from] InvalidDigest),
+    #[error("{0}")]
+    InvalidDigest(InvalidDigest),
 
     /// The Base58 decoding failed.
     #[error("Base58 decode error: {0:?}")]
     Base58DecodeError(base58::FromBase58Error),
+}
+
+impl From<InvalidDigest> for WasmInvalidDigest {
+    fn from(err: InvalidDigest) -> Self {
+        Self::InvalidDigest(err)
+    }
 }
 
 impl From<WasmInvalidDigest> for JsValue {

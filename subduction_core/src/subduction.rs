@@ -1196,11 +1196,12 @@ impl<
             blob,
         };
         {
-            let conns = self.all_connections().await;
+            // Send only to subscribers (consistent with recv_commit forwarding)
+            let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
             for conn in conns {
                 let peer_id = conn.peer_id();
                 tracing::debug!(
-                    "Propagating commit {:?} for sedimentree {:?} to peer {}",
+                    "Propagating commit {:?} for sedimentree {:?} to subscriber {}",
                     msg.request_id(),
                     id,
                     peer_id
@@ -1244,6 +1245,8 @@ impl<
             id
         );
 
+        let self_id = self.peer_id();
+
         // Sign the fragment with our signer (seal returns Verified)
         let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
         let signed_for_wire = verified.signed().clone();
@@ -1263,11 +1266,12 @@ impl<
             blob,
         };
 
-        let conns = self.all_connections().await;
+        // Send only to subscribers (consistent with recv_fragment forwarding)
+        let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
         for conn in conns {
             let peer_id = conn.peer_id();
             tracing::debug!(
-                "Propagating fragment {:?} for sedimentree {:?} to peer {}",
+                "Propagating fragment {:?} for sedimentree {:?} to subscriber {}",
                 fragment.digest(),
                 id,
                 peer_id
@@ -1770,9 +1774,14 @@ impl<
                             .map_err(IoError::Storage)?;
                     }
 
-                    // Track subscription for reconnection restoration
+                    // Mutual subscription: we subscribed to them, so also add them
+                    // to our subscriptions so our commits get pushed to them
                     if subscribe {
                         self.track_outgoing_subscription(*to_ask, id).await;
+                        self.add_subscription(*to_ask, id).await;
+                        tracing::debug!(
+                            "mutual subscription: added peer {to_ask} to our subscriptions for {id:?}"
+                        );
                     }
 
                     had_success = true;
@@ -1909,6 +1918,16 @@ impl<
                                     self.insert_fragment_locally(&putter, verified, blob)
                                         .await
                                         .map_err(IoError::<F, S, C>::Storage)?;
+                                }
+
+                                // Mutual subscription: we subscribed to them, so also add them
+                                // to our subscriptions so our commits get pushed to them
+                                if subscribe {
+                                    self.track_outgoing_subscription(*peer_id, id).await;
+                                    self.add_subscription(*peer_id, id).await;
+                                    tracing::debug!(
+                                        "mutual subscription: added peer {peer_id} to our subscriptions for {id:?}"
+                                    );
                                 }
 
                                 had_success = true;

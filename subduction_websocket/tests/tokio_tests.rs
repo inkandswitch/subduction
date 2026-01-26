@@ -318,10 +318,6 @@ async fn multiple_concurrent_clients() -> TestResult {
 
         client.register(client_ws).await?;
 
-        // Each client adds its own commit
-        let (commit, blob) = random_commit();
-        client.add_commit(sed_id, &commit, blob).await?;
-
         clients.push(client);
 
         tokio::spawn({
@@ -340,9 +336,27 @@ async fn multiple_concurrent_clients() -> TestResult {
         num_clients
     );
 
-    // Sync all clients
+    // Sync all clients first for the specific sedimentree (establishes subscriptions)
     for client in &clients {
-        client.full_sync(Some(Duration::from_millis(100))).await?;
+        client
+            .sync_all(sed_id, true, Some(Duration::from_millis(100)))
+            .await?;
+    }
+
+    // Now each client adds its own commit (after subscribing)
+    for client in &clients {
+        let (commit, blob) = random_commit();
+        client.add_commit(sed_id, &commit, blob).await?;
+    }
+
+    // Give time for commits to propagate
+    tokio::time::sleep(Duration::from_millis(100)).await;
+
+    // Sync again to ensure all commits are shared
+    for client in &clients {
+        client
+            .sync_all(sed_id, true, Some(Duration::from_millis(100)))
+            .await?;
     }
 
     // Give time for sync to complete
