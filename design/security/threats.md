@@ -21,7 +21,7 @@
 - Nonce tracking rejects seen `(PeerId, Nonce)` pairs within drift window
 - Challenge digest in response prevents response replay
 
-**Residual risk:** Within the timestamp window, an attacker with network position could attempt replay before nonce is recorded. Mitigated by TLS (can't intercept) and short window.
+**Residual risk:** Within the timestamp window, an attacker with a privileged network position could attempt replay before nonce is recorded. Mitigated by TLS (can't intercept) and short window.
 
 ## T3: Person-in-the-Middle (PITM)
 
