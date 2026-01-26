@@ -41,6 +41,7 @@ harness = false
 [features]
 default = []
 arbitrary = ["dep:arbitrary"]
+bolero = []
 serde = ["dep:serde"]
 std = [
   "async-lock/std",

@@ -4,11 +4,7 @@ use alloc::{format, string::ToString};
 use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
-    blob::Blob,
-    digest::Digest,
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
 };
 use subduction_core::{
     crypto::signed::Signed,
@@ -161,7 +157,11 @@ impl MemoryStorage {
                 let bytes = minicbor::to_vec(&signed)
                     .map_err(|e| JsValue::from_str(&format!("CBOR encode error: {e}")))?;
                 let obj = js_sys::Object::new();
-                js_sys::Reflect::set(&obj, &"digest".into(), &JsDigest::from(WasmDigest::from(digest)))?;
+                js_sys::Reflect::set(
+                    &obj,
+                    &"digest".into(),
+                    &JsDigest::from(WasmDigest::from(digest)),
+                )?;
                 js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes.as_slice()))?;
                 result.push(&obj);
             }
@@ -171,7 +171,11 @@ impl MemoryStorage {
 
     /// Delete a commit by digest.
     #[wasm_bindgen(js_name = deleteCommit)]
-    pub fn delete_commit(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
+    pub fn delete_commit(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        digest: &WasmDigest,
+    ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         let digest: Digest<LooseCommit> = digest.clone().into();
@@ -222,7 +226,11 @@ impl MemoryStorage {
 
     /// Load a fragment by digest.
     #[wasm_bindgen(js_name = loadFragment)]
-    pub fn load_fragment(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
+    pub fn load_fragment(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        digest: &WasmDigest,
+    ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         let digest: Digest<Fragment> = digest.clone().into();
@@ -272,7 +280,11 @@ impl MemoryStorage {
                 let bytes = minicbor::to_vec(&signed)
                     .map_err(|e| JsValue::from_str(&format!("CBOR encode error: {e}")))?;
                 let obj = js_sys::Object::new();
-                js_sys::Reflect::set(&obj, &"digest".into(), &JsDigest::from(WasmDigest::from(digest)))?;
+                js_sys::Reflect::set(
+                    &obj,
+                    &"digest".into(),
+                    &JsDigest::from(WasmDigest::from(digest)),
+                )?;
                 js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes.as_slice()))?;
                 result.push(&obj);
             }
@@ -282,7 +294,11 @@ impl MemoryStorage {
 
     /// Delete a fragment by digest.
     #[wasm_bindgen(js_name = deleteFragment)]
-    pub fn delete_fragment(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
+    pub fn delete_fragment(
+        &self,
+        sedimentree_id: &WasmSedimentreeId,
+        digest: &WasmDigest,
+    ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
         let digest: Digest<Fragment> = digest.clone().into();

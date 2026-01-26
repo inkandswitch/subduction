@@ -7,11 +7,7 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use sedimentree_core::collections::Set;
 use sedimentree_core::{
-    blob::Blob,
-    digest::Digest,
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
 };
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -293,8 +289,10 @@ impl Storage<Sendable> for FsStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>>
-    {
+    ) -> <Sendable as FutureForm>::Future<
+        '_,
+        Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>,
+    > {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::load_loose_commits");
 
@@ -441,8 +439,10 @@ impl Storage<Sendable> for FsStorage {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, Self::Error>>
-    {
+    ) -> <Sendable as FutureForm>::Future<
+        '_,
+        Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, Self::Error>,
+    > {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::load_fragments");
 
@@ -701,8 +701,10 @@ impl Storage<Local> for FsStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>>
-    {
+    ) -> <Local as FutureForm>::Future<
+        '_,
+        Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>,
+    > {
         Local::from_future(<Self as Storage<Sendable>>::load_loose_commits(
             self,
             sedimentree_id,
@@ -768,8 +770,10 @@ impl Storage<Local> for FsStorage {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, Self::Error>>
-    {
+    ) -> <Local as FutureForm>::Future<
+        '_,
+        Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, Self::Error>,
+    > {
         Local::from_future(<Self as Storage<Sendable>>::load_fragments(
             self,
             sedimentree_id,

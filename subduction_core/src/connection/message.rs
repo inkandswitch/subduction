@@ -3,11 +3,7 @@
 use alloc::vec::Vec;
 
 use sedimentree_core::{
-    blob::Blob,
-    digest::Digest,
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
     sedimentree::SedimentreeSummary,
 };
 

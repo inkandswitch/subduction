@@ -19,7 +19,9 @@ use base58::FromBase58;
 use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
 use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
-use sedimentree_core::{commit::CommitStore, digest::Digest, hex::decode_hex, loose_commit::LooseCommit};
+use sedimentree_core::{
+    commit::CommitStore, digest::Digest, hex::decode_hex, loose_commit::LooseCommit,
+};
 use subduction_wasm::{
     digest::{JsDigest, WasmDigest},
     subduction::WasmHashMetric,
@@ -163,7 +165,9 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
             deps.push(automerge::ChangeHash(arr32));
         }
 
-        Ok(Some(deps.into_iter().map(|h| Digest::from_bytes(h.0)).collect()))
+        Ok(Some(
+            deps.into_iter().map(|h| Digest::from_bytes(h.0)).collect(),
+        ))
     }
 }
 

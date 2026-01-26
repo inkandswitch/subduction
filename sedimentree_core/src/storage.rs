@@ -8,11 +8,7 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 
 use crate::{
-    blob::Blob,
-    digest::Digest,
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
 };
 
 /// Abstraction over storage for `Sedimentree` data.
@@ -77,7 +73,10 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest<Blob>, Self::Error>>;
 
     /// Load a blob from storage.
-    fn load_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, Self::Error>>;
+    fn load_blob(
+        &self,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>>;
 
     /// Delete a blob from storage.
     fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>>;
@@ -312,7 +311,10 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
-    fn load_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
+    fn load_blob(
+        &self,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?blob_digest, "MemoryStorage::load_blob");
             Ok(self.blobs.lock().await.get(&blob_digest).cloned())

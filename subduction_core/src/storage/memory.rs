@@ -280,7 +280,10 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
-    fn load_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
+    fn load_blob(
+        &self,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?blob_digest, "MemoryStorage::load_blob");
             Ok(self.blobs.lock().await.get(&blob_digest).cloned())

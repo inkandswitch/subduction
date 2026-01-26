@@ -313,7 +313,10 @@ impl CommitDag {
         Parents::new(self, node)
     }
 
-    fn parents_of_hash(&self, hash: Digest<LooseCommit>) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
+    fn parents_of_hash(
+        &self,
+        hash: Digest<LooseCommit>,
+    ) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
         self.node_map
             .get(&hash)
             .map(|idx| {
@@ -639,7 +642,10 @@ mod tests {
         };
     }
 
-    fn pretty_hashes(name_map: &Map<Digest<LooseCommit>, &'_ str>, hashes: &Set<Digest<LooseCommit>>) -> Set<String> {
+    fn pretty_hashes(
+        name_map: &Map<Digest<LooseCommit>, &'_ str>,
+        hashes: &Set<Digest<LooseCommit>>,
+    ) -> Set<String> {
         hashes
             .iter()
             .map(|h| {

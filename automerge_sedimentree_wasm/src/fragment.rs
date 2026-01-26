@@ -111,7 +111,9 @@ impl From<Map<WasmDigest, Set<WasmDigest>>> for WasmBoundary {
 /// A store for fragment states.
 #[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
-pub struct WasmFragmentStateStore(pub(crate) Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>);
+pub struct WasmFragmentStateStore(
+    pub(crate) Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>,
+);
 
 #[wasm_bindgen(js_class = FragmentStateStore)]
 impl WasmFragmentStateStore {
@@ -137,7 +139,9 @@ impl WasmFragmentStateStore {
 }
 
 #[allow(clippy::implicit_hasher)]
-impl From<WasmFragmentStateStore> for Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>> {
+impl From<WasmFragmentStateStore>
+    for Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>
+{
     fn from(store: WasmFragmentStateStore) -> Self {
         store.0
     }

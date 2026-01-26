@@ -76,9 +76,7 @@ impl WasmDigest {
     #[wasm_bindgen(js_name = fromHexString)]
     pub fn from_hex_string(s: &str) -> Result<WasmDigest, WasmInvalidDigest> {
         // Parse as Digest<()> for validation, then extract bytes
-        let digest: Digest<()> = s
-            .parse()
-            .map_err(WasmInvalidDigest::InvalidDigest)?;
+        let digest: Digest<()> = s.parse().map_err(WasmInvalidDigest::InvalidDigest)?;
         Ok(WasmDigest(*digest.as_bytes()))
     }
 

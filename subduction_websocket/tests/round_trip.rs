@@ -137,13 +137,16 @@ async fn batch_sync() -> TestResult {
     let blob2 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes2))?;
     let blob3 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes3))?;
 
-    let commit_digest1: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
+    let commit_digest1: Digest<LooseCommit> =
+        Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
     let commit1 = LooseCommit::new(commit_digest1, vec![], BlobMeta::new(blob1.as_slice()));
 
-    let commit_digest2: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
+    let commit_digest2: Digest<LooseCommit> =
+        Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
     let commit2 = LooseCommit::new(commit_digest2, vec![], BlobMeta::new(blob2.as_slice()));
 
-    let commit_digest3: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
+    let commit_digest3: Digest<LooseCommit> =
+        Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
     let commit3 = LooseCommit::new(commit_digest3, vec![], BlobMeta::new(blob3.as_slice()));
 
     ///////////////////

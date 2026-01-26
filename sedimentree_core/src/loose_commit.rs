@@ -27,7 +27,11 @@ pub struct LooseCommit {
 impl LooseCommit {
     /// Constructor for a [`LooseCommit`].
     #[must_use]
-    pub const fn new(digest: Digest<LooseCommit>, parents: Vec<Digest<LooseCommit>>, blob_meta: BlobMeta) -> Self {
+    pub const fn new(
+        digest: Digest<LooseCommit>,
+        parents: Vec<Digest<LooseCommit>>,
+        blob_meta: BlobMeta,
+    ) -> Self {
         Self {
             digest,
             parents,

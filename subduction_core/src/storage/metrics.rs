@@ -10,11 +10,7 @@ use alloc::vec::Vec;
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
-    blob::Blob,
-    collections::Set,
-    digest::Digest,
-    fragment::Fragment,
-    id::SedimentreeId,
+    blob::Blob, collections::Set, digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 
@@ -380,7 +376,10 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         })
     }
 
-    fn load_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
+    fn load_blob(
+        &self,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
             let result = self.inner.load_blob(blob_digest).await;

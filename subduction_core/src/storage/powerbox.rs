@@ -7,11 +7,7 @@ use alloc::sync::Arc;
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob,
-    collections::Set,
-    digest::Digest,
-    fragment::Fragment,
-    id::SedimentreeId,
+    blob::Blob, collections::Set, digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 
@@ -140,7 +136,10 @@ impl<S, P> StoragePowerbox<S, P> {
     /// This is for saving blobs received from peers or created locally.
     /// Blobs are content-addressed and shared across sedimentrees.
     #[must_use]
-    pub fn save_blob<K: FutureForm>(&self, blob: Blob) -> K::Future<'_, Result<BlobDigest, S::Error>>
+    pub fn save_blob<K: FutureForm>(
+        &self,
+        blob: Blob,
+    ) -> K::Future<'_, Result<BlobDigest, S::Error>>
     where
         S: Storage<K>,
     {

@@ -206,7 +206,10 @@ fn fragment_digest(signed: &Signed<Fragment>) -> Option<Digest<Fragment>> {
 
 /// Compute blob digest from a signed fragment by decoding the payload.
 fn fragment_blob_digest(signed: &Signed<Fragment>) -> Option<Digest<Blob>> {
-    signed.decode_payload().ok().map(|f| f.summary().blob_meta().digest())
+    signed
+        .decode_payload()
+        .ok()
+        .map(|f| f.summary().blob_meta().digest())
 }
 
 /// Parse a JS array of {digest, signed} objects into Rust tuples.
@@ -394,7 +397,8 @@ impl Storage<Local> for JsSedimentreeStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> LocalBoxFuture<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>>
+    {
         Local::from_future(async move {
             tracing::debug!(?sedimentree_id, "JsSedimentreeStorage::load_loose_commits");
             let js_promise =
@@ -620,7 +624,10 @@ impl Storage<Local> for JsSedimentreeStorage {
         })
     }
 
-    fn delete_blob(&self, blob_digest: Digest<Blob>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_blob(
+        &self,
+        blob_digest: Digest<Blob>,
+    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
             tracing::debug!(?blob_digest, "JsSedimentreeStorage::delete_blob");
             let promise = self.js_delete_blob(&WasmDigest::from(blob_digest).into());

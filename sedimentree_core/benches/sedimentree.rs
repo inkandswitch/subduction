@@ -19,24 +19,33 @@ mod generators {
     use rand::rngs::StdRng;
     use rand::{Rng, SeedableRng};
     use sedimentree_core::{
-        blob::{BlobMeta, Digest},
+        blob::{Blob, BlobMeta},
+        digest::Digest,
         fragment::Fragment,
         loose_commit::LooseCommit,
         sedimentree::Sedimentree,
     };
 
-    /// Generate a deterministic digest from a seed.
-    pub(super) fn digest_from_seed(seed: u64) -> Digest {
+    /// Generate a deterministic commit digest from a seed.
+    pub(super) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
         let mut rng = StdRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
-        Digest::from(bytes)
+        Digest::from_bytes(bytes)
     }
 
-    /// Generate a digest with a specific number of leading zero bytes.
+    /// Generate a deterministic blob digest from a seed.
+    fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
+        let mut bytes = [0u8; 32];
+        let mut rng = StdRng::seed_from_u64(seed);
+        rng.fill(&mut bytes);
+        Digest::from_bytes(bytes)
+    }
+
+    /// Generate a commit digest with a specific number of leading zero bytes.
     /// The byte immediately after the zeros is guaranteed to be non-zero
     /// to ensure exact depth control.
-    pub(super) fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest {
+    pub(super) fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest<LooseCommit> {
         let mut bytes = [0u8; 32];
         let mut rng = StdRng::seed_from_u64(seed);
         rng.fill(
@@ -50,16 +59,16 @@ mod generators {
         if zeros < 32 && bytes[zeros] == 0 {
             bytes[zeros] = 1;
         }
-        Digest::from(bytes)
+        Digest::from_bytes(bytes)
     }
 
     /// Generate synthetic blob metadata.
     pub(super) fn synthetic_blob_meta(seed: u64, size: u64) -> BlobMeta {
-        BlobMeta::from_digest_size(digest_from_seed(seed), size)
+        BlobMeta::from_digest_size(blob_digest_from_seed(seed), size)
     }
 
     /// Generate a synthetic loose commit with the given number of parents.
-    pub(super) fn synthetic_commit(seed: u64, parents: Vec<Digest>) -> LooseCommit {
+    pub(super) fn synthetic_commit(seed: u64, parents: Vec<Digest<LooseCommit>>) -> LooseCommit {
         let digest = digest_from_seed(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
         LooseCommit::new(digest, parents, blob_meta)
@@ -73,10 +82,10 @@ mod generators {
         leading_zeros: usize,
     ) -> Fragment {
         let head = digest_with_leading_zeros(leading_zeros, head_seed);
-        let boundary: Vec<Digest> = (0..boundary_count)
+        let boundary: Vec<Digest<LooseCommit>> = (0..boundary_count)
             .map(|i| digest_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
             .collect();
-        let checkpoints: Vec<Digest> = (0..checkpoint_count)
+        let checkpoints: Vec<Digest<LooseCommit>> = (0..checkpoint_count)
             .map(|i| digest_from_seed(head_seed + 200 + i as u64))
             .collect();
         let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
@@ -105,7 +114,7 @@ mod generators {
         base_seed: u64,
     ) -> Vec<LooseCommit> {
         let mut commits = Vec::with_capacity(count);
-        let mut recent_digests: Vec<Digest> = Vec::new();
+        let mut recent_digests: Vec<Digest<LooseCommit>> = Vec::new();
 
         for i in 0..count {
             let parents = if i == 0 {
@@ -244,7 +253,10 @@ mod digest {
     use std::hint::black_box;
 
     use criterion::{BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{blob::Digest, commit::CountLeadingZeroBytes, depth::DepthMetric};
+    use sedimentree_core::{
+        commit::CountLeadingZeroBytes, depth::DepthMetric, digest::Digest,
+        loose_commit::LooseCommit,
+    };
 
     use super::generators::{digest_from_seed, digest_with_leading_zeros};
 
@@ -263,7 +275,7 @@ mod digest {
             let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
             group.throughput(Throughput::Bytes(size as u64));
             group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
-                b.iter(|| Digest::hash(black_box(data)));
+                b.iter(|| Digest::<LooseCommit>::hash_bytes(black_box(data)));
             });
         }
 

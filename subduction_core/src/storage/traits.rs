@@ -22,11 +22,7 @@ use alloc::vec::Vec;
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob,
-    collections::Set,
-    digest::Digest,
-    fragment::Fragment,
-    id::SedimentreeId,
+    blob::Blob, collections::Set, digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 
@@ -167,7 +163,10 @@ pub trait Storage<K: FutureForm + ?Sized> {
     fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest<Blob>, Self::Error>>;
 
     /// Load a blob by its digest.
-    fn load_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, Self::Error>>;
+    fn load_blob(
+        &self,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>>;
 
     /// Delete a blob by its digest.
     fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>>;
