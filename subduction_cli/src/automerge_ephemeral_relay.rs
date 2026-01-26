@@ -3,16 +3,18 @@
 //! This server implements the automerge-repo `NetworkSubsystem` protocol handshake
 //! and then broadcasts messages between connected peers.
 //!
-//! ## Performance and Security
+//! # Protocol Compatibility
+//!
+//! This implementation follows the current automerge-repo ephemeral message protocol,
+//! which does not include message authentication or timestamps. Any security
+//! improvements (replay protection, message authentication) would require
+//! coordinated changes to the automerge-repo protocol. Revisit this design when
+//! upstream is ready to address these concerns.
+//!
+//! # Performance
 //!
 //! Uses `AHash` (keyed) for DoS-resistant sharding and dedup keying; faster than
 //! `SipHash` in practice on short inputs; not used as a cryptographic primitive.
-//!
-//! TODO: Add message authentication to prevent malicious peers from sending
-//! forged ephemeral messages.
-//!
-//! TODO: Add timestamp validation to prevent replay attacks (reject messages
-//! with timestamps too far in the past or future).
 
 use ahash::RandomState;
 use anyhow::Result;
