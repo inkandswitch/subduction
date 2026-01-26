@@ -85,6 +85,13 @@
     '';
   };
 
+  fmt = {
+    "fmt" = cmd "Format all Rust code" ''
+      ${cargo} fmt
+      echo "✓ Formatted"
+    '';
+  };
+
   test = {
     "test:host" = cmd "Run workspace tests with arbitrary feature" ''
       set -e
@@ -485,4 +492,4 @@
     '';
   };
 in
-  bench // build // ci // monitoring // release // test // wasm
+  bench // build // ci // fmt // monitoring // release // test // wasm

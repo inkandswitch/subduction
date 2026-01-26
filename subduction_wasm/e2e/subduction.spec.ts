@@ -116,7 +116,7 @@ test.describe("Subduction", () => {
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
-        const peerIds = await syncer.connectedPeerIds();
+        const peerIds = await syncer.getConnectedPeerIds();
 
         return {
           peerIds,
@@ -137,7 +137,7 @@ test.describe("Subduction", () => {
         const syncer = new Subduction(signer, storage);
 
         await syncer.disconnectAll();
-        const peerIds = await syncer.connectedPeerIds();
+        const peerIds = await syncer.getConnectedPeerIds();
 
         return {
           disconnected: true,
@@ -217,7 +217,7 @@ test.describe("Subduction", () => {
       expect(result.isUndefined).toBe(true);
     });
 
-    test("should return empty map for non-existent blob digests", async ({ page }) => {
+    test("should return undefined for non-existent blob digest", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
@@ -228,17 +228,15 @@ test.describe("Subduction", () => {
         testDigest[0] = 1;
         const digest = new Digest(testDigest);
 
-        const blobs = await syncer.getBlobs([digest]);
+        const blob = await syncer.getBlob(digest);
 
         return {
-          blobs,
-          isMap: blobs instanceof Map,
-          size: blobs.size,
+          blob,
+          isUndefined: blob === undefined || blob === null,
         };
       });
 
-      expect(result.isMap).toBe(true);
-      expect(result.size).toBe(0);
+      expect(result.isUndefined).toBe(true);
     });
   });
 
