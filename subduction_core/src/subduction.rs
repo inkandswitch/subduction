@@ -1196,12 +1196,25 @@ impl<
             blob,
         };
         {
-            // Send only to subscribers (consistent with recv_commit forwarding)
-            let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
+            // Send to subscribers, or to all connections if no subscribers exist yet.
+            // This ensures new documents get propagated to at least one peer.
+            let conns = {
+                let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
+                if subscriber_conns.is_empty() {
+                    tracing::debug!(
+                        "No subscribers for sedimentree {:?}, broadcasting to all connections",
+                        id
+                    );
+                    self.all_connections().await
+                } else {
+                    subscriber_conns
+                }
+            };
+
             for conn in conns {
                 let peer_id = conn.peer_id();
                 tracing::debug!(
-                    "Propagating commit {:?} for sedimentree {:?} to subscriber {}",
+                    "Propagating commit {:?} for sedimentree {:?} to {}",
                     msg.request_id(),
                     id,
                     peer_id
@@ -1266,12 +1279,25 @@ impl<
             blob,
         };
 
-        // Send only to subscribers (consistent with recv_fragment forwarding)
-        let conns = self.get_authorized_subscriber_conns(id, &self_id).await;
+        // Send to subscribers, or to all connections if no subscribers exist yet.
+        // This ensures new documents get propagated to at least one peer.
+        let conns = {
+            let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
+            if subscriber_conns.is_empty() {
+                tracing::debug!(
+                    "No subscribers for sedimentree {:?}, broadcasting fragment to all connections",
+                    id
+                );
+                self.all_connections().await
+            } else {
+                subscriber_conns
+            }
+        };
+
         for conn in conns {
             let peer_id = conn.peer_id();
             tracing::debug!(
-                "Propagating fragment {:?} for sedimentree {:?} to subscriber {}",
+                "Propagating fragment {:?} for sedimentree {:?} to {}",
                 fragment.digest(),
                 id,
                 peer_id
