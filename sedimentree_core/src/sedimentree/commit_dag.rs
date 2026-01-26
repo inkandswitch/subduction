@@ -497,10 +497,13 @@ mod tests {
         vec::Vec,
     };
 
+    use rand::{SeedableRng, rngs::SmallRng};
+
     use super::CommitDag;
     use crate::{
         blob::BlobMeta,
         collections::{Map, Set},
+        commit::CountLeadingZeroBytes,
         digest::Digest,
         loose_commit::LooseCommit,
     };
