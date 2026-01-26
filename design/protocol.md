@@ -140,18 +140,7 @@ The version byte enables either approach without breaking existing deployments.
 
 ### Algorithm Agility
 
-If algorithm agility becomes necessary:
-
-```rust
-// Hypothetical future version
-enum SignatureAlgorithm {
-    Ed25519,
-    Ed448,
-    MlDsa44,
-}
-```
-
-This would require a protocol version bump and careful migration planning.
+To keep the protocol simple and with a smaller security surface area, we avoid algorithmic agility.
 
 ## Implementation Notes
 
