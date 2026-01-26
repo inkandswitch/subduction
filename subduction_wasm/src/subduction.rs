@@ -433,6 +433,13 @@ impl WasmSubduction {
 
     /// Request batch sync for a given Sedimentree ID from a specific peer.
     ///
+    /// # Arguments
+    ///
+    /// * `to_ask` - The peer ID to sync with
+    /// * `id` - The sedimentree ID to sync
+    /// * `subscribe` - Whether to subscribe for incremental updates
+    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
@@ -441,12 +448,13 @@ impl WasmSubduction {
         &self,
         to_ask: &WasmPeerId,
         id: &WasmSedimentreeId,
+        subscribe: bool,
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let (success, blobs, conn_errors) = self
             .core
-            .sync_with_peer(&to_ask.clone().into(), id.clone().into(), timeout)
+            .sync_with_peer(&to_ask.clone().into(), id.clone().into(), subscribe, timeout)
             .await
             .map_err(WasmIoError::from)?;
 
@@ -468,6 +476,12 @@ impl WasmSubduction {
 
     /// Request batch sync for a given Sedimentree ID from all connected peers.
     ///
+    /// # Arguments
+    ///
+    /// * `id` - The sedimentree ID to sync
+    /// * `subscribe` - Whether to subscribe for incremental updates
+    /// * `timeout_milliseconds` - Optional timeout in milliseconds
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
@@ -475,11 +489,12 @@ impl WasmSubduction {
     pub async fn sync_all(
         &self,
         id: &WasmSedimentreeId,
+        subscribe: bool,
         timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
         tracing::debug!("WasmSubduction::sync_all");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let peer_map = self.core.sync_all(id.clone().into(), timeout).await?;
+        let peer_map = self.core.sync_all(id.clone().into(), subscribe, timeout).await?;
         tracing::debug!("WasmSubduction::sync_all - done");
         Ok(WasmPeerResultMap(
             peer_map

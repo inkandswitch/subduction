@@ -491,7 +491,7 @@ impl<
         let ids = self.sedimentrees.into_keys().await;
 
         for tree_id in ids {
-            self.sync_with_peer(&peer_id, tree_id, None).await?;
+            self.sync_with_peer(&peer_id, tree_id, true, None).await?;
         }
 
         Ok(fresh)
@@ -961,7 +961,7 @@ impl<
         self.insert_sedimentree_locally(&putter, sedimentree, blobs)
             .await
             .map_err(IoError::Storage)?;
-        self.sync_all(id, None).await?;
+        self.sync_all(id, true, None).await?;
         Ok(())
     }
 
@@ -1404,8 +1404,8 @@ impl<
         &self,
         to_ask: &PeerId,
         id: SedimentreeId,
+        subscribe: bool,
         timeout: Option<Duration>,
-        subscribe: Option<bool>,
     ) -> Result<(bool, Vec<Blob>, Vec<(C, C::CallError)>), IoError<F, S, C>> {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from peer {:?}",
@@ -1444,7 +1444,7 @@ impl<
                         id,
                         req_id,
                         sedimentree_summary: summary,
-                        subscribe: subscribe.unwrap_or(true),
+                        subscribe,
                     },
                     timeout,
                 )
@@ -1500,6 +1500,7 @@ impl<
     pub async fn sync_all(
         &self,
         id: SedimentreeId,
+        subscribe: bool,
         timeout: Option<Duration>,
     ) -> Result<
         Map<PeerId, (bool, Vec<Blob>, Vec<(C, <C as Connection<F>>::CallError)>)>,
@@ -1517,7 +1518,6 @@ impl<
                 .map(|(peer_id, conns)| (*peer_id, conns.iter().cloned().collect()))
                 .collect()
         };
-
         tracing::debug!("Found {} peer(s)", peers.len());
         let blobs = Arc::new(Mutex::new(Set::<Blob>::new()));
         let mut set: FuturesUnordered<_> = peers
@@ -1551,7 +1551,7 @@ impl<
                                     id,
                                     req_id,
                                     sedimentree_summary: summary,
-                                    subscribe: true,
+                                    subscribe,
                                 },
                                 timeout,
                             )
@@ -1637,7 +1637,7 @@ impl<
         let mut errs = Vec::new();
         for id in tree_ids {
             tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
-            let all_results = self.sync_all(id, timeout).await?;
+            let all_results = self.sync_all(id, true, timeout).await?;
             if all_results
                 .values()
                 .any(|(success, _blobs, _errs)| *success)
