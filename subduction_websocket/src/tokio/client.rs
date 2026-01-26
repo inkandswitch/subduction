@@ -201,18 +201,16 @@ impl<
             ClientConnectError::WebSocket(_) => true,
 
             // Handshake errors depend on the specific type
-            ClientConnectError::Handshake(handshake_err) => {
-                use WebSocketHandshakeError::*;
-                match handshake_err {
-                    // Network/transport errors - retry
-                    WebSocket(_) | ConnectionClosed => true,
+            ClientConnectError::Handshake(handshake_err) => match handshake_err {
+                // Network/transport errors - retry
+                WebSocketHandshakeError::WebSocket(_) | WebSocketHandshakeError::ConnectionClosed => true,
 
-                    // Protocol violations or explicit rejection - don't retry
-                    UnexpectedMessageType(_) | DecodeError(_) | Handshake(_) | Rejected { .. } => {
-                        false
-                    }
-                }
-            }
+                // Protocol violations or explicit rejection - don't retry
+                WebSocketHandshakeError::UnexpectedMessageType(_)
+                | WebSocketHandshakeError::DecodeError(_)
+                | WebSocketHandshakeError::Handshake(_)
+                | WebSocketHandshakeError::Rejected { .. } => false,
+            },
         }
     }
 }

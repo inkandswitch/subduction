@@ -9,6 +9,7 @@ Subduction uses two complementary sync protocols to keep sedimentrees consistent
 | [Batch](./batch.md) | Pull (request/response) | Entire sedimentree | Initial sync, reconnection |
 | [Incremental](./incremental.md) | Push (fire-and-forget) | Single commit/fragment | Real-time updates |
 | [Subscriptions](./subscriptions.md) | Opt-in | Per sedimentree | Live update filtering |
+| [Reconnection](./reconnection.md) | Automatic | Per connection | Connection recovery |
 
 ## Typical Usage
 

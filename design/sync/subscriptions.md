@@ -56,7 +56,11 @@ struct RemoveSubscriptions {
 
 ### Automatic Cleanup
 
-When a peer disconnects (all connections closed), the server automatically removes them from all subscription sets. On reconnect, the peer must re-subscribe via `BatchSyncRequest { subscribe: true }`.
+When a peer disconnects (all connections closed), the server automatically removes them from all subscription sets.
+
+### Reconnection Restoration
+
+Subduction tracks outgoing subscriptions per peer. After a successful reconnection, the client can automatically restore subscriptions by re-sending `BatchSyncRequest { subscribe: true }` for each tracked sedimentree. See [reconnection.md](./reconnection.md) for details.
 
 ## Subscription State
 

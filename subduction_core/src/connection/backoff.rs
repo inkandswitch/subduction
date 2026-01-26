@@ -29,7 +29,7 @@
 
 use core::time::Duration;
 
-/// Integer power for f64 (no_std compatible).
+/// Integer power for f64 (`no_std` compatible).
 ///
 /// Computes `base^exp` for non-negative integer exponents.
 fn pow_f64(base: f64, exp: usize) -> f64 {
@@ -93,7 +93,7 @@ impl Backoff {
     /// Reset the attempt counter to zero.
     ///
     /// Call this after a connection has been healthy for a period of time.
-    pub fn reset(&mut self) {
+    pub const fn reset(&mut self) {
         self.attempt = 0;
     }
 
@@ -108,9 +108,13 @@ impl Backoff {
     /// This provides some variation without requiring a random number generator,
     /// making the backoff usable in `no_std` environments. The distribution
     /// isn't uniform but is sufficient for jitter purposes.
+    #[allow(clippy::cast_precision_loss)] // Acceptable for jitter calculation
     fn pseudo_random(&self) -> f64 {
         // Linear congruential generator step
-        let hash = self.attempt.wrapping_mul(1103515245).wrapping_add(12345);
+        let hash = self
+            .attempt
+            .wrapping_mul(1_103_515_245)
+            .wrapping_add(12345);
         (hash % 100) as f64 / 100.0
     }
 }
@@ -240,7 +244,7 @@ mod tests {
         let _ = backoff1.next_delay();
         let _ = backoff1.next_delay();
 
-        let mut backoff2 = backoff1.clone();
+        let mut backoff2 = backoff1;
 
         let _ = backoff1.next_delay();
         assert_eq!(backoff1.attempt(), 3);

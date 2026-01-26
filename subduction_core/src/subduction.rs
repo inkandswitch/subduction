@@ -151,7 +151,7 @@ pub struct Subduction<
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
 
-    /// Backoff state per connection, keyed by ConnectionId.
+    /// Backoff state per connection, keyed by [`ConnectionId`].
     reconnect_backoff: Arc<Mutex<Map<ConnectionId, Backoff>>>,
 
     /// Outgoing subscriptions: sedimentrees we're subscribed to from each peer.

@@ -77,6 +77,7 @@ pub struct ConnectionManager<K: FutureForm, C, S: Spawn<K>> {
     /// Active tasks: maps (`ConnectionId`, `TaskId`) to (`AbortHandle`, `Connection`).
     ///
     /// The connection is stored to enable `Remove(C)` lookup via `PartialEq`.
+    #[allow(clippy::type_complexity)]
     tasks: Arc<Mutex<Vec<(ConnectionId, TaskId, AbortHandle, C)>>>,
 
     /// Inbound commands (add/remove connections).
