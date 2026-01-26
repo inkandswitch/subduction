@@ -508,11 +508,6 @@ mod tests {
         loose_commit::LooseCommit,
     };
 
-    /// Simple deterministic byte generator for tests (no rand dependency needed).
-    fn deterministic_bytes(seed: u64) -> [u8; 32] {
-        *blake3::hash(&seed.to_le_bytes()).as_bytes()
-    }
-
     fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest<LooseCommit> {
         let mut byte_arr: [u8; 32] = rng.r#gen::<[u8; 32]>();
         for slot in byte_arr.iter_mut().take(zeros_count as usize) {
