@@ -414,6 +414,91 @@ where
         Ok(server_id)
     }
 
+    /// Connect to a peer using discovery mode (without knowing their peer ID).
+    ///
+    /// Uses the service name to authenticate via `Audience::Discover` instead
+    /// of requiring the peer's ID upfront. The server's actual peer ID is
+    /// returned on success.
+    ///
+    /// # Arguments
+    ///
+    /// * `uri` - The WebSocket URI to connect to
+    /// * `timeout` - Timeout strategy for requests
+    /// * `default_time_limit` - Default timeout duration
+    /// * `service_name` - The service name for discovery (e.g., "sync.example.com")
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection could not be established,
+    /// handshake fails, or registration fails.
+    pub async fn try_connect_discover(
+        &self,
+        uri: Uri,
+        timeout: O,
+        default_time_limit: Duration,
+        service_name: &str,
+    ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
+        use crate::handshake::client_handshake;
+        use subduction_core::connection::handshake::Nonce;
+
+        let uri_str = uri.to_string();
+        tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
+
+        let mut ws_config = WebSocketConfig::default();
+        ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
+        let (mut ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
+            .await
+            .map_err(TryConnectError::WebSocket)?;
+
+        // Perform handshake with discovery audience
+        let audience = Audience::discover(service_name.as_bytes());
+        let now = TimestampSeconds::now();
+        let nonce = Nonce::random();
+
+        let handshake_result = client_handshake(
+            &mut ws_stream,
+            self.subduction.signer(),
+            audience,
+            now,
+            nonce,
+        )
+        .await?;
+
+        let server_id = handshake_result.server_id;
+        tracing::info!("Handshake complete: connected to {server_id}");
+
+        let ws_conn = UnifiedWebSocket::Dialed(WebSocket::new(
+            ws_stream,
+            timeout,
+            default_time_limit,
+            server_id,
+        ));
+
+        let listen_ws = ws_conn.clone();
+        let listen_uri_str = uri_str.clone();
+        let cancel_token = self.cancellation_token.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                () = cancel_token.cancelled() => {
+                    tracing::debug!("Shutting down listener for peer {listen_uri_str}");
+                }
+                result = listen_ws.listen() => {
+                    if let Err(e) = result {
+                        tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                    }
+                }
+            }
+        });
+
+        self.subduction
+            .register(ws_conn)
+            .await
+            .map_err(TryConnectError::Registration)?;
+
+        tracing::info!("Connected to peer at {uri_str}");
+        Ok(server_id)
+    }
+
     /// Graceful shutdown: cancel and await tasks.
     pub fn stop(&mut self) {
         self.cancellation_token.cancel();

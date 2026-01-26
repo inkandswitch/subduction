@@ -8,7 +8,6 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
     connection::nonce_cache::NonceCache,
     crypto::signer::LocalSigner,
-    peer::id::PeerId,
     policy::OpenPolicy,
     storage::{MetricsStorage, RefreshMetrics},
 };
@@ -156,35 +155,23 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             }
         };
 
-        // Generate a peer ID from the URI hash.
-        // FIXME: This is a placeholder - in production, the expected peer ID
-        // should be known ahead of time (e.g., from a configuration or discovery).
-        let expected_peer_id = {
-            let mut hasher = blake3::Hasher::new();
-            hasher.update(uri.to_string().as_bytes());
-            PeerId::new(*hasher.finalize().as_bytes())
-        };
-
         let timeout_duration = Duration::from_secs(args.timeout);
         let peer_server = server.clone();
+        let peer_service_name = service_name.clone();
 
         // Spawn connection attempt in background to avoid blocking startup
         tokio::spawn(async move {
             match peer_server
-                .try_connect(
+                .try_connect_discover(
                     uri.clone(),
                     FuturesTimerTimeout,
                     timeout_duration,
-                    expected_peer_id,
+                    &peer_service_name,
                 )
                 .await
             {
-                Ok(conn_id) => {
-                    tracing::info!(
-                        "Connected to peer at {} (connection ID: {:?})",
-                        uri,
-                        conn_id
-                    );
+                Ok(peer_id) => {
+                    tracing::info!("Connected to peer at {} (peer ID: {})", uri, peer_id);
                 }
                 Err(e) => {
                     tracing::error!("Failed to connect to peer at {}: {}", uri, e);
