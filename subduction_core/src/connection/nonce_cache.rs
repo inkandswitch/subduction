@@ -37,16 +37,9 @@ const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(180);
 const BUCKET_COUNT: usize = 4;
 
 /// Error returned when a nonce has already been used.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("nonce has already been used")]
 pub struct NonceReused;
-
-impl core::fmt::Display for NonceReused {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "nonce has already been used")
-    }
-}
-
-impl core::error::Error for NonceReused {}
 
 /// Cache of recently-seen nonces for replay protection.
 ///

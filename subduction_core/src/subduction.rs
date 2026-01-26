@@ -75,7 +75,9 @@ pub mod request;
 use crate::{
     connection::{
         Connection,
+        backoff::Backoff,
         handshake::DiscoveryId,
+        id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, Message, RemoveSubscriptions, RequestId, SyncDiff,
@@ -149,9 +151,17 @@ pub struct Subduction<
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
 
+    /// Backoff state per connection, keyed by ConnectionId.
+    reconnect_backoff: Arc<Mutex<Map<ConnectionId, Backoff>>>,
+
+    /// Outgoing subscriptions: sedimentrees we're subscribed to from each peer.
+    ///
+    /// Used to restore subscriptions after reconnection.
+    outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
+
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(C, Message)>,
-    connection_closed: async_channel::Receiver<C>,
+    connection_closed: async_channel::Receiver<(ConnectionId, C)>,
 
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
@@ -216,6 +226,8 @@ impl<
             subscriptions: Arc::new(Mutex::new(Map::new())),
             storage: StoragePowerbox::new(storage, Arc::new(policy)),
             nonce_tracker: Arc::new(nonce_cache),
+            reconnect_backoff: Arc::new(Mutex::new(Map::new())),
+            outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -335,6 +347,96 @@ impl<
         &self.nonce_tracker
     }
 
+    /***********************
+     * RECONNECTION SUPPORT *
+     ***********************/
+
+    /// Get the backoff state for a connection, creating default state if needed.
+    ///
+    /// Returns the delay for the next reconnect attempt.
+    pub async fn get_reconnect_delay(&self, conn_id: ConnectionId) -> Duration {
+        let mut backoffs = self.reconnect_backoff.lock().await;
+        let backoff = backoffs.entry(conn_id).or_default();
+        backoff.next_delay()
+    }
+
+    /// Get the sedimentrees we're subscribed to from a peer.
+    ///
+    /// Used to restore subscriptions after successful reconnection.
+    pub async fn get_peer_subscriptions(&self, peer_id: PeerId) -> Set<SedimentreeId> {
+        self.outgoing_subscriptions
+            .lock()
+            .await
+            .get(&peer_id)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Called after a successful reconnection to re-add the connection.
+    ///
+    /// This re-registers the connection with the manager using the same [`ConnectionId`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the manager channel is closed.
+    pub async fn on_reconnect_success(&self, conn_id: ConnectionId, conn: C) -> Result<(), ()> {
+        tracing::info!(
+            %conn_id,
+            peer_id = %conn.peer_id(),
+            "reconnection successful"
+        );
+
+        // Send ReAdd command to manager
+        self.manager_channel
+            .send(Command::ReAdd(conn_id, conn.clone()))
+            .await
+            .map_err(|_| ())?;
+
+        // Re-add to connections map
+        let peer_id = conn.peer_id();
+        let mut connections = self.connections.lock().await;
+        match connections.get_mut(&peer_id) {
+            Some(peer_conns) => {
+                peer_conns.push(conn);
+            }
+            None => {
+                connections.insert(peer_id, NonEmpty::new(conn));
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Reset backoff state after a connection has been healthy for a period.
+    ///
+    /// Should be called after the connection has been stable (e.g., 10 seconds).
+    pub async fn reset_backoff(&self, conn_id: ConnectionId) {
+        if let Some(backoff) = self.reconnect_backoff.lock().await.get_mut(&conn_id) {
+            backoff.reset();
+            tracing::debug!(%conn_id, "backoff reset after healthy period");
+        }
+    }
+
+    /// Called after a fatal reconnection failure to clean up state.
+    ///
+    /// Removes the backoff state for this connection.
+    pub async fn on_reconnect_failed(&self, conn_id: ConnectionId) {
+        tracing::warn!(%conn_id, "reconnection failed (fatal), cleaning up state");
+        self.reconnect_backoff.lock().await.remove(&conn_id);
+    }
+
+    /// Track an outgoing subscription for reconnection restoration.
+    ///
+    /// Called internally when `sync_with_peer` is called with `subscribe: true`.
+    async fn track_outgoing_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
+        self.outgoing_subscriptions
+            .lock()
+            .await
+            .entry(peer_id)
+            .or_default()
+            .insert(sedimentree_id);
+    }
+
     /// Listen for incoming messages from all connections and handle them appropriately.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
@@ -381,9 +483,11 @@ impl<
                     }
                 }
                 Either::Right((closed_result, _)) => {
-                    if let Ok(conn) = closed_result {
+                    if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
-                        tracing::info!("Connection from peer {} closed, unregistering", peer_id);
+                        tracing::info!(
+                            "Connection {conn_id} from peer {peer_id} closed, unregistering"
+                        );
                         self.unregister(&conn).await;
                     }
                 }
@@ -1659,6 +1763,11 @@ impl<
                         self.insert_fragment_locally(&putter, verified, blob)
                             .await
                             .map_err(IoError::Storage)?;
+                    }
+
+                    // Track subscription for reconnection restoration
+                    if subscribe {
+                        self.track_outgoing_subscription(*to_ask, id).await;
                     }
 
                     had_success = true;

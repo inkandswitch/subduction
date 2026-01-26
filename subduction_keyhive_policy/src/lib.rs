@@ -8,7 +8,6 @@ extern crate std;
 extern crate alloc;
 
 use alloc::vec::Vec;
-use core::fmt;
 
 use ed25519_dalek::VerifyingKey;
 use future_form::Sendable;
@@ -31,83 +30,56 @@ use subduction_core::{
 };
 
 /// Error returned when a connection is not allowed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectionDisallowedError {
     /// The peer ID is not a valid Ed25519 public key.
+    #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
 
     /// The peer is not a known agent in the Keyhive.
+    #[error("peer is not a known agent")]
     UnknownAgent,
 }
 
-impl fmt::Display for ConnectionDisallowedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPeerId => write!(f, "peer ID is not a valid Ed25519 public key"),
-            Self::UnknownAgent => write!(f, "peer is not a known agent"),
-        }
-    }
-}
-
-impl core::error::Error for ConnectionDisallowedError {}
-
 /// Error returned when a fetch operation is not allowed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FetchDisallowedError {
     /// The peer ID is not a valid Ed25519 public key.
+    #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
 
     /// The sedimentree ID is not a valid Ed25519 public key (document ID).
+    #[error("sedimentree ID is not a valid document ID")]
     InvalidSedimentreeId,
 
     /// The document does not exist.
+    #[error("document not found")]
     DocumentNotFound,
 
     /// The peer does not have sufficient access to fetch from this document.
+    #[error("peer does not have Pull access")]
     InsufficientAccess,
 }
 
-impl fmt::Display for FetchDisallowedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidPeerId => write!(f, "peer ID is not a valid Ed25519 public key"),
-            Self::InvalidSedimentreeId => write!(f, "sedimentree ID is not a valid document ID"),
-            Self::DocumentNotFound => write!(f, "document not found"),
-            Self::InsufficientAccess => write!(f, "peer does not have Pull access"),
-        }
-    }
-}
-
-impl core::error::Error for FetchDisallowedError {}
-
 /// Error returned when a put operation is not allowed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PutDisallowedError {
     /// The author peer ID is not a valid Ed25519 public key.
+    #[error("author ID is not a valid Ed25519 public key")]
     InvalidAuthorId,
 
     /// The sedimentree ID is not a valid Ed25519 public key (document ID).
+    #[error("sedimentree ID is not a valid document ID")]
     InvalidSedimentreeId,
 
     /// The document does not exist.
+    #[error("document not found")]
     DocumentNotFound,
 
     /// The author does not have sufficient access to write to this document.
+    #[error("author does not have Write access")]
     InsufficientAccess,
 }
-
-impl fmt::Display for PutDisallowedError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::InvalidAuthorId => write!(f, "author ID is not a valid Ed25519 public key"),
-            Self::InvalidSedimentreeId => write!(f, "sedimentree ID is not a valid document ID"),
-            Self::DocumentNotFound => write!(f, "document not found"),
-            Self::InsufficientAccess => write!(f, "author does not have Write access"),
-        }
-    }
-}
-
-impl core::error::Error for PutDisallowedError {}
 
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
 #[allow(missing_debug_implementations)]

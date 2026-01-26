@@ -22,6 +22,7 @@ rand = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }
 serde = { workspace = true }
 subduction_core = { path = "../subduction_core", default-features = false }
+thiserror = { workspace = true }
 
 [features]
 default = []

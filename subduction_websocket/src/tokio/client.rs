@@ -170,9 +170,9 @@ impl<
     O: 'static + Timeout<Sendable> + Clone + Send + Sync,
 > Reconnect<Sendable> for TokioWebSocketClient<R, O>
 {
-    type ConnectError = ClientConnectError;
+    type ReconnectionError = ClientConnectError;
 
-    fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ConnectError>> {
+    fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ReconnectionError>> {
         async move {
             let (new_instance, new_fut) = TokioWebSocketClient::new(
                 self.address.clone(),
@@ -193,6 +193,27 @@ impl<
             Ok(())
         }
         .boxed()
+    }
+
+    fn should_retry(&self, error: &Self::ReconnectionError) -> bool {
+        match error {
+            // Network errors are generally retryable
+            ClientConnectError::WebSocket(_) => true,
+
+            // Handshake errors depend on the specific type
+            ClientConnectError::Handshake(handshake_err) => {
+                use WebSocketHandshakeError::*;
+                match handshake_err {
+                    // Network/transport errors - retry
+                    WebSocket(_) | ConnectionClosed => true,
+
+                    // Protocol violations or explicit rejection - don't retry
+                    UnexpectedMessageType(_) | DecodeError(_) | Handshake(_) | Rejected { .. } => {
+                        false
+                    }
+                }
+            }
+        }
     }
 }
 

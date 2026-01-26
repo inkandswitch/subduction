@@ -3010,6 +3010,7 @@ dependencies = [
  "sedimentree_core",
  "serde",
  "subduction_core",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

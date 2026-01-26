@@ -1,5 +1,6 @@
 //! Manage connections to peers in the network.
 
+pub mod backoff;
 pub mod handshake;
 pub mod id;
 pub mod manager;
@@ -93,12 +94,31 @@ impl<T: Connection<K>, K: FutureForm> Connection<K> for Arc<T> {
 }
 
 /// A trait for connections that can be re-established if they drop.
+///
+/// Connections implementing this trait can be automatically reconnected
+/// by the connection manager when they drop unexpectedly.
 pub trait Reconnect<K: FutureForm>: Connection<K> {
-    /// A problem when creating the connection.
-    type ConnectError: core::error::Error;
+    /// A problem when reconnecting.
+    type ReconnectionError: core::error::Error + Send + 'static;
 
-    /// Setup the connection, but don't run it.
-    fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ConnectError>>;
+    /// Attempt to reconnect to the same peer.
+    ///
+    /// This should:
+    /// 1. Close any existing connection resources
+    /// 2. Establish a fresh connection
+    /// 3. Complete the handshake
+    fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ReconnectionError>>;
+
+    /// Classify whether an error is retryable.
+    ///
+    /// Return `false` for fatal errors that should not be retried (e.g.,
+    /// authentication rejection, policy violation). Return `true` for
+    /// transient errors like network timeouts.
+    ///
+    /// The default implementation considers all errors retryable.
+    fn should_retry(&self, _error: &Self::ReconnectionError) -> bool {
+        true
+    }
 }
 
 /// An error indicating that a connection is disallowed.

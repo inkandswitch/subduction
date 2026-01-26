@@ -198,15 +198,18 @@ impl From<RemoveSubscriptions> for Message {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestId {
     /// ID for the peer that initiated the request.
+    ///
+    /// This namespaces nonces so they only need to be unique per-peer rather than globally.
+    /// Not redundant with connection-level auth or `Signed<T>` — `RequestId` must be
+    /// matchable without accessing the connection, and these messages aren't individually signed.
     #[n(0)]
-    pub requestor: PeerId, // FIXME may be handled on Signed/Verified now?
+    pub requestor: PeerId,
 
     /// A nonce unique to this user and connection.
     #[n(1)]
     pub nonce: u64,
 }
 
-// TODO also make a version for the sender that is borrowed instead of owned.
 /// The calculated difference for the remote peer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
