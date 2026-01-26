@@ -21,6 +21,7 @@ base58 = { workspace = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
+getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 minicbor = { workspace = true }
 sedimentree_core = { path = "../sedimentree_core", default-features = false }

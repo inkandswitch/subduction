@@ -2714,6 +2714,7 @@ dependencies = [
  "from_js_ref",
  "future_form",
  "futures 0.3.31",
+ "getrandom 0.2.17",
  "js-sys",
  "minicbor",
  "sedimentree_core",
