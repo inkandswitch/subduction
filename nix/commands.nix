@@ -85,7 +85,28 @@
     '';
   };
 
+  fmt = {
+    "fmt" = cmd "Format all Rust code" ''
+      ${cargo} fmt
+      echo "✓ Formatted"
+    '';
+  };
+
   test = {
+    "test:host" = cmd "Run workspace tests with arbitrary feature" ''
+      set -e
+
+      echo "===> Running workspace tests..."
+      ${cargo} test --features arbitrary
+
+      echo ""
+      echo "===> Running doc tests..."
+      ${cargo} test --doc --workspace
+
+      echo ""
+      echo "✓ All host tests passed"
+    '';
+
     "test:no_std" = cmd "Test no_std compatibility (core crates only)" ''
       set -e
 
@@ -276,7 +297,7 @@
     '';
   };
   ci = {
-    "ci" = cmd "Run full CI suite (build, lint, test, docs)" ''
+    "ci" = cmd "Run full CI suite (build, lint, test, wasm)" ''
       set -e
 
       echo "========================================"
@@ -284,50 +305,132 @@
       echo "========================================"
       echo ""
 
-      echo "===> [1/8] Checking formatting..."
+      echo "===> [1/6] Checking formatting..."
       ${cargo} fmt --check
       echo "✓ Formatting OK"
       echo ""
 
-      echo "===> [2/8] Running Clippy..."
+      echo "===> [2/6] Running Clippy..."
       ${cargo} clippy --workspace --all-targets -- -D warnings
       echo "✓ Clippy OK"
       echo ""
 
-      echo "===> [3/8] Building host target..."
+      echo "===> [3/6] Building host target..."
       ${cargo} build --workspace
       echo "✓ Host build OK"
       echo ""
 
-      echo "===> [4/8] Running host tests..."
+      echo "===> [4/6] Running host tests..."
       ${cargo} test --workspace
       echo "✓ Host tests OK"
       echo ""
 
-      echo "===> [5/8] Running doc tests..."
-      ${cargo} test --doc --workspace
-      echo "✓ Doc tests OK"
-      echo ""
-
-      echo "===> [6/8] Checking no_std compatibility..."
-      ${cargo} check --package sedimentree_core --no-default-features
-      ${cargo} check --package subduction_core --no-default-features
-      ${cargo} check --package subduction_wasm --target wasm32-unknown-unknown
-      echo "✓ no_std checks OK"
-      echo ""
-
-      echo "===> [7/8] Building wasm packages..."
+      echo "===> [5/6] Building wasm packages..."
       ${wasm-pack} build --target web subduction_wasm
       echo "✓ Wasm build OK"
       echo ""
 
-      echo "===> [8/8] Running wasm tests..."
+      echo "===> [6/6] Running wasm tests..."
       ${wasm-pack} test --node subduction_wasm
       echo "✓ Wasm tests OK"
       echo ""
 
       echo "========================================"
       echo "  ✓ All CI checks passed!"
+      echo "========================================"
+    '';
+
+    "ci:no_std" = cmd "Check no_std compatibility (core crates)" ''
+      set -e
+
+      echo "========================================"
+      echo "  Subduction CI: no_std"
+      echo "========================================"
+      echo ""
+
+      echo "===> [1/4] Checking sedimentree_core (no_std)..."
+      ${cargo} check --package sedimentree_core --no-default-features
+      echo "✓ sedimentree_core OK"
+      echo ""
+
+      echo "===> [2/4] Checking subduction_core (no_std)..."
+      ${cargo} check --package subduction_core --no-default-features
+      echo "✓ subduction_core OK"
+      echo ""
+
+      echo "===> [3/4] Checking sedimentree_wasm (wasm32)..."
+      ${cargo} check --package sedimentree_wasm --target wasm32-unknown-unknown
+      echo "✓ sedimentree_wasm OK"
+      echo ""
+
+      echo "===> [4/4] Checking subduction_wasm (wasm32)..."
+      ${cargo} check --package subduction_wasm --target wasm32-unknown-unknown
+      echo "✓ subduction_wasm OK"
+      echo ""
+
+      echo "========================================"
+      echo "  ✓ All no_std checks passed!"
+      echo "========================================"
+    '';
+
+    "ci:std" = cmd "Run tests with std feature enabled" ''
+      set -e
+
+      echo "========================================"
+      echo "  Subduction CI: std"
+      echo "========================================"
+      echo ""
+
+      echo "===> [1/4] Testing sedimentree_core (std)..."
+      ${cargo} test --package sedimentree_core --features std
+      echo "✓ sedimentree_core OK"
+      echo ""
+
+      echo "===> [2/4] Testing subduction_core (std)..."
+      ${cargo} test --package subduction_core --features std
+      echo "✓ subduction_core OK"
+      echo ""
+
+      echo "===> [3/4] Testing subduction_websocket..."
+      ${cargo} test --package subduction_websocket --features tokio_client,tokio_server
+      echo "✓ subduction_websocket OK"
+      echo ""
+
+      echo "===> [4/4] Running doc tests..."
+      ${cargo} test --doc --workspace
+      echo "✓ Doc tests OK"
+      echo ""
+
+      echo "========================================"
+      echo "  ✓ All std tests passed!"
+      echo "========================================"
+    '';
+
+    "ci:all-features" = cmd "Run CI with --all-features" ''
+      set -e
+
+      echo "========================================"
+      echo "  Subduction CI: all-features"
+      echo "========================================"
+      echo ""
+
+      echo "===> [1/3] Running Clippy (all features)..."
+      ${cargo} clippy --workspace --all-targets --all-features -- -D warnings
+      echo "✓ Clippy OK"
+      echo ""
+
+      echo "===> [2/3] Building (all features)..."
+      ${cargo} build --workspace --all-features
+      echo "✓ Build OK"
+      echo ""
+
+      echo "===> [3/3] Testing (all features)..."
+      ${cargo} test --workspace --all-features
+      echo "✓ Tests OK"
+      echo ""
+
+      echo "========================================"
+      echo "  ✓ All all-features checks passed!"
       echo "========================================"
     '';
 
@@ -346,6 +449,47 @@
       echo ""
       echo "✓ Quick CI passed"
     '';
+
+    "ci:full" = cmd "Run all CI suites (ci, no_std, std, all-features)" ''
+      set -e
+
+      echo "========================================"
+      echo "  Subduction CI: Full Suite"
+      echo "========================================"
+      echo ""
+
+      echo "╔════════════════════════════════════╗"
+      echo "║  [1/4] Running main CI...          ║"
+      echo "╚════════════════════════════════════╝"
+      echo ""
+      ci
+
+      echo ""
+      echo "╔════════════════════════════════════╗"
+      echo "║  [2/4] Running no_std checks...    ║"
+      echo "╚════════════════════════════════════╝"
+      echo ""
+      ci:no_std
+
+      echo ""
+      echo "╔════════════════════════════════════╗"
+      echo "║  [3/4] Running std tests...        ║"
+      echo "╚════════════════════════════════════╝"
+      echo ""
+      ci:std
+
+      echo ""
+      echo "╔════════════════════════════════════╗"
+      echo "║  [4/4] Running all-features...     ║"
+      echo "╚════════════════════════════════════╝"
+      echo ""
+      ci:all-features
+
+      echo ""
+      echo "========================================"
+      echo "  ✓ All CI suites passed!"
+      echo "========================================"
+    '';
   };
 in
-  bench // build // ci // monitoring // release // test // wasm
+  bench // build // ci // fmt // monitoring // release // test // wasm

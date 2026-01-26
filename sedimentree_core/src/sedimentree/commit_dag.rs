@@ -497,6 +497,8 @@ mod tests {
         vec::Vec,
     };
 
+    use rand::{SeedableRng, rngs::SmallRng};
+
     use super::CommitDag;
     use crate::{
         blob::BlobMeta,
@@ -706,10 +708,9 @@ mod tests {
     // }
 
     #[test]
-    #[cfg(feature = "std")]
     fn simplify_block_boundaries_without_fragments() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut SmallRng::seed_from_u64(42),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   0   |,
@@ -722,10 +723,9 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "std")]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
         simplify_test!(
-            rng => &mut rand::thread_rng(),
+            rng => &mut SmallRng::seed_from_u64(43),
             nodes => | node | level |
                      |   a  |   2   |
                      |   b  |   2   |,
@@ -738,9 +738,8 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "std")]
     fn test_parents() {
-        let mut rng = rand::thread_rng();
+        let mut rng = SmallRng::seed_from_u64(44);
         let a = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
         let c = LooseCommit::new(

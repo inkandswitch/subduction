@@ -606,18 +606,22 @@ mod tests {
         assert_eq!(diff.remote_commits.len(), 2);
     }
 
-    #[cfg(feature = "std")]
     mod proptests {
         use alloc::vec;
+        use core::sync::atomic::{AtomicU64, Ordering};
 
-        use rand::Rng;
+        use rand::{Rng, SeedableRng, rngs::SmallRng};
 
         use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes};
 
         use super::super::*;
 
+        static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
+
         fn hash_with_leading_zeros(zeros_count: u32) -> Digest<LooseCommit> {
-            let mut byte_arr: [u8; 32] = rand::thread_rng().r#gen::<[u8; 32]>();
+            let seed = SEED_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let mut rng = SmallRng::seed_from_u64(seed);
+            let mut byte_arr: [u8; 32] = rng.r#gen::<[u8; 32]>();
             for slot in byte_arr.iter_mut().take(zeros_count as usize) {
                 *slot = 0;
             }

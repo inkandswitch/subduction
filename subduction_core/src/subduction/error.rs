@@ -133,8 +133,7 @@ mod tests {
 
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
-        use alloc::format;
-        use alloc::string::String;
+        use alloc::{format, string::String};
 
         use super::*;
 

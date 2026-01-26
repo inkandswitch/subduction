@@ -17,9 +17,10 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
     digest::Digest,
+    id::SedimentreeId,
     loose_commit::LooseCommit,
+    sedimentree::Sedimentree,
 };
-use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
 use subduction_core::{
     Subduction,
     connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
@@ -49,8 +50,10 @@ use crate::{
 
 use super::depth::WasmDepth;
 
-use futures::future::LocalBoxFuture;
-use futures::stream::{AbortHandle, Abortable};
+use futures::{
+    future::LocalBoxFuture,
+    stream::{AbortHandle, Abortable},
+};
 
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 const WASM_SHARD_COUNT: usize = 4;

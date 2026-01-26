@@ -5,12 +5,14 @@
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
-use sedimentree_core::collections::Set;
 use sedimentree_core::{
-    blob::Blob, digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
+    blob::Blob, collections::Set, digest::Digest, fragment::Fragment, id::SedimentreeId,
+    loose_commit::LooseCommit,
 };
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use subduction_core::{
     crypto::signed::Signed,
     storage::{BatchResult, Storage},

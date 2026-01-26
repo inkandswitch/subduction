@@ -2,8 +2,7 @@
 
 use core::marker::PhantomData;
 
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use sedimentree_core::{

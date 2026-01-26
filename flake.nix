@@ -54,7 +54,6 @@
             "llvm-tools-preview"
             "rust-src"
             "rust-std"
-            "rustfmt"
           ];
 
           targets = [
@@ -68,6 +67,9 @@
             "thumbv6m-none-eabi"
           ];
         };
+
+        # Nightly rustfmt for unstable formatting options (imports_granularity, etc.)
+        nightly-rustfmt = pkgs.rust-bin.nightly.latest.rustfmt;
 
         format-pkgs = with pkgs; [
           nixpkgs-fmt
@@ -203,6 +205,7 @@
             [
               command_menu
               rust-toolchain
+              nightly-rustfmt
 
               pkgs.binaryen
               pkgs.chromedriver
@@ -232,6 +235,7 @@
          shellHook = ''
             unset SOURCE_DATE_EPOCH
             export WORKSPACE_ROOT="$(pwd)"
+            export RUSTFMT="${nightly-rustfmt}/bin/rustfmt"
             menu
           '' + pkgs.lib.optionalString pkgs.stdenv.isLinux ''
             unset PKG_CONFIG_PATH

@@ -2,8 +2,7 @@
 
 use core::marker::PhantomData;
 
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use sedimentree_core::{
@@ -15,10 +14,8 @@ type CommitDigest = Digest<LooseCommit>;
 type FragmentDigest = Digest<Fragment>;
 type BlobDigest = Digest<Blob>;
 
-use super::fetcher::Fetcher;
-use super::traits::Storage;
-use crate::crypto::signed::Signed;
-use crate::crypto::verified::Verified;
+use super::{fetcher::Fetcher, traits::Storage};
+use crate::crypto::{signed::Signed, verified::Verified};
 
 /// A capability granting put access to a specific sedimentree's data.
 ///

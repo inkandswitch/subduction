@@ -2,8 +2,7 @@
 
 use alloc::vec::Vec;
 
-use crate::blob::BlobMeta;
-use crate::digest::Digest;
+use crate::{blob::BlobMeta, digest::Digest};
 
 /// The smallest unit of metadata in a Sedimentree.
 ///

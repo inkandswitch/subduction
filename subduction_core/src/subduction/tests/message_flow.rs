@@ -8,15 +8,15 @@
 //! behavior is consistent across native and WASM-like environments.
 
 use super::common::{TokioSpawn, test_signer};
-use crate::Subduction;
-use crate::connection::message::Message;
-use crate::connection::nonce_cache::NonceCache;
-use crate::connection::test_utils::ChannelMockConnection;
-use crate::crypto::signed::Signed;
-use crate::peer::id::PeerId;
-use crate::policy::OpenPolicy;
-use crate::sharded_map::ShardedMap;
-use crate::storage::MemoryStorage;
+use crate::{
+    Subduction,
+    connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
+    crypto::signed::Signed,
+    peer::id::PeerId,
+    policy::OpenPolicy,
+    sharded_map::ShardedMap,
+    storage::MemoryStorage,
+};
 use core::time::Duration;
 use future_form::{Local, Sendable};
 use sedimentree_core::{

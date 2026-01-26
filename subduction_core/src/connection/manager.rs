@@ -10,16 +10,14 @@
 //! - [`ConnectionId`]: Logical identifier that survives reconnects (returned to caller)
 //! - `TaskId`: Internal identifier for the spawned task (changes on reconnect)
 
-use alloc::sync::Arc;
-use alloc::vec::Vec;
+use alloc::{sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::stream::AbortHandle;
 
-use super::id::ConnectionId;
-use super::{Connection, message::Message};
+use super::{Connection, id::ConnectionId, message::Message};
 
 /// Internal task identifier for abort handle tracking.
 ///
