@@ -244,8 +244,10 @@ mod id {
         });
 
         group.bench_function("peer_id/hash", |b| {
-            use std::collections::hash_map::DefaultHasher;
-            use std::hash::{Hash, Hasher};
+            use std::{
+                collections::hash_map::DefaultHasher,
+                hash::{Hash, Hasher},
+            };
             let peer_id = peer_id_from_seed(12345);
             b.iter(|| {
                 let mut hasher = DefaultHasher::new();

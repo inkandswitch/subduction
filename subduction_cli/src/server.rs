@@ -1,7 +1,6 @@
 //! WebSocket server for Subduction.
 
-use crate::fs_storage::FsStorage;
-use crate::metrics;
+use crate::{fs_storage::FsStorage, metrics};
 use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};

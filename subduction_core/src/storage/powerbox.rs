@@ -15,8 +15,7 @@ type CommitDigest = Digest<LooseCommit>;
 type FragmentDigest = Digest<Fragment>;
 type BlobDigest = Digest<Blob>;
 
-use super::traits::Storage;
-use super::{destroyer::Destroyer, fetcher::Fetcher, putter::Putter};
+use super::{destroyer::Destroyer, fetcher::Fetcher, putter::Putter, traits::Storage};
 use crate::{crypto::signed::Signed, peer::id::PeerId, policy::StoragePolicy};
 
 /// A powerbox that wraps storage and policy, only allowing access through capabilities.

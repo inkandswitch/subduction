@@ -37,11 +37,11 @@ use web_sys::{
     js_sys::{self, Promise},
 };
 
-use super::handshake::client_handshake;
-use super::{WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId};
-use crate::error::WasmHandshakeError;
-use crate::peer_id::WasmPeerId;
-use crate::signer::JsSigner;
+use super::{
+    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId,
+    handshake::client_handshake,
+};
+use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.
 #[wasm_bindgen(js_name = SubductionWebSocket)]

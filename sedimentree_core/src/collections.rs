@@ -10,9 +10,7 @@ mod inner {
 
 #[cfg(not(feature = "std"))]
 mod inner {
-    pub use alloc::collections::BTreeMap as Map;
-    pub use alloc::collections::BTreeSet as Set;
+    pub use alloc::collections::{BTreeMap as Map, BTreeSet as Set};
 }
 
-pub use inner::Map;
-pub use inner::Set;
+pub use inner::{Map, Set};

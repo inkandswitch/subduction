@@ -228,8 +228,7 @@ mod tests {
 
     mod message_request_id {
         use super::*;
-        use crate::crypto::signed::Signed;
-        use crate::crypto::signer::MemorySigner;
+        use crate::crypto::{signed::Signed, signer::MemorySigner};
         use future_form::Sendable;
 
         fn test_signer() -> MemorySigner {
@@ -438,8 +437,7 @@ mod tests {
 
     mod sync_diff {
         use super::*;
-        use crate::crypto::signed::Signed;
-        use crate::crypto::signer::MemorySigner;
+        use crate::crypto::{signed::Signed, signer::MemorySigner};
         use future_form::Sendable;
 
         fn test_signer() -> MemorySigner {

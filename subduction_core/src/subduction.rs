@@ -112,12 +112,12 @@ use futures::{
 };
 use nonempty::NonEmpty;
 use request::FragmentRequested;
-use sedimentree_core::collections::{
-    Map, Set,
-    nonempty_ext::{NonEmptyExt, RemoveResult},
-};
 use sedimentree_core::{
     blob::Blob,
+    collections::{
+        Map, Set,
+        nonempty_ext::{NonEmptyExt, RemoveResult},
+    },
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
     digest::Digest,

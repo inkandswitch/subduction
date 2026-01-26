@@ -1,8 +1,7 @@
 //! Tests for connection authorization policy.
 
 use super::common::new_test_subduction;
-use crate::peer::id::PeerId;
-use crate::policy::connection::ConnectionPolicy;
+use crate::{peer::id::PeerId, policy::connection::ConnectionPolicy};
 
 #[tokio::test]
 async fn test_allowed_to_connect_allows_all_peers() {

@@ -1,19 +1,18 @@
 //! Tests for policy rejection behavior.
 
 use super::common::{TestSpawn, test_signer};
-use crate::Subduction;
-use crate::connection::nonce_cache::NonceCache;
-use crate::connection::test_utils::MockConnection;
-use crate::peer::id::PeerId;
-use crate::policy::{ConnectionPolicy, StoragePolicy};
-use crate::sharded_map::ShardedMap;
-use crate::storage::MemoryStorage;
-use alloc::vec;
-use alloc::vec::Vec;
+use crate::{
+    Subduction,
+    connection::{nonce_cache::NonceCache, test_utils::MockConnection},
+    peer::id::PeerId,
+    policy::{ConnectionPolicy, StoragePolicy},
+    sharded_map::ShardedMap,
+    storage::MemoryStorage,
+};
+use alloc::{vec, vec::Vec};
 use core::fmt;
 use future_form::Sendable;
-use futures::FutureExt;
-use futures::future::BoxFuture;
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
