@@ -492,6 +492,11 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
+    use alloc::{
+        string::{String, ToString},
+        vec::Vec,
+    };
+
     use super::CommitDag;
     use crate::{
         blob::BlobMeta,
@@ -701,6 +706,7 @@ mod tests {
     // }
 
     #[test]
+    #[cfg(feature = "std")]
     fn simplify_block_boundaries_without_fragments() {
         simplify_test!(
             rng => &mut rand::thread_rng(),
@@ -716,6 +722,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
         simplify_test!(
             rng => &mut rand::thread_rng(),
@@ -731,6 +738,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "std")]
     fn test_parents() {
         let mut rng = rand::thread_rng();
         let a = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));

@@ -1,9 +1,10 @@
 //! Heap allocation profiling for sedimentree operations.
 //!
-//! Run with: `cargo test --package sedimentree_core --test heap_profile -- --nocapture`
+//! Run with: `cargo test --package sedimentree_core --test heap_profile --features std -- --nocapture`
 //!
 //! This will output allocation statistics for key operations.
 
+#![cfg(feature = "std")]
 #![allow(missing_docs)]
 
 #[global_allocator]

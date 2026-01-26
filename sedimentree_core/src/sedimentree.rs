@@ -606,6 +606,7 @@ mod tests {
         assert_eq!(diff.remote_commits.len(), 2);
     }
 
+    #[cfg(feature = "std")]
     mod proptests {
         use alloc::vec;
 
