@@ -11,9 +11,10 @@ test.describe("Subduction", () => {
   test.describe("Constructor and Initialization", () => {
     test("should create Subduction instance with MemoryStorage", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage } = window.subduction;
+        const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
         return {
           hasSyncer: !!syncer,
           hasStorage: !!storage,
@@ -26,13 +27,14 @@ test.describe("Subduction", () => {
 
     test("should hydrate Subduction from existing storage", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage } = window.subduction;
+        const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
 
-        const syncer1 = new Subduction(storage);
+        const syncer1 = new Subduction(signer, storage);
         const ids1 = await syncer1.sedimentreeIds();
 
-        const syncer2 = await Subduction.hydrate(storage);
+        const syncer2 = await Subduction.hydrate(signer, storage);
         const ids2 = await syncer2.sedimentreeIds();
 
         return {
@@ -68,9 +70,10 @@ test.describe("Subduction", () => {
   test.describe("Sedimentree Management", () => {
     test("should return empty array for sedimentreeIds initially", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage } = window.subduction;
+        const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
         const ids = await syncer.sedimentreeIds();
 
@@ -108,11 +111,12 @@ test.describe("Subduction", () => {
 
     test("should get peer IDs", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage } = window.subduction;
+        const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
-        const peerIds = await syncer.getPeerIds();
+        const peerIds = await syncer.connectedPeerIds();
 
         return {
           peerIds,
@@ -127,12 +131,13 @@ test.describe("Subduction", () => {
 
     test("should disconnect all connections", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage } = window.subduction;
+        const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
         await syncer.disconnectAll();
-        const peerIds = await syncer.getPeerIds();
+        const peerIds = await syncer.connectedPeerIds();
 
         return {
           disconnected: true,
@@ -148,9 +153,10 @@ test.describe("Subduction", () => {
   test.describe("Data Retrieval", () => {
     test("should return undefined for non-existent sedimentree commits", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
         const testId = new Uint8Array(32);
         testId[0] = 1;
@@ -169,9 +175,10 @@ test.describe("Subduction", () => {
 
     test("should return undefined for non-existent sedimentree fragments", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId } = window.subduction;
+        const { Subduction, MemoryStorage, SedimentreeId, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
         const testId = new Uint8Array(32);
         testId[0] = 1;
@@ -190,15 +197,16 @@ test.describe("Subduction", () => {
 
     test("should return undefined for non-existent blob", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, Digest } = window.subduction;
+        const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
         const testDigest = new Uint8Array(32);
         testDigest[0] = 255;
         const digest = new Digest(testDigest);
 
-        const blob = await syncer.getLocalBlob(digest);
+        const blob = await syncer.getBlob(digest);
 
         return {
           blob,
@@ -209,40 +217,43 @@ test.describe("Subduction", () => {
       expect(result.isUndefined).toBe(true);
     });
 
-    test("should return empty array for non-existent sedimentree blobs", async ({ page }) => {
+    test("should return empty map for non-existent blob digests", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, SedimentreeId } = window.subduction;
+        const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
-        const testId = new Uint8Array(32);
-        testId[0] = 1;
-        const sedimentreeId = SedimentreeId.fromBytes(testId);
+        const testDigest = new Uint8Array(32);
+        testDigest[0] = 1;
+        const digest = new Digest(testDigest);
 
-        const blobs = await syncer.getLocalBlobs(sedimentreeId);
+        const blobs = await syncer.getBlobs([digest]);
 
         return {
           blobs,
-          isArray: Array.isArray(blobs),
-          length: blobs.length,
+          isMap: blobs instanceof Map,
+          size: blobs.size,
         };
       });
 
-      expect(result.isArray).toBe(true);
-      expect(result.length).toBe(0);
+      expect(result.isMap).toBe(true);
+      expect(result.size).toBe(0);
     });
   });
 
   test.describe("Multiple Instances", () => {
     test("should support multiple Subduction instances", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage } = window.subduction;
+        const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
 
+        const signer1 = await WebCryptoSigner.generate();
+        const signer2 = await WebCryptoSigner.generate();
         const storage1 = new MemoryStorage();
         const storage2 = new MemoryStorage();
 
-        const syncer1 = new Subduction(storage1);
-        const syncer2 = new Subduction(storage2);
+        const syncer1 = new Subduction(signer1, storage1);
+        const syncer2 = new Subduction(signer2, storage2);
 
         const ids1 = await syncer1.sedimentreeIds();
         const ids2 = await syncer2.sedimentreeIds();
@@ -475,9 +486,10 @@ test.describe("Subduction", () => {
 
     test("should handle operations on disconnected peers", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, PeerId } = window.subduction;
+        const { Subduction, MemoryStorage, PeerId, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
         const peerBytes = new Uint8Array(32);
         peerBytes[0] = 1;
@@ -497,9 +509,10 @@ test.describe("Subduction", () => {
   test.describe("API Smoke Tests", () => {
     test("should call requestBlobs without throwing", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, Digest } = window.subduction;
+        const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
+        const signer = await WebCryptoSigner.generate();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
         const digest1 = new Digest(new Uint8Array(32));
         const digest2 = new Digest(new Uint8Array(32).fill(1));
