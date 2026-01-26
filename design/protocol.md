@@ -71,7 +71,7 @@ All signatures in Subduction use [Ed25519 (RFC 8032)](https://www.rfc-editor.org
 - **Predictability** — All implementations behave identically
 - **Future-proofing via versioning** — If Ed25519 is broken, bump protocol version
 
-This follows the ["Cryptographic Doom Principle"](https://moxie.org/2011/12/13/the-cryptographic-doom-principle.html): verify _before_ processing. With a fixed algorithm, verification is unambiguous.
+This follows the ["Cryptographic Doom Principle"](https://moxie.org/2011/12/13/the-cryptographic-doom-principle.html), which states that cryptographic data must be authenticated and verified before it is decrypted or otherwise processed—in short, verify _before_ processing. With a fixed algorithm, verification is unambiguous.
 
 ### Key Derivation
 
