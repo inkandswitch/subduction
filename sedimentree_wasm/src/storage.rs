@@ -42,7 +42,8 @@ export interface SedimentreeStorage {
     loadAllSedimentreeIds(): Promise<SedimentreeId[]>;
 
     // CAS operations for commits (keyed by digest)
-    saveCommit(sedimentreeId: SedimentreeId, digest: Digest, signedCommit: Uint8Array): Promise<void>;
+    // blobDigest is provided so storage bridges can load the blob for event callbacks
+    saveCommit(sedimentreeId: SedimentreeId, digest: Digest, signedCommit: Uint8Array, blobDigest: Digest): Promise<void>;
     loadCommit(sedimentreeId: SedimentreeId, digest: Digest): Promise<Uint8Array | null>;
     listCommitDigests(sedimentreeId: SedimentreeId): Promise<Digest[]>;
     loadAllCommits(sedimentreeId: SedimentreeId): Promise<Array<{digest: Digest, signed: Uint8Array}>>;
@@ -50,7 +51,8 @@ export interface SedimentreeStorage {
     deleteAllCommits(sedimentreeId: SedimentreeId): Promise<void>;
 
     // CAS operations for fragments (keyed by digest)
-    saveFragment(sedimentreeId: SedimentreeId, digest: Digest, signedFragment: Uint8Array): Promise<void>;
+    // blobDigest is provided so storage bridges can load the blob for event callbacks
+    saveFragment(sedimentreeId: SedimentreeId, digest: Digest, signedFragment: Uint8Array, blobDigest: Digest): Promise<void>;
     loadFragment(sedimentreeId: SedimentreeId, digest: Digest): Promise<Uint8Array | null>;
     listFragmentDigests(sedimentreeId: SedimentreeId): Promise<Digest[]>;
     loadAllFragments(sedimentreeId: SedimentreeId): Promise<Array<{digest: Digest, signed: Uint8Array}>>;
@@ -95,6 +97,7 @@ extern "C" {
         sedimentree_id: &JsSedimentreeId,
         digest: &JsDigest,
         signed_commit: &[u8],
+        blob_digest: &JsDigest,
     ) -> Promise;
 
     #[wasm_bindgen(method, js_name = loadCommit)]
@@ -137,6 +140,7 @@ extern "C" {
         sedimentree_id: &JsSedimentreeId,
         digest: &JsDigest,
         signed_fragment: &[u8],
+        blob_digest: &JsDigest,
     ) -> Promise;
 
     #[wasm_bindgen(method, js_name = loadFragment)]
@@ -197,6 +201,11 @@ fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest> {
 /// Compute digest from a signed fragment by decoding the payload.
 fn fragment_digest(signed: &Signed<Fragment>) -> Option<Digest> {
     signed.decode_payload().ok().map(|f| f.digest())
+}
+
+/// Compute blob digest from a signed fragment by decoding the payload.
+fn fragment_blob_digest(signed: &Signed<Fragment>) -> Option<Digest> {
+    signed.decode_payload().ok().map(|f| f.summary().blob_meta().digest())
 }
 
 /// Parse a JS array of {digest, signed} objects into Rust tuples.
@@ -308,6 +317,8 @@ impl Storage<Local> for JsSedimentreeStorage {
         Local::from_future(async move {
             let digest = commit_digest(&loose_commit)
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
+            // For commits, the digest IS the blob digest (commit identified by content hash)
+            let blob_digest = digest;
             tracing::debug!(
                 ?sedimentree_id,
                 ?digest,
@@ -321,6 +332,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 &WasmSedimentreeId::from(sedimentree_id).into(),
                 &WasmDigest::from(digest).into(),
                 &signed_bytes,
+                &WasmDigest::from(blob_digest).into(),
             );
             JsFuture::from(js_promise)
                 .await
@@ -439,9 +451,12 @@ impl Storage<Local> for JsSedimentreeStorage {
         Local::from_future(async move {
             let digest = fragment_digest(&fragment)
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
+            let blob_digest = fragment_blob_digest(&fragment)
+                .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
             tracing::debug!(
                 ?sedimentree_id,
                 ?digest,
+                ?blob_digest,
                 "JsSedimentreeStorage::save_fragment"
             );
 
@@ -452,6 +467,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 &WasmSedimentreeId::from(sedimentree_id).into(),
                 &WasmDigest::from(digest).into(),
                 &signed_bytes,
+                &WasmDigest::from(blob_digest).into(),
             );
             JsFuture::from(js_promise)
                 .await
@@ -732,3 +748,7 @@ impl From<JsSedimentreeStorageError> for JsValue {
         js_err.into()
     }
 }
+
+mod memory;
+
+pub use memory::MemoryStorage;
