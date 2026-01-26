@@ -49,7 +49,7 @@ use super::{signer::Signer, verified::Verified};
 /// let verified = signed.try_verify()?;
 /// let payload: &T = verified.payload();
 /// ```
-#[derive(Clone, Debug, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Signed<T: for<'a> minicbor::Decode<'a, ()>> {
     #[n(0)]
@@ -62,6 +62,16 @@ pub struct Signed<T: for<'a> minicbor::Decode<'a, ()>> {
 
     #[n(2)]
     encoded_payload: EncodedPayload<T>,
+}
+
+impl<T: for<'a> minicbor::Decode<'a, ()>> Clone for Signed<T> {
+    fn clone(&self) -> Self {
+        Self {
+            issuer: self.issuer,
+            signature: self.signature,
+            encoded_payload: self.encoded_payload.clone(),
+        }
+    }
 }
 
 impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
@@ -89,7 +99,7 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
             .verify_strict(self.encoded_payload.as_slice(), &self.signature)?;
         let envelope = minicbor::decode::<Envelope<T>>(self.encoded_payload.as_slice())?;
         Ok(Verified {
-            issuer: self.issuer,
+            signed: self.clone(),
             payload: envelope.into_payload(),
         })
     }
@@ -147,6 +157,14 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> PartialEq for Signed<T> {
 }
 
 impl<T: for<'a> minicbor::Decode<'a, ()>> Eq for Signed<T> {}
+
+impl<T: for<'a> minicbor::Decode<'a, ()>> core::hash::Hash for Signed<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.issuer.as_bytes().hash(state);
+        self.signature.to_bytes().hash(state);
+        self.encoded_payload.as_slice().hash(state);
+    }
+}
 
 impl<T: for<'a> minicbor::Decode<'a, ()>> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {

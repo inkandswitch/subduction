@@ -14,9 +14,9 @@ use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
-    storage::Storage,
 };
 use subduction_core::{
+    storage::Storage,
     Subduction,
     connection::{
         handshake::{Audience, DiscoveryId},

@@ -11,8 +11,10 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    storage::Storage,
 };
+
+use super::traits::Storage;
+use crate::crypto::signed::Signed;
 
 /// A capability granting fetch access to a specific sedimentree's data.
 ///
@@ -47,13 +49,13 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
 
     /// Load all loose commits for this sedimentree.
     #[must_use]
-    pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<LooseCommit>, S::Error>> {
+    pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<Signed<LooseCommit>>, S::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
     /// Load all fragments for this sedimentree.
     #[must_use]
-    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Fragment>, S::Error>> {
+    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Signed<Fragment>>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
 

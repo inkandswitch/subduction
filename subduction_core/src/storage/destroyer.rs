@@ -10,7 +10,9 @@ use core::marker::PhantomData;
 use alloc::sync::Arc;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Digest, id::SedimentreeId, storage::Storage};
+use sedimentree_core::{blob::Digest, id::SedimentreeId};
+
+use super::traits::Storage;
 
 /// A capability granting delete access to a specific sedimentree's data.
 ///

@@ -82,7 +82,7 @@ use crate::{
         },
         nonce_cache::NonceCache,
     },
-    crypto::signer::Signer,
+    crypto::{signed::Signed, signer::Signer, verified::Verified},
     peer::id::PeerId,
     policy::{ConnectionPolicy, StoragePolicy},
     sharded_map::ShardedMap,
@@ -122,8 +122,9 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::{RemoteDiff, Sedimentree, SedimentreeSummary},
-    storage::Storage,
 };
+
+use crate::storage::Storage;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -275,16 +276,35 @@ impl<
             spawner,
         );
         for id in ids {
-            let loose_commits = subduction
+            let signed_loose_commits = subduction
                 .storage
                 .load_loose_commits(id)
                 .await
                 .map_err(HydrationError::LoadLooseCommitsError)?;
-            let fragments = subduction
+            let signed_fragments = subduction
                 .storage
                 .load_fragments(id)
                 .await
                 .map_err(HydrationError::LoadFragmentsError)?;
+
+            // Extract payloads from trusted storage (already verified before storage)
+            let loose_commits: Vec<_> = signed_loose_commits
+                .into_iter()
+                .filter_map(|signed| {
+                    Verified::from_trusted(signed)
+                        .map(|v| v.into_payload())
+                        .ok()
+                })
+                .collect();
+            let fragments: Vec<_> = signed_fragments
+                .into_iter()
+                .filter_map(|signed| {
+                    Verified::from_trusted(signed)
+                        .map(|v| v.into_payload())
+                        .ok()
+                })
+                .collect();
+
             let sedimentree = Sedimentree::new(fragments, loose_commits);
 
             subduction
@@ -968,7 +988,20 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        self.insert_sedimentree_locally(&putter, sedimentree, blobs)
+        // Sign all commits and fragments with our signer
+        let mut signed_commits = Vec::with_capacity(sedimentree.loose_commits().count());
+        for commit in sedimentree.loose_commits() {
+            let signed = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
+            signed_commits.push(signed);
+        }
+
+        let mut signed_fragments = Vec::with_capacity(sedimentree.fragments().count());
+        for fragment in sedimentree.fragments() {
+            let signed = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
+            signed_fragments.push(signed);
+        }
+
+        self.insert_sedimentree_locally(&putter, signed_commits, signed_fragments, blobs)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
@@ -1048,13 +1081,16 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        self.insert_commit_locally(&putter, commit.clone(), blob.clone())
+        // Sign the commit with our signer
+        let signed_commit = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
+
+        self.insert_commit_locally(&putter, signed_commit.clone(), blob.clone())
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
         let msg = Message::LooseCommit {
             id,
-            commit: commit.clone(),
+            commit: signed_commit,
             blob,
         };
         {
@@ -1106,6 +1142,9 @@ impl<
             id
         );
 
+        // Sign the fragment with our signer
+        let signed_fragment = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
+
         self.sedimentrees
             .with_entry_or_default(id, |tree| tree.add_fragment(fragment.clone()))
             .await;
@@ -1117,7 +1156,7 @@ impl<
 
         let msg = Message::Fragment {
             id,
-            fragment: fragment.clone(),
+            fragment: signed_fragment,
             blob,
         };
 
@@ -1155,22 +1194,38 @@ impl<
         &self,
         from: &PeerId,
         id: SedimentreeId,
-        commit: &LooseCommit,
+        signed_commit: &Signed<LooseCommit>,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
+        // Verify the signature
+        let verified = match signed_commit.try_verify() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "commit signature verification failed from peer {:?}: {e}",
+                    from
+                );
+                return Ok(false);
+            }
+        };
+
+        let author = PeerId::from(verified.issuer());
         tracing::debug!(
-            "receiving commit {:?} for sedimentree {:?} from peer {:?}",
-            commit.digest(),
+            "receiving commit {:?} for sedimentree {:?} from peer {:?} (author {:?})",
+            verified.payload().digest(),
             id,
-            from
+            from,
+            author
         );
 
-        let putter = match self.storage.get_putter::<F>(*from, *from, id).await {
+        // Authorize using verified author, not sender
+        let putter = match self.storage.get_putter::<F>(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
-                    "policy rejected commit from peer {:?} for sedimentree {:?}: {e}",
+                    "policy rejected commit from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
                     from,
+                    author,
                     id
                 );
                 return Ok(false);
@@ -1178,14 +1233,14 @@ impl<
         };
 
         let was_new = self
-            .insert_commit_locally(&putter, commit.clone(), blob.clone())
+            .insert_commit_locally(&putter, signed_commit.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
         if was_new {
             let msg = Message::LooseCommit {
                 id,
-                commit: commit.clone(),
+                commit: signed_commit.clone(),
                 blob,
             };
             // Forward to authorized subscribers only
@@ -1214,22 +1269,38 @@ impl<
         &self,
         from: &PeerId,
         id: SedimentreeId,
-        fragment: &Fragment,
+        signed_fragment: &Signed<Fragment>,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
+        // Verify the signature
+        let verified = match signed_fragment.try_verify() {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!(
+                    "fragment signature verification failed from peer {:?}: {e}",
+                    from
+                );
+                return Ok(false);
+            }
+        };
+
+        let author = PeerId::from(verified.issuer());
         tracing::debug!(
-            "receiving fragment {:?} for sedimentree {:?} from peer {:?}",
-            fragment.digest(),
+            "receiving fragment {:?} for sedimentree {:?} from peer {:?} (author {:?})",
+            verified.payload().digest(),
             id,
-            from
+            from,
+            author
         );
 
-        let putter = match self.storage.get_putter::<F>(*from, *from, id).await {
+        // Authorize using verified author, not sender
+        let putter = match self.storage.get_putter::<F>(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!(
-                    "policy rejected fragment from peer {:?} for sedimentree {:?}: {e}",
+                    "policy rejected fragment from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
                     from,
+                    author,
                     id
                 );
                 return Ok(false);
@@ -1237,14 +1308,14 @@ impl<
         };
 
         let was_new = self
-            .insert_fragment_locally(&putter, fragment.clone(), blob.clone())
+            .insert_fragment_locally(&putter, signed_fragment.clone(), blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
         if was_new {
             let msg = Message::Fragment {
                 id,
-                fragment: fragment.clone(),
+                fragment: signed_fragment.clone(),
                 blob,
             };
             // Forward to authorized subscribers only
@@ -1284,6 +1355,36 @@ impl<
         let mut their_missing_fragments = Vec::new();
         let mut our_missing_blobs = Vec::new();
 
+        // Load signed commits and fragments from storage
+        let signed_commits = self
+            .storage
+            .load_loose_commits(id)
+            .await
+            .map_err(IoError::Storage)?;
+        let signed_fragments = self
+            .storage
+            .load_fragments(id)
+            .await
+            .map_err(IoError::Storage)?;
+
+        // Build lookup maps by digest
+        let commit_by_digest: Map<_, _> = signed_commits
+            .into_iter()
+            .filter_map(|signed| {
+                Verified::from_trusted(signed.clone())
+                    .ok()
+                    .map(|v| (v.payload().digest(), signed))
+            })
+            .collect();
+        let fragment_by_digest: Map<_, _> = signed_fragments
+            .into_iter()
+            .filter_map(|signed| {
+                Verified::from_trusted(signed.clone())
+                    .ok()
+                    .map(|v| (v.payload().digest(), signed))
+            })
+            .collect();
+
         let sync_diff = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
             let sedimentree = locked.entry(id).or_default();
@@ -1293,7 +1394,7 @@ impl<
                 their_summary.fragment_summaries().len()
             );
 
-            let (commits_to_add, local_commits, local_fragments) = {
+            let (commits_to_add, local_commit_digests, local_fragment_digests) = {
                 let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
                 (
                     diff.remote_commits
@@ -1302,12 +1403,12 @@ impl<
                         .collect::<Vec<LooseCommit>>(),
                     diff.local_commits
                         .iter()
-                        .map(|c| (*c).clone())
-                        .collect::<Vec<LooseCommit>>(),
+                        .map(|c| c.digest())
+                        .collect::<Vec<_>>(),
                     diff.local_fragments
                         .iter()
-                        .map(|f| (*f).clone())
-                        .collect::<Vec<Fragment>>(),
+                        .map(|f| f.digest())
+                        .collect::<Vec<_>>(),
                 )
             };
 
@@ -1315,31 +1416,41 @@ impl<
                 sedimentree.add_commit(commit);
             }
 
-            for commit in local_commits {
-                if let Some(blob) = self
-                    .storage
-                    .load_blob(commit.blob_meta().digest())
-                    .await
-                    .map_err(IoError::Storage)?
-                {
-                    their_missing_commits.push((commit, blob));
-                } else {
-                    tracing::warn!("missing blob for commit {:?}", commit.digest(),);
-                    our_missing_blobs.push(commit.blob_meta().digest());
+            for digest in local_commit_digests {
+                if let Some(signed_commit) = commit_by_digest.get(&digest) {
+                    if let Ok(verified) = Verified::from_trusted(signed_commit.clone()) {
+                        let blob_digest = verified.payload().blob_meta().digest();
+                        if let Some(blob) = self
+                            .storage
+                            .load_blob(blob_digest)
+                            .await
+                            .map_err(IoError::Storage)?
+                        {
+                            their_missing_commits.push((signed_commit.clone(), blob));
+                        } else {
+                            tracing::warn!("missing blob for commit {:?}", digest);
+                            our_missing_blobs.push(blob_digest);
+                        }
+                    }
                 }
             }
 
-            for fragment in local_fragments {
-                if let Some(blob) = self
-                    .storage
-                    .load_blob(fragment.summary().blob_meta().digest())
-                    .await
-                    .map_err(IoError::Storage)?
-                {
-                    their_missing_fragments.push((fragment, blob));
-                } else {
-                    tracing::warn!("missing blob for fragment {:?} ", fragment.digest(),);
-                    our_missing_blobs.push(fragment.summary().blob_meta().digest());
+            for digest in local_fragment_digests {
+                if let Some(signed_fragment) = fragment_by_digest.get(&digest) {
+                    if let Ok(verified) = Verified::from_trusted(signed_fragment.clone()) {
+                        let blob_digest = verified.payload().summary().blob_meta().digest();
+                        if let Some(blob) = self
+                            .storage
+                            .load_blob(blob_digest)
+                            .await
+                            .map_err(IoError::Storage)?
+                        {
+                            their_missing_fragments.push((signed_fragment.clone(), blob));
+                        } else {
+                            tracing::warn!("missing blob for fragment {:?}", digest);
+                            our_missing_blobs.push(blob_digest);
+                        }
+                    }
                 }
             }
 
@@ -1757,7 +1868,8 @@ impl<
     async fn insert_sedimentree_locally(
         &self,
         putter: &Putter<F, S>,
-        sedimentree: Sedimentree,
+        signed_commits: Vec<Signed<LooseCommit>>,
+        signed_fragments: Vec<Signed<Fragment>>,
         blobs: Vec<Blob>,
     ) -> Result<(), S::Error> {
         let id = putter.sedimentree_id();
@@ -1770,14 +1882,24 @@ impl<
 
         putter.save_sedimentree_id().await?;
 
-        for commit in sedimentree.loose_commits() {
-            putter.save_loose_commit(commit.clone()).await?;
+        // Extract payloads for in-memory tree, save signed versions to storage
+        let mut loose_commits = Vec::with_capacity(signed_commits.len());
+        for signed_commit in signed_commits {
+            if let Ok(verified) = Verified::from_trusted(signed_commit.clone()) {
+                loose_commits.push(verified.into_payload());
+                putter.save_loose_commit(signed_commit).await?;
+            }
         }
 
-        for fragment in sedimentree.fragments() {
-            putter.save_fragment(fragment.clone()).await?;
+        let mut fragments = Vec::with_capacity(signed_fragments.len());
+        for signed_fragment in signed_fragments {
+            if let Ok(verified) = Verified::from_trusted(signed_fragment.clone()) {
+                fragments.push(verified.into_payload());
+                putter.save_fragment(signed_fragment).await?;
+            }
         }
 
+        let sedimentree = Sedimentree::new(fragments, loose_commits);
         self.sedimentrees
             .with_entry_or_default(id, |tree| tree.merge(sedimentree))
             .await;
@@ -1838,16 +1960,26 @@ impl<
     async fn insert_commit_locally(
         &self,
         putter: &Putter<F, S>,
-        commit: LooseCommit,
+        signed_commit: Signed<LooseCommit>,
         blob: Blob,
     ) -> Result<bool, S::Error> {
         let id = putter.sedimentree_id();
+
+        // Extract payload for in-memory tree (trusted since we either signed it or verified it)
+        let commit = match Verified::from_trusted(signed_commit.clone()) {
+            Ok(v) => v.into_payload(),
+            Err(e) => {
+                tracing::error!("failed to decode trusted commit: {e}");
+                return Ok(false);
+            }
+        };
+
         tracing::debug!("inserting commit {:?} locally", commit.digest());
 
         // Check in-memory tree first to skip storage for duplicates
         let was_added = self
             .sedimentrees
-            .with_entry_or_default(id, |tree| tree.add_commit(commit.clone()))
+            .with_entry_or_default(id, |tree| tree.add_commit(commit))
             .await;
         if !was_added {
             return Ok(false);
@@ -1856,7 +1988,7 @@ impl<
         // Save blob first so callback wrappers can load it by digest
         putter.save_blob(blob).await?;
         putter.save_sedimentree_id().await?;
-        putter.save_loose_commit(commit).await?;
+        putter.save_loose_commit(signed_commit).await?;
 
         Ok(true)
     }
@@ -1865,13 +1997,23 @@ impl<
     async fn insert_fragment_locally(
         &self,
         putter: &Putter<F, S>,
-        fragment: Fragment,
+        signed_fragment: Signed<Fragment>,
         blob: Blob,
     ) -> Result<bool, S::Error> {
         let id = putter.sedimentree_id();
+
+        // Extract payload for in-memory tree (trusted since we either signed it or verified it)
+        let fragment = match Verified::from_trusted(signed_fragment.clone()) {
+            Ok(v) => v.into_payload(),
+            Err(e) => {
+                tracing::error!("failed to decode trusted fragment: {e}");
+                return Ok(false);
+            }
+        };
+
         let was_added = self
             .sedimentrees
-            .with_entry_or_default(id, |tree| tree.add_fragment(fragment.clone()))
+            .with_entry_or_default(id, |tree| tree.add_fragment(fragment))
             .await;
         if !was_added {
             return Ok(false);
@@ -1880,7 +2022,7 @@ impl<
         // Save blob first so callback wrappers can load it by digest
         putter.save_blob(blob).await?;
         putter.save_sedimentree_id().await?;
-        putter.save_fragment(fragment).await?;
+        putter.save_fragment(signed_fragment).await?;
         Ok(true)
     }
 }

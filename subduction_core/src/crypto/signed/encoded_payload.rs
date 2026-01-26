@@ -7,11 +7,17 @@ use core::{cmp::Ordering, marker::PhantomData};
 ///
 /// The phantom type parameter tracks what type the bytes decode to,
 /// without actually storing a decoded value.
-#[derive(Clone, Debug)]
+#[derive(Debug)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct EncodedPayload<T>(Vec<u8>, PhantomData<T>);
+
+impl<T> Clone for EncodedPayload<T> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone(), PhantomData)
+    }
+}
 
 impl<T> EncodedPayload<T> {
     /// Create a new [`EncodedPayload`].

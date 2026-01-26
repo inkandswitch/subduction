@@ -5,19 +5,18 @@
 
 use alloc::sync::Arc;
 
-use sedimentree_core::collections::Set;
-
 use future_form::FutureForm;
 use sedimentree_core::{
     blob::{Blob, Digest},
+    collections::Set,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    storage::Storage,
 };
 
+use super::traits::Storage;
 use super::{destroyer::Destroyer, fetcher::Fetcher, putter::Putter};
-use crate::{peer::id::PeerId, policy::StoragePolicy};
+use crate::{crypto::signed::Signed, peer::id::PeerId, policy::StoragePolicy};
 
 /// A powerbox that wraps storage and policy, only allowing access through capabilities.
 ///
@@ -163,7 +162,7 @@ impl<S, P> StoragePowerbox<S, P> {
     pub fn load_loose_commits<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<alloc::vec::Vec<LooseCommit>, S::Error>>
+    ) -> K::Future<'_, Result<alloc::vec::Vec<Signed<LooseCommit>>, S::Error>>
     where
         S: Storage<K>,
     {
@@ -177,7 +176,7 @@ impl<S, P> StoragePowerbox<S, P> {
     pub fn load_fragments<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<alloc::vec::Vec<Fragment>, S::Error>>
+    ) -> K::Future<'_, Result<alloc::vec::Vec<Signed<Fragment>>, S::Error>>
     where
         S: Storage<K>,
     {

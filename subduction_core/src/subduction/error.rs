@@ -3,10 +3,10 @@
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Digest, storage::Storage};
+use sedimentree_core::blob::Digest;
 use thiserror::Error;
 
-use crate::connection::Connection;
+use crate::{connection::Connection, storage::Storage};
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
 #[derive(Debug, Clone, Copy, Error)]

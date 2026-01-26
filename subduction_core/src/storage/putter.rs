@@ -11,10 +11,11 @@ use sedimentree_core::{
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    storage::Storage,
 };
 
 use super::fetcher::Fetcher;
+use super::traits::Storage;
+use crate::crypto::signed::Signed;
 
 /// A capability granting put access to a specific sedimentree's data.
 ///
@@ -59,13 +60,13 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
 
     /// Load all loose commits for this sedimentree.
     #[must_use]
-    pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<LooseCommit>, S::Error>> {
+    pub fn load_loose_commits(&self) -> K::Future<'_, Result<Vec<Signed<LooseCommit>>, S::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
     /// Load all fragments for this sedimentree.
     #[must_use]
-    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Fragment>, S::Error>> {
+    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<Signed<Fragment>>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
 
@@ -75,19 +76,19 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
         self.storage.load_blob(digest)
     }
 
-    /// Save a loose commit to this sedimentree.
+    /// Save a signed loose commit to this sedimentree.
     #[must_use]
     pub fn save_loose_commit(
         &self,
-        loose_commit: LooseCommit,
+        loose_commit: Signed<LooseCommit>,
     ) -> K::Future<'_, Result<(), S::Error>> {
         self.storage
             .save_loose_commit(self.sedimentree_id, loose_commit)
     }
 
-    /// Save a fragment to this sedimentree.
+    /// Save a signed fragment to this sedimentree.
     #[must_use]
-    pub fn save_fragment(&self, fragment: Fragment) -> K::Future<'_, Result<(), S::Error>> {
+    pub fn save_fragment(&self, fragment: Signed<Fragment>) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.save_fragment(self.sedimentree_id, fragment)
     }
 

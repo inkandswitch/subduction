@@ -1,8 +1,18 @@
 //! Storage-related types and capabilities.
 //!
 //! This module provides:
+//! - [`Storage`] - The storage trait for persisting signed commits and fragments
+//! - [`MemoryStorage`] - In-memory storage backend
 //! - [`Fetcher`] / [`Putter`] / [`Destroyer`] - Capabilities for storage access
 //! - Storage key and ID utilities
+//!
+//! # Signed Storage
+//!
+//! All commits and fragments are stored as [`Signed`] values. This ensures:
+//!
+//! - **Provenance**: Every stored commit/fragment has a verified author
+//! - **Integrity**: Signatures prevent tampering with stored data
+//! - **Trust on load**: Data loaded from storage was verified before storage
 //!
 //! # Capability Model
 //!
@@ -34,13 +44,19 @@
 //!
 //! [`Subduction`]: crate::subduction::Subduction
 //! [`Destroyer`]: destroyer::Destroyer
+//! [`Signed`]: crate::crypto::signed::Signed
 
 pub mod destroyer;
 pub mod fetcher;
 pub mod id;
 pub mod key;
+pub mod memory;
 pub mod powerbox;
 pub mod putter;
+pub mod traits;
+
+pub use memory::MemoryStorage;
+pub use traits::{BatchResult, Storage};
 
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]

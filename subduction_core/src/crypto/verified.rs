@@ -2,6 +2,8 @@
 
 use core::cmp::Ordering;
 
+use super::signed::Signed;
+
 /// A payload whose signature has been verified.
 ///
 /// This type is a **witness** that [`Signed::try_verify`](super::signed::Signed::try_verify)
@@ -12,28 +14,36 @@ use core::cmp::Ordering;
 /// T  ──seal──►  Signed<T>  ──try_verify──►  Verified<T>
 ///                    │                           │
 ///            payload inaccessible          payload exposed
+///                                                │
+///                                          ──signed()──►  Signed<T> (for storage)
+/// ```
+///
+/// # Storage Pattern
+///
+/// `Verified<T>` retains the original [`Signed<T>`] so you can store the signed
+/// version after verification:
+///
+/// ```ignore
+/// let verified = signed.try_verify()?;
+/// let payload = verified.payload();  // Use for business logic
+/// storage.save(verified.signed());   // Store the signed version
 /// ```
 ///
 /// # Wire Format
 ///
 /// This type should NEVER be sent over the wire directly. Always transmit
 /// [`Signed<T>`](super::signed::Signed) and have the recipient verify.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Verified<T> {
-    #[cbor(with = "crate::cbor::verifying_key")]
-    #[n(0)]
-    pub(super) issuer: ed25519_dalek::VerifyingKey,
-
-    #[n(1)]
+#[derive(Clone, Debug)]
+pub struct Verified<T: for<'a> minicbor::Decode<'a, ()>> {
+    pub(super) signed: Signed<T>,
     pub(super) payload: T,
 }
 
-impl<T> Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()>> Verified<T> {
     /// Returns the verifying key of the issuer who signed this payload.
     #[must_use]
-    pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
-        self.issuer
+    pub fn issuer(&self) -> ed25519_dalek::VerifyingKey {
+        self.signed.issuer()
     }
 
     /// Returns a reference to the verified payload.
@@ -47,22 +57,80 @@ impl<T> Verified<T> {
     pub fn into_payload(self) -> T {
         self.payload
     }
+
+    /// Returns a reference to the original signed value.
+    ///
+    /// Use this when you need to store the signed version after verification.
+    #[must_use]
+    pub const fn signed(&self) -> &Signed<T> {
+        &self.signed
+    }
+
+    /// Consumes the `Verified` and returns the original signed value.
+    #[must_use]
+    pub fn into_signed(self) -> Signed<T> {
+        self.signed
+    }
+
+    /// Construct a `Verified<T>` from data loaded from trusted storage.
+    ///
+    /// # Safety
+    ///
+    /// This bypasses signature verification. Only use for data that was
+    /// previously verified before being stored. The caller is responsible
+    /// for ensuring the data came from a trusted source.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the payload cannot be decoded from the signed data.
+    pub fn from_trusted(signed: Signed<T>) -> Result<Self, minicbor::decode::Error> {
+        use super::signed::envelope::Envelope;
+        let envelope = minicbor::decode::<Envelope<T>>(signed.encoded_payload().as_slice())?;
+        Ok(Self {
+            signed,
+            payload: envelope.into_payload(),
+        })
+    }
 }
 
-impl<T: PartialOrd> PartialOrd for Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()> + PartialEq> PartialEq for Verified<T> {
+    fn eq(&self, other: &Self) -> bool {
+        // Compare by signed value (includes issuer, signature, encoded payload)
+        self.signed == other.signed
+    }
+}
+
+impl<T: for<'a> minicbor::Decode<'a, ()> + Eq> Eq for Verified<T> {}
+
+impl<T: for<'a> minicbor::Decode<'a, ()> + core::hash::Hash> core::hash::Hash for Verified<T> {
+    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
+        self.signed.issuer().as_bytes().hash(state);
+        self.signed.encoded_payload().as_slice().hash(state);
+    }
+}
+
+impl<T: for<'a> minicbor::Decode<'a, ()> + PartialOrd> PartialOrd for Verified<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.payload.partial_cmp(&other.payload) {
-            Some(Ordering::Equal) => self.issuer.as_bytes().partial_cmp(other.issuer.as_bytes()),
+            Some(Ordering::Equal) => self
+                .signed
+                .issuer()
+                .as_bytes()
+                .partial_cmp(other.signed.issuer().as_bytes()),
             ord => ord,
         }
     }
 }
 
 #[allow(clippy::non_canonical_partial_ord_impl)]
-impl<T: Ord> Ord for Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()> + Ord> Ord for Verified<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.payload.cmp(&other.payload) {
-            Ordering::Equal => self.issuer.as_bytes().cmp(other.issuer.as_bytes()),
+            Ordering::Equal => self
+                .signed
+                .issuer()
+                .as_bytes()
+                .cmp(other.signed.issuer().as_bytes()),
             ord @ (Ordering::Less | Ordering::Greater) => ord,
         }
     }

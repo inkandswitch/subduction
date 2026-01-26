@@ -10,7 +10,7 @@ use sedimentree_core::{
     sedimentree::SedimentreeSummary,
 };
 
-use crate::peer::id::PeerId;
+use crate::{crypto::signed::Signed, peer::id::PeerId};
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
@@ -25,9 +25,9 @@ pub enum Message {
         #[n(0)]
         id: SedimentreeId,
 
-        /// The [`LooseCommit`] being sent.
+        /// The signed [`LooseCommit`] being sent.
         #[n(1)]
-        commit: LooseCommit,
+        commit: Signed<LooseCommit>,
 
         /// The [`Blob`] containing the commit data.
         #[n(2)]
@@ -41,9 +41,9 @@ pub enum Message {
         #[n(0)]
         id: SedimentreeId,
 
-        /// The [`Fragment`] being sent.
+        /// The signed [`Fragment`] being sent.
         #[n(1)]
-        fragment: Fragment,
+        fragment: Signed<Fragment>,
 
         /// The [`Blob`] containing the fragment data.
         #[n(2)]
@@ -209,16 +209,15 @@ pub struct RequestId {
 // TODO also make a version for the sender that is borrowed instead of owned.
 /// The calculated difference for the remote peer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SyncDiff {
     /// Commits that we are missing and need to request from the peer.
     #[n(0)]
-    pub missing_commits: Vec<(LooseCommit, Blob)>,
+    pub missing_commits: Vec<(Signed<LooseCommit>, Blob)>,
 
     /// Fragments that we are missing and need to request from the peer.
     #[n(1)]
-    pub missing_fragments: Vec<(Fragment, Blob)>,
+    pub missing_fragments: Vec<(Signed<Fragment>, Blob)>,
 }
 
 #[cfg(test)]
