@@ -8,7 +8,6 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::LooseCommit,
-    storage::MemoryStorage,
 };
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
@@ -17,6 +16,7 @@ use subduction_core::{
     crypto::signer::MemorySigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
+    storage::MemoryStorage,
 };
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,

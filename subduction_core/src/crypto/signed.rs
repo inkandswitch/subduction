@@ -156,14 +156,14 @@ impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
         let decoded_envelope =
             minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
 
-        let signed = Self {
+        let sealed = Self {
             issuer: signer.verifying_key(),
             signature,
             encoded_payload: EncodedPayload::new(encoded),
         };
 
         Verified {
-            signed,
+            signed: sealed,
             payload: decoded_envelope.into_payload(),
         }
     }
@@ -242,5 +242,35 @@ pub enum VerificationError {
 impl From<ed25519_dalek::SignatureError> for VerificationError {
     fn from(_: ed25519_dalek::SignatureError) -> Self {
         Self::InvalidSignature
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a, T> arbitrary::Arbitrary<'a> for Signed<T>
+where
+    T: for<'b> minicbor::Decode<'b, ()> + minicbor::Encode<()> + arbitrary::Arbitrary<'a>,
+{
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        use ed25519_dalek::{Signer as _, SigningKey};
+
+        // Generate arbitrary payload
+        let payload: T = u.arbitrary()?;
+
+        // Generate a random signing key from arbitrary bytes
+        let key_bytes: [u8; 32] = u.arbitrary()?;
+        let signing_key = SigningKey::from_bytes(&key_bytes);
+
+        // Wrap in envelope and encode
+        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
+        let encoded = minicbor::to_vec(&envelope).map_err(|_| arbitrary::Error::IncorrectFormat)?;
+
+        // Sign the encoded payload
+        let signature = signing_key.sign(&encoded);
+
+        Ok(Self {
+            issuer: signing_key.verifying_key(),
+            signature,
+            encoded_payload: EncodedPayload::new(encoded),
+        })
     }
 }

@@ -390,10 +390,7 @@ impl WasmSubduction {
         let core_id = id.clone().into();
         let core_commit = commit.clone().into();
         let blob: Blob = blob.clone().to_vec().into();
-        let maybe_fragment_requested = self
-            .core
-            .add_commit(core_id, &core_commit, blob)
-            .await?;
+        let maybe_fragment_requested = self.core.add_commit(core_id, &core_commit, blob).await?;
 
         Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
     }

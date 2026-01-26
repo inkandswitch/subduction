@@ -48,6 +48,7 @@ use crate::crypto::signed::Signed;
 /// - O(1) lookup by digest for sync protocols
 /// - Efficient "what do I have vs. what do you have" comparisons
 /// - Forwarding signed data without decoding
+#[allow(clippy::type_complexity)]
 pub trait Storage<K: FutureForm + ?Sized> {
     /// The error type for storage operations.
     type Error: core::error::Error;

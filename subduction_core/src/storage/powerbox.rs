@@ -160,6 +160,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// This is for local initialization, loading our own data.
     /// Returns digests alongside signed data for efficient indexing.
     #[must_use]
+    #[allow(clippy::type_complexity)]
     pub fn load_loose_commits<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
@@ -175,6 +176,7 @@ impl<S, P> StoragePowerbox<S, P> {
     /// This is for local initialization, loading our own data.
     /// Returns digests alongside signed data for efficient indexing.
     #[must_use]
+    #[allow(clippy::type_complexity)]
     pub fn load_fragments<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,

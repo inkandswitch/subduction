@@ -1342,6 +1342,7 @@ impl<
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs.
+    #[allow(clippy::too_many_lines)]
     pub async fn recv_batch_sync_request(
         &self,
         id: SedimentreeId,
@@ -1405,39 +1406,39 @@ impl<
             }
 
             for digest in local_commit_digests {
-                if let Some(signed_commit) = commit_by_digest.get(&digest) {
-                    if let Ok(payload) = signed_commit.decode_payload() {
-                        let blob_digest = payload.blob_meta().digest();
-                        if let Some(blob) = self
-                            .storage
-                            .load_blob(blob_digest)
-                            .await
-                            .map_err(IoError::Storage)?
-                        {
-                            their_missing_commits.push((signed_commit.clone(), blob));
-                        } else {
-                            tracing::warn!("missing blob for commit {:?}", digest);
-                            our_missing_blobs.push(blob_digest);
-                        }
+                if let Some(signed_commit) = commit_by_digest.get(&digest)
+                    && let Ok(payload) = signed_commit.decode_payload()
+                {
+                    let blob_digest = payload.blob_meta().digest();
+                    if let Some(blob) = self
+                        .storage
+                        .load_blob(blob_digest)
+                        .await
+                        .map_err(IoError::Storage)?
+                    {
+                        their_missing_commits.push((signed_commit.clone(), blob));
+                    } else {
+                        tracing::warn!("missing blob for commit {:?}", digest);
+                        our_missing_blobs.push(blob_digest);
                     }
                 }
             }
 
             for digest in local_fragment_digests {
-                if let Some(signed_fragment) = fragment_by_digest.get(&digest) {
-                    if let Ok(payload) = signed_fragment.decode_payload() {
-                        let blob_digest = payload.summary().blob_meta().digest();
-                        if let Some(blob) = self
-                            .storage
-                            .load_blob(blob_digest)
-                            .await
-                            .map_err(IoError::Storage)?
-                        {
-                            their_missing_fragments.push((signed_fragment.clone(), blob));
-                        } else {
-                            tracing::warn!("missing blob for fragment {:?}", digest);
-                            our_missing_blobs.push(blob_digest);
-                        }
+                if let Some(signed_fragment) = fragment_by_digest.get(&digest)
+                    && let Ok(payload) = signed_fragment.decode_payload()
+                {
+                    let blob_digest = payload.summary().blob_meta().digest();
+                    if let Some(blob) = self
+                        .storage
+                        .load_blob(blob_digest)
+                        .await
+                        .map_err(IoError::Storage)?
+                    {
+                        their_missing_fragments.push((signed_fragment.clone(), blob));
+                    } else {
+                        tracing::warn!("missing blob for fragment {:?}", digest);
+                        our_missing_blobs.push(blob_digest);
                     }
                 }
             }

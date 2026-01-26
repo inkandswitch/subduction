@@ -69,6 +69,7 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     ///
     /// Returns digests alongside signed data for efficient indexing.
     #[must_use]
+    #[allow(clippy::type_complexity)]
     pub fn load_loose_commits(
         &self,
     ) -> K::Future<'_, Result<Vec<(Digest, Signed<LooseCommit>)>, S::Error>> {
@@ -96,7 +97,10 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     ///
     /// Returns digests alongside signed data for efficient indexing.
     #[must_use]
-    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, S::Error>> {
+    #[allow(clippy::type_complexity)]
+    pub fn load_fragments(
+        &self,
+    ) -> K::Future<'_, Result<Vec<(Digest, Signed<Fragment>)>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
     }
 

@@ -19,6 +19,7 @@ use crate::crypto::signed::Signed;
 ///
 /// Commits and fragments are stored in content-addressed maps keyed by digest.
 #[derive(Debug, Clone, Default)]
+#[allow(clippy::type_complexity)]
 pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
     commits: Arc<Mutex<Map<SedimentreeId, Map<Digest, Signed<LooseCommit>>>>>,
@@ -154,7 +155,11 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         digest: Digest,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::delete_loose_commit");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?digest,
+                "MemoryStorage::delete_loose_commit"
+            );
             if let Some(map) = self.commits.lock().await.get_mut(&sedimentree_id) {
                 map.remove(&digest);
             }

@@ -47,6 +47,7 @@ pub struct DisconnectionError;
 
 /// Errors while running the connection loop.
 #[derive(Debug, Error)]
+#[allow(clippy::large_enum_variant)]
 pub enum RunError {
     /// Internal MPSC channel error.
     #[error("Channel send error: {0}")]

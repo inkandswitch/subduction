@@ -3,7 +3,10 @@
 #[cfg(feature = "idb")]
 pub mod idb;
 
-use alloc::{string::{String, ToString}, vec::Vec};
+use alloc::{
+    string::{String, ToString},
+    vec::Vec,
+};
 use sedimentree_core::collections::Set;
 
 use future_form::{FutureForm, Local};
@@ -224,6 +227,7 @@ fn parse_digest_signed_array<T: for<'a> minicbor::Decode<'a, ()>>(
 }
 
 /// Parse a JS array of Digest objects.
+#[allow(clippy::unnecessary_wraps)]
 fn parse_digest_array(js_value: &JsValue) -> Result<Set<Digest>, JsSedimentreeStorageError> {
     let array = js_sys::Array::from(js_value);
     let mut result = Set::new();
@@ -255,8 +259,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(())
-        }
-        )
+        })
     }
 
     fn delete_sedimentree_id(
@@ -264,15 +267,17 @@ impl Storage<Local> for JsSedimentreeStorage {
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsSedimentreeStorage::delete_sedimentree_id");
+            tracing::debug!(
+                ?sedimentree_id,
+                "JsSedimentreeStorage::delete_sedimentree_id"
+            );
             let js_promise =
                 self.js_delete_sedimentree_id(&WasmSedimentreeId::from(sedimentree_id).into());
             JsFuture::from(js_promise)
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(())
-        }
-        )
+        })
     }
 
     fn load_all_sedimentree_ids(
@@ -290,8 +295,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 ids.insert(wasm_id.into());
             }
             Ok(ids)
-        }
-        )
+        })
     }
 
     // ==================== Commits (CAS) ====================
@@ -304,7 +308,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         Local::from_future(async move {
             let digest = commit_digest(&loose_commit)
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
-            tracing::debug!(?sedimentree_id, ?digest, "JsSedimentreeStorage::save_loose_commit");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?digest,
+                "JsSedimentreeStorage::save_loose_commit"
+            );
 
             let signed_bytes = minicbor::to_vec(&loose_commit)
                 .map_err(|e| JsSedimentreeStorageError::CborEncodeError(e.to_string()))?;
@@ -318,8 +326,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(digest)
-        }
-        )
+        })
     }
 
     fn load_loose_commit(
@@ -328,7 +335,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         digest: Digest,
     ) -> LocalBoxFuture<'_, Result<Option<Signed<LooseCommit>>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "JsSedimentreeStorage::load_loose_commit");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?digest,
+                "JsSedimentreeStorage::load_loose_commit"
+            );
             let js_promise = self.js_load_commit(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
                 &WasmDigest::from(digest).into(),
@@ -345,8 +356,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             let signed: Signed<LooseCommit> = minicbor::decode(&bytes)
                 .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
             Ok(Some(signed))
-        }
-        )
+        })
     }
 
     fn list_commit_digests(
@@ -361,8 +371,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             parse_digest_array(&js_value)
-        }
-        )
+        })
     }
 
     fn load_loose_commits(
@@ -377,8 +386,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             parse_digest_signed_array(&js_value)
-        }
-        )
+        })
     }
 
     fn delete_loose_commit(
@@ -387,7 +395,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         digest: Digest,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "JsSedimentreeStorage::delete_loose_commit");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?digest,
+                "JsSedimentreeStorage::delete_loose_commit"
+            );
             let js_promise = self.js_delete_commit(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
                 &WasmDigest::from(digest).into(),
@@ -396,8 +408,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(())
-        }
-        )
+        })
     }
 
     fn delete_loose_commits(
@@ -405,15 +416,17 @@ impl Storage<Local> for JsSedimentreeStorage {
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsSedimentreeStorage::delete_loose_commits");
+            tracing::debug!(
+                ?sedimentree_id,
+                "JsSedimentreeStorage::delete_loose_commits"
+            );
             let js_promise =
                 self.js_delete_all_commits(&WasmSedimentreeId::from(sedimentree_id).into());
             JsFuture::from(js_promise)
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(())
-        }
-        )
+        })
     }
 
     // ==================== Fragments (CAS) ====================
@@ -426,7 +439,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         Local::from_future(async move {
             let digest = fragment_digest(&fragment)
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
-            tracing::debug!(?sedimentree_id, ?digest, "JsSedimentreeStorage::save_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?digest,
+                "JsSedimentreeStorage::save_fragment"
+            );
 
             let signed_bytes = minicbor::to_vec(&fragment)
                 .map_err(|e| JsSedimentreeStorageError::CborEncodeError(e.to_string()))?;
@@ -440,8 +457,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(digest)
-        }
-        )
+        })
     }
 
     fn load_fragment(
@@ -450,7 +466,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         digest: Digest,
     ) -> LocalBoxFuture<'_, Result<Option<Signed<Fragment>>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "JsSedimentreeStorage::load_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?digest,
+                "JsSedimentreeStorage::load_fragment"
+            );
             let js_promise = self.js_load_fragment(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
                 &WasmDigest::from(digest).into(),
@@ -467,8 +487,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             let signed: Signed<Fragment> = minicbor::decode(&bytes)
                 .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
             Ok(Some(signed))
-        }
-        )
+        })
     }
 
     fn list_fragment_digests(
@@ -476,15 +495,17 @@ impl Storage<Local> for JsSedimentreeStorage {
         sedimentree_id: SedimentreeId,
     ) -> LocalBoxFuture<'_, Result<Set<Digest>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsSedimentreeStorage::list_fragment_digests");
+            tracing::debug!(
+                ?sedimentree_id,
+                "JsSedimentreeStorage::list_fragment_digests"
+            );
             let js_promise =
                 self.js_list_fragment_digests(&WasmSedimentreeId::from(sedimentree_id).into());
             let js_value = JsFuture::from(js_promise)
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             parse_digest_array(&js_value)
-        }
-        )
+        })
     }
 
     fn load_fragments(
@@ -499,8 +520,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             parse_digest_signed_array(&js_value)
-        }
-        )
+        })
     }
 
     fn delete_fragment(
@@ -509,7 +529,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         digest: Digest,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?digest, "JsSedimentreeStorage::delete_fragment");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?digest,
+                "JsSedimentreeStorage::delete_fragment"
+            );
             let js_promise = self.js_delete_fragment(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
                 &WasmDigest::from(digest).into(),
@@ -518,8 +542,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(())
-        }
-        )
+        })
     }
 
     fn delete_fragments(
@@ -534,8 +557,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(())
-        }
-        )
+        })
     }
 
     // ==================== Blobs ====================
@@ -551,8 +573,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             let wasm_digest = WasmDigest::from(&js_digest);
             tracing::debug!(?wasm_digest, "JsSedimentreeStorage::save_blob");
             Ok(wasm_digest.into())
-        }
-        )
+        })
     }
 
     fn load_blob(
@@ -575,8 +596,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             } else {
                 Err(JsSedimentreeStorageError::NotBytes)
             }
-        }
-        )
+        })
     }
 
     fn delete_blob(&self, blob_digest: Digest) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
@@ -587,8 +607,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .await
                 .map_err(JsSedimentreeStorageError::JsError)?;
             Ok(())
-        }
-        )
+        })
     }
 
     // ==================== Convenience Methods ====================
@@ -600,12 +619,14 @@ impl Storage<Local> for JsSedimentreeStorage {
         blob: Blob,
     ) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsSedimentreeStorage::save_commit_with_blob");
+            tracing::debug!(
+                ?sedimentree_id,
+                "JsSedimentreeStorage::save_commit_with_blob"
+            );
             let blob_digest = self.save_blob(blob).await?;
             self.save_loose_commit(sedimentree_id, commit).await?;
             Ok(blob_digest)
-        }
-        )
+        })
     }
 
     fn save_fragment_with_blob(
@@ -615,12 +636,14 @@ impl Storage<Local> for JsSedimentreeStorage {
         blob: Blob,
     ) -> LocalBoxFuture<'_, Result<Digest, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, "JsSedimentreeStorage::save_fragment_with_blob");
+            tracing::debug!(
+                ?sedimentree_id,
+                "JsSedimentreeStorage::save_fragment_with_blob"
+            );
             let blob_digest = self.save_blob(blob).await?;
             self.save_fragment(sedimentree_id, fragment).await?;
             Ok(blob_digest)
-        }
-        )
+        })
     }
 
     fn save_batch(
@@ -658,8 +681,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 commit_digests,
                 fragment_digests,
             })
-        }
-        )
+        })
     }
 }
 

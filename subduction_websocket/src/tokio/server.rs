@@ -16,7 +16,6 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
 };
 use subduction_core::{
-    storage::Storage,
     Subduction,
     connection::{
         handshake::{Audience, DiscoveryId},
@@ -26,6 +25,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{ConnectionPolicy, StoragePolicy},
     sharded_map::ShardedMap,
+    storage::Storage,
     subduction::error::RegistrationError,
     timestamp::TimestampSeconds,
 };

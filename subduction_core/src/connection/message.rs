@@ -209,6 +209,7 @@ pub struct RequestId {
 // TODO also make a version for the sender that is borrowed instead of owned.
 /// The calculated difference for the remote peer.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SyncDiff {
     /// Commits that we are missing and need to request from the peer.
@@ -243,7 +244,9 @@ mod tests {
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit).await.into_signed();
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
             let msg = Message::LooseCommit {
                 id: SedimentreeId::new([1u8; 32]),
                 commit: signed_commit,
@@ -261,7 +264,9 @@ mod tests {
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment).await.into_signed();
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+                .await
+                .into_signed();
             let msg = Message::Fragment {
                 id: SedimentreeId::new([1u8; 32]),
                 fragment: signed_fragment,
@@ -461,7 +466,9 @@ mod tests {
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([2u8; 16]));
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit).await.into_signed();
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
 
             let diff = SyncDiff {
                 missing_commits: vec![(signed_commit.clone(), blob.clone())],
@@ -486,7 +493,9 @@ mod tests {
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([3u8; 16]));
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment).await.into_signed();
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+                .await
+                .into_signed();
 
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
