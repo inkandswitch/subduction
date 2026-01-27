@@ -1,6 +1,6 @@
 [package]
 name = "subduction_core"
-version = "0.1.0"
+version = "0.2.0"
 description = "Subduction: sync protocol for replicating Sedimentrees between peers"
 
 categories = ["web-programming"]
@@ -23,7 +23,7 @@ getrandom = { workspace = true, optional = true }
 metrics = { workspace = true, optional = true }
 minicbor = { workspace = true }
 nonempty = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false }
+sedimentree_core = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
 thiserror = { workspace = true }

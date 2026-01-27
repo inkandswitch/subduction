@@ -4,7 +4,6 @@ members = [
   "automerge_sedimentree",
   "automerge_sedimentree_wasm",
   "automerge_subduction_wasm",
-  "build_info",
   "sedimentree_core",
   "sedimentree_wasm",
   "subduction_cli",
@@ -25,6 +24,15 @@ authors = [
 ]
 
 [workspace.dependencies]
+# Internal crates
+automerge_sedimentree_wasm = { version = "0.2.0", path = "automerge_sedimentree_wasm" }
+sedimentree_core = { version = "0.2.0", path = "sedimentree_core", default-features = false }
+sedimentree_wasm = { version = "0.2.0", path = "sedimentree_wasm", default-features = false }
+subduction_core = { version = "0.2.0", path = "subduction_core", default-features = false }
+subduction_wasm = { version = "0.2.0", path = "subduction_wasm", default-features = false }
+subduction_websocket = { version = "0.2.0", path = "subduction_websocket", default-features = false }
+
+# External crates
 ahash = "0.8"
 anyhow = "1.0"
 arbitrary = "1.4"
@@ -50,7 +58,7 @@ future_form = "0.2.0"
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
-keyhive_core = { git = "https://github.com/inkandswitch/keyhive", branch = "main" }
+keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
 metrics = "0.24"
 minicbor = { version = "2.1", default-features = false, features = ["alloc", "derive"] }
 minicbor-serde = { version = "0.6", default-features = false, features = ["alloc"] }
@@ -71,7 +79,7 @@ tungstenite = "0.27"
 url = { version = "2.5", default-features = false }
 wasm-bindgen = { version = "0.2.105", default-features = false }
 wasm-bindgen-futures = { version = "0.4.53", default-features = false }
-wasm-tracing = { git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
+wasm-tracing = { version = "3.0.0-alpha.0", git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
 wasm_refgen = "0.1.5" # no_std by default
 windows-sys = "0.61.2"
 

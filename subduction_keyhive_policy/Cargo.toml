@@ -1,8 +1,9 @@
 [package]
 name = "subduction_keyhive_policy"
-version = "0.1.0"
+version = "0.2.0"
 description = "Keyhive-based authorization policy for Subduction connections"
 readme = "./README.md"
+publish = false
 
 categories = ["authentication", "cryptography"]
 keywords = ["authorization", "policy", "sync"]
@@ -19,9 +20,9 @@ futures = { workspace = true }
 future_form = { workspace = true }
 keyhive_core = { workspace = true }
 rand = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false }
+sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true }
-subduction_core = { path = "../subduction_core", default-features = false }
+subduction_core = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 
 [features]

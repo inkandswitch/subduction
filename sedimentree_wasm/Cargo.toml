@@ -1,6 +1,6 @@
 [package]
 name = "sedimentree_wasm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Wasm/JavaScript bindings for Sedimentree (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["sedimentree", "wasm"]
@@ -24,8 +24,8 @@ future_form = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 minicbor = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false }
-subduction_core = { path = "../subduction_core", default-features = false }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }

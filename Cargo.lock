@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "automerge",
  "sedimentree_core",
@@ -237,7 +237,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree_wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "automerge",
  "base58",
@@ -256,7 +256,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
@@ -535,7 +535,7 @@ dependencies = [
 
 [[package]]
 name = "build_info"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "bumpalo"
@@ -2685,7 +2685,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -2708,7 +2708,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-lock",
  "base58",
@@ -2942,7 +2942,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "subduction_cli"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -2974,7 +2974,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -3000,7 +3000,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive_policy"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ed25519-dalek",
  "future_form",
@@ -3015,12 +3015,11 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel",
  "async-lock",
  "base58",
- "build_info",
  "console_error_panic_hook",
  "ed25519-dalek",
  "from_js_ref",
@@ -3046,7 +3045,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "arbitrary",

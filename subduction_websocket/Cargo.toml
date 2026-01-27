@@ -1,6 +1,6 @@
 [package]
 name = "subduction_websocket"
-version = "0.1.0"
+version = "0.2.0"
 description = "WebSocket transport layer for the Subduction sync protocol"
 
 categories = ["web-programming"]
@@ -24,8 +24,8 @@ future_form = { workspace = true }
 futures-timer = { workspace = true, optional = true }
 futures-util = { workspace = true }
 rand = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false }
-subduction_core = { path = "../subduction_core", default-features = false }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["time"] }
 tokio-util = { workspace = true, optional = true }
@@ -35,7 +35,7 @@ tungstenite = { workspace = true }
 [dev-dependencies]
 anyhow = "1.0"
 arbitrary = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", features = ["arbitrary", "serde", "std"] }
+sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
 testresult = { workspace = true }
 tokio = { workspace = true }
 tokio-test = { workspace = true }

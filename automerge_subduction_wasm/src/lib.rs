@@ -56,6 +56,6 @@ pub fn start() {
     tracing::info!(
         "🏔️ automerge_subduction_wasm v{} ({})",
         env!("CARGO_PKG_VERSION"),
-        build_info::GIT_HASH
+        env!("GIT_HASH")
     );
 }

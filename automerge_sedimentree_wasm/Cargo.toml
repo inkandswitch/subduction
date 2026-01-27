@@ -1,6 +1,6 @@
 [package]
 name = "automerge_sedimentree_wasm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Wasm bindings for storing Automerge documents in Sedimentree"
 categories = ["web-programming"]
 keywords = ["automerge", "sedimentree", "wasm"]
@@ -19,11 +19,10 @@ crate-type = ["cdylib", "rlib"]
 automerge = { workspace = true }
 base58 = { workspace = true }
 blake3 = { workspace = true }
-build_info = { path = "../build_info" }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false }
-subduction_wasm = { path = "../subduction_wasm", default-features = false }
+sedimentree_core = { workspace = true }
+subduction_wasm = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }

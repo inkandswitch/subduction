@@ -1,4 +1,4 @@
-//! Build script to embed the current Git commit hash into the compiled binary.
+//! Build script to embed the current Git commit hash.
 
 use std::{
     env, fs,

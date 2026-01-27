@@ -1,10 +1,11 @@
 [package]
 name = "subduction_wasm"
-version = "0.1.0"
+version = "0.2.0"
 description = "Wasm/JavaScript bindings for Subduction (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
 readme = "./README.md"
+exclude = ["e2e/server/pkg"]
 
 authors.workspace = true
 edition.workspace = true
@@ -21,7 +22,6 @@ async-lock = { workspace = true }
 base58 = { workspace = true }
 ed25519-dalek = { workspace = true }
 minicbor = { workspace = true }
-build_info = { path = "../build_info" }
 console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
@@ -30,9 +30,9 @@ futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 rand = { workspace = true }
-sedimentree_core = { path = "../sedimentree_core", default-features = false }
-sedimentree_wasm = { path = "../sedimentree_wasm", default-features = false }
-subduction_core = { path = "../subduction_core", default-features = false, features = ["getrandom"] }
+sedimentree_core = { workspace = true }
+sedimentree_wasm = { workspace = true }
+subduction_core = { workspace = true, features = ["getrandom"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
