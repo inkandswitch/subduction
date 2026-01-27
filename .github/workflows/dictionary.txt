@@ -150,6 +150,7 @@ authN
 authZ
 authn
 authz
+automerge
 automerge-repo
 backoff
 bchacha-note

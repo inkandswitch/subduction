@@ -75,14 +75,14 @@ fn find_repo_root(start: &Path) -> Option<PathBuf> {
 fn watch_git(git_dir: &Path) {
     println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
 
-    if let Ok(head) = fs::read_to_string(git_dir.join("HEAD")) {
-        if let Some(rest) = head.strip_prefix("ref: ").map(str::trim) {
-            println!("cargo:rerun-if-changed={}", git_dir.join(rest).display());
-            println!(
-                "cargo:rerun-if-changed={}",
-                git_dir.join("packed-refs").display()
-            );
-        }
+    if let Ok(head) = fs::read_to_string(git_dir.join("HEAD"))
+        && let Some(rest) = head.strip_prefix("ref: ").map(str::trim)
+    {
+        println!("cargo:rerun-if-changed={}", git_dir.join(rest).display());
+        println!(
+            "cargo:rerun-if-changed={}",
+            git_dir.join("packed-refs").display()
+        );
     }
 
     println!("cargo:rerun-if-changed={}", git_dir.join("index").display());
