@@ -8,6 +8,7 @@ members = [
   "sedimentree_wasm",
   "subduction_cli",
   "subduction_core",
+  "subduction_http_long_poll",
   "subduction_keyhive_policy",
   "subduction_wasm",
   "subduction_websocket"
@@ -29,6 +30,7 @@ automerge_sedimentree_wasm = { version = "0.2.0", path = "automerge_sedimentree_
 sedimentree_core = { version = "0.2.0", path = "sedimentree_core", default-features = false }
 sedimentree_wasm = { version = "0.2.0", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.2.0", path = "subduction_core", default-features = false }
+subduction_http_long_poll = { version = "0.2.0", path = "subduction_http_long_poll", default-features = false }
 subduction_wasm = { version = "0.2.0", path = "subduction_wasm", default-features = false }
 subduction_websocket = { version = "0.2.0", path = "subduction_websocket", default-features = false }
 
