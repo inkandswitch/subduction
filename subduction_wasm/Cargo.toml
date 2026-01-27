@@ -6,6 +6,7 @@ categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
 readme = "./README.md"
 exclude = ["e2e/server/pkg"]
+publish = false
 
 authors.workspace = true
 edition.workspace = true

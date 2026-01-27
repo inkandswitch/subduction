@@ -242,7 +242,6 @@ dependencies = [
  "automerge",
  "base58",
  "blake3",
- "build_info",
  "getrandom 0.2.17",
  "getrandom 0.3.4",
  "js-sys",
@@ -260,7 +259,6 @@ version = "0.2.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
- "build_info",
  "console_error_panic_hook",
  "getrandom 0.3.4",
  "subduction_wasm",
@@ -532,10 +530,6 @@ checksum = "d1da5ab77c1437701eeff7c88d968729e7766172279eab0676857b3d63af7a6f"
 dependencies = [
  "cfg_aliases",
 ]
-
-[[package]]
-name = "build_info"
-version = "0.2.0"
 
 [[package]]
 name = "bumpalo"

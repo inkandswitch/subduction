@@ -6,6 +6,7 @@ categories = ["web-programming"]
 keywords = ["automerge", "sedimentree", "wasm"]
 readme = "./README.md"
 build = "build.rs"
+publish = false
 
 authors.workspace = true
 edition.workspace = true

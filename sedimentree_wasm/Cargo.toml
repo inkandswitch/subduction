@@ -5,6 +5,7 @@ description = "Wasm/JavaScript bindings for Sedimentree (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["sedimentree", "wasm"]
 readme = "./README.md"
+publish = false
 
 authors.workspace = true
 edition.workspace = true

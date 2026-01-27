@@ -5,6 +5,7 @@ description = "Wasm bindings for storing Automerge documents in Sedimentree"
 categories = ["web-programming"]
 keywords = ["automerge", "sedimentree", "wasm"]
 readme = "./README.md"
+publish = false
 
 authors.workspace = true
 edition.workspace = true
