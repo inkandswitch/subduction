@@ -32,7 +32,8 @@ tracing = { workspace = true }
 [dev-dependencies]
 bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
-rand = { workspace = true }
+futures = { workspace = true, features = ["executor"] }
+rand = { workspace = true, features = ["std_rng"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
