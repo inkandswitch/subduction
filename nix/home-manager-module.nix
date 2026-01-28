@@ -30,6 +30,36 @@ in {
         description = "Directory for storing sync data.";
       };
 
+      keySeed = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = "Key seed (64 hex characters) for deterministic key generation. If null, a random key will be generated.";
+      };
+
+      handshakeMaxDrift = lib.mkOption {
+        type = lib.types.int;
+        default = 60;
+        description = "Maximum clock drift allowed during handshake (in seconds).";
+      };
+
+      serviceName = lib.mkOption {
+        type = lib.types.nullOr lib.types.str;
+        default = null;
+        description = ''
+          Service name for discovery mode (e.g., `sync.example.com`).
+          Clients can connect without knowing the server's peer ID.
+          The name is hashed to a 32-byte identifier for the handshake.
+          Defaults to the socket address if not specified.
+          Omit the protocol so the same name works across `wss://`, `https://`, etc.
+        '';
+      };
+
+      timeout = lib.mkOption {
+        type = lib.types.int;
+        default = 5;
+        description = "Request timeout in seconds.";
+      };
+
       metricsPort = lib.mkOption {
         type = lib.types.port;
         default = 9090;
@@ -42,16 +72,10 @@ in {
         description = "Whether to enable the Prometheus metrics server.";
       };
 
-      timeout = lib.mkOption {
+      metricsRefreshInterval = lib.mkOption {
         type = lib.types.int;
-        default = 5;
-        description = "Request timeout in seconds.";
-      };
-
-      peerId = lib.mkOption {
-        type = lib.types.nullOr lib.types.str;
-        default = null;
-        description = "Peer ID as 64 hex characters. If null, one will be generated.";
+        default = 60;
+        description = "Interval in seconds for refreshing storage metrics from disk.";
       };
 
       peers = lib.mkOption {
@@ -81,6 +105,39 @@ in {
 
   config = let
     anyEnabled = cfg.server.enable || cfg.relay.enable;
+
+    serverArgs =
+      [
+        "${cfg.package}/bin/subduction_cli"
+        "server"
+        "--socket"
+        cfg.server.socket
+        "--data-dir"
+        (toString cfg.server.dataDir)
+        "--timeout"
+        (toString cfg.server.timeout)
+        "--handshake-max-drift"
+        (toString cfg.server.handshakeMaxDrift)
+      ]
+      ++ lib.optionals cfg.server.enableMetrics [
+        "--metrics"
+        "--metrics-port"
+        (toString cfg.server.metricsPort)
+        "--metrics-refresh-interval"
+        (toString cfg.server.metricsRefreshInterval)
+      ]
+      ++ lib.optionals (cfg.server.keySeed != null) ["--key-seed" cfg.server.keySeed]
+      ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
+      ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
+
+    relayArgs = [
+      "${cfg.package}/bin/subduction_cli"
+      "ephemeral-relay"
+      "--socket"
+      cfg.relay.socket
+      "--max-message-size"
+      (toString cfg.relay.maxMessageSize)
+    ];
   in
     lib.mkIf anyEnabled {
       systemd.user.services = lib.mkIf pkgs.stdenv.isLinux (
@@ -93,23 +150,7 @@ in {
 
             Service = {
               Type = "simple";
-              ExecStart = let
-                args =
-                  [
-                    "${cfg.package}/bin/subduction_cli"
-                    "server"
-                    "--socket"
-                    cfg.server.socket
-                    "--data-dir"
-                    (toString cfg.server.dataDir)
-                    "--timeout"
-                    (toString cfg.server.timeout)
-                  ]
-                  ++ lib.optionals cfg.server.enableMetrics ["--metrics" "--metrics-port" (toString cfg.server.metricsPort)]
-                  ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
-                  ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
-              in
-                lib.escapeShellArgs args;
+              ExecStart = lib.escapeShellArgs serverArgs;
               Restart = "on-failure";
               RestartSec = 5;
             };
@@ -128,14 +169,7 @@ in {
 
             Service = {
               Type = "simple";
-              ExecStart = lib.escapeShellArgs [
-                "${cfg.package}/bin/subduction_cli"
-                "ephemeral-relay"
-                "--socket"
-                cfg.relay.socket
-                "--max-message-size"
-                (toString cfg.relay.maxMessageSize)
-              ];
+              ExecStart = lib.escapeShellArgs relayArgs;
               Restart = "on-failure";
               RestartSec = 5;
             };
@@ -153,20 +187,7 @@ in {
             enable = true;
             config = {
               Label = "com.inkandswitch.subduction";
-              ProgramArguments =
-                [
-                  "${cfg.package}/bin/subduction_cli"
-                  "server"
-                  "--socket"
-                  cfg.server.socket
-                  "--data-dir"
-                  (toString cfg.server.dataDir)
-                  "--timeout"
-                  (toString cfg.server.timeout)
-                ]
-                ++ lib.optionals cfg.server.enableMetrics ["--metrics" "--metrics-port" (toString cfg.server.metricsPort)]
-                ++ lib.optionals (cfg.server.peerId != null) ["--peer-id" cfg.server.peerId]
-                ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
+              ProgramArguments = serverArgs;
               RunAtLoad = true;
               KeepAlive = true;
               StandardOutPath = "${config.xdg.cacheHome}/subduction/server.log";
@@ -179,14 +200,7 @@ in {
             enable = true;
             config = {
               Label = "com.inkandswitch.subduction-relay";
-              ProgramArguments = [
-                "${cfg.package}/bin/subduction_cli"
-                "ephemeral-relay"
-                "--socket"
-                cfg.relay.socket
-                "--max-message-size"
-                (toString cfg.relay.maxMessageSize)
-              ];
+              ProgramArguments = relayArgs;
               RunAtLoad = true;
               KeepAlive = true;
               StandardOutPath = "${config.xdg.cacheHome}/subduction/relay.log";

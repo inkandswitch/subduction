@@ -31,7 +31,7 @@ pub(crate) struct ServerArgs {
     pub(crate) key_seed: Option<String>,
 
     /// Maximum clock drift allowed during handshake (in seconds)
-    #[arg(long, default_value = "60")]
+    #[arg(long, default_value = "600")]
     pub(crate) handshake_max_drift: u64,
 
     /// Service name for discovery mode (e.g., `sync.example.com`).
