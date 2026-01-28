@@ -304,8 +304,9 @@ impl WasmWebSocket {
     ///
     /// * `address` - The WebSocket URL to connect to
     /// * `signer` - The client's signer for authentication
-    /// * `service_name` - The service name for discovery (e.g., `localhost:8080`)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds
+    /// * `timeout_milliseconds` - Request timeout in milliseconds. Defaults to 30000 (30s).
+    /// * `service_name` - The service name for discovery (e.g., `localhost:8080`).
+    ///   If omitted, the host is extracted from the URL.
     ///
     /// # Errors
     ///
@@ -316,10 +317,13 @@ impl WasmWebSocket {
     pub async fn try_discover(
         address: &Url,
         signer: &JsSigner,
-        service_name: &str,
-        timeout_milliseconds: u32,
+        timeout_milliseconds: Option<u32>,
+        service_name: Option<String>,
     ) -> Result<WasmWebSocket, WebSocketAuthenticatedConnectionError> {
         use super::handshake::client_handshake_discover;
+
+        let timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);
+        let service_name = service_name.unwrap_or_else(|| address.host());
 
         // Create WebSocket
         let ws = WebSocket::new(&address.href())
@@ -367,7 +371,7 @@ impl WasmWebSocket {
         drop(onerror);
 
         // Perform discovery handshake
-        let handshake_result = client_handshake_discover(&ws, signer, service_name)
+        let handshake_result = client_handshake_discover(&ws, signer, &service_name)
             .await
             .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
 
