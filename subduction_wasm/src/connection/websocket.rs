@@ -320,9 +320,10 @@ impl WasmWebSocket {
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmWebSocket, WebSocketAuthenticatedConnectionError> {
+        use super::handshake::client_handshake_discover;
+
         let timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);
         let service_name = service_name.unwrap_or_else(|| address.host());
-        use super::handshake::client_handshake_discover;
 
         // Create WebSocket
         let ws = WebSocket::new(&address.href())
