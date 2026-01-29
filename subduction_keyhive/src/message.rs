@@ -6,8 +6,8 @@ use crate::peer_id::KeyhivePeerId;
 
 /// A hash of a keyhive event/operation.
 ///
-/// Events are identified by their BLAKE3 hash.
-pub type EventHash = Vec<u8>;
+/// Events are identified by their 32-byte BLAKE3 hash.
+pub type EventHash = [u8; 32];
 
 /// Serialized event bytes.
 pub type EventBytes = Vec<u8>;

@@ -149,4 +149,3 @@ pub enum IngestError {
     #[error("keyhive rejected event: {0}")]
     Rejected(String),
 }
-
