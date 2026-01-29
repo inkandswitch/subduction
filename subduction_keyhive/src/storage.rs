@@ -13,8 +13,8 @@ use alloc::{sync::Arc, vec::Vec};
 
 use async_lock::Mutex;
 use futures::{
-    future::{BoxFuture, LocalBoxFuture},
     FutureExt,
+    future::{BoxFuture, LocalBoxFuture},
 };
 use futures_kind::{FutureKind, Local, Sendable};
 
@@ -62,8 +62,9 @@ impl StorageHash {
         for (i, chunk) in hex.as_bytes().chunks_exact(2).enumerate() {
             let high = char::from(*chunk.first()?).to_digit(16)?;
             let low = char::from(*chunk.get(1)?).to_digit(16)?;
-            #[allow(clippy::cast_possible_truncation)] // max value is 0xFF
-            { *bytes.get_mut(i)? = ((high << 4) | low) as u8; }
+            #[allow(clippy::cast_possible_truncation)] // high and low are both < 16
+            let byte = ((high << 4) | low) as u8;
+            *bytes.get_mut(i)? = byte;
         }
         Some(Self(bytes))
     }
@@ -92,6 +93,7 @@ pub trait KeyhiveStorage<K: FutureKind + ?Sized> {
     /// Load all archives from storage.
     ///
     /// Returns a vector of (hash, data) pairs for all stored archives.
+    #[allow(clippy::type_complexity)]
     fn load_archives(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
 
     /// Delete an archive from storage.
@@ -110,6 +112,7 @@ pub trait KeyhiveStorage<K: FutureKind + ?Sized> {
     /// Load all events from storage.
     ///
     /// Returns a vector of (hash, data) pairs for all stored events.
+    #[allow(clippy::type_complexity)]
     fn load_events(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
 
     /// Delete an event from storage.
@@ -262,6 +265,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[allow(clippy::unwrap_used)]
     fn storage_hash_hex_roundtrip() {
         let bytes = [
             0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
@@ -270,7 +274,10 @@ mod tests {
         ];
         let hash = StorageHash::new(bytes);
         let hex = hash.to_hex();
-        assert_eq!(hex, "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            hex,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        );
         let parsed = StorageHash::from_hex(&hex).unwrap();
         assert_eq!(hash, parsed);
     }

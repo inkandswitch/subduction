@@ -20,6 +20,8 @@ pub mod signed_message;
 pub mod storage;
 
 #[cfg(feature = "serde")]
+pub mod protocol;
+#[cfg(feature = "serde")]
 pub mod storage_ops;
 
 pub use connection::KeyhiveConnection;
@@ -30,7 +32,9 @@ pub use signed_message::SignedMessage;
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
 
 #[cfg(feature = "serde")]
+pub use protocol::KeyhiveProtocol;
+#[cfg(feature = "serde")]
 pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,
-    save_event, save_event_bytes, save_keyhive_archive, StorageEventHandler,
+    save_event, save_event_bytes, save_keyhive_archive,
 };

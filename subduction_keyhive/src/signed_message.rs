@@ -4,8 +4,7 @@
 //! This module provides the wrapper type that combines the signed data
 //! with an optional contact card.
 
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 use core::fmt;
 
 use crate::peer_id::KeyhivePeerId;
@@ -123,7 +122,11 @@ pub struct VerifiedMessage {
 impl VerifiedMessage {
     /// Create a new verified message.
     #[must_use]
-    pub const fn new(sender_id: KeyhivePeerId, payload: Vec<u8>, contact_card: Option<Vec<u8>>) -> Self {
+    pub const fn new(
+        sender_id: KeyhivePeerId,
+        payload: Vec<u8>,
+        contact_card: Option<Vec<u8>>,
+    ) -> Self {
         Self {
             sender_id,
             payload,

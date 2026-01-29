@@ -16,6 +16,7 @@ async-lock = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
 ciborium = { workspace = true }
+ed25519-dalek = { version = "2.1", features = ["serde"] }
 futures = { workspace = true }
 futures_kind = { workspace = true }
 keyhive_core = { path = "../../keyhive/keyhive_core" }
