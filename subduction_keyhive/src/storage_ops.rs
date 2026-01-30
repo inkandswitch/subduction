@@ -370,3 +370,114 @@ where
 
     Ok(())
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+mod tests {
+    use super::*;
+    use crate::storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
+    use crate::test_utils::{keyhive_peer_id, make_keyhive};
+    use futures_kind::Local;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn save_and_load_archive_roundtrip() {
+        let keyhive = make_keyhive().await;
+        let storage = MemoryKeyhiveStorage::new();
+        let storage_id = StorageHash::new([1u8; 32]);
+
+        let archive = keyhive.into_archive().await;
+        save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+            .await
+            .unwrap();
+
+        let loaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
+        assert_eq!(loaded.len(), 1);
+        assert_eq!(loaded[0].0, storage_id);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn compact_consolidates_archives_and_deletes_processed_events() {
+        // Create two keyhives and exchange contact cards to generate real events
+        let alice = make_keyhive().await;
+        let bob = make_keyhive().await;
+
+        let alice_cc = alice.contact_card().await.unwrap();
+        let bob_cc = bob.contact_card().await.unwrap();
+        alice.receive_contact_card(&bob_cc).await.unwrap();
+        bob.receive_contact_card(&alice_cc).await.unwrap();
+
+        let storage = MemoryKeyhiveStorage::new();
+
+        // Save two separate archives (simulating multiple save points)
+        let id1 = StorageHash::new([1u8; 32]);
+        let archive1 = alice.into_archive().await;
+        save_keyhive_archive::<_, _, Local>(&storage, id1, &archive1)
+            .await
+            .unwrap();
+
+        let id2 = StorageHash::new([2u8; 32]);
+        let archive2 = alice.into_archive().await;
+        save_keyhive_archive::<_, _, Local>(&storage, id2, &archive2)
+            .await
+            .unwrap();
+
+        // Save alice's real events to storage
+        let alice_peer_id = keyhive_peer_id(&alice);
+        let alice_id = alice_peer_id.to_identifier().unwrap();
+        let alice_agent = alice
+            .get_agent(alice_id)
+            .await
+            .expect("alice should have herself as agent");
+        let events = alice.static_events_for_agent(&alice_agent).await.unwrap();
+        assert!(
+            !events.is_empty(),
+            "contact card exchange should produce events"
+        );
+
+        for event in events.values() {
+            save_event::<_, _, Local>(&storage, event).await.unwrap();
+        }
+
+        // Before compaction: 2 archives, N events
+        let archives_before = KeyhiveStorage::<Local>::load_archives(&storage)
+            .await
+            .unwrap();
+        let events_before = KeyhiveStorage::<Local>::load_events(&storage)
+            .await
+            .unwrap();
+        assert_eq!(archives_before.len(), 2);
+        assert!(!events_before.is_empty());
+
+        // Compact
+        let consolidated_id = StorageHash::new([10u8; 32]);
+        compact::<_, _, _, _, _, _, _, Local>(&alice, &storage, consolidated_id)
+            .await
+            .unwrap();
+
+        // After compaction: exactly 1 archive at the consolidated key
+        let archives_after = KeyhiveStorage::<Local>::load_archives(&storage)
+            .await
+            .unwrap();
+        assert_eq!(archives_after.len(), 1);
+        assert_eq!(archives_after[0].0, consolidated_id);
+
+        // Events that alice already knows about should have been deleted.
+        // Alice already has these events in her keyhive state, so they are
+        // "processed" — compaction ingests them, sees they aren't pending,
+        // and removes them.
+        let events_after = KeyhiveStorage::<Local>::load_events(&storage)
+            .await
+            .unwrap();
+        assert_eq!(
+            events_after.len(),
+            0,
+            "all events should be processed (alice already has them) and deleted"
+        );
+
+        // The consolidated archive should be loadable and deserializable
+        let reloaded = load_archives::<[u8; 32], _, Local>(&storage)
+            .await
+            .unwrap();
+        assert_eq!(reloaded.len(), 1);
+    }
+}

@@ -6,8 +6,8 @@
 //! # Storage Key Format
 //!
 //! Keyhive data is stored using the following key format
-//! - Archives: `["keyhive-db", "/archives/", <hex-hash>]`
-//! - Events: `["keyhive-db", "/ops/", <hex-hash>]`
+//! * Archives: `["keyhive-db", "/archives/", <hex-hash>]`
+//! * Events: `["keyhive-db", "/ops/", <hex-hash>]`
 
 use alloc::{sync::Arc, vec::Vec};
 

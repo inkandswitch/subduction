@@ -716,6 +716,7 @@ where
     R: rand::CryptoRng + rand::RngCore,
 {
     // Membership ops
+    #[allow(clippy::type_complexity)]
     let mut ops: Map<Digest<Event<Signer, T, L>>, Event<Signer, T, L>> = keyhive
         .membership_ops_for_agent(agent)
         .await
@@ -725,7 +726,7 @@ where
 
     // Prekey ops
     for key_ops in keyhive.reachable_prekey_ops_for_agent(agent).await.values() {
-        for key_op in key_ops.iter() {
+        for key_op in key_ops {
             let op = Event::<Signer, T, L>::from(key_op.as_ref().clone());
             ops.insert(Digest::hash(&op), op);
         }
@@ -755,4 +756,887 @@ fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, S
 /// Convert a `Digest` to a 32-byte array.
 const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {
     *digest.raw.as_bytes()
+}
+
+#[cfg(test)]
+#[allow(
+    clippy::expect_used,
+    clippy::unwrap_used,
+    clippy::indexing_slicing
+)]
+mod tests {
+    use super::*;
+    use crate::storage::MemoryKeyhiveStorage;
+    use crate::test_utils::{
+        TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
+        exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
+        make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
+        serialize_contact_card,
+    };
+    use futures_kind::Local;
+    use keyhive_core::{
+        access::Access,
+        principal::{identifier::Identifier, membered::Membered, peer::Peer},
+    };
+    use nonempty::nonempty;
+
+    /// Helper to create a test protocol instance.
+    async fn make_protocol() -> (TestProtocol, crate::test_utils::SimpleKeyhive) {
+        let keyhive = make_keyhive().await;
+        let peer_id = keyhive_peer_id(&keyhive);
+        let cc = keyhive.contact_card().await.unwrap();
+        let cc_bytes = serialize_contact_card(&cc);
+        let storage = MemoryKeyhiveStorage::new();
+        let shared = Arc::new(Mutex::new(keyhive.clone()));
+        let protocol = TestProtocol::new(shared, storage, peer_id, cc_bytes);
+        (protocol, keyhive)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sign_and_verify_roundtrip() {
+        let (protocol, _keyhive) = make_protocol().await;
+        let peer_id = protocol.peer_id.clone();
+
+        // Create a peer so we can send to them
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
+
+        let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
+        protocol.add_peer(other_id.clone(), conn_to_other).await;
+
+        // Send a message
+        let message = Message::RequestContactCard {
+            sender_id: peer_id.clone(),
+            target_id: other_id.clone(),
+        };
+        protocol.sign_and_send(&other_id, message, true).await.unwrap();
+
+        // Read the signed message from the channel
+        let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
+
+        // Verify and decode
+        let (decoded_msg, contact_card) =
+            TestProtocol::verify_and_decode(&peer_id, &signed_msg).unwrap();
+
+        // The decoded message should match
+        assert!(matches!(decoded_msg, Message::RequestContactCard { .. }));
+        assert_eq!(decoded_msg.sender_id(), &peer_id);
+        assert_eq!(decoded_msg.target_id(), &other_id);
+
+        // Contact card should be present since we set include_contact_card=true
+        assert!(contact_card.is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn verify_rejects_wrong_sender() {
+        let (protocol, _keyhive) = make_protocol().await;
+        let peer_id = protocol.peer_id.clone();
+
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
+
+        let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
+        protocol.add_peer(other_id.clone(), conn_to_other).await;
+
+        let message = Message::RequestContactCard {
+            sender_id: peer_id.clone(),
+            target_id: other_id.clone(),
+        };
+        protocol.sign_and_send(&other_id, message, false).await.unwrap();
+
+        let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
+
+        // Try to verify as if it came from the wrong sender
+        let wrong_sender = keyhive_peer_id(&make_keyhive().await);
+        let result = TestProtocol::verify_and_decode(&wrong_sender, &signed_msg);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            matches!(err, ProtocolError::Verification(crate::error::VerificationError::SenderMismatch { .. })),
+            "expected SenderMismatch, got: {err:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn verify_rejects_tampered_message() {
+        let (protocol, _keyhive) = make_protocol().await;
+        let peer_id = protocol.peer_id.clone();
+
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
+
+        let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
+        protocol.add_peer(other_id.clone(), conn_to_other).await;
+
+        let message = Message::RequestContactCard {
+            sender_id: peer_id.clone(),
+            target_id: other_id.clone(),
+        };
+        protocol.sign_and_send(&other_id, message, false).await.unwrap();
+
+        let mut signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
+
+        // Tamper with the signed bytes
+        if let Some(byte) = signed_msg.signed.last_mut() {
+            *byte ^= 0xFF;
+        }
+
+        let result = TestProtocol::verify_and_decode(&peer_id, &signed_msg);
+        assert!(result.is_err(), "tampered message should fail verification");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn peer_management() {
+        let (protocol, _keyhive) = make_protocol().await;
+        let peer_id = protocol.peer_id.clone();
+
+        let peer1 = keyhive_peer_id(&make_keyhive().await);
+        let peer2 = keyhive_peer_id(&make_keyhive().await);
+
+        let (conn1, _) = create_channel_pair(peer_id.clone(), &peer1);
+        let (conn2, _) = create_channel_pair(peer_id.clone(), &peer2);
+
+        assert!(protocol.peer_ids().await.is_empty());
+
+        protocol.add_peer(peer1.clone(), conn1).await;
+        protocol.add_peer(peer2.clone(), conn2).await;
+        assert_eq!(protocol.peer_ids().await.len(), 2);
+
+        protocol.remove_peer(&peer1).await;
+        let remaining = protocol.peer_ids().await;
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(remaining[0], peer2);
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_requests_contact_card_for_unknown_peer() {
+        let (protocol, _keyhive) = make_protocol().await;
+        let peer_id = protocol.peer_id.clone();
+
+        // Create a peer that our keyhive doesn't know about
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
+
+        let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
+        protocol.add_peer(other_id.clone(), conn_to_other).await;
+
+        // Sync should request a contact card since we don't know the peer
+        protocol.sync_keyhive(Some(&other_id)).await.unwrap();
+
+        // Verify we got a RequestContactCard
+        let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
+        let (decoded, cc) = TestProtocol::verify_and_decode(&peer_id, &signed_msg).unwrap();
+
+        assert!(matches!(decoded, Message::RequestContactCard { .. }));
+        // Should include our contact card so the peer can learn about us
+        assert!(cc.is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn contact_card_exchange_flow() {
+        // Alice doesn't know Bob, and vice versa
+        let (alice_proto, _alice_kh) = make_protocol().await;
+        let alice_id = alice_proto.peer_id.clone();
+
+        let (bob_proto, _bob_kh) = make_protocol().await;
+        let bob_id = bob_proto.peer_id.clone();
+
+        // Set up channels
+        let (alice_conn, bob_conn) = create_channel_pair(alice_id.clone(), &bob_id);
+        alice_proto.add_peer(bob_id.clone(), alice_conn.clone()).await;
+        bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
+
+        // Alice tries to sync with Bob (she doesn't know him)
+        alice_proto.sync_keyhive(Some(&bob_id)).await.unwrap();
+
+        // Alice should have sent RequestContactCard
+        let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
+
+        let (decoded1, _) = TestProtocol::verify_and_decode(&alice_id, &signed_msg1).unwrap();
+        assert!(
+            matches!(decoded1, Message::RequestContactCard { .. }),
+            "alice should request bob's contact card"
+        );
+
+        // Bob handles alice's RequestContactCard
+        bob_proto.handle_message(&alice_id, signed_msg1).await.unwrap();
+
+        // Bob should have sent MissingContactCard back
+        let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
+
+        let (decoded2, cc2) = TestProtocol::verify_and_decode(&bob_id, &signed_msg2).unwrap();
+        assert!(
+            matches!(decoded2, Message::MissingContactCard { .. }),
+            "bob should respond with MissingContactCard"
+        );
+        // Bob's response should include his contact card
+        assert!(cc2.is_some(), "bob's response should include contact card");
+
+        // Alice handles Bob's MissingContactCard (which includes Bob's contact card)
+        // This should trigger Alice to initiate a sync
+        alice_proto.handle_message(&bob_id, signed_msg2).await.unwrap();
+
+        // Alice should now have sent either a SyncRequest or another RequestContactCard
+        // to Bob (depending on whether she successfully ingested Bob's CC)
+        let signed_msg3 = bob_conn.inbound_rx.recv().await.unwrap();
+        let (decoded3, _) = TestProtocol::verify_and_decode(&alice_id, &signed_msg3).unwrap();
+
+        // After ingesting Bob's contact card, Alice should send a SyncRequest
+        assert!(
+            matches!(decoded3, Message::SyncRequest { .. }),
+            "alice should now be able to send a sync request, got: {decoded3:?}"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_request_response_flow_with_known_peers() {
+        // Set up Alice and Bob who know each other
+        let (alice_proto, alice_kh) = make_protocol().await;
+        let alice_id = alice_proto.peer_id.clone();
+
+        let (bob_proto, bob_kh) = make_protocol().await;
+        let bob_id = bob_proto.peer_id.clone();
+
+        // Exchange contact cards at the keyhive level
+        let alice_cc = alice_kh.contact_card().await.unwrap();
+        let bob_cc = bob_kh.contact_card().await.unwrap();
+        alice_kh.receive_contact_card(&bob_cc).await.unwrap();
+        bob_kh.receive_contact_card(&alice_cc).await.unwrap();
+
+        // Set up channels
+        let (alice_conn, bob_conn) = create_channel_pair(alice_id.clone(), &bob_id);
+        alice_proto.add_peer(bob_id.clone(), alice_conn.clone()).await;
+        bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
+
+        // Alice initiates sync
+        alice_proto.sync_keyhive(Some(&bob_id)).await.unwrap();
+
+        // Read Alice's SyncRequest from the channel
+        let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
+        let (decoded1, _) = TestProtocol::verify_and_decode(&alice_id, &signed_msg1).unwrap();
+
+        assert!(
+            matches!(decoded1, Message::SyncRequest { .. }),
+            "alice should send SyncRequest when she knows bob"
+        );
+
+        // Bob handles the SyncRequest
+        bob_proto.handle_message(&alice_id, signed_msg1).await.unwrap();
+
+        // Bob should respond with SyncResponse
+        let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
+        let (decoded2, _) = TestProtocol::verify_and_decode(&bob_id, &signed_msg2).unwrap();
+
+        assert!(
+            matches!(decoded2, Message::SyncResponse { .. }),
+            "bob should respond with SyncResponse, got: {decoded2:?}"
+        );
+
+        // Alice handles the SyncResponse
+        alice_proto.handle_message(&bob_id, signed_msg2).await.unwrap();
+
+        // Depending on set differences, Alice might send SyncOps or nothing
+        // At minimum, the protocol should complete without errors
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn full_bidirectional_sync() {
+        // Create Alice and Bob, exchange contact cards, then sync both ways
+        let alice_kh = make_keyhive().await;
+        let bob_kh = make_keyhive().await;
+
+        let alice_id = keyhive_peer_id(&alice_kh);
+        let bob_id = keyhive_peer_id(&bob_kh);
+
+        // Exchange contact cards
+        let alice_cc = alice_kh.contact_card().await.unwrap();
+        let bob_cc = bob_kh.contact_card().await.unwrap();
+        alice_kh.receive_contact_card(&bob_cc).await.unwrap();
+        bob_kh.receive_contact_card(&alice_cc).await.unwrap();
+
+        let alice_cc_bytes = serialize_contact_card(&alice_cc);
+        let bob_cc_bytes = serialize_contact_card(&bob_cc);
+
+        let alice_storage = MemoryKeyhiveStorage::new();
+        let bob_storage = MemoryKeyhiveStorage::new();
+
+        let alice_shared = Arc::new(Mutex::new(alice_kh));
+        let bob_shared = Arc::new(Mutex::new(bob_kh));
+
+        let (alice_conn, bob_conn) = create_channel_pair(alice_id.clone(), &bob_id);
+
+        let alice_proto = TestProtocol::new(
+            alice_shared.clone(),
+            alice_storage.clone(),
+            alice_id.clone(),
+            alice_cc_bytes,
+        );
+        let bob_proto = TestProtocol::new(
+            bob_shared.clone(),
+            bob_storage.clone(),
+            bob_id.clone(),
+            bob_cc_bytes,
+        );
+
+        alice_proto.add_peer(bob_id.clone(), alice_conn.clone()).await;
+        bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
+
+        // Alice → Bob sync
+        alice_proto.sync_keyhive(Some(&bob_id)).await.unwrap();
+
+        // Forward SyncRequest to Bob
+        let a_to_b_rx = bob_conn.inbound_rx.clone();
+        let b_to_a_rx = alice_conn.inbound_rx.clone();
+
+        let sync_request = a_to_b_rx.recv().await.unwrap();
+        bob_proto.handle_message(&alice_id, sync_request).await.unwrap();
+
+        // Forward SyncResponse to Alice
+        let sync_response = b_to_a_rx.recv().await.unwrap();
+        alice_proto.handle_message(&bob_id, sync_response).await.unwrap();
+
+        // If Alice sent SyncOps, forward those too
+        if let Ok(sync_ops) = a_to_b_rx.try_recv() {
+            bob_proto.handle_message(&alice_id, sync_ops).await.unwrap();
+        }
+
+        // Now Bob → Alice sync
+        bob_proto.sync_keyhive(Some(&alice_id)).await.unwrap();
+
+        let sync_request2 = b_to_a_rx.recv().await.unwrap();
+        alice_proto.handle_message(&bob_id, sync_request2).await.unwrap();
+
+        let sync_response2 = a_to_b_rx.recv().await.unwrap();
+        bob_proto.handle_message(&alice_id, sync_response2).await.unwrap();
+
+        if let Ok(sync_ops2) = b_to_a_rx.try_recv() {
+            alice_proto.handle_message(&bob_id, sync_ops2).await.unwrap();
+        }
+
+        // After bidirectional sync, both should have the same pending state
+        let alice_pending = {
+            let kh = alice_shared.lock().await;
+            kh.pending_event_hashes().await
+        };
+        let bob_pending = {
+            let kh = bob_shared.lock().await;
+            kh.pending_event_hashes().await
+        };
+
+        // Both should have the same pending hashes (possibly empty)
+        assert_eq!(
+            alice_pending, bob_pending,
+            "after bidirectional sync, pending hashes should match"
+        );
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_skips_self_peer() {
+        let (protocol, _keyhive) = make_protocol().await;
+        let peer_id = protocol.peer_id.clone();
+
+        // Add ourselves as a peer (edge case)
+        let (conn, _) = create_channel_pair(peer_id.clone(), &peer_id);
+        protocol.add_peer(peer_id.clone(), conn).await;
+
+        // Sync should skip ourselves
+        protocol.sync_keyhive(None).await.unwrap();
+
+        // No messages should have been sent (we skipped ourselves)
+        // The protocol should complete without error
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn handle_message_rejects_unsigned_junk() {
+        let (protocol, _keyhive) = make_protocol().await;
+
+        let fake_sender = keyhive_peer_id(&make_keyhive().await);
+
+        // Create a SignedMessage with junk data
+        let junk = SignedMessage::new(vec![0xFF, 0xFE, 0xFD]);
+
+        let result = protocol.handle_message(&fake_sender, junk).await;
+        assert!(result.is_err(), "junk data should fail verification");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn compact_via_protocol() {
+        let (protocol, keyhive) = make_protocol().await;
+        let storage_id = crate::storage::StorageHash::new([1u8; 32]);
+
+        // Save an archive to storage via storage_ops
+        let archive = keyhive.into_archive().await;
+        crate::storage_ops::save_keyhive_archive::<_, _, Local>(
+            &MemoryKeyhiveStorage::new(),
+            storage_id,
+            &archive,
+        )
+        .await
+        .unwrap();
+
+        // Compact via protocol should work
+        let result = protocol.compact(storage_id).await;
+        assert!(result.is_ok());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn ingest_from_storage_via_protocol() {
+        let keyhive = make_keyhive().await;
+        let peer_id = keyhive_peer_id(&keyhive);
+        let cc = keyhive.contact_card().await.unwrap();
+        let cc_bytes = serialize_contact_card(&cc);
+
+        let storage = MemoryKeyhiveStorage::new();
+
+        // Save an archive
+        let archive = keyhive.into_archive().await;
+        let storage_id = crate::storage::StorageHash::new([1u8; 32]);
+        crate::storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+            .await
+            .unwrap();
+
+        let shared = Arc::new(Mutex::new(keyhive));
+        let protocol = TestProtocol::new(shared, storage, peer_id, cc_bytes);
+
+        // Ingest from storage should work
+        let result = protocol.ingest_from_storage().await;
+        assert!(result.is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Integration tests: divergent ops sync convergence
+    // -----------------------------------------------------------------------
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_group_membership_converges() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates a group and adds Bob as a Read member
+        let (group_id, bob_individual_id) = {
+            let kh = alice_kh.lock().await;
+            let group = kh.generate_group(vec![]).await.unwrap();
+            let group_id = group.lock().await.group_id();
+
+            // Get Bob's Individual on Alice's keyhive
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
+
+            kh.add_member(
+                bob_agent,
+                &Membered::Group(group_id, group.clone()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+            let bob_identifier: Identifier = bob_identifier;
+            (group_id, bob_identifier)
+        };
+
+        // Before sync: Bob should not have the group
+        {
+            let kh = bob_kh.lock().await;
+            assert!(kh.get_group(group_id).await.is_none(),
+                "Bob should not have the group before sync");
+        }
+
+        // Sync Alice → Bob
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // After sync: Bob should have the group and his membership
+        {
+            let kh = bob_kh.lock().await;
+            let group = kh.get_group(group_id).await;
+            assert!(group.is_some(), "Bob should have the group after sync");
+
+            let group_ref = group.unwrap();
+            let members = kh
+                .reachable_members(Membered::Group(group_id, group_ref))
+                .await;
+            assert!(
+                members.contains_key(&bob_individual_id),
+                "Bob should be a member of the group"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_document_access_converges() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates group, adds Bob, creates doc owned by group
+        let doc_id = {
+            let kh = alice_kh.lock().await;
+            let group = kh.generate_group(vec![]).await.unwrap();
+            let group_id = group.lock().await.group_id();
+
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
+
+            kh.add_member(
+                bob_agent,
+                &Membered::Group(group_id, group.clone()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+            let doc = kh
+                .generate_doc(
+                    vec![Peer::Group(group_id, group.clone())],
+                    nonempty![[0u8; 32]],
+                )
+                .await
+                .unwrap();
+            doc.lock().await.doc_id()
+        };
+
+        // Before sync: Bob should not have the document
+        {
+            let kh = bob_kh.lock().await;
+            assert!(kh.get_document(doc_id).await.is_none(),
+                "Bob should not have the document before sync");
+        }
+
+        // Sync Alice → Bob
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // After sync: Bob should have the document and it should be reachable
+        {
+            let kh = bob_kh.lock().await;
+            let doc = kh.get_document(doc_id).await;
+            assert!(
+                doc.is_some(),
+                "Bob should have the document after sync"
+            );
+
+            let reachable = kh.reachable_docs().await;
+            assert!(
+                reachable.contains_key(&doc_id),
+                "Bob's reachable docs should include the synced document"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn bidirectional_sync_with_divergent_ops_converges() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates her group and adds Bob
+        let alice_group_id = {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id]).await
+        };
+
+        // Bob creates his group and adds Alice
+        let bob_group_id = {
+            let kh = bob_kh.lock().await;
+            create_group_with_read_members(&kh, &[&alice_id]).await
+        };
+
+        // Before sync: each peer only has their own group
+        {
+            let alice = alice_kh.lock().await;
+            assert!(alice.get_group(alice_group_id).await.is_some());
+            assert!(alice.get_group(bob_group_id).await.is_none(),
+                "Alice should not have Bob's group before sync");
+        }
+        {
+            let bob = bob_kh.lock().await;
+            assert!(bob.get_group(bob_group_id).await.is_some());
+            assert!(bob.get_group(alice_group_id).await.is_none(),
+                "Bob should not have Alice's group before sync");
+        }
+
+        // Bidirectional sync: Alice → Bob, then Bob → Alice
+        run_sync_round(
+            &alice_proto, &bob_proto, &alice_id, &bob_id,
+            &alice_conn, &bob_conn,
+        )
+        .await;
+        run_sync_round(
+            &bob_proto, &alice_proto, &bob_id, &alice_id,
+            &bob_conn, &alice_conn,
+        )
+        .await;
+
+        // Verify both keyhives have both groups
+        {
+            let alice = alice_kh.lock().await;
+            assert!(alice.get_group(alice_group_id).await.is_some());
+            assert!(alice.get_group(bob_group_id).await.is_some());
+        }
+        {
+            let bob = bob_kh.lock().await;
+            assert!(bob.get_group(alice_group_id).await.is_some());
+            assert!(bob.get_group(bob_group_id).await.is_some());
+        }
+
+        // Verify membership op counts match
+        {
+            let alice = alice_kh.lock().await;
+            let bob = bob_kh.lock().await;
+
+            let alice_self = alice.get_agent(alice_id.to_identifier().unwrap()).await.unwrap();
+            let bob_self = bob.get_agent(bob_id.to_identifier().unwrap()).await.unwrap();
+
+            let alice_ops = alice.membership_ops_for_agent(&alice_self).await;
+            let bob_ops = bob.membership_ops_for_agent(&bob_self).await;
+            assert_eq!(alice_ops.len(), bob_ops.len(),
+                "membership op counts should match after bidirectional sync");
+        }
+
+        // Verify pending state is empty
+        {
+            let alice = alice_kh.lock().await;
+            let bob = bob_kh.lock().await;
+            assert!(alice.pending_event_hashes().await.is_empty());
+            assert!(bob.pending_event_hashes().await.is_empty());
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn sync_revocation_propagates() {
+        let TwoPeerHarness {
+            alice_proto,
+            bob_proto,
+            alice_kh,
+            bob_kh,
+            alice_id,
+            bob_id,
+            alice_conn,
+            bob_conn,
+        } = exchange_contact_cards_and_setup().await;
+
+        // Alice creates group and adds Bob
+        let group_id = {
+            let kh = alice_kh.lock().await;
+            let group = kh.generate_group(vec![]).await.unwrap();
+            let group_id = group.lock().await.group_id();
+
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
+
+            kh.add_member(
+                bob_agent,
+                &Membered::Group(group_id, group.clone()),
+                Access::Read,
+                &[],
+            )
+            .await
+            .unwrap();
+
+            group_id
+        };
+
+        // Before first sync: Bob should not have the group
+        {
+            let kh = bob_kh.lock().await;
+            assert!(kh.get_group(group_id).await.is_none(),
+                "Bob should not have the group before sync");
+        }
+
+        // First sync: Alice → Bob — Bob gets the group
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // Bob should now have the group, but no revocations yet
+        {
+            let kh = bob_kh.lock().await;
+            assert!(kh.get_group(group_id).await.is_some(),
+                "Bob should have the group after first sync");
+
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
+            let group = kh.get_group(group_id).await.unwrap();
+            let revocations = Membered::Group(group_id, group)
+                .get_agent_revocations(&bob_agent)
+                .await;
+            assert!(revocations.is_empty(),
+                "Bob should have no revocations before Alice revokes");
+        }
+
+        // Alice revokes Bob from the group
+        {
+            let kh = alice_kh.lock().await;
+            let group = kh.get_group(group_id).await.unwrap();
+            let bob_identifier = bob_id.to_identifier().unwrap();
+
+            kh.revoke_member(
+                bob_identifier,
+                true,
+                &Membered::Group(group_id, group),
+            )
+            .await
+            .unwrap();
+        };
+
+        // Second sync: Alice → Bob — Bob receives the revocation
+        run_sync_round(
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
+        )
+        .await;
+
+        // Verify Bob's keyhive has the revocation
+        {
+            let bob = bob_kh.lock().await;
+            let bob_identifier = bob_id.to_identifier().unwrap();
+            let bob_agent = bob.get_agent(bob_identifier).await.unwrap();
+
+            let group = bob.get_group(group_id).await.unwrap();
+            let revocations = Membered::Group(group_id, group)
+                .get_agent_revocations(&bob_agent)
+                .await;
+
+            assert!(
+                !revocations.is_empty(),
+                "Bob should have received the revocation"
+            );
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn three_peer_transitive_sync() {
+        let alice_keyhive = make_keyhive().await;
+        let bob_keyhive = make_keyhive().await;
+        let carol_keyhive = make_keyhive().await;
+
+        exchange_all_contact_cards(&[&alice_keyhive, &bob_keyhive, &carol_keyhive]).await;
+
+        let alice_id = keyhive_peer_id(&alice_keyhive);
+        let bob_id = keyhive_peer_id(&bob_keyhive);
+        let carol_id = keyhive_peer_id(&carol_keyhive);
+
+        let (alice_proto, alice_kh, _) =
+            make_protocol_with_shared_keyhive(alice_keyhive).await;
+        let (bob_proto, bob_kh, _) =
+            make_protocol_with_shared_keyhive(bob_keyhive).await;
+        let (carol_proto, carol_kh, _) =
+            make_protocol_with_shared_keyhive(carol_keyhive).await;
+
+        let (ab_conn_a, ab_conn_b) = create_channel_pair(alice_id.clone(), &bob_id);
+        let (bc_conn_b, bc_conn_c) = create_channel_pair(bob_id.clone(), &carol_id);
+
+        alice_proto.add_peer(bob_id.clone(), ab_conn_a.clone()).await;
+        bob_proto.add_peer(alice_id.clone(), ab_conn_b.clone()).await;
+        bob_proto.add_peer(carol_id.clone(), bc_conn_b.clone()).await;
+        carol_proto.add_peer(bob_id.clone(), bc_conn_c.clone()).await;
+
+        // Alice creates a group and adds Bob and Carol
+        let group_id = {
+            let kh = alice_kh.lock().await;
+            create_group_with_read_members(&kh, &[&bob_id, &carol_id]).await
+        };
+
+        // Before any sync: neither Bob nor Carol has the group
+        {
+            let kh = bob_kh.lock().await;
+            assert!(kh.get_group(group_id).await.is_none(),
+                "Bob should not have the group before sync");
+        }
+        {
+            let kh = carol_kh.lock().await;
+            assert!(kh.get_group(group_id).await.is_none(),
+                "Carol should not have the group before sync");
+        }
+
+        // Alice syncs to Bob only
+        run_sync_round(
+            &alice_proto, &bob_proto, &alice_id, &bob_id,
+            &ab_conn_a, &ab_conn_b,
+        )
+        .await;
+
+        {
+            let kh = bob_kh.lock().await;
+            assert!(kh.get_group(group_id).await.is_some(),
+                "Bob should have the group after Alice→Bob sync");
+        }
+        // Carol still shouldn't have it
+        {
+            let kh = carol_kh.lock().await;
+            assert!(kh.get_group(group_id).await.is_none(),
+                "Carol should not have the group before Bob→Carol sync");
+        }
+
+        // Bob syncs to Carol
+        run_sync_round(
+            &bob_proto, &carol_proto, &bob_id, &carol_id,
+            &bc_conn_b, &bc_conn_c,
+        )
+        .await;
+
+        // Verify Carol got the group and her membership
+        {
+            let kh = carol_kh.lock().await;
+            let group = kh.get_group(group_id).await;
+            assert!(group.is_some(),
+                "Carol should have the group after transitive sync");
+
+            let carol_identifier = carol_id.to_identifier().unwrap();
+            let members = kh
+                .reachable_members(Membered::Group(group_id, group.unwrap()))
+                .await;
+            assert!(members.contains_key(&carol_identifier),
+                "Carol should be a member of the group");
+        }
+    }
 }

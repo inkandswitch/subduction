@@ -24,6 +24,10 @@ pub mod protocol;
 #[cfg(feature = "serde")]
 pub mod storage_ops;
 
+#[cfg(all(test, feature = "serde"))]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
+mod test_utils;
+
 pub use connection::KeyhiveConnection;
 pub use error::{ProtocolError, SigningError, StorageError, VerificationError};
 pub use message::Message;
