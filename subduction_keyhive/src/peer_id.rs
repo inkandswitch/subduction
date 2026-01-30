@@ -16,11 +16,11 @@ use keyhive_core::principal::identifier::Identifier;
 /// # Format
 ///
 /// When serialized as a string, the format is:
-/// - Without suffix: `<base64(verifying_key)>`
-/// - With suffix: `<base64(verifying_key)>-<suffix>`
+/// * Without suffix: `<base64(verifying_key)>`
+/// * With suffix: `<base64(verifying_key)>-<suffix>`
 ///
 /// For example: `"abc123...==-my-suffix"` or just `"abc123...=="`
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KeyhivePeerId {
     /// The 32-byte Ed25519 verifying key.

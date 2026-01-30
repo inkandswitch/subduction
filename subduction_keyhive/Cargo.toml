@@ -30,5 +30,10 @@ default = []
 serde = ["dep:serde"]
 std = ["thiserror/std"]
 
+[dev-dependencies]
+async-channel = { workspace = true }
+nonempty = "0.10.0"
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [lints]
 workspace = true

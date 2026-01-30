@@ -26,8 +26,8 @@ impl std::error::Error for CborError {}
 ///
 /// All keyhive protocol messages are signed by the sender before transmission.
 /// This wrapper combines:
-/// - An optional contact card (to introduce the sender to the recipient)
-/// - The signed message payload (message data + signature)
+/// * An optional contact card (to introduce the sender to the recipient)
+/// * The signed message payload (message data + signature)
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SignedMessage {
@@ -136,6 +136,7 @@ impl VerifiedMessage {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     #[cfg(all(feature = "serde", feature = "std"))]
     use super::*;
