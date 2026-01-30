@@ -1,6 +1,6 @@
 //! WebSocket client for Subduction.
 
-use crate::fs_storage::FsStorage;
+use sedimentree_fs::FsStorage;
 use anyhow::Result;
 use std::{path::PathBuf, time::Duration};
 use subduction_core::crypto::signer::MemorySigner;

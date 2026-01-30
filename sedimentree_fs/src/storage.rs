@@ -21,7 +21,7 @@ use thiserror::Error;
 
 /// Errors that can occur during filesystem storage operations.
 #[derive(Debug, Error)]
-pub(crate) enum FsStorageError {
+pub enum FsStorageError {
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -54,7 +54,7 @@ pub(crate) enum FsStorageError {
 ///     └── {digest_hex}               ← raw bytes
 /// ```
 #[derive(Debug, Clone)]
-pub(crate) struct FsStorage {
+pub struct FsStorage {
     root: PathBuf,
     ids_cache: Arc<Mutex<Set<SedimentreeId>>>,
 }
@@ -65,7 +65,7 @@ impl FsStorage {
     /// # Errors
     ///
     /// Returns an error if the directories cannot be created.
-    pub(crate) fn new(root: PathBuf) -> Result<Self, FsStorageError> {
+    pub fn new(root: PathBuf) -> Result<Self, FsStorageError> {
         std::fs::create_dir_all(&root)?;
         std::fs::create_dir_all(root.join("trees"))?;
         std::fs::create_dir_all(root.join("blobs"))?;
@@ -73,6 +73,12 @@ impl FsStorage {
         let ids_cache = Arc::new(Mutex::new(Self::load_tree_ids(&root)));
 
         Ok(Self { root, ids_cache })
+    }
+
+    /// Returns the root directory of the storage.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     fn load_tree_ids(root: &Path) -> Set<SedimentreeId> {

@@ -4,7 +4,6 @@
 
 mod automerge_ephemeral_relay;
 mod client;
-mod fs_storage;
 pub mod metrics;
 mod purge;
 mod server;

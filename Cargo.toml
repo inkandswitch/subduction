@@ -5,6 +5,7 @@ members = [
   "automerge_sedimentree_wasm",
   "automerge_subduction_wasm",
   "sedimentree_core",
+  "sedimentree_fs",
   "sedimentree_wasm",
   "subduction_cli",
   "subduction_core",
@@ -27,6 +28,7 @@ authors = [
 # Internal crates
 automerge_sedimentree_wasm = { version = "0.2.0", path = "automerge_sedimentree_wasm" }
 sedimentree_core = { version = "0.2.0", path = "sedimentree_core", default-features = false }
+sedimentree_fs = { version = "0.2.0", path = "sedimentree_fs" }
 sedimentree_wasm = { version = "0.2.0", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.2.0", path = "subduction_core", default-features = false }
 subduction_wasm = { version = "0.2.0", path = "subduction_wasm", default-features = false }
