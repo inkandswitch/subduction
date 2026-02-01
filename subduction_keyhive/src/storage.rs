@@ -22,7 +22,7 @@ use crate::collections::Map;
 
 /// A 32-byte hash used as a storage key.
 ///
-/// This is typically a BLAKE3 hash of the data being stored (for events) or
+/// This is a BLAKE3 hash of the data being stored (for events) or
 /// a keyhive storage identifier (for archives).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct StorageHash(pub [u8; 32]);
