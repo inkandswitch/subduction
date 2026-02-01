@@ -7,7 +7,7 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_dalek::VerifyingKey;
 use keyhive_core::principal::identifier::Identifier;
 
-/// A peer identifier in the keyhive protocol.
+/// A peer identifier.
 ///
 /// The peer ID is derived from an Ed25519 verifying key with an optional suffix.
 /// The suffix is used to distinguish between multiple connections or roles

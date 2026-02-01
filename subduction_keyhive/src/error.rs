@@ -84,29 +84,6 @@ where
     Keyhive(String),
 }
 
-impl<S, R> ProtocolError<S, R>
-where
-    S: core::error::Error + 'static,
-    R: core::error::Error + 'static,
-{
-    /// Create a send error.
-    #[must_use]
-    pub const fn send(err: S) -> Self {
-        Self::Send(err)
-    }
-
-    /// Create a receive error.
-    #[must_use]
-    pub const fn recv(err: R) -> Self {
-        Self::Recv(err)
-    }
-
-    /// Create a keyhive error from any error.
-    pub fn keyhive<E: core::fmt::Display>(err: E) -> Self {
-        Self::Keyhive(err.to_string())
-    }
-}
-
 /// Errors that can occur during storage operations.
 #[derive(Debug, Error)]
 pub enum StorageError {
