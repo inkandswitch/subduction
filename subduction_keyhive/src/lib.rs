@@ -1,8 +1,4 @@
-//! Keyhive protocol implementation for subduction.
-//!
-//! This crate implements the keyhive sync protocol, which enables peers to
-//! synchronize keyhive operations (delegations, revocations, prekey operations)
-//! in a decentralized manner.
+//! Keyhive sync protocol.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 // keyhive_core uses thiserror 1.x and derivative (syn 1.x)
