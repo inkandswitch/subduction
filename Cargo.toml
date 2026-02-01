@@ -76,6 +76,7 @@ tokio = { version = "1.46", features = ["macros", "net", "rt-multi-thread", "syn
 tokio-test = "0.4.4"
 tokio-util = "0.7.16"
 tracing = { version = "0.1.41", default-features = false }
+tracing-loki = "0.2"
 tracing-subscriber = { version = "0.3.2", default-features = false }
 tungstenite = "0.27"
 url = { version = "2.5", default-features = false }

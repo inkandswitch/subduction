@@ -16,6 +16,7 @@ use std::sync::{
 use subduction_core::peer::id::PeerId;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, util::SubscriberInitExt};
+use url::Url;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -39,22 +40,58 @@ async fn main() -> anyhow::Result<()> {
 fn setup_tracing() {
     let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 
-    // Only enable tokio-console if explicitly requested
-    if std::env::var("TOKIO_CONSOLE").is_ok() {
+    // Build base registry with fmt layer
+    let registry = tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter));
+
+    // Optionally add tokio-console layer
+    let registry = if std::env::var("TOKIO_CONSOLE").is_ok() {
         let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
         let console_layer = console_subscriber::ConsoleLayer::builder()
             .with_default_env()
             .spawn();
-
-        tracing_subscriber::registry()
-            .with(console_layer.with_filter(console_filter))
-            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
-            .init();
+        registry.with(Some(console_layer.with_filter(console_filter)))
     } else {
-        tracing_subscriber::registry()
-            .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter))
-            .init();
+        registry.with(None::<tracing_subscriber::filter::Filtered<_, _, _>>)
+    };
+
+    // Optionally add Loki layer
+    // Set LOKI_URL=http://localhost:3100 to enable
+    if let Ok(loki_url) = std::env::var("LOKI_URL") {
+        match setup_loki(&loki_url) {
+            Ok((loki_layer, loki_task)) => {
+                registry.with(Some(loki_layer)).init();
+                tokio::spawn(loki_task);
+                tracing::info!(loki_url, "Loki tracing enabled");
+            }
+            Err(e) => {
+                registry.with(None::<tracing_loki::Layer>).init();
+                eprintln!("Failed to initialize Loki: {e}");
+            }
+        }
+    } else {
+        registry.with(None::<tracing_loki::Layer>).init();
     }
+}
+
+fn setup_loki(
+    loki_url: &str,
+) -> anyhow::Result<(tracing_loki::Layer, tracing_loki::BackgroundTask)> {
+    let url = Url::parse(loki_url)?;
+
+    let service_name = std::env::var("LOKI_SERVICE_NAME").unwrap_or_else(|_| "subduction".into());
+
+    Ok(tracing_loki::builder()
+        .label("service", service_name)?
+        .label("host", hostname())?
+        .extra_field("pid", std::process::id().to_string())?
+        .build_url(url)?)
+}
+
+fn hostname() -> String {
+    std::env::var("HOSTNAME")
+        .or_else(|_| std::env::var("HOST"))
+        .unwrap_or_else(|_| "unknown".into())
 }
 
 fn setup_signal_handlers() -> CancellationToken {
