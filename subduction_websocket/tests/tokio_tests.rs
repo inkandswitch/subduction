@@ -13,7 +13,7 @@ use sedimentree_core::{
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     Subduction,
-    connection::{Connection, Reconnect, message::Message, nonce_cache::NonceCache},
+    connection::{Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache},
     crypto::signer::MemorySigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
@@ -109,7 +109,7 @@ async fn client_reconnect() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         client_signer,
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await?;
 
@@ -185,7 +185,7 @@ async fn server_graceful_shutdown() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         client_signer.clone(),
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await?;
 
@@ -206,7 +206,7 @@ async fn server_graceful_shutdown() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(1),
         test_signer(2),
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await;
 
@@ -301,7 +301,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             TimeoutTokio,
             Duration::from_secs(5),
             client_signer,
-            server_peer_id,
+            Audience::known(server_peer_id),
         )
         .await?;
 
@@ -464,7 +464,7 @@ async fn request_with_delayed_response() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         client_signer,
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await?;
 
@@ -515,7 +515,7 @@ async fn connection_to_invalid_address() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(1),
         client_signer,
-        fake_server_peer_id,
+        Audience::known(fake_server_peer_id),
     )
     .await;
 
@@ -595,7 +595,7 @@ async fn large_message_handling() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(10),
         client_signer,
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await?;
 
@@ -716,7 +716,7 @@ async fn message_ordering() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         client_signer,
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await?;
 
