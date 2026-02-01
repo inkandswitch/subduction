@@ -85,10 +85,12 @@ impl SignedMessage {
     /// Returns [`VerificationError`] if deserialization, signature verification,
     /// or sender identity check fails.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn verify(self, expected_sender: &KeyhivePeerId) -> Result<VerifiedMessage, VerificationError> {
-        let signed: Signed<Vec<u8>> =
-            ciborium::de::from_reader(self.signed.as_slice())
-                .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+    pub fn verify(
+        self,
+        expected_sender: &KeyhivePeerId,
+    ) -> Result<VerifiedMessage, VerificationError> {
+        let signed: Signed<Vec<u8>> = ciborium::de::from_reader(self.signed.as_slice())
+            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
 
         signed
             .try_verify()

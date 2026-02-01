@@ -375,8 +375,10 @@ where
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
-    use crate::test_utils::{keyhive_peer_id, make_keyhive};
+    use crate::{
+        storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash},
+        test_utils::{keyhive_peer_id, make_keyhive},
+    };
     use futures_kind::Local;
 
     #[tokio::test(flavor = "current_thread")]
@@ -475,9 +477,7 @@ mod tests {
         );
 
         // The consolidated archive should be loadable and deserializable
-        let reloaded = load_archives::<[u8; 32], _, Local>(&storage)
-            .await
-            .unwrap();
+        let reloaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
         assert_eq!(reloaded.len(), 1);
     }
 }
