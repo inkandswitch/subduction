@@ -1857,30 +1857,6 @@ dependencies = [
 [[package]]
 name = "keyhive_core"
 version = "0.2.0-alpha.1"
-dependencies = [
- "bincode",
- "blake3",
- "chacha20poly1305",
- "derivative",
- "derive-where",
- "derive_more",
- "dupe",
- "ed25519-dalek",
- "futures 0.3.31",
- "nonempty 0.10.0",
- "rand 0.8.5",
- "serde",
- "signature",
- "thiserror 1.0.69",
- "topological-sort",
- "tracing",
- "trait-variant",
- "x25519-dalek",
-]
-
-[[package]]
-name = "keyhive_core"
-version = "0.2.0-alpha.1"
 source = "git+https://github.com/inkandswitch/keyhive?branch=main#a46be4928f7d55032e9c410df548ae88e28fb961"
 dependencies = [
  "bincode",
@@ -3184,7 +3160,7 @@ dependencies = [
  "ed25519-dalek",
  "futures 0.3.31",
  "futures_kind",
- "keyhive_core 0.2.0-alpha.1",
+ "keyhive_core",
  "nonempty 0.10.0",
  "rand 0.8.5",
  "serde",
@@ -3200,7 +3176,7 @@ dependencies = [
  "ed25519-dalek",
  "future_form",
  "futures 0.3.31",
- "keyhive_core 0.2.0-alpha.1 (git+https://github.com/inkandswitch/keyhive?branch=main)",
+ "keyhive_core",
  "rand 0.8.5",
  "sedimentree_core",
  "serde",
