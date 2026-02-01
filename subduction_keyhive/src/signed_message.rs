@@ -7,7 +7,11 @@
 use alloc::{string::String, vec::Vec};
 use core::fmt;
 
+#[cfg(all(feature = "serde", feature = "std"))]
+use crate::error::VerificationError;
 use crate::peer_id::KeyhivePeerId;
+#[cfg(all(feature = "serde", feature = "std"))]
+use keyhive_core::crypto::signed::Signed;
 
 /// Error type for CBOR serialization/deserialization.
 #[derive(Debug, Clone)]
@@ -34,14 +38,14 @@ pub struct SignedMessage {
     /// Optional serialized contact card.
     ///
     /// Included when the sender wants to introduce themselves to the recipient,
-    /// typically in the first message or when requested.
-    pub contact_card: Option<Vec<u8>>,
+    /// either in the first message or when requested.
+    contact_card: Option<Vec<u8>>,
 
     /// The signed message payload.
     ///
     /// This contains the actual message data and the cryptographic signature.
     /// The recipient should verify the signature before processing the message.
-    pub signed: Vec<u8>,
+    signed: Vec<u8>,
 }
 
 impl SignedMessage {
@@ -69,16 +73,47 @@ impl SignedMessage {
         self.contact_card.is_some()
     }
 
-    /// Get the contact card bytes, if present.
-    #[must_use]
-    pub fn contact_card(&self) -> Option<&[u8]> {
-        self.contact_card.as_deref()
+    /// Verify the signature and sender identity, consuming the signed message.
+    ///
+    /// Deserializes the inner `Signed<Vec<u8>>`, verifies the cryptographic
+    /// signature, checks that the signer matches `expected_sender`, and returns
+    /// a [`VerifiedMessage`] containing the raw payload bytes and optional
+    /// contact card.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`VerificationError`] if deserialization, signature verification,
+    /// or sender identity check fails.
+    #[cfg(all(feature = "serde", feature = "std"))]
+    pub fn verify(self, expected_sender: &KeyhivePeerId) -> Result<VerifiedMessage, VerificationError> {
+        let signed: Signed<Vec<u8>> =
+            ciborium::de::from_reader(self.signed.as_slice())
+                .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+
+        signed
+            .try_verify()
+            .map_err(|_| VerificationError::InvalidSignature)?;
+
+        let sender_id = KeyhivePeerId::from_bytes(*signed.issuer().as_bytes());
+        if !sender_id.same_identity(expected_sender) {
+            return Err(VerificationError::SenderMismatch {
+                expected: expected_sender.clone(),
+                actual: sender_id,
+            });
+        }
+
+        Ok(VerifiedMessage::new(
+            sender_id,
+            signed.payload().clone(),
+            self.contact_card,
+        ))
     }
 
-    /// Get the signed payload bytes.
-    #[must_use]
-    pub fn signed(&self) -> &[u8] {
-        &self.signed
+    /// Get a mutable reference to the signed bytes (for testing tamper scenarios).
+    #[cfg(test)]
+    #[allow(dead_code)]
+    pub(crate) const fn signed_bytes_mut(&mut self) -> &mut Vec<u8> {
+        &mut self.signed
     }
 
     /// Serialize this message to CBOR bytes.

@@ -28,7 +28,7 @@ pub use connection::KeyhiveConnection;
 pub use error::{ProtocolError, SigningError, StorageError, VerificationError};
 pub use message::Message;
 pub use peer_id::KeyhivePeerId;
-pub use signed_message::SignedMessage;
+pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
 
 #[cfg(feature = "serde")]

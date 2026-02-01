@@ -1,6 +1,6 @@
 //! Error types for the keyhive protocol.
 
-use alloc::string::{String, ToString};
+use alloc::string::String;
 
 use thiserror::Error;
 

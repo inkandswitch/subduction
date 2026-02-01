@@ -90,7 +90,7 @@ pub enum Message {
     /// Send a contact card that was requested.
     ///
     /// Response to `RequestContactCard`. After receiving this, the peer
-    /// will typically initiate a new sync request.
+    /// will initiate a new sync request.
     MissingContactCard {
         /// The peer ID of the sender.
         sender_id: KeyhivePeerId,

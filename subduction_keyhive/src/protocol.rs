@@ -218,11 +218,14 @@ where
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
     ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
-        let (message, contact_card_bytes) = Self::verify_and_decode(from, &signed_msg)?;
+        let verified = signed_msg.verify(from)?;
 
-        if let Some(cc_bytes) = contact_card_bytes {
-            self.ingest_contact_card(&cc_bytes).await?;
+        if let Some(cc_bytes) = &verified.contact_card {
+            self.ingest_contact_card(cc_bytes).await?;
         }
+
+        let message: Message = cbor_deserialize(&verified.payload)
+            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
 
         match &message {
             Message::SyncRequest { .. } => self.handle_sync_request(message).await,
@@ -281,7 +284,7 @@ where
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes = cbor_serialize(event).map_err(ProtocolError::keyhive)?;
+                let bytes = cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
                 found_ops.push(bytes);
             }
         }
@@ -473,35 +476,6 @@ where
         conn.send(signed_message).await.map_err(ProtocolError::Send)
     }
 
-    /// Verify a signed message and decode the inner protocol message.
-    #[allow(clippy::type_complexity)]
-    fn verify_and_decode(
-        from: &KeyhivePeerId,
-        signed_msg: &SignedMessage,
-    ) -> Result<(Message, Option<Vec<u8>>), ProtocolError<Conn::SendError, Conn::RecvError>> {
-        let signed: Signed<Vec<u8>> = cbor_deserialize(&signed_msg.signed)
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
-
-        signed
-            .try_verify()
-            .map_err(|_| VerificationError::InvalidSignature)?;
-
-        // Check that the signer matches the expected sender.
-        let sender_peer_id = KeyhivePeerId::from_bytes(*signed.issuer().as_bytes());
-        if !sender_peer_id.same_identity(from) {
-            return Err(VerificationError::SenderMismatch {
-                expected: from.clone(),
-                actual: sender_peer_id,
-            }
-            .into());
-        }
-
-        let message: Message = cbor_deserialize(signed.payload())
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
-
-        Ok((message, signed_msg.contact_card.clone()))
-    }
-
     /// Get the intersection of event hashes accessible to both us and a peer.
     ///
     /// Returns `None` if the peer is unknown (no agent found in keyhive).
@@ -515,8 +489,8 @@ where
         let our_id = self
             .peer_id
             .to_identifier()
-            .map_err(ProtocolError::keyhive)?;
-        let their_id = peer_id.to_identifier().map_err(ProtocolError::keyhive)?;
+            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+        let their_id = peer_id.to_identifier().map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
 
         let keyhive = self.keyhive.lock().await;
 
@@ -559,7 +533,7 @@ where
         let peer_id = self
             .peer_id
             .to_identifier()
-            .map_err(ProtocolError::keyhive)?;
+            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
 
         let keyhive = self.keyhive.lock().await;
 
@@ -573,7 +547,7 @@ where
         for (digest, event) in &events {
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
-                let bytes = cbor_serialize(event).map_err(ProtocolError::keyhive)?;
+                let bytes = cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
                 result.push(bytes);
             }
         }
@@ -593,7 +567,7 @@ where
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
             .collect::<Result<_, _>>()
-            .map_err(ProtocolError::keyhive)?;
+            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
 
         let pending = {
             let keyhive = self.keyhive.lock().await;
@@ -661,13 +635,13 @@ where
         cc_bytes: &[u8],
     ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
         let contact_card: ContactCard =
-            cbor_deserialize(cc_bytes).map_err(ProtocolError::keyhive)?;
+            cbor_deserialize(cc_bytes).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
 
         let keyhive = self.keyhive.lock().await;
         keyhive
             .receive_contact_card(&contact_card)
             .await
-            .map_err(ProtocolError::keyhive)?;
+            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
 
         tracing::debug!("ingested contact card");
         Ok(())
@@ -815,8 +789,8 @@ mod tests {
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
 
         // Verify and decode
-        let (decoded_msg, contact_card) =
-            TestProtocol::verify_and_decode(&peer_id, &signed_msg).unwrap();
+        let verified = signed_msg.verify(&peer_id).unwrap();
+        let decoded_msg: Message = cbor_deserialize(&verified.payload).unwrap();
 
         // The decoded message should match
         assert!(matches!(decoded_msg, Message::RequestContactCard { .. }));
@@ -824,7 +798,7 @@ mod tests {
         assert_eq!(decoded_msg.target_id(), &other_id);
 
         // Contact card should be present since we set include_contact_card=true
-        assert!(contact_card.is_some());
+        assert!(verified.contact_card.is_some());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -848,12 +822,12 @@ mod tests {
 
         // Try to verify as if it came from the wrong sender
         let wrong_sender = keyhive_peer_id(&make_keyhive().await);
-        let result = TestProtocol::verify_and_decode(&wrong_sender, &signed_msg);
+        let result = signed_msg.verify(&wrong_sender);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            matches!(err, ProtocolError::Verification(crate::error::VerificationError::SenderMismatch { .. })),
+            matches!(err, crate::error::VerificationError::SenderMismatch { .. }),
             "expected SenderMismatch, got: {err:?}"
         );
     }
@@ -878,11 +852,11 @@ mod tests {
         let mut signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
 
         // Tamper with the signed bytes
-        if let Some(byte) = signed_msg.signed.last_mut() {
+        if let Some(byte) = signed_msg.signed_bytes_mut().last_mut() {
             *byte ^= 0xFF;
         }
 
-        let result = TestProtocol::verify_and_decode(&peer_id, &signed_msg);
+        let result = signed_msg.verify(&peer_id);
         assert!(result.is_err(), "tampered message should fail verification");
     }
 
@@ -926,11 +900,12 @@ mod tests {
 
         // Verify we got a RequestContactCard
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
-        let (decoded, cc) = TestProtocol::verify_and_decode(&peer_id, &signed_msg).unwrap();
+        let verified = signed_msg.verify(&peer_id).unwrap();
+        let decoded: Message = cbor_deserialize(&verified.payload).unwrap();
 
         assert!(matches!(decoded, Message::RequestContactCard { .. }));
         // Should include our contact card so the peer can learn about us
-        assert!(cc.is_some());
+        assert!(verified.contact_card.is_some());
     }
 
     #[tokio::test(flavor = "current_thread")]
@@ -953,7 +928,8 @@ mod tests {
         // Alice should have sent RequestContactCard
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
 
-        let (decoded1, _) = TestProtocol::verify_and_decode(&alice_id, &signed_msg1).unwrap();
+        let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
+        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
         assert!(
             matches!(decoded1, Message::RequestContactCard { .. }),
             "alice should request bob's contact card"
@@ -965,13 +941,14 @@ mod tests {
         // Bob should have sent MissingContactCard back
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
 
-        let (decoded2, cc2) = TestProtocol::verify_and_decode(&bob_id, &signed_msg2).unwrap();
+        let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
+        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
         assert!(
             matches!(decoded2, Message::MissingContactCard { .. }),
             "bob should respond with MissingContactCard"
         );
         // Bob's response should include his contact card
-        assert!(cc2.is_some(), "bob's response should include contact card");
+        assert!(verified2.contact_card.is_some(), "bob's response should include contact card");
 
         // Alice handles Bob's MissingContactCard (which includes Bob's contact card)
         // This should trigger Alice to initiate a sync
@@ -980,7 +957,8 @@ mod tests {
         // Alice should now have sent either a SyncRequest or another RequestContactCard
         // to Bob (depending on whether she successfully ingested Bob's CC)
         let signed_msg3 = bob_conn.inbound_rx.recv().await.unwrap();
-        let (decoded3, _) = TestProtocol::verify_and_decode(&alice_id, &signed_msg3).unwrap();
+        let verified3 = signed_msg3.verify(&alice_id).unwrap();
+        let decoded3: Message = cbor_deserialize(&verified3.payload).unwrap();
 
         // After ingesting Bob's contact card, Alice should send a SyncRequest
         assert!(
@@ -1014,7 +992,8 @@ mod tests {
 
         // Read Alice's SyncRequest from the channel
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
-        let (decoded1, _) = TestProtocol::verify_and_decode(&alice_id, &signed_msg1).unwrap();
+        let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
+        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
 
         assert!(
             matches!(decoded1, Message::SyncRequest { .. }),
@@ -1026,7 +1005,8 @@ mod tests {
 
         // Bob should respond with SyncResponse
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
-        let (decoded2, _) = TestProtocol::verify_and_decode(&bob_id, &signed_msg2).unwrap();
+        let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
+        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
 
         assert!(
             matches!(decoded2, Message::SyncResponse { .. }),
