@@ -284,7 +284,8 @@ where
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes = cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+                let bytes =
+                    cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
                 found_ops.push(bytes);
             }
         }
@@ -490,7 +491,9 @@ where
             .peer_id
             .to_identifier()
             .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
-        let their_id = peer_id.to_identifier().map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+        let their_id = peer_id
+            .to_identifier()
+            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
 
         let keyhive = self.keyhive.lock().await;
 
@@ -547,7 +550,8 @@ where
         for (digest, event) in &events {
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
-                let bytes = cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+                let bytes =
+                    cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
                 result.push(bytes);
             }
         }
@@ -733,19 +737,17 @@ const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {
 }
 
 #[cfg(test)]
-#[allow(
-    clippy::expect_used,
-    clippy::unwrap_used,
-    clippy::indexing_slicing
-)]
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
-    use crate::storage::MemoryKeyhiveStorage;
-    use crate::test_utils::{
-        TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
-        exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
-        make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
-        serialize_contact_card,
+    use crate::{
+        storage::MemoryKeyhiveStorage,
+        test_utils::{
+            TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
+            exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
+            make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
+            serialize_contact_card,
+        },
     };
     use futures_kind::Local;
     use keyhive_core::{
@@ -783,7 +785,10 @@ mod tests {
             sender_id: peer_id.clone(),
             target_id: other_id.clone(),
         };
-        protocol.sign_and_send(&other_id, message, true).await.unwrap();
+        protocol
+            .sign_and_send(&other_id, message, true)
+            .await
+            .unwrap();
 
         // Read the signed message from the channel
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
@@ -816,7 +821,10 @@ mod tests {
             sender_id: peer_id.clone(),
             target_id: other_id.clone(),
         };
-        protocol.sign_and_send(&other_id, message, false).await.unwrap();
+        protocol
+            .sign_and_send(&other_id, message, false)
+            .await
+            .unwrap();
 
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
 
@@ -847,7 +855,10 @@ mod tests {
             sender_id: peer_id.clone(),
             target_id: other_id.clone(),
         };
-        protocol.sign_and_send(&other_id, message, false).await.unwrap();
+        protocol
+            .sign_and_send(&other_id, message, false)
+            .await
+            .unwrap();
 
         let mut signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
 
@@ -919,7 +930,9 @@ mod tests {
 
         // Set up channels
         let (alice_conn, bob_conn) = create_channel_pair(alice_id.clone(), &bob_id);
-        alice_proto.add_peer(bob_id.clone(), alice_conn.clone()).await;
+        alice_proto
+            .add_peer(bob_id.clone(), alice_conn.clone())
+            .await;
         bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
 
         // Alice tries to sync with Bob (she doesn't know him)
@@ -936,7 +949,10 @@ mod tests {
         );
 
         // Bob handles alice's RequestContactCard
-        bob_proto.handle_message(&alice_id, signed_msg1).await.unwrap();
+        bob_proto
+            .handle_message(&alice_id, signed_msg1)
+            .await
+            .unwrap();
 
         // Bob should have sent MissingContactCard back
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
@@ -948,11 +964,17 @@ mod tests {
             "bob should respond with MissingContactCard"
         );
         // Bob's response should include his contact card
-        assert!(verified2.contact_card.is_some(), "bob's response should include contact card");
+        assert!(
+            verified2.contact_card.is_some(),
+            "bob's response should include contact card"
+        );
 
         // Alice handles Bob's MissingContactCard (which includes Bob's contact card)
         // This should trigger Alice to initiate a sync
-        alice_proto.handle_message(&bob_id, signed_msg2).await.unwrap();
+        alice_proto
+            .handle_message(&bob_id, signed_msg2)
+            .await
+            .unwrap();
 
         // Alice should now have sent either a SyncRequest or another RequestContactCard
         // to Bob (depending on whether she successfully ingested Bob's CC)
@@ -984,7 +1006,9 @@ mod tests {
 
         // Set up channels
         let (alice_conn, bob_conn) = create_channel_pair(alice_id.clone(), &bob_id);
-        alice_proto.add_peer(bob_id.clone(), alice_conn.clone()).await;
+        alice_proto
+            .add_peer(bob_id.clone(), alice_conn.clone())
+            .await;
         bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
 
         // Alice initiates sync
@@ -1001,7 +1025,10 @@ mod tests {
         );
 
         // Bob handles the SyncRequest
-        bob_proto.handle_message(&alice_id, signed_msg1).await.unwrap();
+        bob_proto
+            .handle_message(&alice_id, signed_msg1)
+            .await
+            .unwrap();
 
         // Bob should respond with SyncResponse
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
@@ -1014,7 +1041,10 @@ mod tests {
         );
 
         // Alice handles the SyncResponse
-        alice_proto.handle_message(&bob_id, signed_msg2).await.unwrap();
+        alice_proto
+            .handle_message(&bob_id, signed_msg2)
+            .await
+            .unwrap();
 
         // Depending on set differences, Alice might send SyncOps or nothing
         // At minimum, the protocol should complete without errors
@@ -1059,7 +1089,9 @@ mod tests {
             bob_cc_bytes,
         );
 
-        alice_proto.add_peer(bob_id.clone(), alice_conn.clone()).await;
+        alice_proto
+            .add_peer(bob_id.clone(), alice_conn.clone())
+            .await;
         bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
 
         // Alice → Bob sync
@@ -1070,11 +1102,17 @@ mod tests {
         let b_to_a_rx = alice_conn.inbound_rx.clone();
 
         let sync_request = a_to_b_rx.recv().await.unwrap();
-        bob_proto.handle_message(&alice_id, sync_request).await.unwrap();
+        bob_proto
+            .handle_message(&alice_id, sync_request)
+            .await
+            .unwrap();
 
         // Forward SyncResponse to Alice
         let sync_response = b_to_a_rx.recv().await.unwrap();
-        alice_proto.handle_message(&bob_id, sync_response).await.unwrap();
+        alice_proto
+            .handle_message(&bob_id, sync_response)
+            .await
+            .unwrap();
 
         // If Alice sent SyncOps, forward those too
         if let Ok(sync_ops) = a_to_b_rx.try_recv() {
@@ -1085,13 +1123,22 @@ mod tests {
         bob_proto.sync_keyhive(Some(&alice_id)).await.unwrap();
 
         let sync_request2 = b_to_a_rx.recv().await.unwrap();
-        alice_proto.handle_message(&bob_id, sync_request2).await.unwrap();
+        alice_proto
+            .handle_message(&bob_id, sync_request2)
+            .await
+            .unwrap();
 
         let sync_response2 = a_to_b_rx.recv().await.unwrap();
-        bob_proto.handle_message(&alice_id, sync_response2).await.unwrap();
+        bob_proto
+            .handle_message(&alice_id, sync_response2)
+            .await
+            .unwrap();
 
         if let Ok(sync_ops2) = b_to_a_rx.try_recv() {
-            alice_proto.handle_message(&bob_id, sync_ops2).await.unwrap();
+            alice_proto
+                .handle_message(&bob_id, sync_ops2)
+                .await
+                .unwrap();
         }
 
         // After bidirectional sync, both should have the same pending state
@@ -1227,8 +1274,10 @@ mod tests {
         // Before sync: Bob should not have the group
         {
             let kh = bob_kh.lock().await;
-            assert!(kh.get_group(group_id).await.is_none(),
-                "Bob should not have the group before sync");
+            assert!(
+                kh.get_group(group_id).await.is_none(),
+                "Bob should not have the group before sync"
+            );
         }
 
         // Sync Alice → Bob
@@ -1303,8 +1352,10 @@ mod tests {
         // Before sync: Bob should not have the document
         {
             let kh = bob_kh.lock().await;
-            assert!(kh.get_document(doc_id).await.is_none(),
-                "Bob should not have the document before sync");
+            assert!(
+                kh.get_document(doc_id).await.is_none(),
+                "Bob should not have the document before sync"
+            );
         }
 
         // Sync Alice → Bob
@@ -1322,10 +1373,7 @@ mod tests {
         {
             let kh = bob_kh.lock().await;
             let doc = kh.get_document(doc_id).await;
-            assert!(
-                doc.is_some(),
-                "Bob should have the document after sync"
-            );
+            assert!(doc.is_some(), "Bob should have the document after sync");
 
             let reachable = kh.reachable_docs().await;
             assert!(
@@ -1364,25 +1412,37 @@ mod tests {
         {
             let alice = alice_kh.lock().await;
             assert!(alice.get_group(alice_group_id).await.is_some());
-            assert!(alice.get_group(bob_group_id).await.is_none(),
-                "Alice should not have Bob's group before sync");
+            assert!(
+                alice.get_group(bob_group_id).await.is_none(),
+                "Alice should not have Bob's group before sync"
+            );
         }
         {
             let bob = bob_kh.lock().await;
             assert!(bob.get_group(bob_group_id).await.is_some());
-            assert!(bob.get_group(alice_group_id).await.is_none(),
-                "Bob should not have Alice's group before sync");
+            assert!(
+                bob.get_group(alice_group_id).await.is_none(),
+                "Bob should not have Alice's group before sync"
+            );
         }
 
         // Bidirectional sync: Alice → Bob, then Bob → Alice
         run_sync_round(
-            &alice_proto, &bob_proto, &alice_id, &bob_id,
-            &alice_conn, &bob_conn,
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &alice_conn,
+            &bob_conn,
         )
         .await;
         run_sync_round(
-            &bob_proto, &alice_proto, &bob_id, &alice_id,
-            &bob_conn, &alice_conn,
+            &bob_proto,
+            &alice_proto,
+            &bob_id,
+            &alice_id,
+            &bob_conn,
+            &alice_conn,
         )
         .await;
 
@@ -1403,13 +1463,22 @@ mod tests {
             let alice = alice_kh.lock().await;
             let bob = bob_kh.lock().await;
 
-            let alice_self = alice.get_agent(alice_id.to_identifier().unwrap()).await.unwrap();
-            let bob_self = bob.get_agent(bob_id.to_identifier().unwrap()).await.unwrap();
+            let alice_self = alice
+                .get_agent(alice_id.to_identifier().unwrap())
+                .await
+                .unwrap();
+            let bob_self = bob
+                .get_agent(bob_id.to_identifier().unwrap())
+                .await
+                .unwrap();
 
             let alice_ops = alice.membership_ops_for_agent(&alice_self).await;
             let bob_ops = bob.membership_ops_for_agent(&bob_self).await;
-            assert_eq!(alice_ops.len(), bob_ops.len(),
-                "membership op counts should match after bidirectional sync");
+            assert_eq!(
+                alice_ops.len(),
+                bob_ops.len(),
+                "membership op counts should match after bidirectional sync"
+            );
         }
 
         // Verify pending state is empty
@@ -1458,8 +1527,10 @@ mod tests {
         // Before first sync: Bob should not have the group
         {
             let kh = bob_kh.lock().await;
-            assert!(kh.get_group(group_id).await.is_none(),
-                "Bob should not have the group before sync");
+            assert!(
+                kh.get_group(group_id).await.is_none(),
+                "Bob should not have the group before sync"
+            );
         }
 
         // First sync: Alice → Bob — Bob gets the group
@@ -1476,8 +1547,10 @@ mod tests {
         // Bob should now have the group, but no revocations yet
         {
             let kh = bob_kh.lock().await;
-            assert!(kh.get_group(group_id).await.is_some(),
-                "Bob should have the group after first sync");
+            assert!(
+                kh.get_group(group_id).await.is_some(),
+                "Bob should have the group after first sync"
+            );
 
             let bob_identifier = bob_id.to_identifier().unwrap();
             let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
@@ -1485,8 +1558,10 @@ mod tests {
             let revocations = Membered::Group(group_id, group)
                 .get_agent_revocations(&bob_agent)
                 .await;
-            assert!(revocations.is_empty(),
-                "Bob should have no revocations before Alice revokes");
+            assert!(
+                revocations.is_empty(),
+                "Bob should have no revocations before Alice revokes"
+            );
         }
 
         // Alice revokes Bob from the group
@@ -1495,13 +1570,9 @@ mod tests {
             let group = kh.get_group(group_id).await.unwrap();
             let bob_identifier = bob_id.to_identifier().unwrap();
 
-            kh.revoke_member(
-                bob_identifier,
-                true,
-                &Membered::Group(group_id, group),
-            )
-            .await
-            .unwrap();
+            kh.revoke_member(bob_identifier, true, &Membered::Group(group_id, group))
+                .await
+                .unwrap();
         };
 
         // Second sync: Alice → Bob — Bob receives the revocation
@@ -1545,20 +1616,25 @@ mod tests {
         let bob_id = keyhive_peer_id(&bob_keyhive);
         let carol_id = keyhive_peer_id(&carol_keyhive);
 
-        let (alice_proto, alice_kh, _) =
-            make_protocol_with_shared_keyhive(alice_keyhive).await;
-        let (bob_proto, bob_kh, _) =
-            make_protocol_with_shared_keyhive(bob_keyhive).await;
-        let (carol_proto, carol_kh, _) =
-            make_protocol_with_shared_keyhive(carol_keyhive).await;
+        let (alice_proto, alice_kh, _) = make_protocol_with_shared_keyhive(alice_keyhive).await;
+        let (bob_proto, bob_kh, _) = make_protocol_with_shared_keyhive(bob_keyhive).await;
+        let (carol_proto, carol_kh, _) = make_protocol_with_shared_keyhive(carol_keyhive).await;
 
         let (ab_conn_a, ab_conn_b) = create_channel_pair(alice_id.clone(), &bob_id);
         let (bc_conn_b, bc_conn_c) = create_channel_pair(bob_id.clone(), &carol_id);
 
-        alice_proto.add_peer(bob_id.clone(), ab_conn_a.clone()).await;
-        bob_proto.add_peer(alice_id.clone(), ab_conn_b.clone()).await;
-        bob_proto.add_peer(carol_id.clone(), bc_conn_b.clone()).await;
-        carol_proto.add_peer(bob_id.clone(), bc_conn_c.clone()).await;
+        alice_proto
+            .add_peer(bob_id.clone(), ab_conn_a.clone())
+            .await;
+        bob_proto
+            .add_peer(alice_id.clone(), ab_conn_b.clone())
+            .await;
+        bob_proto
+            .add_peer(carol_id.clone(), bc_conn_b.clone())
+            .await;
+        carol_proto
+            .add_peer(bob_id.clone(), bc_conn_c.clone())
+            .await;
 
         // Alice creates a group and adds Bob and Carol
         let group_id = {
@@ -1569,38 +1645,54 @@ mod tests {
         // Before any sync: neither Bob nor Carol has the group
         {
             let kh = bob_kh.lock().await;
-            assert!(kh.get_group(group_id).await.is_none(),
-                "Bob should not have the group before sync");
+            assert!(
+                kh.get_group(group_id).await.is_none(),
+                "Bob should not have the group before sync"
+            );
         }
         {
             let kh = carol_kh.lock().await;
-            assert!(kh.get_group(group_id).await.is_none(),
-                "Carol should not have the group before sync");
+            assert!(
+                kh.get_group(group_id).await.is_none(),
+                "Carol should not have the group before sync"
+            );
         }
 
         // Alice syncs to Bob only
         run_sync_round(
-            &alice_proto, &bob_proto, &alice_id, &bob_id,
-            &ab_conn_a, &ab_conn_b,
+            &alice_proto,
+            &bob_proto,
+            &alice_id,
+            &bob_id,
+            &ab_conn_a,
+            &ab_conn_b,
         )
         .await;
 
         {
             let kh = bob_kh.lock().await;
-            assert!(kh.get_group(group_id).await.is_some(),
-                "Bob should have the group after Alice→Bob sync");
+            assert!(
+                kh.get_group(group_id).await.is_some(),
+                "Bob should have the group after Alice→Bob sync"
+            );
         }
         // Carol still shouldn't have it
         {
             let kh = carol_kh.lock().await;
-            assert!(kh.get_group(group_id).await.is_none(),
-                "Carol should not have the group before Bob→Carol sync");
+            assert!(
+                kh.get_group(group_id).await.is_none(),
+                "Carol should not have the group before Bob→Carol sync"
+            );
         }
 
         // Bob syncs to Carol
         run_sync_round(
-            &bob_proto, &carol_proto, &bob_id, &carol_id,
-            &bc_conn_b, &bc_conn_c,
+            &bob_proto,
+            &carol_proto,
+            &bob_id,
+            &carol_id,
+            &bc_conn_b,
+            &bc_conn_c,
         )
         .await;
 
@@ -1608,15 +1700,19 @@ mod tests {
         {
             let kh = carol_kh.lock().await;
             let group = kh.get_group(group_id).await;
-            assert!(group.is_some(),
-                "Carol should have the group after transitive sync");
+            assert!(
+                group.is_some(),
+                "Carol should have the group after transitive sync"
+            );
 
             let carol_identifier = carol_id.to_identifier().unwrap();
             let members = kh
                 .reachable_members(Membered::Group(group_id, group.unwrap()))
                 .await;
-            assert!(members.contains_key(&carol_identifier),
-                "Carol should be a member of the group");
+            assert!(
+                members.contains_key(&carol_identifier),
+                "Carol should be a member of the group"
+            );
         }
     }
 }

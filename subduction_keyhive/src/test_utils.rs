@@ -4,8 +4,7 @@ use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
-use futures::FutureExt;
-use futures::future::LocalBoxFuture;
+use futures::{FutureExt, future::LocalBoxFuture};
 use futures_kind::Local;
 use keyhive_core::{
     access::Access,
@@ -18,11 +17,8 @@ use keyhive_core::{
 use rand::rngs::OsRng;
 
 use crate::{
-    connection::KeyhiveConnection,
-    peer_id::KeyhivePeerId,
-    protocol::KeyhiveProtocol,
-    signed_message::SignedMessage,
-    storage::MemoryKeyhiveStorage,
+    connection::KeyhiveConnection, peer_id::KeyhivePeerId, protocol::KeyhiveProtocol,
+    signed_message::SignedMessage, storage::MemoryKeyhiveStorage,
 };
 
 /// Type alias for the simple keyhive type used in tests.
@@ -109,12 +105,7 @@ impl KeyhiveConnection<Local> for ChannelConnection {
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<SignedMessage, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
-        async move {
-            rx.recv()
-                .await
-                .map_err(|e| ChannelError(e.to_string()))
-        }
-        .boxed_local()
+        async move { rx.recv().await.map_err(|e| ChannelError(e.to_string())) }.boxed_local()
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectError>> {
@@ -169,7 +160,11 @@ pub(crate) type TestProtocol = KeyhiveProtocol<
 /// protocol.
 pub(crate) async fn make_protocol_with_shared_keyhive(
     keyhive: SimpleKeyhive,
-) -> (TestProtocol, Arc<Mutex<SimpleKeyhive>>, MemoryKeyhiveStorage) {
+) -> (
+    TestProtocol,
+    Arc<Mutex<SimpleKeyhive>>,
+    MemoryKeyhiveStorage,
+) {
     let peer_id = keyhive_peer_id(&keyhive);
     let cc = keyhive
         .contact_card()
@@ -273,10 +268,7 @@ pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
         .contact_card()
         .await
         .expect("alice contact card");
-    let bob_cc = bob_keyhive
-        .contact_card()
-        .await
-        .expect("bob contact card");
+    let bob_cc = bob_keyhive.contact_card().await.expect("bob contact card");
     alice_keyhive
         .receive_contact_card(&bob_cc)
         .await
@@ -297,9 +289,7 @@ pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
     alice_proto
         .add_peer(bob_id.clone(), alice_conn.clone())
         .await;
-    bob_proto
-        .add_peer(alice_id.clone(), bob_conn.clone())
-        .await;
+    bob_proto.add_peer(alice_id.clone(), bob_conn.clone()).await;
 
     TwoPeerHarness {
         alice_proto,
