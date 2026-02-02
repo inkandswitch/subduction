@@ -47,34 +47,47 @@ fn setup_tracing() {
         .with(tracing_subscriber::fmt::layer().with_filter(fmt_filter));
 
     // Optionally add tokio-console layer
-    let registry = if std::env::var("TOKIO_CONSOLE").is_ok() {
+    let console_layer = if std::env::var("TOKIO_CONSOLE").is_ok() {
         let console_filter = EnvFilter::new("tokio=trace,runtime=trace");
-        let console_layer = console_subscriber::ConsoleLayer::builder()
+        let layer = console_subscriber::ConsoleLayer::builder()
             .with_default_env()
             .spawn();
-        registry.with(Some(console_layer.with_filter(console_filter)))
+        Some(layer.with_filter(console_filter))
     } else {
-        registry.with(None::<tracing_subscriber::filter::Filtered<_, _, _>>)
+        None
     };
 
-    // Optionally add Loki layer
+    // Optionally add Loki layer (native-tls only)
     // Set LOKI_URL=http://localhost:3100 to enable
     #[cfg(feature = "native-tls")]
-    if let Ok(loki_url) = std::env::var("LOKI_URL") {
-        match setup_loki(&loki_url) {
-            Ok((loki_layer, loki_task)) => {
-                registry.with(Some(loki_layer)).init();
-                tokio::spawn(loki_task);
-                tracing::info!(loki_url, "Loki tracing enabled");
-                return;
+    let (loki_layer, loki_task) = match std::env::var("LOKI_URL") {
+        Ok(loki_url) => match setup_loki(&loki_url) {
+            Ok((layer, task)) => {
+                eprintln!("Loki tracing enabled: {loki_url}");
+                (Some(layer), Some(task))
             }
             Err(e) => {
                 eprintln!("Failed to initialize Loki: {e}");
+                (None, None)
             }
-        }
-    }
+        },
+        Err(_) => (None, None),
+    };
 
-    registry.with(None::<tracing_subscriber::layer::Identity>).init();
+    #[cfg(not(feature = "native-tls"))]
+    let loki_layer: Option<tracing_subscriber::layer::Identity> = None;
+
+    // Initialize with all layers
+    registry
+        .with(console_layer)
+        .with(loki_layer)
+        .init();
+
+    // Spawn Loki background task after subscriber is initialized
+    #[cfg(feature = "native-tls")]
+    if let Some(task) = loki_task {
+        tokio::spawn(task);
+    }
 }
 
 #[cfg(feature = "native-tls")]
