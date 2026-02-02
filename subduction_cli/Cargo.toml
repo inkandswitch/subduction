@@ -38,7 +38,7 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true, default-features = true }
-tracing-loki = { workspace = true }
+tracing-loki = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, default-features = true }
 tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
@@ -49,6 +49,7 @@ native-tls = [
   "async-tungstenite/tokio-native-tls",
   "subduction_websocket/tokio_client",
   "subduction_websocket/tokio_server",
+  "dep:tracing-loki",
 ]
 rustls = [
   "async-tungstenite/tokio-rustls-native-certs",

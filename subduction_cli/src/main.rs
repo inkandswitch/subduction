@@ -16,6 +16,8 @@ use std::sync::{
 use subduction_core::peer::id::PeerId;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, util::SubscriberInitExt};
+
+#[cfg(feature = "native-tls")]
 use url::Url;
 
 #[tokio::main]
@@ -57,23 +59,25 @@ fn setup_tracing() {
 
     // Optionally add Loki layer
     // Set LOKI_URL=http://localhost:3100 to enable
+    #[cfg(feature = "native-tls")]
     if let Ok(loki_url) = std::env::var("LOKI_URL") {
         match setup_loki(&loki_url) {
             Ok((loki_layer, loki_task)) => {
                 registry.with(Some(loki_layer)).init();
                 tokio::spawn(loki_task);
                 tracing::info!(loki_url, "Loki tracing enabled");
+                return;
             }
             Err(e) => {
-                registry.with(None::<tracing_loki::Layer>).init();
                 eprintln!("Failed to initialize Loki: {e}");
             }
         }
-    } else {
-        registry.with(None::<tracing_loki::Layer>).init();
     }
+
+    registry.with(None::<tracing_subscriber::layer::Identity>).init();
 }
 
+#[cfg(feature = "native-tls")]
 fn setup_loki(
     loki_url: &str,
 ) -> anyhow::Result<(tracing_loki::Layer, tracing_loki::BackgroundTask)> {
@@ -88,6 +92,7 @@ fn setup_loki(
         .build_url(url)?)
 }
 
+#[cfg(feature = "native-tls")]
 fn hostname() -> String {
     std::env::var("HOSTNAME")
         .or_else(|_| std::env::var("HOST"))
