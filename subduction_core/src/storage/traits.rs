@@ -168,6 +168,14 @@ pub trait Storage<K: FutureForm + ?Sized> {
         blob_digest: Digest<Blob>,
     ) -> K::Future<'_, Result<Option<Blob>, Self::Error>>;
 
+    /// Load blobs by their digests.
+    ///
+    /// Returns only the blobs that were found. Missing digests are silently skipped.
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>>;
+
     /// Delete a blob by its digest.
     fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>>;
 

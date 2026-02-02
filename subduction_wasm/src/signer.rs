@@ -7,8 +7,6 @@
 
 pub mod webcrypto;
 
-pub use webcrypto::WebCryptoSigner;
-
 use alloc::vec::Vec;
 
 use ed25519_dalek::{Signature, VerifyingKey};

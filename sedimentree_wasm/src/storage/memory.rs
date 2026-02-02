@@ -8,7 +8,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     crypto::signed::Signed,
-    storage::{MemoryStorage as CoreMemoryStorage, Storage},
+    storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage},
 };
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;

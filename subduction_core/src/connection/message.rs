@@ -3,7 +3,11 @@
 use alloc::vec::Vec;
 
 use sedimentree_core::{
-    blob::Blob, digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
+    blob::Blob,
+    digest::Digest,
+    fragment::{Fragment, FragmentSummary},
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
     sedimentree::SedimentreeSummary,
 };
 
@@ -207,18 +211,113 @@ pub struct RequestId {
     pub nonce: u64,
 }
 
-/// The calculated difference for the remote peer.
+/// The calculated difference between two peers.
+///
+/// Contains both:
+/// - Data to send to the requestor (`missing_commits`, `missing_fragments`)
+/// - Data the responder is requesting back (`requesting`)
 #[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SyncDiff {
-    /// Commits that we are missing and need to request from the peer.
+    /// Commits the requestor is missing (responder sends these).
     #[n(0)]
     pub missing_commits: Vec<(Signed<LooseCommit>, Blob)>,
 
-    /// Fragments that we are missing and need to request from the peer.
+    /// Fragments the requestor is missing (responder sends these).
     #[n(1)]
     pub missing_fragments: Vec<(Signed<Fragment>, Blob)>,
+
+    /// Data the responder is requesting from the requestor.
+    ///
+    /// The requestor should send these commits and fragments back
+    /// as individual [`Message::LooseCommit`] and [`Message::Fragment`] messages.
+    #[n(2)]
+    pub requesting: RequestedData,
+}
+
+/// Data that the responder is requesting from the requestor.
+///
+/// After receiving a [`BatchSyncResponse`], the requestor should send back
+/// the commits and fragments identified here (fire-and-forget).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct RequestedData {
+    /// Digests of commits the responder needs from the requestor.
+    #[n(0)]
+    pub commit_digests: Vec<Digest<LooseCommit>>,
+
+    /// Summaries of fragments the responder needs from the requestor.
+    ///
+    /// Uses [`FragmentSummary`] rather than [`Digest<Fragment>`] because the
+    /// requestor's [`SedimentreeSummary`] only contains summaries, not full digests.
+    /// The requestor matches these against their stored fragments.
+    #[n(1)]
+    pub fragment_summaries: Vec<FragmentSummary>,
+}
+
+impl RequestedData {
+    /// Returns `true` if there is no data being requested.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.commit_digests.is_empty() && self.fragment_summaries.is_empty()
+    }
+}
+
+/// Statistics from a sync operation.
+///
+/// Tracks how many commits and fragments were sent and received during a sync.
+/// The "sent" counts reflect items that were _successfully_ sent over the wire,
+/// not just items that were requested.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SyncStats {
+    /// Number of commits received from the peer.
+    pub commits_received: usize,
+
+    /// Number of fragments received from the peer.
+    pub fragments_received: usize,
+
+    /// Number of commits successfully sent to the peer.
+    pub commits_sent: usize,
+
+    /// Number of fragments successfully sent to the peer.
+    pub fragments_sent: usize,
+}
+
+impl SyncStats {
+    /// Create stats with zero counts.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            commits_received: 0,
+            fragments_received: 0,
+            commits_sent: 0,
+            fragments_sent: 0,
+        }
+    }
+
+    /// Total items received (commits + fragments).
+    #[must_use]
+    pub const fn total_received(&self) -> usize {
+        self.commits_received + self.fragments_received
+    }
+
+    /// Total items sent (commits + fragments).
+    #[must_use]
+    pub const fn total_sent(&self) -> usize {
+        self.commits_sent + self.fragments_sent
+    }
+
+    /// Returns true if no data was exchanged.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.commits_received == 0
+            && self.fragments_received == 0
+            && self.commits_sent == 0
+            && self.fragments_sent == 0
+    }
 }
 
 #[cfg(test)]
@@ -313,6 +412,10 @@ mod tests {
                 diff: SyncDiff {
                     missing_commits: Vec::new(),
                     missing_fragments: Vec::new(),
+                    requesting: RequestedData {
+                        commit_digests: Vec::new(),
+                        fragment_summaries: Vec::new(),
+                    },
                 },
             });
             assert_eq!(msg.request_id(), Some(req_id));
@@ -414,6 +517,10 @@ mod tests {
                 diff: SyncDiff {
                     missing_commits: Vec::new(),
                     missing_fragments: Vec::new(),
+                    requesting: RequestedData {
+                        commit_digests: Vec::new(),
+                        fragment_summaries: Vec::new(),
+                    },
                 },
             };
 
@@ -449,10 +556,15 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
                 missing_fragments: Vec::new(),
+                requesting: RequestedData {
+                    commit_digests: Vec::new(),
+                    fragment_summaries: Vec::new(),
+                },
             };
 
             assert_eq!(diff.missing_commits.len(), 0);
             assert_eq!(diff.missing_fragments.len(), 0);
+            assert!(diff.requesting.is_empty());
         }
 
         #[tokio::test]
@@ -471,6 +583,10 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: vec![(signed_commit.clone(), blob.clone())],
                 missing_fragments: Vec::new(),
+                requesting: RequestedData {
+                    commit_digests: Vec::new(),
+                    fragment_summaries: Vec::new(),
+                },
             };
 
             assert_eq!(diff.missing_commits.len(), 1);
@@ -498,6 +614,10 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
                 missing_fragments: vec![(signed_fragment, blob)],
+                requesting: RequestedData {
+                    commit_digests: Vec::new(),
+                    fragment_summaries: Vec::new(),
+                },
             };
 
             assert_eq!(diff.missing_fragments.len(), 1);

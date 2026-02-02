@@ -1,14 +1,15 @@
 //! WebSocket server for Subduction.
 
-use crate::{fs_storage::FsStorage, metrics};
+use crate::metrics;
 use anyhow::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
+use sedimentree_fs_storage::FsStorage;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
     connection::nonce_cache::NonceCache,
     crypto::signer::MemorySigner,
-    policy::OpenPolicy,
-    storage::{MetricsStorage, RefreshMetrics},
+    policy::open::OpenPolicy,
+    storage::metrics::{MetricsStorage, RefreshMetrics},
 };
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;

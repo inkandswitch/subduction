@@ -16,12 +16,4 @@ pub mod fragment;
 pub mod peer_id;
 pub mod signer;
 pub mod subduction;
-
-// Re-export sedimentree types from sedimentree_wasm
-pub use sedimentree_wasm::{
-    depth, digest, fragment as sedimentree_fragment, loose_commit, sedimentree, sedimentree_id,
-    storage,
-};
-
-pub use signer::WebCryptoSigner;
-pub use subduction::WasmSubduction;
+pub mod sync_stats;

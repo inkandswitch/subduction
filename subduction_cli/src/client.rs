@@ -1,9 +1,9 @@
 //! WebSocket client for Subduction.
 
-use crate::fs_storage::FsStorage;
 use anyhow::Result;
+use sedimentree_fs_storage::FsStorage;
 use std::{path::PathBuf, time::Duration};
-use subduction_core::crypto::signer::MemorySigner;
+use subduction_core::{connection::handshake::Audience, crypto::signer::MemorySigner};
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
@@ -62,7 +62,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
             FuturesTimerTimeout,
             Duration::from_secs(args.timeout),
             signer,
-            server_peer_id,
+            Audience::known(server_peer_id),
         )
         .await?;
 

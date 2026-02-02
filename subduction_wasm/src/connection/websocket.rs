@@ -38,8 +38,8 @@ use web_sys::{
 };
 
 use super::{
-    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId,
-    handshake::client_handshake,
+    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, handshake::client_handshake,
+    message::WasmMessage,
 };
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 

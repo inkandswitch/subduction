@@ -12,8 +12,8 @@ use alloc::{
 use future_form::Local;
 use futures::channel::oneshot;
 use subduction_core::{
-    connection::handshake::{self, Audience, Challenge, Nonce, Rejection, RejectionReason},
-    crypto::{signed::Signed, signer::Signer},
+    connection::handshake::{self, Audience, Challenge, Rejection, RejectionReason},
+    crypto::{nonce::Nonce, signed::Signed, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };

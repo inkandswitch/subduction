@@ -2,12 +2,12 @@
 
 use super::common::{TestSpawn, test_signer};
 use crate::{
-    Subduction,
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     peer::id::PeerId,
-    policy::{ConnectionPolicy, StoragePolicy},
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use alloc::{vec, vec::Vec};
 use core::fmt;

@@ -1,10 +1,14 @@
 # Batch Sync Protocol
 
-Batch sync reconciles the complete state of a sedimentree between two peers in a single request/response exchange. It answers _"what data am I missing?"_ by comparing metadata summaries.
+Batch sync reconciles the complete state of a sedimentree between two peers in 1.5 round trips. It answers _"what data am I missing?"_ and _"what data are you missing?"_ by comparing metadata summaries.
 
 ## Overview
 
-Batch sync is a pull-based protocol. The requester sends their current `SedimentreeSummary`, and the responder computes a diff and returns the missing commits and fragments with their blobs.
+Batch sync is a bidirectional protocol. The requester sends their current `SedimentreeSummary`, and the responder:
+1. Computes what the requester is missing and sends it
+2. Computes what the responder is missing and requests it back
+
+This completes full bidirectional sync in 1.5 round trips instead of requiring two separate sync operations.
 
 > [!NOTE]
 > Batch sync transfers metadata *and* blob data together. For large sedimentrees, consider incremental sync for ongoing updates after the initial batch sync.
@@ -15,14 +19,17 @@ sequenceDiagram
     participant B as Responder
 
     A->>B: BatchSyncRequest { id, summary }
-    Note right of B: Compute diff
+    Note right of B: Compute diff (both directions)
     Note right of B: Gather missing data
 
-    B->>A: BatchSyncResponse { diff }
+    B->>A: BatchSyncResponse { diff, requesting }
     Note left of A: Store received data
+
+    A-->>B: Fire-and-forget: requested data
+    Note right of B: Store received data
 ```
 
-The requester learns what they're missing; the responder provides it in one response.
+The requester learns what they're missing; the responder provides it and also requests what _they're_ missing. The requester then sends the requested data as fire-and-forget messages.
 
 ## Message Types
 
@@ -58,6 +65,12 @@ struct BatchSyncResponse {
 struct SyncDiff {
     missing_commits: Vec<(Signed<LooseCommit>, Blob)>,  // Commits requester lacks
     missing_fragments: Vec<(Signed<Fragment>, Blob)>,   // Fragments requester lacks
+    requesting: RequestedData,                          // What responder wants back
+}
+
+struct RequestedData {
+    commit_digests: Set<Digest<LooseCommit>>,    // Commits responder lacks
+    fragment_summaries: Set<FragmentSummary>,    // Fragments responder lacks
 }
 ```
 
@@ -73,10 +86,16 @@ flowchart TD
     D -->|No| E[Return empty diff]
     D -->|Yes| F[Compute RemoteDiff]
     F --> G[Load blobs for missing items]
+    F --> G2[Build RequestedData for what we need]
     G --> H[Send BatchSyncResponse]
+    G2 --> H
     H --> I[Requester: store commits]
     I --> J[Requester: store fragments]
     J --> K[Requester: store blobs]
+    K --> L{Responder requested data?}
+    L -->|Yes| M[Send fire-and-forget messages]
+    L -->|No| N[Done]
+    M --> N
 ```
 
 ## Diffing Algorithm
@@ -116,8 +135,9 @@ Sent as WebSocket binary frames.
 |----------|-----------|
 | **Consistency** | Summary-based diffing ensures convergence |
 | **Efficiency** | Only missing data transferred |
-| **Atomicity** | Single request/response exchange |
+| **Bidirectional** | 1.5 RT completes sync in both directions |
 | **Correlation** | `RequestId` links response to request |
+| **Self-confirming** | Running sync twice confirms success |
 
 ## Sequence Diagram (Success)
 
@@ -132,8 +152,9 @@ sequenceDiagram
     A->>B: BatchSyncRequest { id, req_id, summary }
 
     Note right of B: Load local sedimentree
-    Note right of B: Compute diff against summary
-    Note right of B: Load blobs for diff
+    Note right of B: Compute diff (both directions)
+    Note right of B: Load blobs for what A needs
+    Note right of B: Build RequestedData for what B needs
 
     B->>A: BatchSyncResponse { req_id, id, diff }
 
@@ -142,7 +163,14 @@ sequenceDiagram
     Note left of A: Store missing fragments
     Note left of A: Store blobs
 
-    Note over A,B: Sedimentrees Synchronized
+    alt Responder requested data
+        Note left of A: Load requested commits/fragments
+        A-->>B: LooseCommit messages (fire-and-forget)
+        A-->>B: Fragment messages (fire-and-forget)
+        Note right of B: Store received data
+    end
+
+    Note over A,B: Sedimentrees Synchronized (1.5 RT)
 ```
 
 ## Implementation Notes
@@ -188,18 +216,103 @@ for (signed_fragment, blob) in response.diff.missing_fragments {
 ```rust
 let BatchSyncRequest { id, req_id, sedimentree_summary } = request;
 
-// Compute diff
+// Compute diff (both directions)
 let local = sedimentrees.get(&id)?;
 let remote_diff = local.diff_for_remote(&sedimentree_summary);
 
-// Gather blobs
-let missing_commits = /* load commits + blobs */;
-let missing_fragments = /* load fragments + blobs */;
+// What we have that they don't → send to them
+let missing_commits = /* load commits + blobs for remote_diff.local_commits */;
+let missing_fragments = /* load fragments + blobs for remote_diff.local_fragments */;
+
+// What they have that we don't → request from them
+let requesting = RequestedData {
+    commit_digests: remote_diff.remote_commits.iter().map(|c| c.digest()).collect(),
+    fragment_summaries: remote_diff.remote_fragment_summaries.iter().cloned().collect(),
+};
 
 BatchSyncResponse {
     req_id,
     id,
-    diff: SyncDiff { missing_commits, missing_fragments },
+    diff: SyncDiff { missing_commits, missing_fragments, requesting },
 }
 ```
+
+### Handling Requested Data (Requester Side)
+
+After receiving the response, the requester sends the data the responder requested:
+
+```rust
+// Process the response
+for (signed_commit, blob) in response.diff.missing_commits {
+    // Store what we received...
+}
+
+// Send what responder requested (fire-and-forget)
+for commit_digest in response.diff.requesting.commit_digests {
+    if let Some(commit) = storage.load_commit(id, commit_digest).await? {
+        conn.send(Message::LooseCommit { id, commit, blob }).await?;
+    }
+}
+for summary in response.diff.requesting.fragment_summaries {
+    if let Some(fragment) = storage.load_fragment_by_summary(id, &summary).await? {
+        conn.send(Message::Fragment { id, fragment, blob }).await?;
+    }
+}
+```
+
+## Bidirectional Sync (1.5 RT)
+
+The protocol completes bidirectional sync in 1.5 round trips:
+
+| Step | Direction | Content                                              |
+|------|-----------|------------------------------------------------------|
+| 1    | A → B     | `BatchSyncRequest` with A's summary                  |
+| 2    | B → A     | `BatchSyncResponse` with data A needs + what B wants |
+| 3    | A → B     | Fire-and-forget messages with data B requested       |
+
+After step 3, both peers have each other's data.
+
+### Why Fire-and-Forget?
+
+The third step uses fire-and-forget (no acknowledgment) because:
+
+1. **TCP guarantees delivery** — If the connection stays up, data arrives
+2. **Idempotent by design** — Receiving the same commit/fragment twice deduplicates safely
+3. **Self-healing** — Any missed data is caught on the next sync cycle
+4. **Simpler protocol** — No additional message types or state tracking
+
+## Confirmation
+
+The protocol does not include an explicit confirmation message. This is intentional.
+
+### "Confirmation Is Just Another Sync"
+
+If you need to confirm that a sync completed successfully, simply **run batch sync again**:
+
+```
+First sync:
+  A → B: BatchSyncRequest (A's summary)
+  B → A: BatchSyncResponse (data + requesting)
+  A → B: Fire-and-forget data
+
+Second sync:
+  A → B: BatchSyncRequest (A's updated summary)
+  B → A: BatchSyncResponse
+         └─ If first sync succeeded: empty diff, empty requesting
+         └─ If fire-and-forget failed: re-requests same data
+  A → B: (re-send if needed)
+```
+
+The second sync implicitly confirms the first:
+- **Empty `requesting`** = first sync's fire-and-forget succeeded
+- **Non-empty `requesting`** = first sync's fire-and-forget failed, automatically retried
+
+This is cleaner than adding explicit confirmation because:
+- No new message types needed
+- No special state tracking
+- Uses the existing idempotent protocol
+- Self-healing by design
+
+> [!TIP]
+> **Confirmation is just another sync.** The protocol is self-confirming through repetition. This aligns with CRDT philosophy: don't add special cases, let the normal merge process handle it.
 

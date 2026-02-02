@@ -17,6 +17,14 @@ rust-version.workspace = true
 automerge = { workspace = true }
 sedimentree_core = { workspace = true }
 
+[dev-dependencies]
+criterion = { workspace = true }
+rand = { workspace = true, features = ["small_rng"] }
+
+[[bench]]
+name = "egwalker"
+harness = false
+
 [features]
 default = []
 std = ["sedimentree_core/std"]

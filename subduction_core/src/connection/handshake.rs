@@ -32,12 +32,11 @@ use sedimentree_core::digest::Digest as RawDigest;
 use thiserror::Error;
 
 use crate::{
-    crypto::{digest::Digest, signed::Signed, signer::Signer},
+    crypto::{nonce::Nonce, signed::Signed, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
-
-pub use crate::crypto::nonce::Nonce;
+use sedimentree_core::digest::Digest;
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);

@@ -48,8 +48,3 @@ pub mod timestamp;
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub mod metrics;
-
-pub use subduction::Subduction;
-
-#[cfg(feature = "metrics")]
-pub use storage::MetricsStorage;

@@ -1,0 +1,28 @@
+[package]
+name = "sedimentree_fs_storage"
+version = "0.2.0"
+description = "Filesystem-based storage backend for Sedimentree"
+
+categories = ["filesystem"]
+keywords = ["sedimentree", "storage", "filesystem"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-lock = { workspace = true }
+future_form = { workspace = true }
+hex = { workspace = true }
+minicbor = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["std"] }
+thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+tracing = { workspace = true, default-features = true }
+
+[lints]
+workspace = true

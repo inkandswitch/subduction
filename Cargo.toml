@@ -5,6 +5,7 @@ members = [
   "automerge_sedimentree_wasm",
   "automerge_subduction_wasm",
   "sedimentree_core",
+  "sedimentree_fs_storage",
   "sedimentree_wasm",
   "subduction_cli",
   "subduction_core",
@@ -27,6 +28,7 @@ authors = [
 # Internal crates
 automerge_sedimentree_wasm = { version = "0.2.0", path = "automerge_sedimentree_wasm" }
 sedimentree_core = { version = "0.2.0", path = "sedimentree_core", default-features = false }
+sedimentree_fs_storage = { version = "0.2.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.2.0", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.2.0", path = "subduction_core", default-features = false }
 subduction_wasm = { version = "0.2.0", path = "subduction_wasm", default-features = false }
@@ -74,6 +76,7 @@ tokio = { version = "1.46", features = ["macros", "net", "rt-multi-thread", "syn
 tokio-test = "0.4.4"
 tokio-util = "0.7.16"
 tracing = { version = "0.1.41", default-features = false }
+tracing-loki = "0.2"
 tracing-subscriber = { version = "0.3.2", default-features = false }
 tungstenite = "0.27"
 url = { version = "2.5", default-features = false }

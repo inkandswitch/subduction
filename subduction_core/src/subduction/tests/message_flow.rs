@@ -9,13 +9,13 @@
 
 use super::common::{TokioSpawn, test_signer};
 use crate::{
-    Subduction,
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,
     peer::id::PeerId,
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use core::time::Duration;
 use future_form::{Local, Sendable};

@@ -23,10 +23,14 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::{peer_id::WasmPeerId, sedimentree_id::WasmSedimentreeId};
-
-pub use message::{JsMessage, WasmMessage};
-pub use nonce::{WasmNonce, WasmNonceError};
+use crate::{
+    connection::{
+        message::{JsMessage, WasmMessage},
+        nonce::WasmNonce,
+    },
+    peer_id::WasmPeerId,
+};
+use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"

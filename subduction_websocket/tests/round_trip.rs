@@ -14,12 +14,12 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    Subduction,
-    connection::{Connection, message::Message, nonce_cache::NonceCache},
+    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
     crypto::signer::MemorySigner,
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
@@ -87,7 +87,7 @@ async fn rend_receive() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         client_signer,
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await?;
 
@@ -228,7 +228,7 @@ async fn batch_sync() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         client_signer,
-        server_peer_id,
+        Audience::known(server_peer_id),
     )
     .await?;
 

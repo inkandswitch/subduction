@@ -25,10 +25,10 @@ use future_form::FutureForm;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        handshake::{self, Audience, Challenge, HandshakeError, Nonce, Rejection, RejectionReason},
+        handshake::{self, Audience, Challenge, HandshakeError, Rejection, RejectionReason},
         nonce_cache::NonceCache,
     },
-    crypto::{signed::Signed, signer::Signer},
+    crypto::{nonce::Nonce, signed::Signed, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };

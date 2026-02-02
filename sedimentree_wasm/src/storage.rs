@@ -21,7 +21,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     crypto::signed::Signed,
-    storage::{BatchResult, Storage},
+    storage::traits::{BatchResult, Storage},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -625,6 +625,38 @@ impl Storage<Local> for JsSedimentreeStorage {
         })
     }
 
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> LocalBoxFuture<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
+        let blob_digests = blob_digests.to_vec();
+        Local::from_future(async move {
+            tracing::debug!(
+                count = blob_digests.len(),
+                "JsSedimentreeStorage::load_blobs"
+            );
+
+            let mut results = Vec::with_capacity(blob_digests.len());
+            for digest in blob_digests {
+                let promise = self.js_load_blob(&WasmDigest::from(digest).into());
+                let js_value = JsFuture::from(promise)
+                    .await
+                    .map_err(JsSedimentreeStorageError::JsError)?;
+
+                if js_value.is_null() || js_value.is_undefined() {
+                    continue; // Skip missing blobs
+                }
+
+                if js_value.is_instance_of::<Uint8Array>() {
+                    results.push((digest, Blob::from(Uint8Array::new(&js_value).to_vec())));
+                } else {
+                    return Err(JsSedimentreeStorageError::NotBytes);
+                }
+            }
+            Ok(results)
+        })
+    }
+
     fn delete_blob(
         &self,
         blob_digest: Digest<Blob>,
@@ -762,6 +794,4 @@ impl From<JsSedimentreeStorageError> for JsValue {
     }
 }
 
-mod memory;
-
-pub use memory::MemoryStorage;
+pub mod memory;

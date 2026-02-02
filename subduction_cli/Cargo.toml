@@ -1,6 +1,6 @@
 [package]
 name = "subduction_cli"
-version = "0.2.0"
+version = "0.2.1"
 description = "CLI server and client for Subduction sync over WebSockets"
 
 categories = ["command-line-utilities", "web-programming"]
@@ -21,7 +21,6 @@ async-tungstenite = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
-minicbor = { workspace = true }
 console-subscriber = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
@@ -29,14 +28,17 @@ futures-util = { workspace = true }
 hex = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+minicbor = { workspace = true }
 rand = { workspace = true, features = ["std", "std_rng"] }
 sedimentree_core = { workspace = true, features = ["std"] }
+sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
 tokio-util = { workspace = true }
 tracing = { workspace = true, default-features = true }
+tracing-loki = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, default-features = true }
 tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
@@ -47,6 +49,7 @@ native-tls = [
   "async-tungstenite/tokio-native-tls",
   "subduction_websocket/tokio_client",
   "subduction_websocket/tokio_server",
+  "dep:tracing-loki",
 ]
 rustls = [
   "async-tungstenite/tokio-rustls-native-certs",

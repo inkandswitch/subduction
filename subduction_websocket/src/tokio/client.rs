@@ -14,10 +14,10 @@ use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
         Connection, Reconnect,
-        handshake::{Audience, Nonce},
+        handshake::Audience,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
-    crypto::signer::Signer,
+    crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
@@ -43,7 +43,7 @@ pub struct TokioWebSocketClient<
 > {
     address: Uri,
     signer: R,
-    expected_peer_id: PeerId,
+    audience: Audience,
     socket: WebSocket<ConnectStream, Sendable, O>,
 }
 
@@ -60,7 +60,8 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
     /// * `timeout` - Timeout strategy for requests
     /// * `default_time_limit` - Default timeout duration
     /// * `signer` - The client's signer for authentication
-    /// * `expected_peer_id` - The expected server peer ID
+    /// * `audience` - The expected server identity ([`Audience::Known`] for a specific peer,
+    ///   [`Audience::Discover`] for service discovery)
     ///
     /// # Errors
     ///
@@ -70,7 +71,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         timeout: O,
         default_time_limit: Duration,
         signer: R,
-        expected_peer_id: PeerId,
+        audience: Audience,
     ) -> Result<(Self, BoxFuture<'a, Result<(), RunError>>), ClientConnectError>
     where
         O: 'a,
@@ -83,7 +84,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
             connect_async_with_config(address.clone(), Some(ws_config)).await?;
 
         // Perform handshake
-        let audience = Audience::known(expected_peer_id);
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
@@ -100,7 +100,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let client = TokioWebSocketClient {
             address,
             signer,
-            expected_peer_id,
+            audience,
             socket,
         };
         Ok((client, socket_listener))
@@ -179,7 +179,7 @@ impl<
                 self.socket.timeout_strategy().clone(),
                 self.socket.default_time_limit(),
                 self.signer.clone(),
-                self.expected_peer_id,
+                self.audience,
             )
             .await?;
 

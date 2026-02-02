@@ -1,7 +1,32 @@
-//! Filesystem-based storage for Subduction.
+//! Filesystem-based storage for Sedimentree.
 //!
-//! Uses a content-addressed layout where commits and fragments are stored
-//! in individual files keyed by their digest.
+//! This crate provides [`FsStorage`], a content-addressed filesystem storage
+//! implementation that implements the [`Storage`] trait from `subduction_core`.
+//!
+//! # Storage Layout
+//!
+//! ```text
+//! root/
+//! ├── trees/
+//! │   └── {sedimentree_id_hex}/
+//! │       ├── commits/
+//! │       │   └── {digest_hex}.cbor  ← Signed<LooseCommit>
+//! │       └── fragments/
+//! │           └── {digest_hex}.cbor  ← Signed<Fragment>
+//! └── blobs/
+//!     └── {digest_hex}               ← raw bytes
+//! ```
+//!
+//! # Example
+//!
+//! ```no_run
+//! use sedimentree_fs_storage::FsStorage;
+//! use std::path::PathBuf;
+//!
+//! let storage = FsStorage::new(PathBuf::from("./data")).expect("failed to create storage");
+//! ```
+
+#![forbid(unsafe_code)]
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
@@ -15,13 +40,13 @@ use std::{
 };
 use subduction_core::{
     crypto::signed::Signed,
-    storage::{BatchResult, Storage},
+    storage::traits::{BatchResult, Storage},
 };
 use thiserror::Error;
 
 /// Errors that can occur during filesystem storage operations.
 #[derive(Debug, Error)]
-pub(crate) enum FsStorageError {
+pub enum FsStorageError {
     /// I/O error.
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
@@ -54,7 +79,7 @@ pub(crate) enum FsStorageError {
 ///     └── {digest_hex}               ← raw bytes
 /// ```
 #[derive(Debug, Clone)]
-pub(crate) struct FsStorage {
+pub struct FsStorage {
     root: PathBuf,
     ids_cache: Arc<Mutex<Set<SedimentreeId>>>,
 }
@@ -65,7 +90,7 @@ impl FsStorage {
     /// # Errors
     ///
     /// Returns an error if the directories cannot be created.
-    pub(crate) fn new(root: PathBuf) -> Result<Self, FsStorageError> {
+    pub fn new(root: PathBuf) -> Result<Self, FsStorageError> {
         std::fs::create_dir_all(&root)?;
         std::fs::create_dir_all(root.join("trees"))?;
         std::fs::create_dir_all(root.join("blobs"))?;
@@ -73,6 +98,12 @@ impl FsStorage {
         let ids_cache = Arc::new(Mutex::new(Self::load_tree_ids(&root)));
 
         Ok(Self { root, ids_cache })
+    }
+
+    /// Returns the root directory of the storage.
+    #[must_use]
+    pub fn root(&self) -> &Path {
+        &self.root
     }
 
     fn load_tree_ids(root: &Path) -> Set<SedimentreeId> {
@@ -538,13 +569,35 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?blob_digest, "FsStorage::load_blob");
-
             let blob_path = self.blob_path(blob_digest);
             match tokio::fs::read(&blob_path).await {
                 Ok(data) => Ok(Some(Blob::new(data))),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(e.into()),
             }
+        })
+    }
+
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
+        let blob_digests = blob_digests.to_vec();
+        Sendable::from_future(async move {
+            tracing::debug!(count = blob_digests.len(), "FsStorage::load_blobs");
+
+            let mut results = Vec::with_capacity(blob_digests.len());
+            for digest in blob_digests {
+                let blob_path = self.blob_path(digest);
+                match tokio::fs::read(&blob_path).await {
+                    Ok(data) => results.push((digest, Blob::new(data))),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Skip missing blobs
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Ok(results)
         })
     }
 
@@ -816,6 +869,13 @@ impl Storage<Local> for FsStorage {
         blob_digest: Digest<Blob>,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_blob(self, blob_digest))
+    }
+
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::load_blobs(self, blob_digests))
     }
 
     fn delete_blob(

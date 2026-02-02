@@ -25,7 +25,7 @@ use sedimentree_core::id::SedimentreeId;
 use serde::Deserialize;
 use subduction_core::{
     peer::id::PeerId,
-    policy::{ConnectionPolicy, StoragePolicy},
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
 
 /// Error returned when a connection is not allowed.

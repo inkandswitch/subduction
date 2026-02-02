@@ -12,10 +12,8 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use crate::{
-    connection::{JsConnection, websocket::CallError},
-    storage::JsSedimentreeStorage,
-};
+use crate::connection::{JsConnection, websocket::CallError};
+use sedimentree_wasm::storage::JsSedimentreeStorage;
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
