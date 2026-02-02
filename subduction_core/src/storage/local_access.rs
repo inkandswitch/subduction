@@ -39,7 +39,7 @@ pub struct LocalStorageAccess<S> {
 
 impl<S> LocalStorageAccess<S> {
     /// Create a new local storage access wrapper.
-    pub fn new(storage: Arc<S>) -> Self {
+    pub const fn new(storage: Arc<S>) -> Self {
         Self { storage }
     }
 
@@ -47,7 +47,7 @@ impl<S> LocalStorageAccess<S> {
     ///
     /// This is useful when you need to pass the storage to other components.
     #[must_use]
-    pub fn storage(&self) -> &Arc<S> {
+    pub const fn storage(&self) -> &Arc<S> {
         &self.storage
     }
 
@@ -68,7 +68,12 @@ impl<S> LocalStorageAccess<S> {
     /// Load blobs by their digests.
     ///
     /// Returns only the blobs that were found. Missing digests are silently skipped.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying storage fails to load the blobs.
     #[must_use]
+    #[allow(clippy::type_complexity)]
     pub fn load_blobs<K: FutureForm>(
         &self,
         digests: &[BlobDigest],
@@ -80,6 +85,10 @@ impl<S> LocalStorageAccess<S> {
     }
 
     /// Load a single blob by its digest.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the underlying storage fails to load the blob.
     pub async fn load_blob<K: FutureForm>(
         &self,
         digest: BlobDigest,

@@ -65,11 +65,13 @@ fn load_automerge(bytes: &[u8]) -> Automerge {
 }
 
 /// Generate a random digest with specified leading zero bytes.
+#[allow(clippy::indexing_slicing)]
 fn random_digest_with_depth(rng: &mut SmallRng, depth: u32) -> Digest<LooseCommit> {
     let mut bytes = [0u8; 32];
     rng.fill(&mut bytes);
 
     // Set leading zeros based on depth
+    // SAFETY: zeros is clamped to 31, so all indices are valid for a 32-byte array
     let zeros = depth.min(31) as usize;
     bytes[..zeros].fill(0);
     if zeros < 32 {
@@ -152,7 +154,7 @@ enum MetricType {
 }
 
 impl MetricType {
-    fn name(self) -> &'static str {
+    const fn name(self) -> &'static str {
         match self {
             MetricType::LeadingZeros => "leading_zeros",
             MetricType::Base10 => "base10",
@@ -160,9 +162,9 @@ impl MetricType {
     }
 
     /// Expected fragment rate: 1 in N commits becomes a fragment boundary.
-    /// - LeadingZeros: 1/256 chance per byte
-    /// - Base10: 1/10 chance per trailing zero
-    fn fragment_rate(self) -> usize {
+    /// - `LeadingZeros`: 1/256 chance per byte
+    /// - `Base10`: 1/10 chance per trailing zero
+    const fn fragment_rate(self) -> usize {
         match self {
             MetricType::LeadingZeros => 256,
             MetricType::Base10 => 10,
@@ -406,7 +408,7 @@ fn bench_diff(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark diff_remote (comparing against a summary).
+/// Benchmark `diff_remote` (comparing against a summary).
 fn bench_diff_remote(c: &mut Criterion) {
     let mut group = c.benchmark_group("diff_remote");
 
@@ -663,7 +665,7 @@ fn bench_heads_by_metric(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark minimal_hash computation with different depth metrics.
+/// Benchmark `minimal_hash` computation with different depth metrics.
 fn bench_minimal_hash_by_metric(c: &mut Criterion) {
     let mut group = c.benchmark_group("minimal_hash_by_metric");
 

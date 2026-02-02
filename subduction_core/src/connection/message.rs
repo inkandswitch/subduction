@@ -260,7 +260,7 @@ pub struct RequestedData {
 impl RequestedData {
     /// Returns `true` if there is no data being requested.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.commit_digests.is_empty() && self.fragment_summaries.is_empty()
     }
 }

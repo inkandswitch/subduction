@@ -88,7 +88,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let nonce = Nonce::random();
 
         let handshake_result =
-            client_handshake(&mut ws_stream, &signer, audience.clone(), now, nonce).await?;
+            client_handshake(&mut ws_stream, &signer, audience, now, nonce).await?;
 
         let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
@@ -179,7 +179,7 @@ impl<
                 self.socket.timeout_strategy().clone(),
                 self.socket.default_time_limit(),
                 self.signer.clone(),
-                self.audience.clone(),
+                self.audience,
             )
             .await?;
 

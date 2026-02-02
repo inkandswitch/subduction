@@ -1024,14 +1024,13 @@ impl<
                     debug_assert_eq!(req_id, resp_batch_id);
 
                     // Send back data the responder requested (bidirectional sync)
-                    if !diff.requesting.is_empty() {
-                        if let Err(e) = self.send_requested_data(&conn, id, &diff.requesting).await
-                        {
-                            tracing::warn!(
-                                "failed to send requested data to peer {:?}: {e}",
-                                conn.peer_id()
-                            );
-                        }
+                    if !diff.requesting.is_empty()
+                        && let Err(e) = self.send_requested_data(&conn, id, &diff.requesting).await
+                    {
+                        tracing::warn!(
+                            "failed to send requested data to peer {:?}: {e}",
+                            conn.peer_id()
+                        );
                     }
 
                     if let Err(e) = self
@@ -1741,6 +1740,7 @@ impl<
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
+    #[allow(clippy::too_many_lines)]
     pub async fn sync_with_peer(
         &self,
         to_ask: &PeerId,
@@ -2019,7 +2019,7 @@ impl<
 
                                 // Send back data the responder requested (bidirectional sync)
                                 if !requesting.is_empty() {
-                                    match self.send_requested_data(&conn, id, &requesting).await {
+                                    match self.send_requested_data(conn, id, &requesting).await {
                                         Ok((commits, fragments)) => {
                                             stats.commits_sent += commits;
                                             stats.fragments_sent += fragments;
@@ -2243,6 +2243,7 @@ impl<
     /// as individual messages. Returns the count of successfully sent items.
     /// Errors in sending individual items are logged but don't prevent sending
     /// other items.
+    #[allow(clippy::too_many_lines)]
     async fn send_requested_data(
         &self,
         conn: &C,
@@ -2295,10 +2296,10 @@ impl<
         let mut blob_digests_needed: Vec<BlobDigest> = Vec::new();
 
         for commit_digest in &requesting.commit_digests {
-            if let Some(signed_commit) = commit_by_digest.get(commit_digest) {
-                if let Ok(payload) = signed_commit.decode_payload() {
-                    blob_digests_needed.push(payload.blob_meta().digest());
-                }
+            if let Some(signed_commit) = commit_by_digest.get(commit_digest)
+                && let Ok(payload) = signed_commit.decode_payload()
+            {
+                blob_digests_needed.push(payload.blob_meta().digest());
             }
         }
 
