@@ -14,12 +14,12 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    Subduction,
     connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
