@@ -229,7 +229,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "automerge",
  "criterion",
@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree_wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "automerge",
  "base58",
@@ -2789,7 +2789,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -2812,7 +2812,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_fs_storage"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-lock",
  "future_form",
@@ -2827,7 +2827,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-lock",
  "base58",
@@ -3127,7 +3127,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive_policy"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "ed25519-dalek",
  "future_form",

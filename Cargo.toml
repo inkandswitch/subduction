@@ -26,10 +26,10 @@ authors = [
 
 [workspace.dependencies]
 # Internal crates
-automerge_sedimentree_wasm = { version = "0.2.0", path = "automerge_sedimentree_wasm" }
-sedimentree_core = { version = "0.2.0", path = "sedimentree_core", default-features = false }
-sedimentree_fs_storage = { version = "0.2.0", path = "sedimentree_fs_storage" }
-sedimentree_wasm = { version = "0.2.0", path = "sedimentree_wasm", default-features = false }
+automerge_sedimentree_wasm = { version = "0.3.0", path = "automerge_sedimentree_wasm" }
+sedimentree_core = { version = "0.3.0", path = "sedimentree_core", default-features = false }
+sedimentree_fs_storage = { version = "0.3.0", path = "sedimentree_fs_storage" }
+sedimentree_wasm = { version = "0.3.0", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.3.0", path = "subduction_core", default-features = false }
 subduction_wasm = { version = "0.3.0", path = "subduction_wasm", default-features = false }
 subduction_websocket = { version = "0.3.0", path = "subduction_websocket", default-features = false }
