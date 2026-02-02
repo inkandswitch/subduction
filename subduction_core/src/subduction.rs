@@ -1532,6 +1532,28 @@ impl<
 
         let sync_diff = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
+
+            // If sedimentree not in memory, hydrate it from storage
+            if !locked.contains_key(&id) {
+                // Extract payloads from trusted storage (already verified before storage)
+                let loose_commits: Vec<_> = commit_by_digest
+                    .values()
+                    .filter_map(|signed| signed.decode_payload().ok())
+                    .collect();
+                let fragments: Vec<_> = fragment_by_digest
+                    .values()
+                    .filter_map(|signed| signed.decode_payload().ok())
+                    .collect();
+
+                if !loose_commits.is_empty() || !fragments.is_empty() {
+                    let sedimentree = Sedimentree::new(fragments, loose_commits);
+                    locked.insert(id, sedimentree);
+                    tracing::debug!(
+                        "hydrated sedimentree {id:?} from storage for batch sync"
+                    );
+                }
+            }
+
             let sedimentree = locked.entry(id).or_default();
             tracing::debug!(
                 "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commits and {} fragments",
@@ -1540,7 +1562,6 @@ impl<
             );
 
             let (
-                commits_to_add,
                 local_commit_digests,
                 local_fragment_digests,
                 our_missing_commit_digests,
@@ -1548,10 +1569,6 @@ impl<
             ) = {
                 let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
                 (
-                    diff.remote_commits
-                        .iter()
-                        .map(|c| (*c).clone())
-                        .collect::<Vec<LooseCommit>>(),
                     diff.local_commits
                         .iter()
                         .map(|c| c.digest())
@@ -1572,9 +1589,12 @@ impl<
                 )
             };
 
-            for commit in commits_to_add {
-                sedimentree.add_commit(commit);
-            }
+            // NOTE: We intentionally do NOT add remote commits to the in-memory tree here.
+            // The commits_to_add are just metadata from the summary - we don't have the actual
+            // signed commits or blobs yet. We'll add them when they arrive via LooseCommit
+            // messages (in response to our "requesting" field).
+            // Adding them here would cause the actual commits to be skipped as duplicates
+            // and never persisted to storage.
 
             for digest in local_commit_digests {
                 if let Some(signed_commit) = commit_by_digest.get(&digest)
@@ -1777,6 +1797,13 @@ impl<
                 .map(|t| t.summarize())
                 .unwrap_or_default();
 
+            tracing::debug!(
+                "Sending summary for {:?}: {} loose commits, {} fragment summaries",
+                id,
+                summary.loose_commits().len(),
+                summary.fragment_summaries().len()
+            );
+
             let req_id = conn.next_request_id().await;
 
             let result = conn
@@ -1848,10 +1875,20 @@ impl<
                     stats.commits_received += commits_to_receive;
                     stats.fragments_received += fragments_to_receive;
 
+                    tracing::debug!(
+                        "Received response for {:?}: {} commits received, peer requesting {} commits and {} fragments",
+                        id,
+                        commits_to_receive,
+                        requesting.commit_digests.len(),
+                        requesting.fragment_summaries.len()
+                    );
+
                     // Send back data the responder requested (bidirectional sync)
                     if !requesting.is_empty() {
+                        tracing::debug!("Calling send_requested_data for {:?}", id);
                         match self.send_requested_data(&conn, id, &requesting).await {
                             Ok((commits, fragments)) => {
+                                tracing::debug!("send_requested_data returned: {} commits, {} fragments", commits, fragments);
                                 stats.commits_sent += commits;
                                 stats.fragments_sent += fragments;
                             }
@@ -1982,6 +2019,15 @@ impl<
                                 // Track counts for stats
                                 let commits_to_receive = missing_commits.len();
                                 let fragments_to_receive = missing_fragments.len();
+
+                                tracing::debug!(
+                                    sedimentree_id = ?id,
+                                    commits_received = commits_to_receive,
+                                    fragments_received = fragments_to_receive,
+                                    peer_requesting_commits = requesting.commit_digests.len(),
+                                    peer_requesting_fragments = requesting.fragment_summaries.len(),
+                                    "sync_all: response received"
+                                );
 
                                 for (signed_commit, blob) in missing_commits {
                                     let verified = match signed_commit.try_verify() {
@@ -2341,6 +2387,7 @@ impl<
                             );
                         } else {
                             commits_sent += 1;
+                            tracing::debug!("Sent commit {:?} to peer", commit_digest);
                         }
                     } else {
                         tracing::warn!("missing blob for requested commit {:?}", commit_digest);
