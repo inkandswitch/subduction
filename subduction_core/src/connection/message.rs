@@ -265,6 +265,59 @@ impl RequestedData {
     }
 }
 
+/// Statistics from a sync operation.
+///
+/// Tracks how many commits and fragments were sent and received during a sync.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct SyncStats {
+    /// Number of commits received from the peer.
+    pub commits_received: usize,
+
+    /// Number of fragments received from the peer.
+    pub fragments_received: usize,
+
+    /// Number of commits sent to the peer (requested by them).
+    pub commits_sent: usize,
+
+    /// Number of fragments sent to the peer (requested by them).
+    pub fragments_sent: usize,
+}
+
+impl SyncStats {
+    /// Create stats with zero counts.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            commits_received: 0,
+            fragments_received: 0,
+            commits_sent: 0,
+            fragments_sent: 0,
+        }
+    }
+
+    /// Total items received (commits + fragments).
+    #[must_use]
+    pub const fn total_received(&self) -> usize {
+        self.commits_received + self.fragments_received
+    }
+
+    /// Total items sent (commits + fragments).
+    #[must_use]
+    pub const fn total_sent(&self) -> usize {
+        self.commits_sent + self.fragments_sent
+    }
+
+    /// Returns true if no data was exchanged.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.commits_received == 0
+            && self.fragments_received == 0
+            && self.commits_sent == 0
+            && self.fragments_sent == 0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

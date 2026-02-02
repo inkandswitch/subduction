@@ -46,6 +46,7 @@ use crate::{
     sedimentree_id::WasmSedimentreeId,
     signer::JsSigner,
     storage::{JsSedimentreeStorage, JsSedimentreeStorageError},
+    sync_stats::WasmSyncStats,
 };
 
 use super::depth::WasmDepth;
@@ -453,7 +454,7 @@ impl WasmSubduction {
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let (success, blobs, conn_errors) = self
+        let (success, stats, conn_errors) = self
             .core
             .sync_with_peer(
                 &to_ask.clone().into(),
@@ -466,10 +467,7 @@ impl WasmSubduction {
 
         Ok(PeerBatchSyncResult {
             success,
-            blobs: blobs
-                .into_iter()
-                .map(|blob| Uint8Array::from(blob.as_slice()))
-                .collect(),
+            stats: stats.into(),
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
@@ -508,12 +506,12 @@ impl WasmSubduction {
         Ok(WasmPeerResultMap(
             peer_map
                 .into_iter()
-                .map(|(peer_id, (success, blobs, conn_errs))| {
+                .map(|(peer_id, (success, stats, conn_errs))| {
                     (
                         peer_id,
                         (
                             success,
-                            blobs,
+                            stats.into(),
                             conn_errs
                                 .into_iter()
                                 .map(|(conn, err)| (conn, WasmCallError::from(err)))
@@ -536,7 +534,7 @@ impl WasmSubduction {
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let (success, blobs, errs) = self
+        let (success, stats, errs) = self
             .core
             .full_sync(timeout)
             .await
@@ -544,10 +542,7 @@ impl WasmSubduction {
 
         Ok(PeerBatchSyncResult {
             success,
-            blobs: blobs
-                .into_iter()
-                .map(|blob| Uint8Array::from(blob.as_slice()))
-                .collect(),
+            stats: stats.into(),
             conn_errors: errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
@@ -613,7 +608,7 @@ impl WasmSubduction {
 #[derive(Debug)]
 pub struct PeerBatchSyncResult {
     success: bool,
-    blobs: Vec<Uint8Array>,
+    stats: WasmSyncStats,
     conn_errors: Vec<ConnErrPair>,
 }
 
@@ -627,11 +622,11 @@ impl PeerBatchSyncResult {
         self.success
     }
 
-    /// Whether the batch sync was successful with at least one connection.
+    /// Statistics about the sync operation.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn blobs(&self) -> Vec<Uint8Array> {
-        self.blobs.clone()
+    pub fn stats(&self) -> WasmSyncStats {
+        self.stats
     }
 
     /// List of connection errors that occurred during the batch sync.
@@ -671,7 +666,7 @@ impl ConnErrPair {
 #[wasm_bindgen(js_name = PeerResultMap)]
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
-pub struct WasmPeerResultMap(Map<PeerId, (bool, Vec<Blob>, Vec<(JsConnection, WasmCallError)>)>);
+pub struct WasmPeerResultMap(Map<PeerId, (bool, WasmSyncStats, Vec<(JsConnection, WasmCallError)>)>);
 
 #[wasm_bindgen(js_class = PeerResultMap)]
 impl WasmPeerResultMap {
@@ -681,12 +676,9 @@ impl WasmPeerResultMap {
     pub fn get_result(&self, peer_id: &WasmPeerId) -> Option<PeerBatchSyncResult> {
         self.0
             .get(&peer_id.clone().into())
-            .map(|(success, blobs, conn_errs)| PeerBatchSyncResult {
+            .map(|(success, stats, conn_errs)| PeerBatchSyncResult {
                 success: *success,
-                blobs: blobs
-                    .iter()
-                    .map(|blob| Uint8Array::from(blob.as_slice()))
-                    .collect(),
+                stats: *stats,
                 conn_errors: conn_errs
                     .iter()
                     .map(|(conn, err)| ConnErrPair {
@@ -701,13 +693,10 @@ impl WasmPeerResultMap {
     #[must_use]
     pub fn entries(&self) -> Vec<PeerBatchSyncResult> {
         let mut results = Vec::with_capacity(self.0.len());
-        for (success, blobs, conn_errs) in self.0.values() {
+        for (success, stats, conn_errs) in self.0.values() {
             results.push(PeerBatchSyncResult {
                 success: *success,
-                blobs: blobs
-                    .iter()
-                    .map(|blob| Uint8Array::from(blob.as_slice()))
-                    .collect(),
+                stats: *stats,
                 conn_errors: conn_errs
                     .iter()
                     .map(|(conn, err)| ConnErrPair {

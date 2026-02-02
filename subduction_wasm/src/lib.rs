@@ -16,6 +16,7 @@ pub mod fragment;
 pub mod peer_id;
 pub mod signer;
 pub mod subduction;
+pub mod sync_stats;
 
 // Re-export sedimentree types from sedimentree_wasm
 pub use sedimentree_wasm::{
