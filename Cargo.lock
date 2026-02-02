@@ -2811,7 +2811,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "sedimentree_fs"
+name = "sedimentree_fs_storage"
 version = "0.2.0"
 dependencies = [
  "async-lock",
@@ -3086,7 +3086,7 @@ dependencies = [
  "minicbor",
  "rand 0.8.5",
  "sedimentree_core",
- "sedimentree_fs",
+ "sedimentree_fs_storage",
  "subduction_core",
  "subduction_websocket",
  "thiserror 2.0.18",

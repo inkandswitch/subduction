@@ -1,7 +1,32 @@
-//! Filesystem-based storage for Subduction.
+//! Filesystem-based storage for Sedimentree.
 //!
-//! Uses a content-addressed layout where commits and fragments are stored
-//! in individual files keyed by their digest.
+//! This crate provides [`FsStorage`], a content-addressed filesystem storage
+//! implementation that implements the [`Storage`] trait from `subduction_core`.
+//!
+//! # Storage Layout
+//!
+//! ```text
+//! root/
+//! ├── trees/
+//! │   └── {sedimentree_id_hex}/
+//! │       ├── commits/
+//! │       │   └── {digest_hex}.cbor  ← Signed<LooseCommit>
+//! │       └── fragments/
+//! │           └── {digest_hex}.cbor  ← Signed<Fragment>
+//! └── blobs/
+//!     └── {digest_hex}               ← raw bytes
+//! ```
+//!
+//! # Example
+//!
+//! ```no_run
+//! use sedimentree_fs_storage::FsStorage;
+//! use std::path::PathBuf;
+//!
+//! let storage = FsStorage::new(PathBuf::from("./data")).expect("failed to create storage");
+//! ```
+
+#![forbid(unsafe_code)]
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};

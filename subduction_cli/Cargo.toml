@@ -31,7 +31,7 @@ metrics-exporter-prometheus = { workspace = true }
 minicbor = { workspace = true }
 rand = { workspace = true, features = ["std", "std_rng"] }
 sedimentree_core = { workspace = true, features = ["std"] }
-sedimentree_fs = { workspace = true }
+sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
