@@ -38,25 +38,17 @@ pub enum VerificationError {
         actual: KeyhivePeerId,
     },
 
-    /// Failed to parse the peer ID.
-    #[error("failed to parse peer ID: {0}")]
-    InvalidPeerId(String),
 }
 
 /// Errors that can occur during protocol operations.
 #[derive(Debug, Error)]
-pub enum ProtocolError<SendErr, RecvErr>
+pub enum ProtocolError<SendErr>
 where
     SendErr: core::error::Error + 'static,
-    RecvErr: core::error::Error + 'static,
 {
     /// Failed to send a message.
     #[error("send error: {0}")]
     Send(#[source] SendErr),
-
-    /// Failed to receive a message.
-    #[error("receive error: {0}")]
-    Recv(#[source] RecvErr),
 
     /// Message signing failed.
     #[error("signing error: {0}")]
@@ -108,21 +100,3 @@ pub enum StorageError {
     Deserialization(String),
 }
 
-/// Errors that can occur during event ingestion.
-#[derive(Debug, Error)]
-pub enum IngestError {
-    /// Failed to ingest one or more events.
-    #[error("failed to ingest {pending_count} events")]
-    PendingEvents {
-        /// Number of events still pending.
-        pending_count: usize,
-    },
-
-    /// Failed to deserialize event bytes.
-    #[error("failed to deserialize event: {0}")]
-    Deserialization(String),
-
-    /// Keyhive rejected the event.
-    #[error("keyhive rejected event: {0}")]
-    Rejected(String),
-}

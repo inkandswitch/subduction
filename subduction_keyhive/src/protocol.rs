@@ -97,7 +97,6 @@ where
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Conn::SendError: 'static,
-    Conn::RecvError: 'static,
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<K>,
     K: futures_kind::FutureKind + ?Sized,
@@ -146,7 +145,7 @@ where
     pub async fn sync_keyhive(
         &self,
         target: Option<&KeyhivePeerId>,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let peer_ids = match target {
             Some(t) => vec![t.clone()],
             None => self.peer_ids().await,
@@ -217,7 +216,7 @@ where
         &self,
         from: &KeyhivePeerId,
         signed_msg: SignedMessage,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let verified = signed_msg.verify(from)?;
 
         if let Some(cc_bytes) = &verified.contact_card {
@@ -240,7 +239,7 @@ where
     async fn handle_sync_request(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::SyncRequest {
             sender_id,
             found: peer_found,
@@ -318,7 +317,7 @@ where
     async fn handle_sync_response(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::SyncResponse {
             sender_id,
             requested: requested_hashes,
@@ -371,7 +370,7 @@ where
     async fn handle_sync_ops(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::SyncOps { sender_id, ops, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "SyncOps",
@@ -397,7 +396,7 @@ where
     async fn handle_request_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::RequestContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "RequestContactCard",
@@ -423,7 +422,7 @@ where
     async fn handle_missing_contact_card(
         &self,
         message: Message,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let Message::MissingContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "MissingContactCard",
@@ -445,7 +444,7 @@ where
         target_peer_id: &KeyhivePeerId,
         message: Message,
         include_contact_card: bool,
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let msg_bytes =
             cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
 
@@ -485,7 +484,7 @@ where
         peer_id: &KeyhivePeerId,
     ) -> Result<
         Option<Map<Digest<StaticEvent<T>>, StaticEvent<T>>>,
-        ProtocolError<Conn::SendError, Conn::RecvError>,
+        ProtocolError<Conn::SendError>,
     > {
         let our_id = self
             .peer_id
@@ -520,7 +519,7 @@ where
     /// Get pending event hashes as `Vec<EventHash>`.
     async fn get_pending_hashes(
         &self,
-    ) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError>> {
         let keyhive = self.keyhive.lock().await;
         let digests = keyhive.pending_event_hashes().await;
         Ok(digests.into_iter().map(|d| digest_to_bytes(&d)).collect())
@@ -530,7 +529,7 @@ where
     async fn get_event_bytes_for_hashes(
         &self,
         hashes: &[EventHash],
-    ) -> Result<Vec<EventBytes>, ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<Vec<EventBytes>, ProtocolError<Conn::SendError>> {
         let requested_set: Set<EventHash> = hashes.iter().copied().collect();
 
         let peer_id = self
@@ -566,7 +565,7 @@ where
     async fn ingest_events(
         &self,
         event_bytes_list: &[EventBytes],
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let events: Vec<StaticEvent<T>> = event_bytes_list
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
@@ -637,7 +636,7 @@ where
     async fn ingest_contact_card(
         &self,
         cc_bytes: &[u8],
-    ) -> Result<(), ProtocolError<Conn::SendError, Conn::RecvError>> {
+    ) -> Result<(), ProtocolError<Conn::SendError>> {
         let contact_card: ContactCard =
             cbor_deserialize(cc_bytes).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
 
