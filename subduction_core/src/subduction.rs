@@ -87,7 +87,7 @@ use crate::{
     },
     crypto::{signed::Signed, signer::Signer, verified::Verified},
     peer::id::PeerId,
-    policy::{ConnectionPolicy, StoragePolicy},
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter},
 };

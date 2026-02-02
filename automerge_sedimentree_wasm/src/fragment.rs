@@ -4,8 +4,8 @@ use alloc::vec::Vec;
 use sedimentree_core::collections::{Map, Set};
 
 use sedimentree_core::{commit::FragmentState, digest::Digest, loose_commit::LooseCommit};
-use subduction_wasm::{
-    digest::WasmDigest, loose_commit::WasmBlobMeta, sedimentree_fragment::WasmFragment,
+use sedimentree_wasm::{
+    digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmBlobMeta,
 };
 use wasm_bindgen::prelude::*;
 

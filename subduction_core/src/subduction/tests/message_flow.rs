@@ -13,7 +13,7 @@ use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,
     peer::id::PeerId,
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
 };

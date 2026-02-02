@@ -6,7 +6,7 @@ use core::convert::Infallible;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::id::SedimentreeId;
 
-use super::{ConnectionPolicy, StoragePolicy};
+use super::{connection::ConnectionPolicy, storage::StoragePolicy};
 use crate::peer::id::PeerId;
 
 /// An open policy that allows all connections and storage operations.

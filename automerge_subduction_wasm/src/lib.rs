@@ -12,21 +12,6 @@ use wasm_tracing::WasmLayerConfig;
 
 use wasm_bindgen::prelude::*;
 
-pub use automerge;
-pub use automerge_sedimentree_wasm;
-pub use subduction_wasm;
-
-// Re-export wasm-bindgen types so they appear in the generated JS bindings
-pub use subduction_wasm::{
-    connection::{
-        WasmBatchSyncRequest, WasmBatchSyncResponse, WasmMessage, WasmRequestId,
-        websocket::WasmWebSocket,
-    },
-    peer_id::WasmPeerId,
-    signer::WebCryptoSigner,
-    subduction::WasmSubduction,
-};
-
 /// Set a panic hook to get better error messages if the code panics.
 ///
 /// # Panics

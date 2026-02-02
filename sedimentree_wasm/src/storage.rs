@@ -791,6 +791,4 @@ impl From<JsSedimentreeStorageError> for JsValue {
     }
 }
 
-mod memory;
-
-pub use memory::MemoryStorage;
+pub mod memory;

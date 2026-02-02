@@ -22,10 +22,8 @@ use js_sys::{Array, Uint8Array};
 use sedimentree_core::{
     commit::CommitStore, digest::Digest, hex::decode_hex, loose_commit::LooseCommit,
 };
-use subduction_wasm::{
-    digest::{JsDigest, WasmDigest},
-    subduction::WasmHashMetric,
-};
+use sedimentree_wasm::digest::{JsDigest, WasmDigest};
+use subduction_wasm::subduction::WasmHashMetric;
 use wasm_bindgen::prelude::*;
 
 /// A Wasm wrapper around a duck-typed `Automerge` instance.

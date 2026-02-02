@@ -21,7 +21,7 @@ use crate::{
     },
     crypto::signed::Signed,
     peer::id::PeerId,
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
 };

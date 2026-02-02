@@ -15,7 +15,7 @@ use super::{
     destroyer::Destroyer, fetcher::Fetcher, local_access::LocalStorageAccess, putter::Putter,
     traits::Storage,
 };
-use crate::{peer::id::PeerId, policy::StoragePolicy};
+use crate::{peer::id::PeerId, policy::storage::StoragePolicy};
 
 /// A powerbox that wraps storage and policy, only allowing access through capabilities.
 ///

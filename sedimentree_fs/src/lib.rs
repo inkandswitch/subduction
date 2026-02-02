@@ -20,7 +20,7 @@
 //! # Example
 //!
 //! ```no_run
-//! use sedimentree_fs::FsStorage;
+//! use sedimentree_fs::storage::FsStorage;
 //! use std::path::PathBuf;
 //!
 //! let storage = FsStorage::new(PathBuf::from("./data")).expect("failed to create storage");
@@ -28,6 +28,4 @@
 
 #![forbid(unsafe_code)]
 
-mod storage;
-
-pub use storage::{FsStorage, FsStorageError};
+pub mod storage;

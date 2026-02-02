@@ -17,7 +17,7 @@ use subduction_core::{
     Subduction,
     connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
     crypto::signer::MemorySigner,
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
 };

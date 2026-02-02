@@ -11,8 +11,8 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
-use crate::{
-    digest::WasmDigest, loose_commit::WasmLooseCommit, sedimentree_fragment::WasmFragment,
+use sedimentree_wasm::{
+    digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit,
     sedimentree_id::WasmSedimentreeId,
 };
 

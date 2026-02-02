@@ -4,7 +4,7 @@ use crate::{
     Subduction,
     connection::{manager::Spawn, nonce_cache::NonceCache, test_utils::MockConnection},
     crypto::signer::MemorySigner,
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
 };

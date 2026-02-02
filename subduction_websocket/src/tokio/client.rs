@@ -14,10 +14,10 @@ use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
         Connection, Reconnect,
-        handshake::{Audience, Nonce},
+        handshake::Audience,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
-    crypto::signer::Signer,
+    crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };

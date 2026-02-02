@@ -4,7 +4,7 @@ use super::common::{TestSpawn, new_test_subduction, test_signer};
 use crate::{
     Subduction,
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
 };

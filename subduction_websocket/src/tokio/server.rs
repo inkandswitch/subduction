@@ -16,17 +16,16 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
 };
 use subduction_core::{
-    Subduction,
     connection::{
         handshake::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
     },
     crypto::signer::Signer,
     peer::id::PeerId,
-    policy::{ConnectionPolicy, StoragePolicy},
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::traits::Storage,
-    subduction::error::RegistrationError,
+    subduction::{Subduction, error::RegistrationError},
     timestamp::TimestampSeconds,
 };
 
@@ -353,7 +352,7 @@ where
         expected_peer_id: PeerId,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
         use crate::handshake::client_handshake;
-        use subduction_core::connection::handshake::Nonce;
+        use subduction_core::crypto::nonce::Nonce;
 
         let uri_str = uri.to_string();
         tracing::info!("Connecting to peer at {uri_str}");
@@ -451,7 +450,7 @@ where
         service_name: &str,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
         use crate::handshake::client_handshake;
-        use subduction_core::connection::handshake::Nonce;
+        use subduction_core::crypto::nonce::Nonce;
 
         let uri_str = uri.to_string();
         tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");

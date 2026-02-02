@@ -22,34 +22,34 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    Subduction,
     connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
     peer::id::PeerId,
-    policy::OpenPolicy,
+    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
+    subduction::Subduction,
 };
 use wasm_bindgen::prelude::*;
 
 use crate::{
     connection::{JsConnection, JsConnectionError},
-    depth::JsToDepth,
-    digest::{JsDigest, WasmDigest},
     error::{
         WasmAttachError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
         WasmRegistrationError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
-    loose_commit::WasmLooseCommit,
     peer_id::WasmPeerId,
-    sedimentree::WasmSedimentree,
-    sedimentree_fragment::WasmFragment,
-    sedimentree_id::WasmSedimentreeId,
     signer::JsSigner,
-    storage::{JsSedimentreeStorage, JsSedimentreeStorageError},
     sync_stats::WasmSyncStats,
 };
-
-use super::depth::WasmDepth;
+use sedimentree_wasm::{
+    depth::{JsToDepth, WasmDepth},
+    digest::{JsDigest, WasmDigest},
+    loose_commit::WasmLooseCommit,
+    sedimentree::WasmSedimentree,
+    sedimentree_id::WasmSedimentreeId,
+    storage::{JsSedimentreeStorage, JsSedimentreeStorageError},
+};
+use sedimentree_wasm::fragment::WasmFragment;
 
 use futures::{
     future::LocalBoxFuture,

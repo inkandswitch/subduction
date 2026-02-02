@@ -248,6 +248,7 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "sedimentree_core",
+ "sedimentree_wasm",
  "subduction_wasm",
  "thiserror 2.0.18",
  "tracing",
