@@ -1852,18 +1852,17 @@ impl<
 
                     // Send back data the responder requested (bidirectional sync)
                     if !requesting.is_empty() {
-                        // Track what we're sending
-                        stats.commits_sent += requesting.commit_digests.len();
-                        stats.fragments_sent += requesting.fragment_summaries.len();
-
-                        if let Err(e) = self
-                            .send_requested_data(&conn, id, &requesting)
-                            .await
-                        {
-                            tracing::warn!(
-                                "failed to send requested data to peer {:?}: {e}",
-                                to_ask
-                            );
+                        match self.send_requested_data(&conn, id, &requesting).await {
+                            Ok((commits, fragments)) => {
+                                stats.commits_sent += commits;
+                                stats.fragments_sent += fragments;
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "failed to send requested data to peer {:?}: {e}",
+                                    to_ask
+                                );
+                            }
                         }
                     }
 
@@ -2022,18 +2021,17 @@ impl<
 
                                 // Send back data the responder requested (bidirectional sync)
                                 if !requesting.is_empty() {
-                                    // Track what we're sending
-                                    stats.commits_sent += requesting.commit_digests.len();
-                                    stats.fragments_sent += requesting.fragment_summaries.len();
-
-                                    if let Err(e) = self
-                                        .send_requested_data(&conn, id, &requesting)
-                                        .await
-                                    {
-                                        tracing::warn!(
-                                            "failed to send requested data to peer {:?}: {e}",
-                                            peer_id
-                                        );
+                                    match self.send_requested_data(&conn, id, &requesting).await {
+                                        Ok((commits, fragments)) => {
+                                            stats.commits_sent += commits;
+                                            stats.fragments_sent += fragments;
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!(
+                                                "failed to send requested data to peer {:?}: {e}",
+                                                peer_id
+                                            );
+                                        }
                                     }
                                 }
 
@@ -2244,16 +2242,17 @@ impl<
     /// Send requested data back to a peer (fire-and-forget for bidirectional sync).
     ///
     /// Loads the requested commits and fragments from storage and sends them
-    /// as individual messages. Errors in sending are returned but don't prevent
-    /// sending other items.
+    /// as individual messages. Returns the count of successfully sent items.
+    /// Errors in sending individual items are logged but don't prevent sending
+    /// other items.
     async fn send_requested_data(
         &self,
         conn: &C,
         id: SedimentreeId,
         requesting: &RequestedData,
-    ) -> Result<(), IoError<F, S, C>> {
+    ) -> Result<(usize, usize), IoError<F, S, C>> {
         if requesting.is_empty() {
-            return Ok(());
+            return Ok((0, 0));
         }
 
         tracing::debug!(
@@ -2321,6 +2320,9 @@ impl<
             .into_iter()
             .collect();
 
+        let mut commits_sent = 0;
+        let mut fragments_sent = 0;
+
         // Send requested commits
         for commit_digest in &requesting.commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(commit_digest) {
@@ -2338,6 +2340,8 @@ impl<
                                 commit_digest,
                                 e
                             );
+                        } else {
+                            commits_sent += 1;
                         }
                     } else {
                         tracing::warn!("missing blob for requested commit {:?}", commit_digest);
@@ -2360,6 +2364,8 @@ impl<
                     };
                     if let Err(e) = conn.send(&msg).await {
                         tracing::warn!("failed to send requested fragment {:?}: {}", digest, e);
+                    } else {
+                        fragments_sent += 1;
                     }
                 } else {
                     tracing::warn!("missing blob for requested fragment {:?}", digest);
@@ -2372,7 +2378,7 @@ impl<
             }
         }
 
-        Ok(())
+        Ok((commits_sent, fragments_sent))
     }
 
     async fn insert_commit_locally(

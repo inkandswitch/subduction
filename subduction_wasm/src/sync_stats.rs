@@ -4,6 +4,9 @@ use subduction_core::connection::message::SyncStats;
 use wasm_bindgen::prelude::*;
 
 /// Statistics from a sync operation.
+///
+/// The "sent" counts reflect items that were _successfully_ sent over the wire,
+/// not just items that were requested.
 #[wasm_bindgen(js_name = SyncStats)]
 #[derive(Debug, Clone, Copy, Default)]
 pub struct WasmSyncStats {
@@ -29,14 +32,14 @@ impl WasmSyncStats {
         self.fragments_received
     }
 
-    /// Number of commits sent to the peer.
+    /// Number of commits successfully sent to the peer.
     #[must_use]
     #[wasm_bindgen(getter, js_name = commitsSent)]
     pub fn commits_sent(&self) -> usize {
         self.commits_sent
     }
 
-    /// Number of fragments sent to the peer.
+    /// Number of fragments successfully sent to the peer.
     #[must_use]
     #[wasm_bindgen(getter, js_name = fragmentsSent)]
     pub fn fragments_sent(&self) -> usize {

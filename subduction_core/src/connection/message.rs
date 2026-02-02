@@ -268,6 +268,8 @@ impl RequestedData {
 /// Statistics from a sync operation.
 ///
 /// Tracks how many commits and fragments were sent and received during a sync.
+/// The "sent" counts reflect items that were _successfully_ sent over the wire,
+/// not just items that were requested.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SyncStats {
@@ -277,10 +279,10 @@ pub struct SyncStats {
     /// Number of fragments received from the peer.
     pub fragments_received: usize,
 
-    /// Number of commits sent to the peer (requested by them).
+    /// Number of commits successfully sent to the peer.
     pub commits_sent: usize,
 
-    /// Number of fragments sent to the peer (requested by them).
+    /// Number of fragments successfully sent to the peer.
     pub fragments_sent: usize,
 }
 
