@@ -72,6 +72,7 @@ LooseCommit
 Memoization
 MemorySigner
 MiCKey
+minicbor
 mitigations
 misconfiguration
 ML-DSA
@@ -120,6 +121,7 @@ Stateful
 struct
 Subduction
 submodules
+TCP
 TLS
 TODO
 TODOs
@@ -169,6 +171,7 @@ decrypt
 decrypted
 decrypting
 deduplicate
+deduplicates
 deduplication
 delegator
 edgenames
