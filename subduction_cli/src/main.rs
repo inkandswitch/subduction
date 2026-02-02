@@ -78,10 +78,7 @@ fn setup_tracing() {
     let loki_layer: Option<tracing_subscriber::layer::Identity> = None;
 
     // Initialize with all layers
-    registry
-        .with(console_layer)
-        .with(loki_layer)
-        .init();
+    registry.with(console_layer).with(loki_layer).init();
 
     // Spawn Loki background task after subscriber is initialized
     #[cfg(feature = "native-tls")]

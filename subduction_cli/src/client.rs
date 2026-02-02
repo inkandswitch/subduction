@@ -1,7 +1,7 @@
 //! WebSocket client for Subduction.
 
-use sedimentree_fs_storage::FsStorage;
 use anyhow::Result;
+use sedimentree_fs_storage::FsStorage;
 use std::{path::PathBuf, time::Duration};
 use subduction_core::{connection::handshake::Audience, crypto::signer::MemorySigner};
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};

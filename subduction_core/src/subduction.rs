@@ -1025,9 +1025,7 @@ impl<
 
                     // Send back data the responder requested (bidirectional sync)
                     if !diff.requesting.is_empty() {
-                        if let Err(e) = self
-                            .send_requested_data(&conn, id, &diff.requesting)
-                            .await
+                        if let Err(e) = self.send_requested_data(&conn, id, &diff.requesting).await
                         {
                             tracing::warn!(
                                 "failed to send requested data to peer {:?}: {e}",

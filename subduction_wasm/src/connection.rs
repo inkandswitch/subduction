@@ -24,12 +24,13 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
-    connection::{message::{JsMessage, WasmMessage}, nonce::WasmNonce},
+    connection::{
+        message::{JsMessage, WasmMessage},
+        nonce::WasmNonce,
+    },
     peer_id::WasmPeerId,
 };
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
-
-
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"

@@ -294,9 +294,13 @@ fn bench_load_document(c: &mut Criterion) {
 
     for tv in TEST_VECTORS {
         group.throughput(Throughput::Bytes(tv.bytes.len() as u64));
-        group.bench_with_input(BenchmarkId::from_parameter(tv.name), tv.bytes, |b, bytes| {
-            b.iter(|| load_automerge(black_box(bytes)));
-        });
+        group.bench_with_input(
+            BenchmarkId::from_parameter(tv.name),
+            tv.bytes,
+            |b, bytes| {
+                b.iter(|| load_automerge(black_box(bytes)));
+            },
+        );
     }
 
     group.finish();
@@ -613,13 +617,9 @@ fn bench_minimize_by_metric(c: &mut Criterion) {
         let fragment_count_b10 = tree_b10.fragments().count() as u64;
 
         group.throughput(Throughput::Elements(fragment_count_b10));
-        group.bench_with_input(
-            BenchmarkId::new("base10", tv.name),
-            &tree_b10,
-            |b, tree| {
-                b.iter(|| tree.minimize(black_box(&base10)));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("base10", tv.name), &tree_b10, |b, tree| {
+            b.iter(|| tree.minimize(black_box(&base10)));
+        });
     }
 
     group.finish();
@@ -655,13 +655,9 @@ fn bench_heads_by_metric(c: &mut Criterion) {
         let fragment_count_b10 = tree_b10.fragments().count() as u64;
 
         group.throughput(Throughput::Elements(fragment_count_b10));
-        group.bench_with_input(
-            BenchmarkId::new("base10", tv.name),
-            &tree_b10,
-            |b, tree| {
-                b.iter(|| tree.heads(black_box(&base10)));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("base10", tv.name), &tree_b10, |b, tree| {
+            b.iter(|| tree.heads(black_box(&base10)));
+        });
     }
 
     group.finish();
@@ -697,13 +693,9 @@ fn bench_minimal_hash_by_metric(c: &mut Criterion) {
         let fragment_count_b10 = tree_b10.fragments().count() as u64;
 
         group.throughput(Throughput::Elements(fragment_count_b10));
-        group.bench_with_input(
-            BenchmarkId::new("base10", tv.name),
-            &tree_b10,
-            |b, tree| {
-                b.iter(|| tree.minimal_hash(black_box(&base10)));
-            },
-        );
+        group.bench_with_input(BenchmarkId::new("base10", tv.name), &tree_b10, |b, tree| {
+            b.iter(|| tree.minimal_hash(black_box(&base10)));
+        });
     }
 
     group.finish();

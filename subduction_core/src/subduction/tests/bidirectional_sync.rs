@@ -102,7 +102,11 @@ async fn test_responder_requests_missing_commits() -> TestResult {
 
     // Verify Alice has the commit
     let alice_commits = alice.get_commits(sedimentree_id).await;
-    assert_eq!(alice_commits.map(|c| c.len()), Some(1), "Alice should have 1 commit");
+    assert_eq!(
+        alice_commits.map(|c| c.len()),
+        Some(1),
+        "Alice should have 1 commit"
+    );
 
     // Now simulate peer (Bob) sending a BatchSyncRequest with an empty summary
     // (Bob has nothing, Alice has commit A)
@@ -353,9 +357,10 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Alice should send BatchSyncResponse with:
     // - missing_commits: [commit_a] (what Bob needs)
     // - requesting: [digest_b] (what Alice wants from Bob)
-    let response = tokio::time::timeout(Duration::from_millis(100), alice_handle.outbound_rx.recv())
-        .await?
-        .expect("should receive response from Alice");
+    let response =
+        tokio::time::timeout(Duration::from_millis(100), alice_handle.outbound_rx.recv())
+            .await?
+            .expect("should receive response from Alice");
 
     match response {
         Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) => {
@@ -465,7 +470,9 @@ async fn test_responder_requests_fragments() -> TestResult {
     match response {
         Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) => {
             assert!(
-                diff.requesting.fragment_summaries.contains(&fragment_summary),
+                diff.requesting
+                    .fragment_summaries
+                    .contains(&fragment_summary),
                 "Alice should request the fragment from Bob. Got: {:?}",
                 diff.requesting.fragment_summaries
             );
@@ -550,10 +557,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
                 diff.missing_commits.is_empty(),
                 "No missing commits when in sync"
             );
-            assert!(
-                diff.requesting.is_empty(),
-                "No requesting when in sync"
-            );
+            assert!(diff.requesting.is_empty(), "No requesting when in sync");
         }
         other => panic!("Expected BatchSyncResponse, got {:?}", other),
     }

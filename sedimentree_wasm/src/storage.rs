@@ -631,7 +631,10 @@ impl Storage<Local> for JsSedimentreeStorage {
     ) -> LocalBoxFuture<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
         let blob_digests = blob_digests.to_vec();
         Local::from_future(async move {
-            tracing::debug!(count = blob_digests.len(), "JsSedimentreeStorage::load_blobs");
+            tracing::debug!(
+                count = blob_digests.len(),
+                "JsSedimentreeStorage::load_blobs"
+            );
 
             let mut results = Vec::with_capacity(blob_digests.len());
             for digest in blob_digests {

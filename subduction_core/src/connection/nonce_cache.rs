@@ -28,8 +28,6 @@ use sedimentree_core::collections::Set;
 
 use crate::{crypto::nonce::Nonce, peer::id::PeerId, timestamp::TimestampSeconds};
 
-
-
 /// Default bucket duration (3 minutes).
 const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(180);
 

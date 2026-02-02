@@ -44,12 +44,12 @@ use crate::{
 use sedimentree_wasm::{
     depth::{JsToDepth, WasmDepth},
     digest::{JsDigest, WasmDigest},
+    fragment::WasmFragment,
     loose_commit::WasmLooseCommit,
     sedimentree::WasmSedimentree,
     sedimentree_id::WasmSedimentreeId,
     storage::{JsSedimentreeStorage, JsSedimentreeStorageError},
 };
-use sedimentree_wasm::fragment::WasmFragment;
 
 use futures::{
     future::LocalBoxFuture,
@@ -666,7 +666,9 @@ impl ConnErrPair {
 #[wasm_bindgen(js_name = PeerResultMap)]
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
-pub struct WasmPeerResultMap(Map<PeerId, (bool, WasmSyncStats, Vec<(JsConnection, WasmCallError)>)>);
+pub struct WasmPeerResultMap(
+    Map<PeerId, (bool, WasmSyncStats, Vec<(JsConnection, WasmCallError)>)>,
+);
 
 #[wasm_bindgen(js_class = PeerResultMap)]
 impl WasmPeerResultMap {
