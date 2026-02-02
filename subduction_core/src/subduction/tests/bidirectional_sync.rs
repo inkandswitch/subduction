@@ -1,15 +1,17 @@
 //! Tests for bidirectional sync (1.5 RT protocol).
 //!
 //! The bidirectional sync protocol works as follows:
-//! 1. Requestor sends BatchSyncRequest with their sedimentree summary
+//! 1. Requestor sends `BatchSyncRequest` with their sedimentree summary
 //! 2. Responder calculates what requestor is missing AND what responder is missing
-//! 3. Responder sends BatchSyncResponse with:
+//! 3. Responder sends `BatchSyncResponse` with:
 //!    - `missing_commits`/`missing_fragments`: data requestor needs
 //!    - `requesting`: data responder wants back from requestor
 //! 4. Requestor receives response and sends requested data (fire-and-forget)
 //!
 //! This completes sync in 1.5 round trips instead of requiring a second
 //! full request/response cycle.
+
+#![allow(clippy::expect_used, clippy::panic)]
 
 use super::common::{TokioSpawn, test_signer};
 use crate::{
@@ -135,20 +137,19 @@ async fn test_responder_requests_missing_commits() -> TestResult {
         .await?
         .expect("should receive response");
 
-    match response {
-        Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) => {
-            assert_eq!(
-                diff.missing_commits.len(),
-                1,
-                "Response should contain the commit Alice has"
-            );
-            assert!(
-                diff.requesting.is_empty(),
-                "Alice shouldn't request anything (Bob has nothing)"
-            );
-        }
-        other => panic!("Expected BatchSyncResponse, got {:?}", other),
-    }
+    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+        panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+
+    assert_eq!(
+        diff.missing_commits.len(),
+        1,
+        "Response should contain the commit Alice has"
+    );
+    assert!(
+        diff.requesting.is_empty(),
+        "Alice shouldn't request anything (Bob has nothing)"
+    );
 
     alice_actor_task.abort();
     alice_listener_task.abort();
@@ -217,20 +218,19 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
         .await?
         .expect("should receive response");
 
-    match response {
-        Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) => {
-            assert!(
-                diff.missing_commits.is_empty(),
-                "Alice has nothing to send to Bob"
-            );
-            assert!(
-                diff.requesting.commit_digests.contains(&digest_b),
-                "Alice should request commit B from Bob. Got: {:?}",
-                diff.requesting.commit_digests
-            );
-        }
-        other => panic!("Expected BatchSyncResponse, got {:?}", other),
-    }
+    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+        panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+
+    assert!(
+        diff.missing_commits.is_empty(),
+        "Alice has nothing to send to Bob"
+    );
+    assert!(
+        diff.requesting.commit_digests.contains(&digest_b),
+        "Alice should request commit B from Bob. Got: {:?}",
+        diff.requesting.commit_digests
+    );
 
     alice_actor_task.abort();
     alice_listener_task.abort();
@@ -243,6 +243,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
 /// 3. Alice sends commit A to Bob AND requests commit B
 /// 4. Bob sends commit B back to Alice (fire-and-forget)
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn test_full_bidirectional_sync_flow() -> TestResult {
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let alice_peer_id = PeerId::new([1u8; 32]);
@@ -362,48 +363,47 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             .await?
             .expect("should receive response from Alice");
 
-    match response {
-        Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) => {
-            assert_eq!(
-                diff.missing_commits.len(),
-                1,
-                "Alice should send commit A to Bob"
-            );
-            assert!(
-                diff.requesting.commit_digests.contains(&digest_b),
-                "Alice should request commit B"
-            );
+    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+        panic!("Expected BatchSyncResponse, got {response:?}");
+    };
 
-            // Simulate Bob receiving this response and sending the requested data back
-            // Bob would call send_requested_data, which sends LooseCommit messages
+    assert_eq!(
+        diff.missing_commits.len(),
+        1,
+        "Alice should send commit A to Bob"
+    );
+    assert!(
+        diff.requesting.commit_digests.contains(&digest_b),
+        "Alice should request commit B"
+    );
 
-            // Feed the response to Bob (simulating Bob receiving Alice's response)
-            bob_handle
-                .inbound_tx
-                .send(Message::BatchSyncResponse(BatchSyncResponse {
-                    id: sedimentree_id,
-                    req_id: RequestId {
-                        requestor: bob_peer_id,
-                        nonce: 1,
-                    },
-                    diff: diff.clone(),
-                }))
-                .await?;
-            tokio::time::sleep(Duration::from_millis(50)).await;
+    // Simulate Bob receiving this response and sending the requested data back
+    // Bob would call send_requested_data, which sends LooseCommit messages
 
-            // Bob should now have commit A (from the response's missing_commits)
-            // Note: The response handling adds the missing_commits to Bob's storage
-            // But we need Bob to process this...
+    // Feed the response to Bob (simulating Bob receiving Alice's response)
+    bob_handle
+        .inbound_tx
+        .send(Message::BatchSyncResponse(BatchSyncResponse {
+            id: sedimentree_id,
+            req_id: RequestId {
+                requestor: bob_peer_id,
+                nonce: 1,
+            },
+            diff: diff.clone(),
+        }))
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
-            // Actually, in this test setup, Bob receives a BatchSyncResponse but
-            // didn't initiate the call, so he won't process it correctly.
-            // The response handling happens in sync_with_peer/full_sync flow.
+    // Bob should now have commit A (from the response's missing_commits)
+    // Note: The response handling adds the missing_commits to Bob's storage
+    // But we need Bob to process this...
 
-            // For a proper integration test, we'd need to trigger Bob's sync.
-            // For now, let's verify the protocol fields are correct.
-        }
-        other => panic!("Expected BatchSyncResponse, got {:?}", other),
-    }
+    // Actually, in this test setup, Bob receives a BatchSyncResponse but
+    // didn't initiate the call, so he won't process it correctly.
+    // The response handling happens in sync_with_peer/full_sync flow.
+
+    // For a proper integration test, we'd need to trigger Bob's sync.
+    // For now, let's verify the protocol fields are correct.
 
     alice_actor_task.abort();
     alice_listener_task.abort();
@@ -467,18 +467,17 @@ async fn test_responder_requests_fragments() -> TestResult {
         .await?
         .expect("should receive response");
 
-    match response {
-        Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) => {
-            assert!(
-                diff.requesting
-                    .fragment_summaries
-                    .contains(&fragment_summary),
-                "Alice should request the fragment from Bob. Got: {:?}",
-                diff.requesting.fragment_summaries
-            );
-        }
-        other => panic!("Expected BatchSyncResponse, got {:?}", other),
-    }
+    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+        panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+
+    assert!(
+        diff.requesting
+            .fragment_summaries
+            .contains(&fragment_summary),
+        "Alice should request the fragment from Bob. Got: {:?}",
+        diff.requesting.fragment_summaries
+    );
 
     alice_actor_task.abort();
     alice_listener_task.abort();
@@ -551,16 +550,15 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
         .await?
         .expect("should receive response");
 
-    match response {
-        Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) => {
-            assert!(
-                diff.missing_commits.is_empty(),
-                "No missing commits when in sync"
-            );
-            assert!(diff.requesting.is_empty(), "No requesting when in sync");
-        }
-        other => panic!("Expected BatchSyncResponse, got {:?}", other),
-    }
+    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+        panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+
+    assert!(
+        diff.missing_commits.is_empty(),
+        "No missing commits when in sync"
+    );
+    assert!(diff.requesting.is_empty(), "No requesting when in sync");
 
     alice_actor_task.abort();
     alice_listener_task.abort();
