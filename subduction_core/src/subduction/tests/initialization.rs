@@ -2,11 +2,11 @@
 
 use super::common::{TestSpawn, new_test_subduction, test_signer};
 use crate::{
-    Subduction,
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use future_form::Sendable;
 use sedimentree_core::commit::CountLeadingZeroBytes;

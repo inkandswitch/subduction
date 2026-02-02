@@ -13,7 +13,6 @@
 
 use super::common::{TokioSpawn, test_signer};
 use crate::{
-    Subduction,
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         nonce_cache::NonceCache,
@@ -24,6 +23,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use core::time::Duration;
 use future_form::Sendable;

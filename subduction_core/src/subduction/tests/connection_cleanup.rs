@@ -2,7 +2,6 @@
 
 use super::common::{TestSpawn, test_signer};
 use crate::{
-    Subduction,
     connection::{
         nonce_cache::NonceCache,
         test_utils::{FailingSendMockConnection, MockConnection},
@@ -12,6 +11,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use future_form::Sendable;
 use sedimentree_core::{

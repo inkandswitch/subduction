@@ -1,12 +1,12 @@
 //! Common test utilities and helpers.
 
 use crate::{
-    Subduction,
     connection::{manager::Spawn, nonce_cache::NonceCache, test_utils::MockConnection},
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
+    subduction::Subduction,
 };
 use alloc::sync::Arc;
 use future_form::Sendable;
