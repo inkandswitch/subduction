@@ -6,7 +6,7 @@ use crate::{
     crypto::signer::MemorySigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
 };
 use alloc::sync::Arc;
 use future_form::Sendable;

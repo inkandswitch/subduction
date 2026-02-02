@@ -6,7 +6,7 @@ use crate::{
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     policy::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
 };
 use future_form::Sendable;
 use sedimentree_core::commit::CountLeadingZeroBytes;

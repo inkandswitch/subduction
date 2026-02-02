@@ -290,6 +290,21 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
+        let blob_digests = blob_digests.to_vec();
+        K::from_future(async move {
+            tracing::debug!(count = blob_digests.len(), "MemoryStorage::load_blobs");
+            let blobs = self.blobs.lock().await;
+            Ok(blob_digests
+                .into_iter()
+                .filter_map(|digest| blobs.get(&digest).map(|blob| (digest, blob.clone())))
+                .collect())
+        })
+    }
+
     fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?blob_digest, "MemoryStorage::delete_blob");

@@ -15,7 +15,7 @@ use crate::{
     peer::id::PeerId,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
 };
 use core::time::Duration;
 use future_form::{Local, Sendable};

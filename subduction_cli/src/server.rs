@@ -9,7 +9,7 @@ use subduction_core::{
     connection::nonce_cache::NonceCache,
     crypto::signer::MemorySigner,
     policy::OpenPolicy,
-    storage::{MetricsStorage, RefreshMetrics},
+    storage::metrics::{MetricsStorage, RefreshMetrics},
 };
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;

@@ -50,6 +50,3 @@ pub mod timestamp;
 pub mod metrics;
 
 pub use subduction::Subduction;
-
-#[cfg(feature = "metrics")]
-pub use storage::MetricsStorage;

@@ -11,7 +11,7 @@ use crate::{
     peer::id::PeerId,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
 };
 use future_form::Sendable;
 use sedimentree_core::{

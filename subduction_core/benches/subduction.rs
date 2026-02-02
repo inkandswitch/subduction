@@ -37,7 +37,9 @@ mod generators {
         sedimentree::SedimentreeSummary,
     };
     use subduction_core::{
-        connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncDiff},
+        connection::message::{
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff,
+        },
         crypto::{signed::Signed, signer::MemorySigner},
         peer::id::PeerId,
         storage::key::StorageKey,
@@ -177,6 +179,10 @@ mod generators {
         SyncDiff {
             missing_commits,
             missing_fragments,
+            requesting: RequestedData {
+                commit_digests: Vec::new(),
+                fragment_summaries: Vec::new(),
+            },
         }
     }
 

@@ -17,7 +17,7 @@ use sedimentree_core::{
 use crate::{
     crypto::signed::Signed,
     metrics,
-    storage::{BatchResult, Storage},
+    storage::traits::{BatchResult, Storage},
 };
 
 /// A storage wrapper that records metrics for all operations.
@@ -384,6 +384,19 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
             let start = Instant::now();
             let result = self.inner.load_blob(blob_digest).await;
             metrics::storage_operation_duration("load_blob", start.elapsed().as_secs_f64());
+            result
+        })
+    }
+
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
+        let blob_digests = blob_digests.to_vec();
+        K::from_future(async move {
+            let start = Instant::now();
+            let result = self.inner.load_blobs(&blob_digests).await;
+            metrics::storage_operation_duration("load_blobs", start.elapsed().as_secs_f64());
             result
         })
     }

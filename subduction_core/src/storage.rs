@@ -50,17 +50,12 @@ pub mod destroyer;
 pub mod fetcher;
 pub mod id;
 pub mod key;
+pub mod local_access;
 pub mod memory;
 pub mod powerbox;
 pub mod putter;
 pub mod traits;
 
-pub use memory::MemoryStorage;
-pub use traits::{BatchResult, Storage};
-
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub mod metrics;
-
-#[cfg(feature = "metrics")]
-pub use metrics::{MetricsStorage, RefreshMetrics};

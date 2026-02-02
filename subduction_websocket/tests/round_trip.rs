@@ -19,7 +19,7 @@ use subduction_core::{
     crypto::signer::MemorySigner,
     policy::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
 };
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,

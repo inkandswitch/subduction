@@ -80,7 +80,8 @@ use crate::{
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
-            BatchSyncRequest, BatchSyncResponse, Message, RemoveSubscriptions, RequestId, SyncDiff,
+            BatchSyncRequest, BatchSyncResponse, Message, RemoveSubscriptions, RequestId,
+            RequestedData, SyncDiff,
         },
         nonce_cache::NonceCache,
     },
@@ -131,7 +132,7 @@ type CommitDigest = Digest<LooseCommit>;
 type FragmentDigest = Digest<Fragment>;
 type BlobDigest = Digest<Blob>;
 
-use crate::storage::Storage;
+use crate::storage::traits::Storage;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -295,12 +296,14 @@ impl<
         for id in ids {
             let signed_loose_commits = subduction
                 .storage
-                .load_loose_commits(id)
+                .local_access()
+                .load_loose_commits::<F>(id)
                 .await
                 .map_err(HydrationError::LoadLooseCommitsError)?;
             let signed_fragments = subduction
                 .storage
-                .load_fragments(id)
+                .local_access()
+                .load_fragments::<F>(id)
                 .await
                 .map_err(HydrationError::LoadFragmentsError)?;
 
@@ -576,7 +579,8 @@ impl<
                 let len = blobs.len();
                 for blob in blobs {
                     self.storage
-                        .save_blob(blob)
+                        .local_access()
+                        .save_blob::<F>(blob)
                         .await
                         .map_err(IoError::Storage)?;
                 }
@@ -927,7 +931,7 @@ impl<
     /// * Returns `S::Error` if the storage backend encounters an error.
     pub async fn get_blob(&self, digest: BlobDigest) -> Result<Option<Blob>, S::Error> {
         tracing::debug!("Looking for blob with digest {:?}", digest);
-        if let Some(data) = self.storage.load_blob(digest).await? {
+        if let Some(data) = self.storage.local_access().load_blob::<F>(digest).await? {
             Ok(Some(data))
         } else {
             Ok(None)
@@ -960,7 +964,7 @@ impl<
                         .map(|fragment| fragment.summary().blob_meta().digest()),
                 )
             {
-                if let Some(blob) = self.storage.load_blob(digest).await? {
+                if let Some(blob) = self.storage.local_access().load_blob::<F>(digest).await? {
                     results.push(blob);
                 } else {
                     tracing::warn!("Missing blob for digest {:?}", digest);
@@ -1018,6 +1022,19 @@ impl<
                         .map_err(IoError::ConnCall)?;
 
                     debug_assert_eq!(req_id, resp_batch_id);
+
+                    // Send back data the responder requested (bidirectional sync)
+                    if !diff.requesting.is_empty() {
+                        if let Err(e) = self
+                            .send_requested_data(&conn, id, &diff.requesting)
+                            .await
+                        {
+                            tracing::warn!(
+                                "failed to send requested data to peer {:?}: {e}",
+                                conn.peer_id()
+                            );
+                        }
+                    }
 
                     if let Err(e) = self
                         .recv_batch_sync_response(&conn.peer_id(), id, diff)
@@ -1269,7 +1286,8 @@ impl<
             .await;
 
         self.storage
-            .save_blob(blob.clone())
+            .local_access()
+            .save_blob::<F>(blob.clone())
             .await
             .map_err(IoError::Storage)?;
 
@@ -1498,12 +1516,14 @@ impl<
         // Load signed commits and fragments from storage
         let signed_commits = self
             .storage
-            .load_loose_commits(id)
+            .local_access()
+            .load_loose_commits::<F>(id)
             .await
             .map_err(IoError::Storage)?;
         let signed_fragments = self
             .storage
-            .load_fragments(id)
+            .local_access()
+            .load_fragments::<F>(id)
             .await
             .map_err(IoError::Storage)?;
 
@@ -1522,7 +1542,13 @@ impl<
                 their_summary.fragment_summaries().len()
             );
 
-            let (commits_to_add, local_commit_digests, local_fragment_digests) = {
+            let (
+                commits_to_add,
+                local_commit_digests,
+                local_fragment_digests,
+                our_missing_commit_digests,
+                our_missing_fragment_summaries,
+            ) = {
                 let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
                 (
                     diff.remote_commits
@@ -1536,6 +1562,15 @@ impl<
                     diff.local_fragments
                         .iter()
                         .map(|f| f.digest())
+                        .collect::<Vec<_>>(),
+                    // What we (responder) are missing from requestor
+                    diff.remote_commits
+                        .iter()
+                        .map(|c| c.digest())
+                        .collect::<Vec<_>>(),
+                    diff.remote_fragment_summaries
+                        .iter()
+                        .map(|s| (*s).clone())
                         .collect::<Vec<_>>(),
                 )
             };
@@ -1551,7 +1586,8 @@ impl<
                     let blob_digest = payload.blob_meta().digest();
                     if let Some(blob) = self
                         .storage
-                        .load_blob(blob_digest)
+                        .local_access()
+                        .load_blob::<F>(blob_digest)
                         .await
                         .map_err(IoError::Storage)?
                     {
@@ -1570,7 +1606,8 @@ impl<
                     let blob_digest = payload.summary().blob_meta().digest();
                     if let Some(blob) = self
                         .storage
-                        .load_blob(blob_digest)
+                        .local_access()
+                        .load_blob::<F>(blob_digest)
                         .await
                         .map_err(IoError::Storage)?
                     {
@@ -1583,14 +1620,20 @@ impl<
             }
 
             tracing::info!(
-                "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments",
+                "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments, requesting {} commits and {} fragments",
                 their_missing_commits.len(),
-                their_missing_fragments.len()
+                their_missing_fragments.len(),
+                our_missing_commit_digests.len(),
+                our_missing_fragment_summaries.len(),
             );
 
             SyncDiff {
                 missing_commits: their_missing_commits,
                 missing_fragments: their_missing_fragments,
+                requesting: RequestedData {
+                    commit_digests: our_missing_commit_digests,
+                    fragment_summaries: our_missing_fragment_summaries,
+                },
             }
         };
 
@@ -1757,6 +1800,7 @@ impl<
                         SyncDiff {
                             missing_commits,
                             missing_fragments,
+                            requesting,
                         },
                     ..
                 }) => {
@@ -1798,6 +1842,19 @@ impl<
                         self.insert_fragment_locally(&putter, verified, blob)
                             .await
                             .map_err(IoError::Storage)?;
+                    }
+
+                    // Send back data the responder requested (bidirectional sync)
+                    if !requesting.is_empty() {
+                        if let Err(e) = self
+                            .send_requested_data(&conn, id, &requesting)
+                            .await
+                        {
+                            tracing::warn!(
+                                "failed to send requested data to peer {:?}: {e}",
+                                to_ask
+                            );
+                        }
                     }
 
                     // Mutual subscription: we subscribed to them, so also add them
@@ -1897,6 +1954,7 @@ impl<
                                     SyncDiff {
                                         missing_commits,
                                         missing_fragments,
+                                        requesting,
                                     },
                                 ..
                             }) => {
@@ -1944,6 +2002,19 @@ impl<
                                     self.insert_fragment_locally(&putter, verified, blob)
                                         .await
                                         .map_err(IoError::<F, S, C>::Storage)?;
+                                }
+
+                                // Send back data the responder requested (bidirectional sync)
+                                if !requesting.is_empty() {
+                                    if let Err(e) = self
+                                        .send_requested_data(&conn, id, &requesting)
+                                        .await
+                                    {
+                                        tracing::warn!(
+                                            "failed to send requested data to peer {:?}: {e}",
+                                            peer_id
+                                        );
+                                    }
                                 }
 
                                 // Mutual subscription: we subscribed to them, so also add them
@@ -2146,6 +2217,140 @@ impl<
 
     //     Ok(())
     // }
+
+    /// Send requested data back to a peer (fire-and-forget for bidirectional sync).
+    ///
+    /// Loads the requested commits and fragments from storage and sends them
+    /// as individual messages. Errors in sending are returned but don't prevent
+    /// sending other items.
+    async fn send_requested_data(
+        &self,
+        conn: &C,
+        id: SedimentreeId,
+        requesting: &RequestedData,
+    ) -> Result<(), IoError<F, S, C>> {
+        if requesting.is_empty() {
+            return Ok(());
+        }
+
+        tracing::debug!(
+            "sending {} requested commits and {} requested fragments to peer {:?}",
+            requesting.commit_digests.len(),
+            requesting.fragment_summaries.len(),
+            conn.peer_id()
+        );
+
+        // Load commits and fragments from storage
+        let commit_by_digest: Map<_, _> = if requesting.commit_digests.is_empty() {
+            Map::default()
+        } else {
+            self.storage
+                .local_access()
+                .load_loose_commits::<F>(id)
+                .await
+                .map_err(IoError::Storage)?
+                .into_iter()
+                .collect()
+        };
+
+        let fragment_by_summary: Map<_, _> = if requesting.fragment_summaries.is_empty() {
+            Map::default()
+        } else {
+            self.storage
+                .local_access()
+                .load_fragments::<F>(id)
+                .await
+                .map_err(IoError::Storage)?
+                .into_iter()
+                .filter_map(|(digest, signed)| {
+                    signed
+                        .decode_payload()
+                        .ok()
+                        .map(|f| (f.summary().clone(), (digest, signed)))
+                })
+                .collect()
+        };
+
+        // Collect all blob digests we need to load
+        let mut blob_digests_needed: Vec<BlobDigest> = Vec::new();
+
+        for commit_digest in &requesting.commit_digests {
+            if let Some(signed_commit) = commit_by_digest.get(commit_digest) {
+                if let Ok(payload) = signed_commit.decode_payload() {
+                    blob_digests_needed.push(payload.blob_meta().digest());
+                }
+            }
+        }
+
+        for requested_summary in &requesting.fragment_summaries {
+            if fragment_by_summary.contains_key(requested_summary) {
+                blob_digests_needed.push(requested_summary.blob_meta().digest());
+            }
+        }
+
+        // Batch load all blobs
+        let blob_by_digest: Map<_, _> = self
+            .storage
+            .local_access()
+            .load_blobs::<F>(&blob_digests_needed)
+            .await
+            .map_err(IoError::Storage)?
+            .into_iter()
+            .collect();
+
+        // Send requested commits
+        for commit_digest in &requesting.commit_digests {
+            if let Some(signed_commit) = commit_by_digest.get(commit_digest) {
+                if let Ok(payload) = signed_commit.decode_payload() {
+                    let blob_digest = payload.blob_meta().digest();
+                    if let Some(blob) = blob_by_digest.get(&blob_digest) {
+                        let msg = Message::LooseCommit {
+                            id,
+                            commit: signed_commit.clone(),
+                            blob: blob.clone(),
+                        };
+                        if let Err(e) = conn.send(&msg).await {
+                            tracing::warn!(
+                                "failed to send requested commit {:?}: {}",
+                                commit_digest,
+                                e
+                            );
+                        }
+                    } else {
+                        tracing::warn!("missing blob for requested commit {:?}", commit_digest);
+                    }
+                }
+            } else {
+                tracing::warn!("requested commit {:?} not found in storage", commit_digest);
+            }
+        }
+
+        // Send requested fragments
+        for requested_summary in &requesting.fragment_summaries {
+            if let Some((digest, signed_fragment)) = fragment_by_summary.get(requested_summary) {
+                let blob_digest = requested_summary.blob_meta().digest();
+                if let Some(blob) = blob_by_digest.get(&blob_digest) {
+                    let msg = Message::Fragment {
+                        id,
+                        fragment: signed_fragment.clone(),
+                        blob: blob.clone(),
+                    };
+                    if let Err(e) = conn.send(&msg).await {
+                        tracing::warn!("failed to send requested fragment {:?}: {}", digest, e);
+                    }
+                } else {
+                    tracing::warn!("missing blob for requested fragment {:?}", digest);
+                }
+            } else {
+                tracing::warn!(
+                    "requested fragment with summary {:?} not found in storage",
+                    requested_summary.head()
+                );
+            }
+        }
+
+        Ok(())
+    }
 
     async fn insert_commit_locally(
         &self,

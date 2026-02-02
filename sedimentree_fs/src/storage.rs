@@ -15,7 +15,7 @@ use std::{
 };
 use subduction_core::{
     crypto::signed::Signed,
-    storage::{BatchResult, Storage},
+    storage::traits::{BatchResult, Storage},
 };
 use thiserror::Error;
 
@@ -544,13 +544,35 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?blob_digest, "FsStorage::load_blob");
-
             let blob_path = self.blob_path(blob_digest);
             match tokio::fs::read(&blob_path).await {
                 Ok(data) => Ok(Some(Blob::new(data))),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
                 Err(e) => Err(e.into()),
             }
+        })
+    }
+
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
+        let blob_digests = blob_digests.to_vec();
+        Sendable::from_future(async move {
+            tracing::debug!(count = blob_digests.len(), "FsStorage::load_blobs");
+
+            let mut results = Vec::with_capacity(blob_digests.len());
+            for digest in blob_digests {
+                let blob_path = self.blob_path(digest);
+                match tokio::fs::read(&blob_path).await {
+                    Ok(data) => results.push((digest, Blob::new(data))),
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                        // Skip missing blobs
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+            }
+            Ok(results)
         })
     }
 
@@ -822,6 +844,13 @@ impl Storage<Local> for FsStorage {
         blob_digest: Digest<Blob>,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
         Local::from_future(<Self as Storage<Sendable>>::load_blob(self, blob_digest))
+    }
+
+    fn load_blobs(
+        &self,
+        blob_digests: &[Digest<Blob>],
+    ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
+        Local::from_future(<Self as Storage<Sendable>>::load_blobs(self, blob_digests))
     }
 
     fn delete_blob(

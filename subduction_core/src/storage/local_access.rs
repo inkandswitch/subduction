@@ -1,0 +1,143 @@
+//! Local storage access for trusted internal operations.
+//!
+//! [`LocalStorageAccess`] provides direct storage access for operations that don't
+//! fit the capability model:
+//!
+//! - **Blobs**: Content-addressed, shared across sedimentrees
+//! - **Hydration**: Loading our own data at startup
+//!
+//! This is separate from [`StoragePowerbox`] which only mints capabilities for
+//! peer-authorized access.
+
+use alloc::{sync::Arc, vec::Vec};
+
+use future_form::FutureForm;
+use sedimentree_core::{
+    blob::Blob, collections::Set, digest::Digest, fragment::Fragment, id::SedimentreeId,
+    loose_commit::LooseCommit,
+};
+
+use super::traits::Storage;
+use crate::crypto::signed::Signed;
+
+type CommitDigest = Digest<LooseCommit>;
+type FragmentDigest = Digest<Fragment>;
+type BlobDigest = Digest<Blob>;
+
+/// Direct storage access for trusted local operations.
+///
+/// Use this for:
+/// - Blob operations (content-addressed, not sedimentree-scoped)
+/// - Hydration (loading our own data at startup)
+/// - Internal sync operations
+///
+/// This bypasses the capability model — only use from trusted code paths.
+#[derive(Debug)]
+pub struct LocalStorageAccess<S> {
+    storage: Arc<S>,
+}
+
+impl<S> LocalStorageAccess<S> {
+    /// Create a new local storage access wrapper.
+    pub fn new(storage: Arc<S>) -> Self {
+        Self { storage }
+    }
+
+    /// Get the underlying storage Arc.
+    ///
+    /// This is useful when you need to pass the storage to other components.
+    #[must_use]
+    pub fn storage(&self) -> &Arc<S> {
+        &self.storage
+    }
+
+    // ==================== Blob Operations ====================
+
+    /// Save a blob, returning its digest.
+    #[must_use]
+    pub fn save_blob<K: FutureForm>(
+        &self,
+        blob: Blob,
+    ) -> K::Future<'_, Result<BlobDigest, S::Error>>
+    where
+        S: Storage<K>,
+    {
+        self.storage.save_blob(blob)
+    }
+
+    /// Load blobs by their digests.
+    ///
+    /// Returns only the blobs that were found. Missing digests are silently skipped.
+    #[must_use]
+    pub fn load_blobs<K: FutureForm>(
+        &self,
+        digests: &[BlobDigest],
+    ) -> K::Future<'_, Result<Vec<(BlobDigest, Blob)>, S::Error>>
+    where
+        S: Storage<K>,
+    {
+        self.storage.load_blobs(digests)
+    }
+
+    /// Load a single blob by its digest.
+    pub async fn load_blob<K: FutureForm>(
+        &self,
+        digest: BlobDigest,
+    ) -> Result<Option<Blob>, S::Error>
+    where
+        S: Storage<K>,
+    {
+        self.storage.load_blob(digest).await
+    }
+
+    // ==================== Hydration Operations ====================
+
+    /// Load all sedimentree IDs from storage.
+    #[must_use]
+    pub fn load_all_sedimentree_ids<K: FutureForm>(
+        &self,
+    ) -> K::Future<'_, Result<Set<SedimentreeId>, S::Error>>
+    where
+        S: Storage<K>,
+    {
+        self.storage.load_all_sedimentree_ids()
+    }
+
+    /// Load loose commits for a sedimentree.
+    ///
+    /// Returns digests alongside signed data for efficient indexing.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn load_loose_commits<K: FutureForm>(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> K::Future<'_, Result<Vec<(CommitDigest, Signed<LooseCommit>)>, S::Error>>
+    where
+        S: Storage<K>,
+    {
+        self.storage.load_loose_commits(sedimentree_id)
+    }
+
+    /// Load fragments for a sedimentree.
+    ///
+    /// Returns digests alongside signed data for efficient indexing.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn load_fragments<K: FutureForm>(
+        &self,
+        sedimentree_id: SedimentreeId,
+    ) -> K::Future<'_, Result<Vec<(FragmentDigest, Signed<Fragment>)>, S::Error>>
+    where
+        S: Storage<K>,
+    {
+        self.storage.load_fragments(sedimentree_id)
+    }
+}
+
+impl<S> Clone for LocalStorageAccess<S> {
+    fn clone(&self) -> Self {
+        Self {
+            storage: self.storage.clone(),
+        }
+    }
+}

@@ -7,7 +7,7 @@ use crate::{
     peer::id::PeerId,
     policy::{ConnectionPolicy, StoragePolicy},
     sharded_map::ShardedMap,
-    storage::MemoryStorage,
+    storage::memory::MemoryStorage,
 };
 use alloc::{vec, vec::Vec};
 use core::fmt;

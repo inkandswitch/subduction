@@ -6,7 +6,7 @@ use future_form::FutureForm;
 use sedimentree_core::{blob::Blob, digest::Digest};
 use thiserror::Error;
 
-use crate::{connection::Connection, storage::Storage};
+use crate::{connection::Connection, storage::traits::Storage};
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
 #[derive(Debug, Clone, Copy, Error)]

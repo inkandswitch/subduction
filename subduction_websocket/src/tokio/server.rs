@@ -25,7 +25,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{ConnectionPolicy, StoragePolicy},
     sharded_map::ShardedMap,
-    storage::Storage,
+    storage::traits::Storage,
     subduction::error::RegistrationError,
     timestamp::TimestampSeconds,
 };
