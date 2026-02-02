@@ -1,11 +1,19 @@
 //! # Wasm Bindings for the Subduction/Automerge integration.
+//!
+//! This crate re-exports all types from `subduction_wasm` and `automerge_sedimentree_wasm`
+//! to provide a single unified entry point for TypeScript/JavaScript consumers.
 
 #![cfg_attr(not(feature = "std"), no_std)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![allow(clippy::missing_const_for_fn)] // wasm_bindgen doens't like const
+#![allow(ambiguous_glob_reexports)] // Intentional: umbrella crate for JS consumers
 
 #[cfg(feature = "std")]
 extern crate std;
+
+// Re-export everything from subduction_wasm and automerge_sedimentree_wasm
+pub use automerge_sedimentree_wasm::*;
+pub use subduction_wasm::*;
 
 #[cfg(feature = "wasm-tracing")]
 use wasm_tracing::WasmLayerConfig;
