@@ -10,6 +10,7 @@ members = [
   "subduction_cli",
   "subduction_core",
   "subduction_keyhive_policy",
+  "subduction_keyhive",
   "subduction_wasm",
   "subduction_websocket"
 ]
@@ -44,7 +45,9 @@ async-tungstenite = "0.31.0"
 automerge = "0.7.0"
 axum = "0.8"
 base58 = "0.2.0"
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 blake3 = { version = "1.8", default-features = false }
+ciborium = { version = "0.2", default-features = false }
 bolero = "0.13.4"
 clap = { version = "4.5", features = ["derive"] }
 console-subscriber = "0.5.0"
@@ -57,6 +60,7 @@ futures = { version = "0.3.31", default-features = false, features = ["alloc", "
 futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 future_form = "0.2.0"
+futures_kind = { version = "0.1", default-features = false }
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
