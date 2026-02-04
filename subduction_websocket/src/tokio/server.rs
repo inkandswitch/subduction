@@ -194,18 +194,26 @@ where
                                         };
 
                                         // Step 3: Create WebSocket wrapper with verified PeerId
-                                        let ws_conn = UnifiedWebSocket::Accepted(WebSocket::new(
+                                        let ws = WebSocket::new(
                                             ws_stream,
                                             tout,
                                             default_time_limit,
                                             client_id,
-                                        ));
+                                        );
+                                        let ws_conn = UnifiedWebSocket::Accepted(ws.clone());
 
-                                        // Step 4: Start listener
-                                        let listen_ws = ws_conn.clone();
+                                        // Step 4: Start listener and sender tasks
+                                        let listen_ws = ws.clone();
                                         tokio::spawn(async move {
                                             if let Err(e) = listen_ws.listen().await {
                                                 tracing::error!("WebSocket listen error: {e}");
+                                            }
+                                        });
+
+                                        let sender_ws = ws;
+                                        tokio::spawn(async move {
+                                            if let Err(e) = sender_ws.run_sender().await {
+                                                tracing::error!("WebSocket sender error: {e}");
                                             }
                                         });
 
@@ -393,14 +401,10 @@ where
         let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let ws_conn = UnifiedWebSocket::Dialed(WebSocket::new(
-            ws_stream,
-            timeout,
-            default_time_limit,
-            server_id,
-        ));
+        let ws = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
+        let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
-        let listen_ws = ws_conn.clone();
+        let listen_ws = ws.clone();
         let listen_uri_str = uri_str.clone();
         let cancel_token = self.cancellation_token.clone();
         tokio::spawn(async move {
@@ -411,6 +415,22 @@ where
                 result = listen_ws.listen() => {
                     if let Err(e) = result {
                         tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                    }
+                }
+            }
+        });
+
+        let sender_ws = ws;
+        let sender_uri_str = uri_str.clone();
+        let sender_cancel_token = self.cancellation_token.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                () = sender_cancel_token.cancelled() => {
+                    tracing::debug!("Shutting down sender for peer {sender_uri_str}");
+                }
+                result = sender_ws.run_sender() => {
+                    if let Err(e) = result {
+                        tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
                     }
                 }
             }
@@ -478,14 +498,10 @@ where
         let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let ws_conn = UnifiedWebSocket::Dialed(WebSocket::new(
-            ws_stream,
-            timeout,
-            default_time_limit,
-            server_id,
-        ));
+        let ws = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
+        let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
-        let listen_ws = ws_conn.clone();
+        let listen_ws = ws.clone();
         let listen_uri_str = uri_str.clone();
         let cancel_token = self.cancellation_token.clone();
         tokio::spawn(async move {
@@ -496,6 +512,22 @@ where
                 result = listen_ws.listen() => {
                     if let Err(e) = result {
                         tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                    }
+                }
+            }
+        });
+
+        let sender_ws = ws;
+        let sender_uri_str = uri_str.clone();
+        let sender_cancel_token = self.cancellation_token.clone();
+        tokio::spawn(async move {
+            tokio::select! {
+                () = sender_cancel_token.cancelled() => {
+                    tracing::debug!("Shutting down sender for peer {sender_uri_str}");
+                }
+                result = sender_ws.run_sender() => {
+                    if let Err(e) = result {
+                        tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
                     }
                 }
             }

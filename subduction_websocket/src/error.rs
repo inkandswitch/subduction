@@ -10,6 +10,10 @@ pub enum SendError {
     /// WebSocket error.
     #[error("WebSocket error: {0}")]
     WebSocket(#[from] tungstenite::Error),
+
+    /// Outbound channel closed (sender task stopped).
+    #[error("Outbound channel closed")]
+    ChannelClosed,
 }
 
 /// Problem while attempting to make a roundtrip call.
@@ -26,6 +30,10 @@ pub enum CallError {
     /// Timed out waiting for response.
     #[error("Timed out waiting for response")]
     Timeout,
+
+    /// Outbound channel closed (sender task stopped).
+    #[error("Outbound channel closed")]
+    ChannelClosed,
 }
 
 /// Problem while attempting to receive a message.

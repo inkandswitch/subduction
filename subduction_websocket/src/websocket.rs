@@ -30,6 +30,12 @@ use crate::{
     timeout::{TimedOut, Timeout},
 };
 
+/// Channel capacity for outbound messages.
+///
+/// This is sized to allow many concurrent sends without blocking while still
+/// providing backpressure if the sender task can't keep up.
+const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
+
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]
 pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
@@ -41,7 +47,16 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
     default_time_limit: Duration,
 
     ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
-    outbound: Arc<Mutex<WebSocketSender<T>>>,
+
+    /// Channel for outbound messages. A dedicated sender task drains this to the WebSocket.
+    /// This eliminates mutex contention when many tasks send concurrently.
+    outbound_tx: async_channel::Sender<tungstenite::Message>,
+
+    /// Receiver end, held to keep channel alive and passed to sender task.
+    outbound_rx: async_channel::Receiver<tungstenite::Message>,
+
+    /// The actual WebSocket sender, used only by the sender task.
+    ws_sender: Arc<Mutex<WebSocketSender<T>>>,
 
     pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
@@ -90,12 +105,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
         #[allow(clippy::expect_used)]
         let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
 
+        let tx = self.outbound_tx.clone();
         async move {
-            self.outbound
-                .lock()
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await?;
+                .map_err(|_| SendError::ChannelClosed)?;
 
             Ok(())
         }
@@ -123,6 +137,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
     ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+        let outbound_tx = self.outbound_tx.clone();
         async move {
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
@@ -135,11 +150,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
                 .expect("serialization should be infallible");
 
-            self.outbound
-                .lock()
-                .await
+            outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await?;
+                .await
+                .map_err(|_| CallError::ChannelClosed)?;
 
             tracing::debug!(
                 chan_id = self.chan_id,
@@ -174,6 +188,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
 
 impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
     /// Create a new WebSocket connection.
+    ///
+    /// After creating the connection, you must call [`run_sender`](Self::run_sender)
+    /// to start the background task that sends outbound messages.
     pub fn new(
         ws: WebSocketStream<T>,
         timeout_strategy: O,
@@ -187,6 +204,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
             oneshot::Sender<BatchSyncResponse>,
         >::new()));
         let (inbound_writer, inbound_reader) = async_channel::bounded(128);
+        let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
 
@@ -199,13 +217,41 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
             default_time_limit,
 
             ws_reader: Arc::new(Mutex::new(ws_reader)),
-            outbound: Arc::new(Mutex::new(ws_writer)),
+            outbound_tx,
+            outbound_rx,
+            ws_sender: Arc::new(Mutex::new(ws_writer)),
             pending,
             inbound_writer,
             inbound_reader,
 
             _phantom: PhantomData,
         }
+    }
+
+    /// Run the sender task that drains outbound messages to the WebSocket.
+    ///
+    /// This task should be spawned as a background task. It will run until the
+    /// outbound channel is closed (when all senders are dropped) or a send error occurs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if sending to the WebSocket fails.
+    pub async fn run_sender(&self) -> Result<(), RunError> {
+        tracing::info!(
+            "starting WebSocket sender task for peer {:?}",
+            self.peer_id
+        );
+
+        let rx = self.outbound_rx.clone();
+        let mut ws_sender = self.ws_sender.lock().await;
+
+        while let Ok(msg) = rx.recv().await {
+            tracing::debug!("sender task: sending message to WebSocket");
+            ws_sender.send(msg).await?;
+        }
+
+        tracing::info!("sender task: outbound channel closed, shutting down");
+        Ok(())
     }
 
     /// The timeout strategy used for requests.
@@ -317,9 +363,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                 }
                 Ok(tungstenite::Message::Ping(p)) => {
                     tracing::debug!(size = p.len(), "received ping");
-                    self.outbound
-                        .lock()
-                        .await
+                    self.outbound_tx
                         .send(tungstenite::Message::Pong(p))
                         .await
                         .unwrap_or_else(|_| {
@@ -385,12 +429,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
         #[allow(clippy::expect_used)]
         let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
 
+        let tx = self.outbound_tx.clone();
         async move {
-            self.outbound
-                .lock()
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await?;
+                .map_err(|_| SendError::ChannelClosed)?;
 
             Ok(())
         }
@@ -418,6 +461,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
     ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+        let outbound_tx = self.outbound_tx.clone();
         async move {
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
@@ -430,11 +474,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
                 .expect("serialization should be infallible");
 
-            self.outbound
-                .lock()
-                .await
+            outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await?;
+                .await
+                .map_err(|_| CallError::ChannelClosed)?;
 
             tracing::info!(
                 chan_id = self.chan_id,
@@ -478,7 +521,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K> + Clone> Cl
             timeout_strategy: self.timeout_strategy.clone(),
             default_time_limit: self.default_time_limit,
             ws_reader: self.ws_reader.clone(),
-            outbound: self.outbound.clone(),
+            outbound_tx: self.outbound_tx.clone(),
+            outbound_rx: self.outbound_rx.clone(),
+            ws_sender: self.ws_sender.clone(),
             pending: self.pending.clone(),
             inbound_writer: self.inbound_writer.clone(),
             inbound_reader: self.inbound_reader.clone(),
@@ -493,7 +538,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
     fn eq(&self, other: &Self) -> bool {
         self.peer_id == other.peer_id
             && Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
-            && Arc::ptr_eq(&self.outbound, &other.outbound)
+            && self.outbound_tx.same_channel(&other.outbound_tx)
             && Arc::ptr_eq(&self.pending, &other.pending)
             && self.inbound_writer.same_channel(&other.inbound_writer)
             && self.inbound_reader.same_channel(&other.inbound_reader)
