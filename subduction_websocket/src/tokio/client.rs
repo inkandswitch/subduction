@@ -1,21 +1,21 @@
 //! # Subduction [`WebSocket`] client for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    handshake::{WebSocketHandshakeError, client_handshake},
+    handshake::{client_handshake, WebSocketHandshakeError},
     timeout::Timeout,
-    websocket::WebSocket,
+    websocket::{ListenerTask, SenderTask, WebSocket},
+    MAX_MESSAGE_SIZE,
 };
-use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
+use async_tungstenite::tokio::{connect_async_with_config, ConnectStream};
 use core::time::Duration;
 use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use subduction_core::{
     connection::{
-        Connection, Reconnect,
         handshake::Audience,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Reconnect,
     },
     crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
@@ -75,21 +75,13 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
-    #[allow(clippy::type_complexity)]
     pub async fn new<'a>(
         address: Uri,
         timeout: O,
         default_time_limit: Duration,
         signer: R,
         audience: Audience,
-    ) -> Result<
-        (
-            Self,
-            BoxFuture<'a, Result<(), RunError>>,
-            BoxFuture<'a, Result<(), RunError>>,
-        ),
-        ClientConnectError,
-    >
+    ) -> Result<(Self, ListenerTask<'a>, SenderTask<'a>), ClientConnectError>
     where
         O: 'a,
         R: 'a,
@@ -115,8 +107,8 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let listener_socket = socket.clone();
         let sender_socket = socket.clone();
 
-        let listener_fut = async move { listener_socket.listen().await }.boxed();
-        let sender_fut = async move { sender_socket.run_sender().await }.boxed();
+        let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
+        let sender = SenderTask::new(async move { sender_socket.run_sender().await }.boxed());
 
         let client = TokioWebSocketClient {
             address,
@@ -124,7 +116,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
             audience,
             socket,
         };
-        Ok((client, listener_fut, sender_fut))
+        Ok((client, listener, sender))
     }
 
     /// Start listening for incoming messages.
@@ -187,15 +179,15 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
 }
 
 impl<
-    R: 'static + Signer<Sendable> + Clone + Send + Sync,
-    O: 'static + Timeout<Sendable> + Clone + Send + Sync,
-> Reconnect<Sendable> for TokioWebSocketClient<R, O>
+        R: 'static + Signer<Sendable> + Clone + Send + Sync,
+        O: 'static + Timeout<Sendable> + Clone + Send + Sync,
+    > Reconnect<Sendable> for TokioWebSocketClient<R, O>
 {
     type ReconnectionError = ClientConnectError;
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ReconnectionError>> {
         async move {
-            let (new_instance, listener_fut, sender_fut) = TokioWebSocketClient::new(
+            let (new_instance, listener, sender) = TokioWebSocketClient::new(
                 self.address.clone(),
                 self.socket.timeout_strategy().clone(),
                 self.socket.default_time_limit(),
@@ -206,12 +198,12 @@ impl<
 
             *self = new_instance;
             tokio::spawn(async move {
-                if let Err(e) = listener_fut.await {
+                if let Err(e) = listener.await {
                     tracing::error!("WebSocket client listener error after reconnect: {e:?}");
                 }
             });
             tokio::spawn(async move {
-                if let Err(e) = sender_fut.await {
+                if let Err(e) = sender.await {
                     tracing::error!("WebSocket client sender error after reconnect: {e:?}");
                 }
             });

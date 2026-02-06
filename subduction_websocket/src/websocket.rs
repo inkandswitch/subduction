@@ -2,6 +2,7 @@
 
 use alloc::{boxed::Box, sync::Arc};
 use core::{
+    future::IntoFuture,
     marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -12,15 +13,15 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
+    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -35,6 +36,58 @@ use crate::{
 /// This is sized to allow many concurrent sends without blocking while still
 /// providing backpressure if the sender task can't keep up.
 const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
+
+/// A background task that receives incoming WebSocket messages and dispatches them.
+///
+/// Must be spawned (e.g., via `tokio::spawn`) for the connection to receive messages.
+pub struct ListenerTask<'a>(BoxFuture<'a, Result<(), RunError>>);
+
+impl core::fmt::Debug for ListenerTask<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ListenerTask").finish_non_exhaustive()
+    }
+}
+
+impl<'a> ListenerTask<'a> {
+    pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
+        Self(fut)
+    }
+}
+
+impl<'a> IntoFuture for ListenerTask<'a> {
+    type Output = Result<(), RunError>;
+    type IntoFuture = BoxFuture<'a, Result<(), RunError>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        self.0
+    }
+}
+
+/// A background task that drains outbound messages to the WebSocket.
+///
+/// Must be spawned (e.g., via `tokio::spawn`) for the connection to send messages.
+pub struct SenderTask<'a>(BoxFuture<'a, Result<(), RunError>>);
+
+impl core::fmt::Debug for SenderTask<'_> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("SenderTask").finish_non_exhaustive()
+    }
+}
+
+impl<'a> SenderTask<'a> {
+    pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
+        Self(fut)
+    }
+}
+
+impl<'a> IntoFuture for SenderTask<'a> {
+    type Output = Result<(), RunError>;
+    type IntoFuture = BoxFuture<'a, Result<(), RunError>>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        self.0
+    }
+}
 
 /// A WebSocket implementation for [`Connection`].
 #[derive(Debug)]
@@ -237,10 +290,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     ///
     /// Returns an error if sending to the WebSocket fails.
     pub async fn run_sender(&self) -> Result<(), RunError> {
-        tracing::info!(
-            "starting WebSocket sender task for peer {:?}",
-            self.peer_id
-        );
+        tracing::info!("starting WebSocket sender task for peer {:?}", self.peer_id);
 
         let rx = self.outbound_rx.clone();
         let mut ws_sender = self.ws_sender.lock().await;

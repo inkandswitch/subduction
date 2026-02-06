@@ -14,7 +14,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
+    connection::{handshake::Audience, message::Message, nonce_cache::NonceCache, Connection},
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -22,7 +22,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -82,7 +82,7 @@ async fn rend_receive() -> TestResult {
 
     let bound = server_ws.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, actor) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -92,7 +92,12 @@ async fn rend_receive() -> TestResult {
     .await?;
 
     tokio::spawn(async move {
-        actor.await?;
+        listener_fut.await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    tokio::spawn(async move {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -223,7 +228,7 @@ async fn batch_sync() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, socket_listener) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -233,13 +238,12 @@ async fn batch_sync() -> TestResult {
     .await?;
 
     tokio::spawn(async {
-        socket_listener.await?;
+        listener_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
-    let task_client_ws = client_ws.clone();
-    tokio::spawn(async move {
-        task_client_ws.listen().await?;
+    tokio::spawn(async {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 

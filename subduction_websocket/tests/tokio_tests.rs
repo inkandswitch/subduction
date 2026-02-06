@@ -13,7 +13,7 @@ use sedimentree_core::{
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
+        handshake::Audience, message::Message, nonce_cache::NonceCache, Connection, Reconnect,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
@@ -22,7 +22,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -106,7 +106,7 @@ async fn client_reconnect() -> TestResult {
     let bound = server.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
 
-    let (mut client_ws, socket_listener) = TokioWebSocketClient::new(
+    let (mut client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -116,7 +116,12 @@ async fn client_reconnect() -> TestResult {
     .await?;
 
     tokio::spawn(async {
-        socket_listener.await?;
+        listener_fut.await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    tokio::spawn(async {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -182,7 +187,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     // Connect a client
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (_client_ws, socket_listener) = TokioWebSocketClient::new(
+    let (_client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -192,7 +197,12 @@ async fn server_graceful_shutdown() -> TestResult {
     .await?;
 
     tokio::spawn(async {
-        socket_listener.await?;
+        listener_fut.await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    tokio::spawn(async {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -298,7 +308,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         tokio::spawn(actor_fut);
         tokio::spawn(listener_fut);
 
-        let (client_ws, socket_listener) = TokioWebSocketClient::new(
+        let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
             uri.clone(),
             TimeoutTokio,
             Duration::from_secs(5),
@@ -308,13 +318,12 @@ async fn multiple_concurrent_clients() -> TestResult {
         .await?;
 
         tokio::spawn(async {
-            socket_listener.await?;
+            listener_fut.await?;
             Ok::<(), anyhow::Error>(())
         });
 
-        let task_client_ws = client_ws.clone();
-        tokio::spawn(async move {
-            task_client_ws.listen().await?;
+        tokio::spawn(async {
+            sender_fut.await?;
             Ok::<(), anyhow::Error>(())
         });
 
@@ -461,7 +470,7 @@ async fn request_with_delayed_response() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, socket_listener) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -471,13 +480,12 @@ async fn request_with_delayed_response() -> TestResult {
     .await?;
 
     tokio::spawn(async {
-        socket_listener.await?;
+        listener_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
-    let task_client_ws = client_ws.clone();
-    tokio::spawn(async move {
-        task_client_ws.listen().await?;
+    tokio::spawn(async {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -592,7 +600,7 @@ async fn large_message_handling() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, socket_listener) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(10),
@@ -602,13 +610,12 @@ async fn large_message_handling() -> TestResult {
     .await?;
 
     tokio::spawn(async {
-        socket_listener.await?;
+        listener_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
-    let task_client_ws = client_ws.clone();
-    tokio::spawn(async move {
-        task_client_ws.listen().await?;
+    tokio::spawn(async {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -713,7 +720,7 @@ async fn message_ordering() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, socket_listener) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -723,13 +730,12 @@ async fn message_ordering() -> TestResult {
     .await?;
 
     tokio::spawn(async {
-        socket_listener.await?;
+        listener_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
-    let task_client_ws = client_ws.clone();
-    tokio::spawn(async move {
-        task_client_ws.listen().await?;
+    tokio::spawn(async {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 

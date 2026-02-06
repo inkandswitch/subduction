@@ -56,7 +56,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     let server_peer_id = crate::parse_peer_id(&args.server_peer_id)?;
 
     tracing::info!("Connecting to WebSocket server at {}", uri);
-    let (_client, listen_fut, sender_fut): (TokioWebSocketClient<MemorySigner, _>, _, _) =
+    let (_client, listener, sender): (TokioWebSocketClient<MemorySigner, _>, _, _) =
         TokioWebSocketClient::new(
             uri,
             FuturesTimerTimeout,
@@ -74,7 +74,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     let listener_token = token.clone();
     tokio::spawn(async move {
         tokio::select! {
-            result = listen_fut => {
+            result = listener => {
                 if let Err(e) = result {
                     tracing::error!("Listener error: {}", e);
                 }
@@ -89,7 +89,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     let sender_token = token.clone();
     tokio::spawn(async move {
         tokio::select! {
-            result = sender_fut => {
+            result = sender => {
                 if let Err(e) = result {
                     tracing::error!("Sender error: {}", e);
                 }
