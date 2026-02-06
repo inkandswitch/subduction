@@ -120,12 +120,13 @@ use sedimentree_core::{
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     commit::CountLeadingZeroBytes,
+    crypto::fingerprint::{Fingerprint, FingerprintSeed},
     depth::{Depth, DepthMetric},
     digest::Digest,
-    fragment::Fragment,
+    fragment::{Fragment, FragmentId},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
-    sedimentree::{RemoteDiff, Sedimentree, SedimentreeSummary},
+    loose_commit::{CommitId, LooseCommit},
+    sedimentree::{FingerprintSummary, Sedimentree},
 };
 
 type CommitDigest = Digest<LooseCommit>;
@@ -133,6 +134,21 @@ type FragmentDigest = Digest<Fragment>;
 type BlobDigest = Digest<Blob>;
 
 use crate::storage::traits::Storage;
+
+/// Generate a random [`FingerprintSeed`] for a sync request.
+///
+/// # Panics
+///
+/// Panics if the system random number generator fails.
+#[cfg(feature = "getrandom")]
+#[allow(clippy::expect_used)]
+fn random_fingerprint_seed() -> FingerprintSeed {
+    let mut bytes = [0u8; 16];
+    getrandom::getrandom(&mut bytes).expect("getrandom failed");
+    let key0 = u64::from_le_bytes(bytes[..8].try_into().expect("checked length"));
+    let key1 = u64::from_le_bytes(bytes[8..].try_into().expect("checked length"));
+    FingerprintSeed::new(key0, key1)
+}
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -617,7 +633,7 @@ impl<
             }
             Message::BatchSyncRequest(BatchSyncRequest {
                 id,
-                sedimentree_summary,
+                fingerprint_summary,
                 req_id,
                 subscribe,
             }) => {
@@ -631,7 +647,7 @@ impl<
                 }
 
                 if let Err(ListenError::MissingBlobs(missing)) = self
-                    .recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
+                    .recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
                     .await
                 {
                     tracing::warn!(
@@ -640,7 +656,7 @@ impl<
                         missing
                     );
                     self.request_blobs(missing).await;
-                    self.recv_batch_sync_request(id, &sedimentree_summary, req_id, conn)
+                    self.recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
                         .await?; // try responing again
                 }
             }
@@ -1088,9 +1104,10 @@ impl<
         } else {
             let tree = self.sedimentrees.get_cloned(&id).await;
             if let Some(tree) = tree {
-                let summary = tree.summarize();
                 let conns = self.all_connections().await;
                 for conn in conns {
+                    let seed = random_fingerprint_seed();
+                    let summary = tree.fingerprint_summarize(&seed);
                     let req_id = conn.next_request_id().await;
                     let BatchSyncResponse {
                         id,
@@ -1101,7 +1118,7 @@ impl<
                             BatchSyncRequest {
                                 id,
                                 req_id,
-                                sedimentree_summary: summary.clone(),
+                                fingerprint_summary: summary,
                                 subscribe: false,
                             },
                             timeout,
@@ -1113,7 +1130,7 @@ impl<
 
                     // Send back data the responder requested (bidirectional sync)
                     if !diff.requesting.is_empty()
-                        && let Err(e) = self.send_requested_data(&conn, id, &diff.requesting).await
+                        && let Err(e) = self.send_requested_data(&conn, id, &seed, &diff.requesting).await
                     {
                         tracing::warn!(
                             "failed to send requested data to peer {:?}: {e}",
@@ -1579,7 +1596,7 @@ impl<
     pub async fn recv_batch_sync_request(
         &self,
         id: SedimentreeId,
-        their_summary: &SedimentreeSummary,
+        their_fingerprints: &FingerprintSummary,
         req_id: RequestId,
         conn: &C,
     ) -> Result<(), ListenError<F, S, C>> {
@@ -1630,36 +1647,29 @@ impl<
 
             let sedimentree = locked.entry(id).or_default();
             tracing::debug!(
-                "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commits and {} fragments",
-                their_summary.loose_commits().len(),
-                their_summary.fragment_summaries().len()
+                "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commit fps and {} fragment fps",
+                their_fingerprints.commit_fingerprints().len(),
+                their_fingerprints.fragment_fingerprints().len()
             );
 
             let (
                 local_commit_digests,
                 local_fragment_digests,
-                our_missing_commit_digests,
-                our_missing_fragment_summaries,
+                our_missing_commit_fingerprints,
+                our_missing_fragment_fingerprints,
             ) = {
-                let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
+                let diff = sedimentree.diff_remote_fingerprints(their_fingerprints);
                 (
-                    diff.local_commits
+                    diff.local_only_commits
                         .iter()
                         .map(|c| c.digest())
                         .collect::<Vec<_>>(),
-                    diff.local_fragments
+                    diff.local_only_fragments
                         .iter()
                         .map(|f| f.digest())
                         .collect::<Vec<_>>(),
-                    // What we (responder) are missing from requestor
-                    diff.remote_commits
-                        .iter()
-                        .map(|c| c.digest())
-                        .collect::<Vec<_>>(),
-                    diff.remote_fragment_summaries
-                        .iter()
-                        .map(|s| (*s).clone())
-                        .collect::<Vec<_>>(),
+                    diff.remote_only_commit_fingerprints,
+                    diff.remote_only_fragment_fingerprints,
                 )
             };
 
@@ -1714,16 +1724,16 @@ impl<
                 "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments, requesting {} commits and {} fragments",
                 their_missing_commits.len(),
                 their_missing_fragments.len(),
-                our_missing_commit_digests.len(),
-                our_missing_fragment_summaries.len(),
+                our_missing_commit_fingerprints.len(),
+                our_missing_fragment_fingerprints.len(),
             );
 
             SyncDiff {
                 missing_commits: their_missing_commits,
                 missing_fragments: their_missing_fragments,
                 requesting: RequestedData {
-                    commit_digests: our_missing_commit_digests,
-                    fragment_summaries: our_missing_fragment_summaries,
+                    commit_fingerprints: our_missing_commit_fingerprints,
+                    fragment_fingerprints: our_missing_fragment_fingerprints,
                 },
             }
         };
@@ -1864,18 +1874,19 @@ impl<
 
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
-            let summary = self
+            let seed = random_fingerprint_seed();
+            let fp_summary = self
                 .sedimentrees
                 .get_cloned(&id)
                 .await
-                .map(|t| t.summarize())
-                .unwrap_or_default();
+                .map(|t| t.fingerprint_summarize(&seed))
+                .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
 
             tracing::debug!(
-                "Sending summary for {:?}: {} loose commits, {} fragment summaries",
+                "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
                 id,
-                summary.loose_commits().len(),
-                summary.fragment_summaries().len()
+                fp_summary.commit_fingerprints().len(),
+                fp_summary.fragment_fingerprints().len()
             );
 
             let req_id = conn.next_request_id().await;
@@ -1885,7 +1896,7 @@ impl<
                     BatchSyncRequest {
                         id,
                         req_id,
-                        sedimentree_summary: summary,
+                        fingerprint_summary: fp_summary,
                         subscribe,
                     },
                     timeout,
@@ -1953,14 +1964,14 @@ impl<
                         "Received response for {:?}: {} commits received, peer requesting {} commits and {} fragments",
                         id,
                         commits_to_receive,
-                        requesting.commit_digests.len(),
-                        requesting.fragment_summaries.len()
+                        requesting.commit_fingerprints.len(),
+                        requesting.fragment_fingerprints.len()
                     );
 
                     // Send back data the responder requested (bidirectional sync)
                     if !requesting.is_empty() {
                         tracing::debug!("Calling send_requested_data for {:?}", id);
-                        match self.send_requested_data(&conn, id, &requesting).await {
+                        match self.send_requested_data(&conn, id, &seed, &requesting).await {
                             Ok((commits, fragments)) => {
                                 tracing::debug!(
                                     "send_requested_data returned: {} commits, {} fragments",
@@ -2012,7 +2023,7 @@ impl<
     /// A tuple of:
     /// - `bool`: Whether at least one sync was successful
     /// - `SyncStats`: Statistics about the sync (note: `commits_sent`/`fragments_sent` will be 0)
-    /// - `Option<(C, RequestedData)>`: If the peer requested data, the connection and data to send
+    /// - `Option<(C, FingerprintSeed, RequestedData)>`: If the peer requested data, the connection, seed, and data to send
     /// - `Vec<(C, C::CallError)>`: Any connection errors encountered
     ///
     /// # Errors
@@ -2027,10 +2038,10 @@ impl<
     ///     .await?;
     ///
     /// // Spawn the send as a background task (fire-and-forget)
-    /// if let Some((conn, requested_data)) = pending_send {
+    /// if let Some((conn, seed, requested_data)) = pending_send {
     ///     let subduction = subduction.clone();
     ///     tokio::spawn(async move {
-    ///         let _ = subduction.send_requested_data(&conn, sed_id, &requested_data).await;
+    ///         let _ = subduction.send_requested_data(&conn, sed_id, &seed, &requested_data).await;
     ///     });
     /// }
     /// ```
@@ -2045,7 +2056,7 @@ impl<
         (
             bool,
             SyncStats,
-            Option<(C, RequestedData)>,
+            Option<(C, FingerprintSeed, RequestedData)>,
             Vec<(C, C::CallError)>,
         ),
         IoError<F, S, C>,
@@ -2058,7 +2069,7 @@ impl<
 
         let mut stats = SyncStats::new();
         let mut had_success = false;
-        let mut pending_send: Option<(C, RequestedData)> = None;
+        let mut pending_send: Option<(C, FingerprintSeed, RequestedData)> = None;
 
         let peer_conns: Vec<C> = {
             self.connections
@@ -2073,18 +2084,19 @@ impl<
 
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
-            let summary = self
+            let seed = random_fingerprint_seed();
+            let fp_summary = self
                 .sedimentrees
                 .get_cloned(&id)
                 .await
-                .map(|t| t.summarize())
-                .unwrap_or_default();
+                .map(|t| t.fingerprint_summarize(&seed))
+                .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
 
             tracing::debug!(
-                "Sending summary for {:?}: {} loose commits, {} fragment summaries",
+                "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
                 id,
-                summary.loose_commits().len(),
-                summary.fragment_summaries().len()
+                fp_summary.commit_fingerprints().len(),
+                fp_summary.fragment_fingerprints().len()
             );
 
             let req_id = conn.next_request_id().await;
@@ -2094,7 +2106,7 @@ impl<
                     BatchSyncRequest {
                         id,
                         req_id,
-                        sedimentree_summary: summary,
+                        fingerprint_summary: fp_summary,
                         subscribe,
                     },
                     timeout,
@@ -2162,13 +2174,13 @@ impl<
                         "Received response for {:?}: {} commits received, peer requesting {} commits and {} fragments",
                         id,
                         commits_to_receive,
-                        requesting.commit_digests.len(),
-                        requesting.fragment_summaries.len()
+                        requesting.commit_fingerprints.len(),
+                        requesting.fragment_fingerprints.len()
                     );
 
                     // Return the requested data for caller to send in background
                     if !requesting.is_empty() {
-                        pending_send = Some((conn.clone(), requesting));
+                        pending_send = Some((conn.clone(), seed, requesting));
                     }
 
                     // Mutual subscription: we subscribed to them, so also add them
@@ -2199,7 +2211,7 @@ impl<
     /// Returns:
     /// - `bool`: whether the sync succeeded
     /// - `SyncStats`: statistics about the sync
-    /// - `Option<RequestedData>`: data the peer requested from us (caller should send)
+    /// - `Option<(FingerprintSeed, RequestedData)>`: seed + data the peer requested from us (caller should send)
     /// - `Option<C::CallError>`: error if the call failed
     ///
     /// # Errors
@@ -2212,7 +2224,7 @@ impl<
         id: SedimentreeId,
         subscribe: bool,
         timeout: Option<Duration>,
-    ) -> Result<(bool, SyncStats, Option<RequestedData>, Option<C::CallError>), IoError<F, S, C>>
+    ) -> Result<(bool, SyncStats, Option<(FingerprintSeed, RequestedData)>, Option<C::CallError>), IoError<F, S, C>>
     {
         let peer_id = conn.peer_id();
         tracing::debug!(
@@ -2223,18 +2235,19 @@ impl<
 
         let mut stats = SyncStats::new();
 
-        let summary = self
+        let seed = random_fingerprint_seed();
+        let fp_summary = self
             .sedimentrees
             .get_cloned(&id)
             .await
-            .map(|t| t.summarize())
-            .unwrap_or_default();
+            .map(|t| t.fingerprint_summarize(&seed))
+            .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
 
         tracing::debug!(
-            "Sending summary for {:?}: {} loose commits, {} fragment summaries",
+            "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
             id,
-            summary.loose_commits().len(),
-            summary.fragment_summaries().len()
+            fp_summary.commit_fingerprints().len(),
+            fp_summary.fragment_fingerprints().len()
         );
 
         let req_id = conn.next_request_id().await;
@@ -2244,7 +2257,7 @@ impl<
                 BatchSyncRequest {
                     id,
                     req_id,
-                    sedimentree_summary: summary,
+                    fingerprint_summary: fp_summary,
                     subscribe,
                 },
                 timeout,
@@ -2312,15 +2325,15 @@ impl<
                     "Received response for {:?}: {} commits received, peer requesting {} commits and {} fragments",
                     id,
                     commits_to_receive,
-                    requesting.commit_digests.len(),
-                    requesting.fragment_summaries.len()
+                    requesting.commit_fingerprints.len(),
+                    requesting.fragment_fingerprints.len()
                 );
 
                 // Return the requested data for caller to send
                 let pending_send = if requesting.is_empty() {
                     None
                 } else {
-                    Some(requesting)
+                    Some((seed, requesting))
                 };
 
                 // Mutual subscription
@@ -2387,12 +2400,13 @@ impl<
 
                     for conn in peer_conns {
                         tracing::debug!("Using connection to peer {}", conn.peer_id());
-                        let summary = self
+                        let seed = random_fingerprint_seed();
+                        let fp_summary = self
                             .sedimentrees
                             .get_cloned(&id)
                             .await
-                            .map(|t| t.summarize())
-                            .unwrap_or_default();
+                            .map(|t| t.fingerprint_summarize(&seed))
+                            .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
 
                         let req_id = conn.next_request_id().await;
 
@@ -2401,7 +2415,7 @@ impl<
                                 BatchSyncRequest {
                                     id,
                                     req_id,
-                                    sedimentree_summary: summary,
+                                    fingerprint_summary: fp_summary,
                                     subscribe,
                                 },
                                 timeout,
@@ -2441,8 +2455,8 @@ impl<
                                     sedimentree_id = ?id,
                                     commits_received = commits_to_receive,
                                     fragments_received = fragments_to_receive,
-                                    peer_requesting_commits = requesting.commit_digests.len(),
-                                    peer_requesting_fragments = requesting.fragment_summaries.len(),
+                                    peer_requesting_commits = requesting.commit_fingerprints.len(),
+                                    peer_requesting_fragments = requesting.fragment_fingerprints.len(),
                                     "sync_all: response received"
                                 );
 
@@ -2482,7 +2496,7 @@ impl<
 
                                 // Send back data the responder requested (bidirectional sync)
                                 if !requesting.is_empty() {
-                                    match self.send_requested_data(conn, id, &requesting).await {
+                                    match self.send_requested_data(conn, id, &seed, &requesting).await {
                                         Ok((commits, fragments)) => {
                                             stats.commits_sent += commits;
                                             stats.fragments_sent += fragments;
@@ -2777,6 +2791,7 @@ impl<
         &self,
         conn: &C,
         id: SedimentreeId,
+        seed: &FingerprintSeed,
         requesting: &RequestedData,
     ) -> Result<(usize, usize), IoError<F, S, C>> {
         if requesting.is_empty() {
@@ -2785,13 +2800,58 @@ impl<
 
         tracing::debug!(
             "sending {} requested commits and {} requested fragments to peer {:?}",
-            requesting.commit_digests.len(),
-            requesting.fragment_summaries.len(),
+            requesting.commit_fingerprints.len(),
+            requesting.fragment_fingerprints.len(),
             conn.peer_id()
         );
 
-        // Load commits and fragments from storage
-        let commit_by_digest: Map<_, _> = if requesting.commit_digests.is_empty() {
+        // Build reverse-lookup tables: Fingerprint → Digest
+        // from the in-memory sedimentree + seed. Dropped after resolution.
+        let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
+
+        let commit_fp_to_digest: Map<Fingerprint<CommitId>, CommitDigest> = sedimentree
+            .loose_commits()
+            .map(|c| (Fingerprint::new(seed, &c.commit_id()), c.digest()))
+            .collect();
+
+        let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, FragmentDigest> = sedimentree
+            .fragments()
+            .map(|f| (Fingerprint::new(seed, &f.fragment_id()), f.digest()))
+            .collect();
+
+        drop(sedimentree);
+
+        // Resolve requested fingerprints → digests, then drop the lookup tables
+        let requested_commit_digests: Vec<CommitDigest> = requesting
+            .commit_fingerprints
+            .iter()
+            .filter_map(|fp| {
+                let resolved = commit_fp_to_digest.get(fp).copied();
+                if resolved.is_none() {
+                    tracing::warn!("requested commit fingerprint {fp} not found locally");
+                }
+                resolved
+            })
+            .collect();
+
+        drop(commit_fp_to_digest);
+
+        let requested_fragment_digests: Vec<FragmentDigest> = requesting
+            .fragment_fingerprints
+            .iter()
+            .filter_map(|fp| {
+                let resolved = fragment_fp_to_digest.get(fp).copied();
+                if resolved.is_none() {
+                    tracing::warn!("requested fragment fingerprint {fp} not found locally");
+                }
+                resolved
+            })
+            .collect();
+
+        drop(fragment_fp_to_digest);
+
+        // Load signed items from storage (only if we have items to send)
+        let commit_by_digest: Map<_, _> = if requested_commit_digests.is_empty() {
             Map::default()
         } else {
             self.storage
@@ -2803,7 +2863,7 @@ impl<
                 .collect()
         };
 
-        let fragment_by_summary: Map<_, _> = if requesting.fragment_summaries.is_empty() {
+        let fragment_by_digest: Map<_, _> = if requested_fragment_digests.is_empty() {
             Map::default()
         } else {
             self.storage
@@ -2812,19 +2872,15 @@ impl<
                 .await
                 .map_err(IoError::Storage)?
                 .into_iter()
-                .filter_map(|(digest, signed)| {
-                    signed
-                        .decode_payload()
-                        .ok()
-                        .map(|f| (f.summary().clone(), (digest, signed)))
-                })
                 .collect()
         };
 
-        // Collect all blob digests we need to load
-        let mut blob_digests_needed: Vec<BlobDigest> = Vec::new();
+        // Collect blob digests needed for resolved items
+        let mut blob_digests_needed: Vec<BlobDigest> = Vec::with_capacity(
+            requested_commit_digests.len() + requested_fragment_digests.len(),
+        );
 
-        for commit_digest in &requesting.commit_digests {
+        for commit_digest in &requested_commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(commit_digest)
                 && let Ok(payload) = signed_commit.decode_payload()
             {
@@ -2832,9 +2888,11 @@ impl<
             }
         }
 
-        for requested_summary in &requesting.fragment_summaries {
-            if fragment_by_summary.contains_key(requested_summary) {
-                blob_digests_needed.push(requested_summary.blob_meta().digest());
+        for fragment_digest in &requested_fragment_digests {
+            if let Some(signed_fragment) = fragment_by_digest.get(fragment_digest)
+                && let Ok(payload) = signed_fragment.decode_payload()
+            {
+                blob_digests_needed.push(payload.summary().blob_meta().digest());
             }
         }
 
@@ -2848,12 +2906,14 @@ impl<
             .into_iter()
             .collect();
 
-        // Build all messages to send
-        let mut commit_messages: Vec<Message> = Vec::new();
-        let mut fragment_messages: Vec<Message> = Vec::new();
+        drop(blob_digests_needed);
 
-        for commit_digest in &requesting.commit_digests {
-            if let Some(signed_commit) = commit_by_digest.get(commit_digest) {
+        // Build messages from resolved digests, then drop storage maps
+        let mut commit_messages: Vec<Message> =
+            Vec::with_capacity(requested_commit_digests.len());
+
+        for commit_digest in requested_commit_digests {
+            if let Some(signed_commit) = commit_by_digest.get(&commit_digest) {
                 if let Ok(payload) = signed_commit.decode_payload() {
                     let blob_digest = payload.blob_meta().digest();
                     if let Some(blob) = blob_by_digest.get(&blob_digest) {
@@ -2863,36 +2923,40 @@ impl<
                             blob: blob.clone(),
                         });
                     } else {
-                        tracing::warn!("missing blob for requested commit {:?}", commit_digest);
+                        tracing::warn!("missing blob for commit {:?}", commit_digest);
                     }
                 }
             } else {
-                tracing::warn!("requested commit {:?} not found in storage", commit_digest);
+                tracing::warn!("commit {:?} not in storage", commit_digest);
             }
         }
 
-        for requested_summary in &requesting.fragment_summaries {
-            if let Some((_digest, signed_fragment)) = fragment_by_summary.get(requested_summary) {
-                let blob_digest = requested_summary.blob_meta().digest();
-                if let Some(blob) = blob_by_digest.get(&blob_digest) {
-                    fragment_messages.push(Message::Fragment {
-                        id,
-                        fragment: signed_fragment.clone(),
-                        blob: blob.clone(),
-                    });
-                } else {
-                    tracing::warn!(
-                        "missing blob for requested fragment {:?}",
-                        requested_summary
-                    );
+        drop(commit_by_digest);
+
+        let mut fragment_messages: Vec<Message> =
+            Vec::with_capacity(requested_fragment_digests.len());
+
+        for fragment_digest in requested_fragment_digests {
+            if let Some(signed_fragment) = fragment_by_digest.get(&fragment_digest) {
+                if let Ok(payload) = signed_fragment.decode_payload() {
+                    let blob_digest = payload.summary().blob_meta().digest();
+                    if let Some(blob) = blob_by_digest.get(&blob_digest) {
+                        fragment_messages.push(Message::Fragment {
+                            id,
+                            fragment: signed_fragment.clone(),
+                            blob: blob.clone(),
+                        });
+                    } else {
+                        tracing::warn!("missing blob for fragment {:?}", fragment_digest);
+                    }
                 }
             } else {
-                tracing::warn!(
-                    "requested fragment with summary {:?} not found in storage",
-                    requested_summary.head()
-                );
+                tracing::warn!("fragment {:?} not in storage", fragment_digest);
             }
         }
+
+        drop(fragment_by_digest);
+        drop(blob_by_digest);
 
         // Send all messages concurrently using FuturesUnordered
         let mut send_futures: FuturesUnordered<_> = commit_messages

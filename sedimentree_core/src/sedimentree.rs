@@ -73,7 +73,7 @@ impl SedimentreeSummary {
 ///
 /// Bandwidth: ~16 bytes (seed) + 8 bytes per item, vs ~100+ bytes
 /// per item with [`SedimentreeSummary`].
-#[derive(Clone, Debug, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FingerprintSummary {
     #[n(0)]
