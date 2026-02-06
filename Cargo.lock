@@ -2804,6 +2804,7 @@ dependencies = [
  "num-bigint",
  "rand 0.8.5",
  "serde",
+ "siphasher",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",
