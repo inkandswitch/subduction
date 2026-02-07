@@ -5,7 +5,7 @@
 //! hardware security modules, remote signing services, etc.).
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 
 use crate::peer::id::PeerId;
 
@@ -16,10 +16,6 @@ use crate::peer::id::PeerId;
 /// - Hardware security modules
 /// - Remote signing services
 /// - Key derivation schemes
-///
-/// The trait is generic over [`FutureForm`] to support both:
-/// - `Sendable`: Thread-safe futures for multi-threaded runtimes like Tokio
-/// - `Local`: Single-threaded futures for Wasm and local executors
 ///
 /// For synchronous signers like [`MemorySigner`], the async overhead is negligible.
 pub trait Signer<K: FutureForm> {

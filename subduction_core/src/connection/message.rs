@@ -4,11 +4,12 @@ use alloc::vec::Vec;
 
 use sedimentree_core::{
     blob::Blob,
+    crypto::fingerprint::Fingerprint,
     digest::Digest,
-    fragment::{Fragment, FragmentSummary},
+    fragment::{Fragment, FragmentId},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
-    sedimentree::SedimentreeSummary,
+    loose_commit::{CommitId, LooseCommit},
+    sedimentree::FingerprintSummary,
 };
 
 use crate::{crypto::signed::Signed, peer::id::PeerId};
@@ -133,9 +134,12 @@ pub struct BatchSyncRequest {
     #[n(1)]
     pub req_id: RequestId,
 
-    /// The summary of the sedimentree that the requester has.
+    /// Compact fingerprint summary of the requester's sedimentree.
+    ///
+    /// Uses SipHash-2-4 fingerprints with a per-request random seed
+    /// instead of full structural data.
     #[n(2)]
-    pub sedimentree_summary: SedimentreeSummary,
+    pub fingerprint_summary: FingerprintSummary,
 
     /// Whether to subscribe to future updates for this sedimentree.
     #[n(3)]
@@ -240,28 +244,28 @@ pub struct SyncDiff {
 ///
 /// After receiving a [`BatchSyncResponse`], the requestor should send back
 /// the commits and fragments identified here (fire-and-forget).
+///
+/// The fingerprints are echoed back from the requestor's original
+/// [`FingerprintSummary`]. The requestor reverse-lookups each fingerprint
+/// to find the corresponding local item.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestedData {
-    /// Digests of commits the responder needs from the requestor.
+    /// Fingerprints of commits the responder needs from the requestor.
     #[n(0)]
-    pub commit_digests: Vec<Digest<LooseCommit>>,
+    pub commit_fingerprints: Vec<Fingerprint<CommitId>>,
 
-    /// Summaries of fragments the responder needs from the requestor.
-    ///
-    /// Uses [`FragmentSummary`] rather than [`Digest<Fragment>`] because the
-    /// requestor's [`SedimentreeSummary`] only contains summaries, not full digests.
-    /// The requestor matches these against their stored fragments.
+    /// Fingerprints of fragments the responder needs from the requestor.
     #[n(1)]
-    pub fragment_summaries: Vec<FragmentSummary>,
+    pub fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
 }
 
 impl RequestedData {
     /// Returns `true` if there is no data being requested.
     #[must_use]
     pub const fn is_empty(&self) -> bool {
-        self.commit_digests.is_empty() && self.fragment_summaries.is_empty()
+        self.commit_fingerprints.is_empty() && self.fragment_fingerprints.is_empty()
     }
 }
 
@@ -324,6 +328,18 @@ impl SyncStats {
 mod tests {
     use super::*;
     use alloc::vec;
+    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
+
+    fn empty_fingerprint_summary() -> FingerprintSummary {
+        FingerprintSummary::new(FingerprintSeed::new(0, 0), Vec::new(), Vec::new())
+    }
+
+    fn empty_requested_data() -> RequestedData {
+        RequestedData {
+            commit_fingerprints: Vec::new(),
+            fragment_fingerprints: Vec::new(),
+        }
+    }
 
     mod message_request_id {
         use super::*;
@@ -394,7 +410,7 @@ mod tests {
             let msg = Message::BatchSyncRequest(BatchSyncRequest {
                 id: SedimentreeId::new([2u8; 32]),
                 req_id,
-                sedimentree_summary: SedimentreeSummary::default(),
+                fingerprint_summary: empty_fingerprint_summary(),
                 subscribe: false,
             });
             assert_eq!(msg.request_id(), Some(req_id));
@@ -412,10 +428,7 @@ mod tests {
                 diff: SyncDiff {
                     missing_commits: Vec::new(),
                     missing_fragments: Vec::new(),
-                    requesting: RequestedData {
-                        commit_digests: Vec::new(),
-                        fragment_summaries: Vec::new(),
-                    },
+                    requesting: empty_requested_data(),
                 },
             });
             assert_eq!(msg.request_id(), Some(req_id));
@@ -485,7 +498,7 @@ mod tests {
                     requestor: PeerId::new([2u8; 32]),
                     nonce: 42,
                 },
-                sedimentree_summary: SedimentreeSummary::default(),
+                fingerprint_summary: empty_fingerprint_summary(),
                 subscribe: false,
             };
 
@@ -517,10 +530,7 @@ mod tests {
                 diff: SyncDiff {
                     missing_commits: Vec::new(),
                     missing_fragments: Vec::new(),
-                    requesting: RequestedData {
-                        commit_digests: Vec::new(),
-                        fragment_summaries: Vec::new(),
-                    },
+                    requesting: empty_requested_data(),
                 },
             };
 
@@ -556,10 +566,7 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
                 missing_fragments: Vec::new(),
-                requesting: RequestedData {
-                    commit_digests: Vec::new(),
-                    fragment_summaries: Vec::new(),
-                },
+                requesting: empty_requested_data(),
             };
 
             assert_eq!(diff.missing_commits.len(), 0);
@@ -583,10 +590,7 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: vec![(signed_commit.clone(), blob.clone())],
                 missing_fragments: Vec::new(),
-                requesting: RequestedData {
-                    commit_digests: Vec::new(),
-                    fragment_summaries: Vec::new(),
-                },
+                requesting: empty_requested_data(),
             };
 
             assert_eq!(diff.missing_commits.len(), 1);
@@ -614,10 +618,7 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
                 missing_fragments: vec![(signed_fragment, blob)],
-                requesting: RequestedData {
-                    commit_digests: Vec::new(),
-                    fragment_summaries: Vec::new(),
-                },
+                requesting: empty_requested_data(),
             };
 
             assert_eq!(diff.missing_fragments.len(), 1);

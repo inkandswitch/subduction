@@ -1,6 +1,10 @@
 //! Fragment types for Sedimentree data partitioning.
 
+pub mod id;
+
 use alloc::vec::Vec;
+
+pub use self::id::FragmentId;
 
 use crate::{
     blob::BlobMeta,
@@ -153,6 +157,12 @@ impl Fragment {
     pub const fn digest(&self) -> Digest<Fragment> {
         self.digest
     }
+
+    /// Extract the causal identity of this fragment.
+    #[must_use]
+    pub fn fragment_id(&self) -> FragmentId {
+        self.summary.fragment_id()
+    }
 }
 
 /// The minimal data for a [`Fragment`].
@@ -207,6 +217,12 @@ impl FragmentSummary {
     #[must_use]
     pub fn depth<M: DepthMetric>(&self, hash_metric: &M) -> Depth {
         hash_metric.to_depth(self.head)
+    }
+
+    /// Extract the causal identity of this fragment summary.
+    #[must_use]
+    pub fn fragment_id(&self) -> FragmentId {
+        FragmentId::new(self.head, self.boundary.clone())
     }
 }
 

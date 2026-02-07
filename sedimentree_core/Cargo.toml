@@ -24,6 +24,7 @@ minicbor = { workspace = true }
 nonempty = { workspace = true }
 num-bigint = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
+siphasher = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 

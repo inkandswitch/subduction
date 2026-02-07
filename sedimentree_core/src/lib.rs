@@ -24,6 +24,7 @@ pub mod blob;
 pub mod cbor;
 pub mod collections;
 pub mod commit;
+pub mod crypto;
 pub mod depth;
 pub mod digest;
 pub mod fragment;
