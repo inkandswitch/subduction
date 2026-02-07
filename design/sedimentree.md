@@ -136,8 +136,6 @@ Leading zeros occur with probability 1/256 per byte:
 | 1     | 1/256       | ~1 in 256    |
 | 2     | 1/65536     | ~1 in 65K    |
 
-This creates a self-balancing structure without manual configuration.
-
 ## Fragment Boundaries
 
 When a commit's hash has enough leading zeros, it triggers a fragment checkpoint:

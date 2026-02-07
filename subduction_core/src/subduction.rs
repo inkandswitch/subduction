@@ -548,36 +548,33 @@ impl<
                 }
                 // Second: receive new messages
                 msg_result = self.msg_queue.recv().fuse() => {
-                    match msg_result {
-                        Ok((conn, msg)) => {
-                            let peer_id = conn.peer_id();
-                            tracing::debug!(
-                                "Subduction listener received message from peer {}: {:?}",
-                                peer_id,
-                                msg
-                            );
+                    if let Ok((conn, msg)) = msg_result {
+                        let peer_id = conn.peer_id();
+                        tracing::debug!(
+                            "Subduction listener received message from peer {}: {:?}",
+                            peer_id,
+                            msg
+                        );
 
-                            // Spawn dispatch as concurrent task
-                            let this = self.clone();
-                            let conn_clone = conn.clone();
-                            in_flight.push(async move {
-                                let result = this.dispatch(&conn_clone, msg).await;
-                                (conn_clone, result)
-                            });
-                        }
-                        Err(_) => {
-                            tracing::info!("Message queue closed");
-                            // Drain remaining in-flight tasks before exiting
-                            while let Some((conn, result)) = in_flight.next().await {
-                                if let Err(e) = result {
-                                    tracing::error!(
-                                        peer = %conn.peer_id(),
-                                        "error dispatching message during shutdown: {e}"
-                                    );
-                                }
+                        // Spawn dispatch as concurrent task
+                        let this = self.clone();
+                        let conn_clone = conn.clone();
+                        in_flight.push(async move {
+                            let result = this.dispatch(&conn_clone, msg).await;
+                            (conn_clone, result)
+                        });
+                    } else {
+                        tracing::info!("Message queue closed");
+                        // Drain remaining in-flight tasks before exiting
+                        while let Some((conn, result)) = in_flight.next().await {
+                            if let Err(e) = result {
+                                tracing::error!(
+                                    peer = %conn.peer_id(),
+                                    "error dispatching message during shutdown: {e}"
+                                );
                             }
-                            break;
                         }
+                        break;
                     }
                 }
                 // Third: handle closed connections
@@ -1287,7 +1284,6 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        // Sign the commit with our signer (seal returns Verified)
         let verified = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
         let signed_for_wire = verified.signed().clone();
 
@@ -1301,8 +1297,6 @@ impl<
             blob,
         };
         {
-            // Send to subscribers, or to all connections if no subscribers exist yet.
-            // This ensures new documents get propagated to at least one peer.
             let conns = {
                 let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
                 if subscriber_conns.is_empty() {
@@ -1365,7 +1359,6 @@ impl<
 
         let self_id = self.peer_id();
 
-        // Sign the fragment with our signer (seal returns Verified)
         let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
         let signed_for_wire = verified.signed().clone();
 
@@ -1385,8 +1378,6 @@ impl<
             blob,
         };
 
-        // Send to subscribers, or to all connections if no subscribers exist yet.
-        // This ensures new documents get propagated to at least one peer.
         let conns = {
             let subscriber_conns = self.get_authorized_subscriber_conns(id, &self_id).await;
             if subscriber_conns.is_empty() {
@@ -1436,7 +1427,6 @@ impl<
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
-        // Verify the signature
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -1457,7 +1447,6 @@ impl<
             author
         );
 
-        // Authorize using verified author, not sender
         let putter = match self.storage.get_putter::<F>(*from, author, id).await {
             Ok(p) => p,
             Err(e) => {
@@ -1471,7 +1460,6 @@ impl<
             }
         };
 
-        // Clone signed for forwarding before consuming verified
         let signed_for_wire = verified.signed().clone();
 
         let was_new = self
@@ -1485,7 +1473,7 @@ impl<
                 commit: signed_for_wire,
                 blob,
             };
-            // Forward to authorized subscribers only
+
             let conns = self.get_authorized_subscriber_conns(id, from).await;
             for conn in conns {
                 let peer_id = conn.peer_id();
@@ -1601,7 +1589,6 @@ impl<
         let mut their_missing_fragments = Vec::new();
         let mut our_missing_blobs = Vec::new();
 
-        // Load signed commits and fragments from storage
         let signed_commits = self
             .storage
             .local_access()
@@ -1615,7 +1602,6 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
-        // Storage returns (Digest, Signed<T>) tuples — no decoding needed for lookup
         let commit_by_digest: Map<CommitDigest, Signed<LooseCommit>> =
             signed_commits.into_iter().collect();
         let fragment_by_digest: Map<FragmentDigest, Signed<Fragment>> =
@@ -1624,9 +1610,8 @@ impl<
         let sync_diff = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
-            // If sedimentree not in memory, hydrate it from storage
+            #[allow(clippy::map_entry)] // Entry API is cumbersome here: conditional insert depends on decoded payload
             if !locked.contains_key(&id) {
-                // Extract payloads from trusted storage (already verified before storage)
                 let loose_commits: Vec<_> = commit_by_digest
                     .values()
                     .filter_map(|signed| signed.decode_payload().ok())
@@ -2030,6 +2015,10 @@ impl<
     /// - `Option<(C, RequestedData)>`: If the peer requested data, the connection and data to send
     /// - `Vec<(C, C::CallError)>`: Any connection errors encountered
     ///
+    /// # Errors
+    ///
+    /// Returns [`IoError`] if storage operations fail.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -2212,7 +2201,11 @@ impl<
     /// - `SyncStats`: statistics about the sync
     /// - `Option<RequestedData>`: data the peer requested from us (caller should send)
     /// - `Option<C::CallError>`: error if the call failed
-    #[allow(clippy::type_complexity)]
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IoError`] if storage operations fail.
+    #[allow(clippy::too_many_lines, clippy::type_complexity)]
     pub async fn sync_sedimentree_with_conn(
         &self,
         conn: &C,
@@ -2775,6 +2768,10 @@ impl<
     ///
     /// This method is public to allow callers to spawn it as a background task
     /// after calling [`sync_with_peer_receive_only`](Self::sync_with_peer_receive_only).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IoError`] if storage operations fail.
     #[allow(clippy::too_many_lines)]
     pub async fn send_requested_data(
         &self,

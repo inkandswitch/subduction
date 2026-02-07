@@ -202,14 +202,14 @@ Sent as WebSocket binary frames.
 
 ## Properties
 
-| Property | Mechanism |
-|----------|-----------|
-| **Consistency** | Fingerprint-based diffing ensures convergence |
-| **Efficiency** | ~75% smaller requests; only missing data transferred |
-| **Bidirectional** | 1.5 RT completes sync in both directions |
-| **Correlation** | `RequestId` links response to request |
-| **Self-confirming** | Running sync twice confirms success |
-| **Anti-precomputation** | Random per-request seed prevents chosen-collision attacks |
+| Property                  | Mechanism                                                 |
+|---------------------------|-----------------------------------------------------------|
+| **Consistency**           | Fingerprint-based diffing ensures convergence             |
+| **Efficiency**            | ~75% smaller requests; only missing data transferred      |
+| **Bidirectional**         | 1.5 RT completes sync in both directions                  |
+| **Correlation**           | `RequestId` links response to request                     |
+| **Self-confirming**       | Running sync twice confirms success                       |
+| **Precompute-resistance** | Random per-request seed prevents chosen-collision attacks |
 
 ## Sequence Diagram (Success)
 
