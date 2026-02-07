@@ -116,7 +116,7 @@ use request::FragmentRequested;
 use sedimentree_core::{
     blob::Blob,
     collections::{
-        Map, Set,
+        Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     commit::CountLeadingZeroBytes,
@@ -1610,9 +1610,8 @@ impl<
         let sync_diff = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
-            #[allow(clippy::map_entry)]
-            // Entry API is cumbersome here: conditional insert depends on decoded payload
-            if !locked.contains_key(&id) {
+            // If sedimentree not in memory, hydrate it from storage
+            if let Entry::Vacant(entry) = locked.entry(id) {
                 let loose_commits: Vec<_> = commit_by_digest
                     .values()
                     .filter_map(|signed| signed.decode_payload().ok())
@@ -1624,7 +1623,7 @@ impl<
 
                 if !loose_commits.is_empty() || !fragments.is_empty() {
                     let sedimentree = Sedimentree::new(fragments, loose_commits);
-                    locked.insert(id, sedimentree);
+                    entry.insert(sedimentree);
                     tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
                 }
             }
