@@ -34,7 +34,7 @@ Subscriptions are bundled with batch sync requests. This ensures the peer has cu
 struct BatchSyncRequest {
     id: SedimentreeId,
     req_id: RequestId,
-    fingerprint_summary: FingerprintSummary,
+    sedimentree_summary: SedimentreeSummary,
     subscribe: bool,  // Opt into live updates
 }
 ```
