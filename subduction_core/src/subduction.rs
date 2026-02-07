@@ -1089,7 +1089,9 @@ impl<
 
                     // Send back data the responder requested (bidirectional sync)
                     if !diff.requesting.is_empty()
-                        && let Err(e) = self.send_requested_data(&conn, id, &seed, &diff.requesting).await
+                        && let Err(e) = self
+                            .send_requested_data(&conn, id, &seed, &diff.requesting)
+                            .await
                     {
                         tracing::warn!(
                             "failed to send requested data to peer {:?}: {e}",
@@ -2187,8 +2189,15 @@ impl<
         id: SedimentreeId,
         subscribe: bool,
         timeout: Option<Duration>,
-    ) -> Result<(bool, SyncStats, Option<(FingerprintSeed, RequestedData)>, Option<C::CallError>), IoError<F, S, C>>
-    {
+    ) -> Result<
+        (
+            bool,
+            SyncStats,
+            Option<(FingerprintSeed, RequestedData)>,
+            Option<C::CallError>,
+        ),
+        IoError<F, S, C>,
+    > {
         let peer_id = conn.peer_id();
         tracing::debug!(
             "sync_sedimentree_with_conn for {:?} with peer {:?}",
@@ -2847,8 +2856,7 @@ impl<
         drop(blob_digests_needed);
 
         // Build messages from resolved digests, then drop storage maps
-        let mut commit_messages: Vec<Message> =
-            Vec::with_capacity(requested_commit_digests.len());
+        let mut commit_messages: Vec<Message> = Vec::with_capacity(requested_commit_digests.len());
 
         for commit_digest in requested_commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(&commit_digest) {

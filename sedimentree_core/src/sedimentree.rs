@@ -6,8 +6,8 @@ use alloc::vec::Vec;
 
 use crate::{
     collections::{Map, Set},
-    depth::{DepthMetric, MAX_STRATA_DEPTH},
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
+    depth::{DepthMetric, MAX_STRATA_DEPTH},
     digest::Digest,
     fragment::{Fragment, FragmentId, FragmentSpec, FragmentSummary},
     id::SedimentreeId,

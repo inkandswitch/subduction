@@ -13,7 +13,7 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{test_signer, TokioSpawn};
+use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
