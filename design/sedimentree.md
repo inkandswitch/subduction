@@ -79,18 +79,22 @@ struct Sedimentree {
 }
 ```
 
-### SedimentreeSummary
+### FingerprintSummary
 
-A lightweight version for transmission:
+A compact wire representation for [batch sync](./sync/batch.md) reconciliation:
 
 ```rust
-struct SedimentreeSummary {
-    fragment_summaries: Set<FragmentSummary>,  // No checkpoints
-    commits: Set<LooseCommit>,
+struct FingerprintSummary {
+    seed: FingerprintSeed,                               // 128-bit SipHash key (random per request)
+    commit_fingerprints: Vec<Fingerprint<CommitId>>,     // 8 bytes each
+    fragment_fingerprints: Vec<Fingerprint<FragmentId>>, // 8 bytes each
 }
 ```
 
-Omits checkpoint details to reduce bandwidth while preserving enough information for diffing.
+Uses 8-byte SipHash-2-4 keyed hashes instead of full 32-byte digests, reducing sync request payload by ~75%. Fingerprints are computed over _causal identity_ only: `digest()` for commits, `head + boundary` for fragments (excluding `blob_meta`).
+
+> [!NOTE]
+> `SedimentreeSummary` (with full digests) still exists for local diffing and testing but is no longer used on the wire.
 
 ## Depth Partitioning
 

@@ -1639,9 +1639,7 @@ impl<
                 if !loose_commits.is_empty() || !fragments.is_empty() {
                     let sedimentree = Sedimentree::new(fragments, loose_commits);
                     locked.insert(id, sedimentree);
-                    tracing::debug!(
-                        "hydrated sedimentree {id:?} from storage for batch sync"
-                    );
+                    tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
                 }
             }
 
@@ -1979,7 +1977,11 @@ impl<
                         tracing::debug!("Calling send_requested_data for {:?}", id);
                         match self.send_requested_data(&conn, id, &requesting).await {
                             Ok((commits, fragments)) => {
-                                tracing::debug!("send_requested_data returned: {} commits, {} fragments", commits, fragments);
+                                tracing::debug!(
+                                    "send_requested_data returned: {} commits, {} fragments",
+                                    commits,
+                                    fragments
+                                );
                                 stats.commits_sent += commits;
                                 stats.fragments_sent += fragments;
                             }
@@ -2050,7 +2052,15 @@ impl<
         id: SedimentreeId,
         subscribe: bool,
         timeout: Option<Duration>,
-    ) -> Result<(bool, SyncStats, Option<(C, RequestedData)>, Vec<(C, C::CallError)>), IoError<F, S, C>> {
+    ) -> Result<
+        (
+            bool,
+            SyncStats,
+            Option<(C, RequestedData)>,
+            Vec<(C, C::CallError)>,
+        ),
+        IoError<F, S, C>,
+    > {
         tracing::info!(
             "Requesting batch sync (receive-only) for sedimentree {:?} from peer {:?}",
             id,
@@ -2595,12 +2605,10 @@ impl<
         // Create concurrent sync futures for all sedimentrees
         let mut sync_futures: FuturesUnordered<_> = tree_ids
             .into_iter()
-            .map(|id| {
-                async move {
-                    tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
-                    let result = self.sync_all(id, true, timeout).await;
-                    (id, result)
-                }
+            .map(|id| async move {
+                tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
+                let result = self.sync_all(id, true, timeout).await;
+                (id, result)
             })
             .collect();
 
@@ -2876,7 +2884,10 @@ impl<
                         blob: blob.clone(),
                     });
                 } else {
-                    tracing::warn!("missing blob for requested fragment {:?}", requested_summary);
+                    tracing::warn!(
+                        "missing blob for requested fragment {:?}",
+                        requested_summary
+                    );
                 }
             } else {
                 tracing::warn!(

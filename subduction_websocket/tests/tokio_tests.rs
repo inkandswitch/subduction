@@ -13,7 +13,7 @@ use sedimentree_core::{
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        handshake::Audience, message::Message, nonce_cache::NonceCache, Connection, Reconnect,
+        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
@@ -22,7 +22,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
+    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
