@@ -162,7 +162,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
         async move {
             tx.send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
-                .map_err(|_| SendError::ChannelClosed)?;
+                .map_err(|_| SendError)?;
 
             Ok(())
         }
@@ -176,7 +176,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
         async move {
             let msg = chan.recv().await.map_err(|_| {
                 tracing::error!("inbound channel {} closed unexpectedly", self.chan_id);
-                RecvError::ReadFromClosed
+                RecvError
             })?;
 
             tracing::debug!("recv: inbound message {msg:?}");
@@ -206,7 +206,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
-                .map_err(|_| CallError::ChannelClosed)?;
+                .map_err(|_| CallError::SenderTaskStopped)?;
 
             tracing::debug!(
                 chan_id = self.chan_id,
@@ -227,7 +227,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
                 }
                 Ok(Err(e)) => {
                     tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ChanCanceled(e))
+                    Err(CallError::ResponseDropped(e))
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {:?} timed out", req_id);
@@ -346,7 +346,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                             self.peer_id,
                             e
                         );
-                        RunError::Deserialize
+                        RunError::Deserialize(e)
                     })?;
 
                     tracing::debug!(
@@ -483,7 +483,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
         async move {
             tx.send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
-                .map_err(|_| SendError::ChannelClosed)?;
+                .map_err(|_| SendError)?;
 
             Ok(())
         }
@@ -497,7 +497,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
         async move {
             let msg = chan.recv().await.map_err(|_| {
                 tracing::error!("inbound channel {} closed unexpectedly", self.chan_id);
-                RecvError::ReadFromClosed
+                RecvError
             })?;
 
             tracing::debug!("recv: inbound message {msg:?}");
@@ -527,7 +527,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
-                .map_err(|_| CallError::ChannelClosed)?;
+                .map_err(|_| CallError::SenderTaskStopped)?;
 
             tracing::info!(
                 chan_id = self.chan_id,
@@ -548,7 +548,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
                 }
                 Ok(Err(e)) => {
                     tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ChanCanceled(e))
+                    Err(CallError::ResponseDropped(e))
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {:?} timed out", req_id);

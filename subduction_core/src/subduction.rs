@@ -1610,7 +1610,8 @@ impl<
         let sync_diff = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
-            #[allow(clippy::map_entry)] // Entry API is cumbersome here: conditional insert depends on decoded payload
+            #[allow(clippy::map_entry)]
+            // Entry API is cumbersome here: conditional insert depends on decoded payload
             if !locked.contains_key(&id) {
                 let loose_commits: Vec<_> = commit_by_digest
                     .values()
