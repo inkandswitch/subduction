@@ -56,25 +56,10 @@ impl EffectSlot {
     }
 }
 
-/// Extract the `EffectSlot` pointer from a `Waker`.
-///
-/// # Safety
-///
-/// The waker must have been created by `make_waker` with a valid slot pointer.
-pub unsafe fn slot_from_waker(_waker: &Waker) -> &EffectSlot {
-    // The data pointer of our RawWaker is the EffectSlot pointer.
-    // We reconstruct it by exploiting that Waker stores the RawWaker's
-    // data pointer. We access it via the waker's clone behavior —
-    // our clone fn just copies the pointer.
-    //
-    // In practice, we use a thread-local to avoid this unsafety.
-    // See `CURRENT_SLOT` below.
-    unreachable!("use CURRENT_SLOT instead")
-}
-
-// Instead of extracting from the Waker (which requires nightly or unsafe
-// transmute), we use a thread-local. This is safe because `Driven` futures
-// are `!Send` — they never cross thread boundaries.
+// The `Driven` form uses a thread-local to pass the slot pointer into
+// `EffectFuture::poll`. This is safe because `Driven` futures are `!Send`
+// — they never cross thread boundaries. See `SendableDriven` for the
+// `Send`-safe variant that uses `Waker::data()` instead.
 
 thread_local! {
     static CURRENT_SLOT: Cell<*const EffectSlot> = const { Cell::new(std::ptr::null()) };
@@ -91,22 +76,23 @@ pub fn with_slot<R>(slot: &EffectSlot, f: impl FnOnce() -> R) -> R {
     })
 }
 
-/// Get the current effect slot (called by effect futures during poll).
+/// Get a pointer to the current effect slot.
+///
+/// Returns a raw pointer rather than a reference to avoid a `'static`
+/// lifetime lie. Callers must dereference within the scope of their
+/// `poll` call (which is always inside `with_slot`).
 ///
 /// # Panics
 ///
 /// Panics if called outside of a `with_slot` scope.
-pub fn current_slot() -> &'static EffectSlot {
+pub(crate) fn current_slot_ptr() -> *const EffectSlot {
     CURRENT_SLOT.with(|cell| {
         let ptr = cell.get();
         assert!(
             !ptr.is_null(),
-            "current_slot() called outside of driven poll"
+            "current_slot_ptr() called outside of driven poll"
         );
-        // Safety: the slot is alive for the duration of with_slot,
-        // and we're within that scope. The 'static is a lie but safe
-        // because we only use it within the poll call.
-        unsafe { &*ptr }
+        ptr
     })
 }
 

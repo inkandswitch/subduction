@@ -5,38 +5,70 @@
 //! - On first poll: writes the effect `E` into the current `EffectSlot`,
 //!   returns `Poll::Pending`.
 //! - On second poll: reads the response `R` from the `EffectSlot`,
-//!   returns `Poll::Ready(R)`.
+//!   returns `Poll::Ready(Ok(R))` on success, or `Poll::Ready(Err(_))`
+//!   on protocol violation (missing response or type mismatch).
 //!
 //! This is the primitive that makes sequential async code work as a
 //! sans-I/O state machine.
 
 use std::{
     any::Any,
+    fmt,
     future::Future,
     marker::PhantomData,
     pin::Pin,
     task::{Context, Poll},
 };
 
-use crate::driven::current_slot;
+use crate::driven::current_slot_ptr;
+
+/// Error returned when the driver protocol is violated.
+#[derive(Debug)]
+pub enum EffectError {
+    /// `provide_response` was not called before re-polling.
+    MissingResponse,
+    /// The response type did not match the expected type `R`.
+    DowncastFailed { expected: &'static str },
+    /// The future was polled after it already completed.
+    PollAfterCompletion,
+    /// The future was polled with a Waker not created by `make_slot_waker`
+    /// (e.g., a tokio or async-std waker). Sentinel check failed.
+    WrongWaker,
+}
+
+impl fmt::Display for EffectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingResponse => {
+                write!(f, "polled after Pending but no response was provided")
+            }
+            Self::DowncastFailed { expected } => {
+                write!(f, "response type mismatch: expected {expected}")
+            }
+            Self::PollAfterCompletion => write!(f, "EffectFuture polled after completion"),
+            Self::WrongWaker => write!(
+                f,
+                "polled with a foreign Waker (not created by make_slot_waker)"
+            ),
+        }
+    }
+}
 
 /// A future that yields a single effect and waits for a response.
 ///
-/// `E` is the effect type (must be `Any + 'static` for type-erasure).
-/// `R` is the response type (must be `Any + 'static` for type-erasure).
+/// Returns `Result<R, EffectError>` to avoid panicking on protocol violations.
 pub struct EffectFuture<E: 'static, R: 'static> {
     state: EffectState<E>,
     _response: PhantomData<R>,
 }
 
 enum EffectState<E> {
-    /// Haven't emitted the effect yet.
     Ready(E),
-    /// Effect emitted, waiting for response.
     Pending,
-    /// Already completed (shouldn't be polled again).
     Done,
 }
+
+impl<E: 'static, R: 'static> Unpin for EffectFuture<E, R> {}
 
 impl<E: 'static, R: 'static> EffectFuture<E, R> {
     pub fn new(effect: E) -> Self {
@@ -48,41 +80,44 @@ impl<E: 'static, R: 'static> EffectFuture<E, R> {
 }
 
 impl<E: 'static, R: 'static> Future for EffectFuture<E, R> {
-    type Output = R;
+    type Output = Result<R, EffectError>;
 
-    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<R> {
-        // Safety: we never move out of the Pin, and EffectState is Unpin-safe
-        let this = unsafe { self.get_unchecked_mut() };
+    fn poll(self: Pin<&mut Self>, _cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
 
         match std::mem::replace(&mut this.state, EffectState::Done) {
             EffectState::Ready(effect) => {
                 // First poll: emit the effect.
-                let slot = current_slot();
+                // Safety: we are inside a `with_slot` scope (via DrivenFuture::poll_with_slot),
+                // so the pointer is valid for the duration of this poll call.
+                let slot = unsafe { &*current_slot_ptr() };
                 slot.emit_effect(Box::new(effect) as Box<dyn Any>);
                 this.state = EffectState::Pending;
                 Poll::Pending
             }
             EffectState::Pending => {
-                // Second poll: read the response.
-                let slot = current_slot();
-                let response = slot
-                    .take_response()
-                    .expect("driven: polled after Pending but no response provided");
-                let typed: Box<R> = response.downcast().expect("driven: response type mismatch");
-                Poll::Ready(*typed)
+                let slot = unsafe { &*current_slot_ptr() };
+                let Some(response) = slot.take_response() else {
+                    return Poll::Ready(Err(EffectError::MissingResponse));
+                };
+                match response.downcast::<R>() {
+                    Ok(typed) => Poll::Ready(Ok(*typed)),
+                    Err(_) => Poll::Ready(Err(EffectError::DowncastFailed {
+                        expected: std::any::type_name::<R>(),
+                    })),
+                }
             }
-            EffectState::Done => {
-                panic!("driven: EffectFuture polled after completion");
-            }
+            EffectState::Done => Poll::Ready(Err(EffectError::PollAfterCompletion)),
         }
     }
 }
 
 /// Convenience function to create and await an effect in one expression.
 ///
-/// Used in `DrivenStorage` method implementations:
+/// Returns `Result<R, EffectError>` — use `?` to propagate protocol errors.
+///
 /// ```ignore
-/// let digest: Digest<Blob> = emit(SaveBlobEffect { blob }).await;
+/// let DigestResp(d) = emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await?;
 /// ```
 pub fn emit<E: 'static, R: 'static>(effect: E) -> EffectFuture<E, R> {
     EffectFuture::new(effect)

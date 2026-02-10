@@ -67,20 +67,15 @@ pub unsafe extern "C" fn storage_free(handle: *mut std::ffi::c_void) {
     }
 }
 
-/// Recover the inner reference from an opaque handle.
-unsafe fn get_inner(handle: *mut std::ffi::c_void) -> Result<&'static TokioStorageInner, FfiError> {
-    if handle.is_null() {
-        return Err(FfiError::NullPointer);
-    }
-    Ok(unsafe { &*handle.cast::<TokioStorageInner>() })
-}
-
 /// Reconstruct a byte slice from FFI pointers.
+///
+/// Returns an empty slice if `ptr` is null or `len` is 0.
 ///
 /// # Safety
 ///
-/// `ptr` must be valid for `len` bytes for the duration of the call.
-unsafe fn slice_from<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
+/// If `ptr` is non-null, it must be valid for `len` bytes for
+/// the lifetime `'a`.
+unsafe fn slice_from_ffi<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
     if ptr.is_null() || len == 0 {
         &[]
     } else {
@@ -89,12 +84,21 @@ unsafe fn slice_from<'a>(ptr: *const u8, len: usize) -> &'a [u8] {
 }
 
 /// Run a fallible FFI operation with panic catching, returning CBOR data.
+///
+/// Performs the null check and dereference of the opaque handle internally,
+/// so the `&TokioStorageInner` borrow is scoped to the closure — no
+/// `'static` lie needed.
 fn run_ffi(
     handle: *mut std::ffi::c_void,
     f: impl FnOnce(&TokioStorageInner) -> Result<Vec<u8>, FfiError> + panic::UnwindSafe,
 ) -> FfiResult {
     match panic::catch_unwind(|| {
-        let inner = unsafe { get_inner(handle) }?;
+        if handle.is_null() {
+            return Err(FfiError::NullPointer);
+        }
+        // Safety: handle was produced by storage_new (Box::into_raw) and
+        // the reference does not escape this closure.
+        let inner = unsafe { &*handle.cast::<TokioStorageInner>() };
         f(inner)
     }) {
         Ok(Ok(data)) => FfiResult::ok(data),
@@ -109,7 +113,10 @@ fn run_ffi_unit(
     f: impl FnOnce(&TokioStorageInner) -> Result<(), FfiError> + panic::UnwindSafe,
 ) -> FfiResult {
     match panic::catch_unwind(|| {
-        let inner = unsafe { get_inner(handle) }?;
+        if handle.is_null() {
+            return Err(FfiError::NullPointer);
+        }
+        let inner = unsafe { &*handle.cast::<TokioStorageInner>() };
         f(inner)
     }) {
         Ok(Ok(())) => FfiResult::ok_empty(),
@@ -127,7 +134,7 @@ pub extern "C" fn storage_save_sedimentree_id(
     id_len: usize,
 ) -> FfiResult {
     run_ffi_unit(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         inner
             .run(async move { Storage::<Sendable>::save_sedimentree_id(&*s, id).await })
@@ -142,7 +149,7 @@ pub extern "C" fn storage_delete_sedimentree_id(
     id_len: usize,
 ) -> FfiResult {
     run_ffi_unit(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         inner
             .run(async move { Storage::<Sendable>::delete_sedimentree_id(&*s, id).await })
@@ -171,7 +178,8 @@ pub extern "C" fn storage_save_loose_commit(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let args: cbor_bridge::IdAndSignedCommit =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         let digest =
             inner
@@ -191,7 +199,8 @@ pub extern "C" fn storage_load_loose_commit(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let args: cbor_bridge::IdAndCommitDigest =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         let commit =
             inner
@@ -210,7 +219,7 @@ pub extern "C" fn storage_list_commit_digests(
     id_len: usize,
 ) -> FfiResult {
     run_ffi(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         let digests = inner
             .run(async move { Storage::<Sendable>::list_commit_digests(&*s, id).await })
@@ -226,7 +235,7 @@ pub extern "C" fn storage_load_loose_commits(
     id_len: usize,
 ) -> FfiResult {
     run_ffi(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         let pairs = inner
             .run(async move { Storage::<Sendable>::load_loose_commits(&*s, id).await })
@@ -243,7 +252,8 @@ pub extern "C" fn storage_delete_loose_commit(
 ) -> FfiResult {
     run_ffi_unit(handle, |inner| {
         let args: cbor_bridge::IdAndCommitDigest =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         inner
             .run(async move {
@@ -260,7 +270,7 @@ pub extern "C" fn storage_delete_loose_commits(
     id_len: usize,
 ) -> FfiResult {
     run_ffi_unit(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         inner
             .run(async move { Storage::<Sendable>::delete_loose_commits(&*s, id).await })
@@ -278,7 +288,8 @@ pub extern "C" fn storage_save_fragment(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let args: cbor_bridge::IdAndSignedFragment =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         let digest =
             inner
@@ -298,7 +309,8 @@ pub extern "C" fn storage_load_fragment(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let args: cbor_bridge::IdAndFragmentDigest =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         let fragment = inner
             .run(async move { Storage::<Sendable>::load_fragment(&*s, args.id, args.digest).await })
@@ -314,7 +326,7 @@ pub extern "C" fn storage_list_fragment_digests(
     id_len: usize,
 ) -> FfiResult {
     run_ffi(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         let digests = inner
             .run(async move { Storage::<Sendable>::list_fragment_digests(&*s, id).await })
@@ -330,7 +342,7 @@ pub extern "C" fn storage_load_fragments(
     id_len: usize,
 ) -> FfiResult {
     run_ffi(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         let pairs = inner
             .run(async move { Storage::<Sendable>::load_fragments(&*s, id).await })
@@ -347,7 +359,8 @@ pub extern "C" fn storage_delete_fragment(
 ) -> FfiResult {
     run_ffi_unit(handle, |inner| {
         let args: cbor_bridge::IdAndFragmentDigest =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         inner
             .run(async move {
@@ -364,7 +377,7 @@ pub extern "C" fn storage_delete_fragments(
     id_len: usize,
 ) -> FfiResult {
     run_ffi_unit(handle, |inner| {
-        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from(id_ptr, id_len) })?;
+        let id = cbor_bridge::decode_sedimentree_id(unsafe { slice_from_ffi(id_ptr, id_len) })?;
         let s = Arc::clone(&inner.storage);
         inner
             .run(async move { Storage::<Sendable>::delete_fragments(&*s, id).await })
@@ -381,7 +394,7 @@ pub extern "C" fn storage_save_blob(
     blob_len: usize,
 ) -> FfiResult {
     run_ffi(handle, |inner| {
-        let blob = cbor_bridge::decode_blob(unsafe { slice_from(blob_ptr, blob_len) })?;
+        let blob = cbor_bridge::decode_blob(unsafe { slice_from_ffi(blob_ptr, blob_len) })?;
         let s = Arc::clone(&inner.storage);
         let digest = inner
             .run(async move { Storage::<Sendable>::save_blob(&*s, blob).await })
@@ -398,7 +411,7 @@ pub extern "C" fn storage_load_blob(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let digest =
-            cbor_bridge::decode_blob_digest(unsafe { slice_from(digest_ptr, digest_len) })?;
+            cbor_bridge::decode_blob_digest(unsafe { slice_from_ffi(digest_ptr, digest_len) })?;
         let s = Arc::clone(&inner.storage);
         let blob = inner
             .run(async move { Storage::<Sendable>::load_blob(&*s, digest).await })
@@ -414,8 +427,9 @@ pub extern "C" fn storage_load_blobs(
     digests_len: usize,
 ) -> FfiResult {
     run_ffi(handle, |inner| {
-        let digests =
-            cbor_bridge::decode_blob_digest_slice(unsafe { slice_from(digests_ptr, digests_len) })?;
+        let digests = cbor_bridge::decode_blob_digest_slice(unsafe {
+            slice_from_ffi(digests_ptr, digests_len)
+        })?;
         let s = Arc::clone(&inner.storage);
         let pairs = inner
             .run(async move { Storage::<Sendable>::load_blobs(&*s, &digests).await })
@@ -432,7 +446,7 @@ pub extern "C" fn storage_delete_blob(
 ) -> FfiResult {
     run_ffi_unit(handle, |inner| {
         let digest =
-            cbor_bridge::decode_blob_digest(unsafe { slice_from(digest_ptr, digest_len) })?;
+            cbor_bridge::decode_blob_digest(unsafe { slice_from_ffi(digest_ptr, digest_len) })?;
         let s = Arc::clone(&inner.storage);
         inner
             .run(async move { Storage::<Sendable>::delete_blob(&*s, digest).await })
@@ -450,7 +464,8 @@ pub extern "C" fn storage_save_commit_with_blob(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let args: cbor_bridge::CommitWithBlobArgs =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         let digest = inner
             .run(async move {
@@ -470,7 +485,8 @@ pub extern "C" fn storage_save_fragment_with_blob(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let args: cbor_bridge::FragmentWithBlobArgs =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
         let s = Arc::clone(&inner.storage);
         let digest = inner
             .run(async move {
@@ -490,7 +506,8 @@ pub extern "C" fn storage_save_batch(
 ) -> FfiResult {
     run_ffi(handle, |inner| {
         let args: cbor_bridge::SaveBatchArgs =
-            minicbor::decode(unsafe { slice_from(args_ptr, args_len) }).map_err(FfiError::from)?;
+            minicbor::decode(unsafe { slice_from_ffi(args_ptr, args_len) })
+                .map_err(FfiError::from)?;
 
         let commits: Vec<_> = args
             .commits

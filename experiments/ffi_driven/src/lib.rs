@@ -46,7 +46,9 @@ mod tests {
         // Effect: a simple string request. Response: usize.
         let slot = SendableEffectSlot::new();
         let mut future = sendable_driven::SendableDrivenFuture::new(Box::pin(async {
-            let len: usize = sendable_emit::<String, usize>("hello".to_string()).await;
+            let len: usize = sendable_emit::<String, usize>("hello".to_string())
+                .await
+                .unwrap();
             len * 2
         }));
 
@@ -76,7 +78,7 @@ mod tests {
 
         let slot = SendableEffectSlot::new();
         let mut future = sendable_driven::SendableDrivenFuture::new(Box::pin(async {
-            let val: u64 = sendable_emit::<u32, u64>(42u32).await;
+            let val: u64 = sendable_emit::<u32, u64>(42u32).await.unwrap();
             val + 1
         }));
 

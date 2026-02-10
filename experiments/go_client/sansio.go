@@ -16,7 +16,6 @@ extern FfiEffect sansio_driver_next_effect(SansioDriverHandle d);
 extern int32_t   sansio_driver_provide_response(SansioDriverHandle d, const uint8_t *ptr, size_t len);
 extern int32_t   sansio_driver_is_complete(SansioDriverHandle d);
 extern FfiResult sansio_driver_finish(SansioDriverHandle d);
-extern void      sansio_driver_free(SansioDriverHandle d);
 */
 import "C"
 import (
@@ -44,7 +43,7 @@ func driveSansio(handle C.SansioDriverHandle, handler EffectHandler) ([]byte, er
 
 		responseData, err := handler(uint32(effect.tag), effectData)
 		if err != nil {
-			C.sansio_driver_free(handle)
+			C.sansio_driver_finish(handle) // always consumes the handle
 			return nil, fmt.Errorf("effect handler error (tag %d): %w", effect.tag, err)
 		}
 

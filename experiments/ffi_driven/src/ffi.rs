@@ -4,6 +4,7 @@
 //! internal: state machines are compiler-generated from async code.
 
 use std::any::Any;
+use std::panic::{self, AssertUnwindSafe};
 use std::task::Poll;
 
 use ffi_common::{
@@ -277,19 +278,26 @@ impl DrivenDriver {
 
 /// Helper: decode args, build a DrivenFuture that emits effects and
 /// encodes the final result as CBOR bytes.
+///
+/// Wraps the body in `catch_unwind` — returns null on panic (e.g., bad CBOR).
 macro_rules! driven_start {
     ($name:ident, |$bytes:ident| $body:expr) => {
         #[unsafe(no_mangle)]
         pub extern "C" fn $name(ptr: *const u8, len: usize) -> DriverHandle {
-            let $bytes = if ptr.is_null() || len == 0 {
-                &[][..]
-            } else {
-                unsafe { std::slice::from_raw_parts(ptr, len) }
-            };
-            let future: DrivenFuture<'static, Result<Vec<u8>, DrivenError>> = $body;
-            let mut driver = DrivenDriver::new(future);
-            driver.poll();
-            Box::into_raw(Box::new(driver))
+            match panic::catch_unwind(AssertUnwindSafe(|| {
+                let $bytes = if ptr.is_null() || len == 0 {
+                    &[][..]
+                } else {
+                    unsafe { std::slice::from_raw_parts(ptr, len) }
+                };
+                let future: DrivenFuture<'static, Result<Vec<u8>, DrivenError>> = $body;
+                let mut driver = DrivenDriver::new(future);
+                driver.poll();
+                Box::into_raw(Box::new(driver))
+            })) {
+                Ok(handle) => handle,
+                Err(_) => std::ptr::null_mut(),
+            }
         }
     };
 }
@@ -297,7 +305,7 @@ macro_rules! driven_start {
 driven_start!(driven_start_save_sedimentree_id, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
-        let UnitResp = emit::<SaveSedimentreeIdEff, UnitResp>(SaveSedimentreeIdEff(id)).await;
+        let UnitResp = emit::<SaveSedimentreeIdEff, UnitResp>(SaveSedimentreeIdEff(id)).await?;
         Ok(Vec::new())
     }))
 });
@@ -305,7 +313,7 @@ driven_start!(driven_start_save_sedimentree_id, |bytes| {
 driven_start!(driven_start_delete_sedimentree_id, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
-        let UnitResp = emit::<DeleteSedimentreeIdEff, UnitResp>(DeleteSedimentreeIdEff(id)).await;
+        let UnitResp = emit::<DeleteSedimentreeIdEff, UnitResp>(DeleteSedimentreeIdEff(id)).await?;
         Ok(Vec::new())
     }))
 });
@@ -313,7 +321,8 @@ driven_start!(driven_start_delete_sedimentree_id, |bytes| {
 driven_start!(driven_start_load_all_sedimentree_ids, |_bytes| {
     DrivenFuture::new(Box::pin(async move {
         let SedimentreeIdSetResp(ids) =
-            emit::<LoadAllSedimentreeIdsEff, SedimentreeIdSetResp>(LoadAllSedimentreeIdsEff).await;
+            emit::<LoadAllSedimentreeIdsEff, SedimentreeIdSetResp>(LoadAllSedimentreeIdsEff)
+                .await?;
         cbor_bridge::encode_sedimentree_id_set(&ids).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -325,7 +334,7 @@ driven_start!(driven_start_save_loose_commit, |bytes| {
             SaveLooseCommitEff,
             DigestResp<sedimentree_core::loose_commit::LooseCommit>,
         >(SaveLooseCommitEff(args.id, args.commit))
-        .await;
+        .await?;
         cbor_bridge::encode_commit_digest(&d).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -336,7 +345,7 @@ driven_start!(driven_start_load_loose_commit, |bytes| {
         let OptionalSignedCommitResp(c) = emit::<LoadLooseCommitEff, OptionalSignedCommitResp>(
             LoadLooseCommitEff(args.id, args.digest),
         )
-        .await;
+        .await?;
         cbor_bridge::encode_optional_signed_commit(&c).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -345,7 +354,7 @@ driven_start!(driven_start_list_commit_digests, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
         let CommitDigestSetResp(d) =
-            emit::<ListCommitDigestsEff, CommitDigestSetResp>(ListCommitDigestsEff(id)).await;
+            emit::<ListCommitDigestsEff, CommitDigestSetResp>(ListCommitDigestsEff(id)).await?;
         cbor_bridge::encode_commit_digest_set(&d).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -354,7 +363,7 @@ driven_start!(driven_start_load_loose_commits, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
         let CommitPairsResp(p) =
-            emit::<LoadLooseCommitsEff, CommitPairsResp>(LoadLooseCommitsEff(id)).await;
+            emit::<LoadLooseCommitsEff, CommitPairsResp>(LoadLooseCommitsEff(id)).await?;
         cbor_bridge::encode_commit_pairs(&p).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -364,7 +373,7 @@ driven_start!(driven_start_delete_loose_commit, |bytes| {
     DrivenFuture::new(Box::pin(async move {
         let UnitResp =
             emit::<DeleteLooseCommitEff, UnitResp>(DeleteLooseCommitEff(args.id, args.digest))
-                .await;
+                .await?;
         Ok(Vec::new())
     }))
 });
@@ -372,7 +381,7 @@ driven_start!(driven_start_delete_loose_commit, |bytes| {
 driven_start!(driven_start_delete_loose_commits, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
-        let UnitResp = emit::<DeleteLooseCommitsEff, UnitResp>(DeleteLooseCommitsEff(id)).await;
+        let UnitResp = emit::<DeleteLooseCommitsEff, UnitResp>(DeleteLooseCommitsEff(id)).await?;
         Ok(Vec::new())
     }))
 });
@@ -384,7 +393,7 @@ driven_start!(driven_start_save_fragment, |bytes| {
             emit::<SaveFragmentEff, DigestResp<sedimentree_core::fragment::Fragment>>(
                 SaveFragmentEff(args.id, args.fragment),
             )
-            .await;
+            .await?;
         cbor_bridge::encode_fragment_digest(&d).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -395,7 +404,7 @@ driven_start!(driven_start_load_fragment, |bytes| {
         let OptionalSignedFragmentResp(f) = emit::<LoadFragmentEff, OptionalSignedFragmentResp>(
             LoadFragmentEff(args.id, args.digest),
         )
-        .await;
+        .await?;
         cbor_bridge::encode_optional_signed_fragment(&f).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -404,7 +413,8 @@ driven_start!(driven_start_list_fragment_digests, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
         let FragmentDigestSetResp(d) =
-            emit::<ListFragmentDigestsEff, FragmentDigestSetResp>(ListFragmentDigestsEff(id)).await;
+            emit::<ListFragmentDigestsEff, FragmentDigestSetResp>(ListFragmentDigestsEff(id))
+                .await?;
         cbor_bridge::encode_fragment_digest_set(&d).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -413,7 +423,7 @@ driven_start!(driven_start_load_fragments, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
         let FragmentPairsResp(p) =
-            emit::<LoadFragmentsEff, FragmentPairsResp>(LoadFragmentsEff(id)).await;
+            emit::<LoadFragmentsEff, FragmentPairsResp>(LoadFragmentsEff(id)).await?;
         cbor_bridge::encode_fragment_pairs(&p).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -422,7 +432,7 @@ driven_start!(driven_start_delete_fragment, |bytes| {
     let args: cbor_bridge::IdAndFragmentDigest = minicbor::decode(bytes).expect("decode args");
     DrivenFuture::new(Box::pin(async move {
         let UnitResp =
-            emit::<DeleteFragmentEff, UnitResp>(DeleteFragmentEff(args.id, args.digest)).await;
+            emit::<DeleteFragmentEff, UnitResp>(DeleteFragmentEff(args.id, args.digest)).await?;
         Ok(Vec::new())
     }))
 });
@@ -430,7 +440,7 @@ driven_start!(driven_start_delete_fragment, |bytes| {
 driven_start!(driven_start_delete_fragments, |bytes| {
     let id = cbor_bridge::decode_sedimentree_id(bytes).expect("decode id");
     DrivenFuture::new(Box::pin(async move {
-        let UnitResp = emit::<DeleteFragmentsEff, UnitResp>(DeleteFragmentsEff(id)).await;
+        let UnitResp = emit::<DeleteFragmentsEff, UnitResp>(DeleteFragmentsEff(id)).await?;
         Ok(Vec::new())
     }))
 });
@@ -439,7 +449,8 @@ driven_start!(driven_start_save_blob, |bytes| {
     let blob = cbor_bridge::decode_blob(bytes).expect("decode blob");
     DrivenFuture::new(Box::pin(async move {
         let DigestResp(d) =
-            emit::<SaveBlobEff, DigestResp<sedimentree_core::blob::Blob>>(SaveBlobEff(blob)).await;
+            emit::<SaveBlobEff, DigestResp<sedimentree_core::blob::Blob>>(SaveBlobEff(blob))
+                .await?;
         cbor_bridge::encode_blob_digest(&d).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -447,7 +458,8 @@ driven_start!(driven_start_save_blob, |bytes| {
 driven_start!(driven_start_load_blob, |bytes| {
     let digest = cbor_bridge::decode_blob_digest(bytes).expect("decode digest");
     DrivenFuture::new(Box::pin(async move {
-        let OptionalBlobResp(b) = emit::<LoadBlobEff, OptionalBlobResp>(LoadBlobEff(digest)).await;
+        let OptionalBlobResp(b) =
+            emit::<LoadBlobEff, OptionalBlobResp>(LoadBlobEff(digest)).await?;
         cbor_bridge::encode_optional_blob(&b).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -455,7 +467,7 @@ driven_start!(driven_start_load_blob, |bytes| {
 driven_start!(driven_start_load_blobs, |bytes| {
     let digests = cbor_bridge::decode_blob_digest_slice(bytes).expect("decode digests");
     DrivenFuture::new(Box::pin(async move {
-        let BlobPairsResp(p) = emit::<LoadBlobsEff, BlobPairsResp>(LoadBlobsEff(digests)).await;
+        let BlobPairsResp(p) = emit::<LoadBlobsEff, BlobPairsResp>(LoadBlobsEff(digests)).await?;
         cbor_bridge::encode_blob_digest_pairs(&p).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -463,7 +475,7 @@ driven_start!(driven_start_load_blobs, |bytes| {
 driven_start!(driven_start_delete_blob, |bytes| {
     let digest = cbor_bridge::decode_blob_digest(bytes).expect("decode digest");
     DrivenFuture::new(Box::pin(async move {
-        let UnitResp = emit::<DeleteBlobEff, UnitResp>(DeleteBlobEff(digest)).await;
+        let UnitResp = emit::<DeleteBlobEff, UnitResp>(DeleteBlobEff(digest)).await?;
         Ok(Vec::new())
     }))
 });
@@ -477,11 +489,11 @@ driven_start!(driven_start_save_commit_with_blob, |bytes| {
             SaveLooseCommitEff,
             DigestResp<sedimentree_core::loose_commit::LooseCommit>,
         >(SaveLooseCommitEff(args.id, args.commit))
-        .await;
+        .await?;
         // Step 2: save blob
         let DigestResp(bd) =
             emit::<SaveBlobEff, DigestResp<sedimentree_core::blob::Blob>>(SaveBlobEff(args.blob))
-                .await;
+                .await?;
         cbor_bridge::encode_blob_digest(&bd).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -493,10 +505,10 @@ driven_start!(driven_start_save_fragment_with_blob, |bytes| {
             SaveFragmentEff,
             DigestResp<sedimentree_core::fragment::Fragment>,
         >(SaveFragmentEff(args.id, args.fragment))
-        .await;
+        .await?;
         let DigestResp(bd) =
             emit::<SaveBlobEff, DigestResp<sedimentree_core::blob::Blob>>(SaveBlobEff(args.blob))
-                .await;
+                .await?;
         cbor_bridge::encode_blob_digest(&bd).map_err(|e| DrivenError(e.to_string()))
     }))
 });
@@ -512,12 +524,12 @@ driven_start!(driven_start_save_batch, |bytes| {
                 SaveLooseCommitEff,
                 DigestResp<sedimentree_core::loose_commit::LooseCommit>,
             >(SaveLooseCommitEff(args.id, pair.commit))
-            .await;
+            .await?;
             commit_digests.push(cd);
             let DigestResp(_bd) = emit::<SaveBlobEff, DigestResp<sedimentree_core::blob::Blob>>(
                 SaveBlobEff(pair.blob),
             )
-            .await;
+            .await?;
         }
 
         for pair in args.fragments {
@@ -525,12 +537,12 @@ driven_start!(driven_start_save_batch, |bytes| {
                 SaveFragmentEff,
                 DigestResp<sedimentree_core::fragment::Fragment>,
             >(SaveFragmentEff(args.id, pair.fragment))
-            .await;
+            .await?;
             fragment_digests.push(fd);
             let DigestResp(_bd) = emit::<SaveBlobEff, DigestResp<sedimentree_core::blob::Blob>>(
                 SaveBlobEff(pair.blob),
             )
-            .await;
+            .await?;
         }
 
         let result = cbor_bridge::BatchResultWire {
@@ -564,14 +576,28 @@ pub extern "C" fn driven_provide_response(
     if handle.is_null() {
         return 1;
     }
-    let driver = unsafe { &mut *handle };
-    let data = if data_ptr.is_null() || data_len == 0 {
-        &[][..]
-    } else {
-        unsafe { std::slice::from_raw_parts(data_ptr, data_len) }
-    };
-    let complete = driver.provide_response_bytes(data);
-    i32::from(complete)
+    // catch_unwind guards against panics from downcast mismatches
+    // or protocol violations inside the poll chain.
+    match panic::catch_unwind(AssertUnwindSafe(|| {
+        let driver = unsafe { &mut *handle };
+        let data = if data_ptr.is_null() || data_len == 0 {
+            &[][..]
+        } else {
+            unsafe { std::slice::from_raw_parts(data_ptr, data_len) }
+        };
+        let complete = driver.provide_response_bytes(data);
+        i32::from(complete)
+    })) {
+        Ok(v) => v,
+        Err(_) => {
+            // On panic, mark the driver as complete with an error so
+            // driven_finish can report it instead of hanging.
+            let driver = unsafe { &mut *handle };
+            driver.future = None;
+            driver.result = Some(Err(DrivenError("panic during provide_response".into())));
+            1 // complete
+        }
+    }
 }
 
 #[unsafe(no_mangle)]
@@ -583,6 +609,21 @@ pub extern "C" fn driven_is_complete(handle: DriverHandle) -> i32 {
     i32::from(driver.result.is_some())
 }
 
+/// Extract the final result and free the driver.
+///
+/// Always consumes the driver handle — the handle is invalidated after
+/// this call regardless of whether the operation was complete.
+///
+/// Returns an `FfiResult`:
+/// - On success: CBOR-encoded result data.
+/// - On driven error: error with status -3.
+/// - If not complete: error with status -5.
+/// - If handle is null: error with status -4.
+///
+/// # Safety
+///
+/// `handle` must have been returned by a `driven_start_*` function
+/// and must not have been consumed already.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn driven_finish(handle: DriverHandle) -> FfiResult {
     if handle.is_null() {
@@ -593,14 +634,5 @@ pub unsafe extern "C" fn driven_finish(handle: DriverHandle) -> FfiResult {
         Some(Ok(data)) => FfiResult::ok(data),
         Some(Err(e)) => FfiResult::err(-3, &e.to_string()),
         None => FfiResult::err(-5, "driver not complete"),
-    }
-}
-
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn driven_free(handle: DriverHandle) {
-    if !handle.is_null() {
-        unsafe {
-            drop(Box::from_raw(handle));
-        }
     }
 }

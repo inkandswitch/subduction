@@ -68,6 +68,12 @@ pub struct DrivenStorage;
 #[error("driven storage error: {0}")]
 pub struct DrivenError(pub String);
 
+impl From<crate::effect_future::EffectError> for DrivenError {
+    fn from(e: crate::effect_future::EffectError) -> Self {
+        Self(e.to_string())
+    }
+}
+
 // We can't use `#[future_form(Driven)]` because we don't have a real
 // FutureForm impl for Driven. Instead, we implement the trait methods
 // directly, returning `DrivenFuture` (which is just Pin<Box<dyn Future>>).
@@ -89,7 +95,7 @@ impl DrivenStorage {
         id: SedimentreeId,
     ) -> DrivenFuture<'_, Result<(), DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
-            let UnitResp = emit::<SaveSedimentreeIdEff, UnitResp>(SaveSedimentreeIdEff(id)).await;
+            let UnitResp = emit::<SaveSedimentreeIdEff, UnitResp>(SaveSedimentreeIdEff(id)).await?;
             Ok(())
         }))
     }
@@ -100,7 +106,7 @@ impl DrivenStorage {
     ) -> DrivenFuture<'_, Result<(), DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
             let UnitResp =
-                emit::<DeleteSedimentreeIdEff, UnitResp>(DeleteSedimentreeIdEff(id)).await;
+                emit::<DeleteSedimentreeIdEff, UnitResp>(DeleteSedimentreeIdEff(id)).await?;
             Ok(())
         }))
     }
@@ -111,7 +117,7 @@ impl DrivenStorage {
         DrivenFuture::new(Box::pin(async move {
             let SedimentreeIdSetResp(ids) =
                 emit::<LoadAllSedimentreeIdsEff, SedimentreeIdSetResp>(LoadAllSedimentreeIdsEff)
-                    .await;
+                    .await?;
             Ok(ids)
         }))
     }
@@ -124,7 +130,7 @@ impl DrivenStorage {
         DrivenFuture::new(Box::pin(async move {
             let DigestResp(digest) =
                 emit::<SaveLooseCommitEff, DigestResp<LooseCommit>>(SaveLooseCommitEff(id, commit))
-                    .await;
+                    .await?;
             Ok(digest)
         }))
     }
@@ -139,7 +145,7 @@ impl DrivenStorage {
                 LoadLooseCommitEff,
                 OptionalSignedCommitResp,
             >(LoadLooseCommitEff(id, digest))
-            .await;
+            .await?;
             Ok(commit)
         }))
     }
@@ -150,7 +156,7 @@ impl DrivenStorage {
     ) -> DrivenFuture<'_, Result<Set<Digest<LooseCommit>>, DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
             let CommitDigestSetResp(digests) =
-                emit::<ListCommitDigestsEff, CommitDigestSetResp>(ListCommitDigestsEff(id)).await;
+                emit::<ListCommitDigestsEff, CommitDigestSetResp>(ListCommitDigestsEff(id)).await?;
             Ok(digests)
         }))
     }
@@ -162,7 +168,7 @@ impl DrivenStorage {
     {
         DrivenFuture::new(Box::pin(async move {
             let CommitPairsResp(pairs) =
-                emit::<LoadLooseCommitsEff, CommitPairsResp>(LoadLooseCommitsEff(id)).await;
+                emit::<LoadLooseCommitsEff, CommitPairsResp>(LoadLooseCommitsEff(id)).await?;
             Ok(pairs)
         }))
     }
@@ -174,7 +180,7 @@ impl DrivenStorage {
     ) -> DrivenFuture<'_, Result<(), DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
             let UnitResp =
-                emit::<DeleteLooseCommitEff, UnitResp>(DeleteLooseCommitEff(id, digest)).await;
+                emit::<DeleteLooseCommitEff, UnitResp>(DeleteLooseCommitEff(id, digest)).await?;
             Ok(())
         }))
     }
@@ -184,7 +190,8 @@ impl DrivenStorage {
         id: SedimentreeId,
     ) -> DrivenFuture<'_, Result<(), DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
-            let UnitResp = emit::<DeleteLooseCommitsEff, UnitResp>(DeleteLooseCommitsEff(id)).await;
+            let UnitResp =
+                emit::<DeleteLooseCommitsEff, UnitResp>(DeleteLooseCommitsEff(id)).await?;
             Ok(())
         }))
     }
@@ -196,7 +203,8 @@ impl DrivenStorage {
     ) -> DrivenFuture<'_, Result<Digest<Fragment>, DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
             let DigestResp(digest) =
-                emit::<SaveFragmentEff, DigestResp<Fragment>>(SaveFragmentEff(id, fragment)).await;
+                emit::<SaveFragmentEff, DigestResp<Fragment>>(SaveFragmentEff(id, fragment))
+                    .await?;
             Ok(digest)
         }))
     }
@@ -209,7 +217,7 @@ impl DrivenStorage {
         DrivenFuture::new(Box::pin(async move {
             let OptionalSignedFragmentResp(fragment) =
                 emit::<LoadFragmentEff, OptionalSignedFragmentResp>(LoadFragmentEff(id, digest))
-                    .await;
+                    .await?;
             Ok(fragment)
         }))
     }
@@ -221,7 +229,7 @@ impl DrivenStorage {
         DrivenFuture::new(Box::pin(async move {
             let FragmentDigestSetResp(digests) =
                 emit::<ListFragmentDigestsEff, FragmentDigestSetResp>(ListFragmentDigestsEff(id))
-                    .await;
+                    .await?;
             Ok(digests)
         }))
     }
@@ -232,7 +240,7 @@ impl DrivenStorage {
     ) -> DrivenFuture<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
             let FragmentPairsResp(pairs) =
-                emit::<LoadFragmentsEff, FragmentPairsResp>(LoadFragmentsEff(id)).await;
+                emit::<LoadFragmentsEff, FragmentPairsResp>(LoadFragmentsEff(id)).await?;
             Ok(pairs)
         }))
     }
@@ -243,21 +251,23 @@ impl DrivenStorage {
         digest: Digest<Fragment>,
     ) -> DrivenFuture<'_, Result<(), DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
-            let UnitResp = emit::<DeleteFragmentEff, UnitResp>(DeleteFragmentEff(id, digest)).await;
+            let UnitResp =
+                emit::<DeleteFragmentEff, UnitResp>(DeleteFragmentEff(id, digest)).await?;
             Ok(())
         }))
     }
 
     pub fn delete_fragments(&self, id: SedimentreeId) -> DrivenFuture<'_, Result<(), DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
-            let UnitResp = emit::<DeleteFragmentsEff, UnitResp>(DeleteFragmentsEff(id)).await;
+            let UnitResp = emit::<DeleteFragmentsEff, UnitResp>(DeleteFragmentsEff(id)).await?;
             Ok(())
         }))
     }
 
     pub fn save_blob(&self, blob: Blob) -> DrivenFuture<'_, Result<Digest<Blob>, DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
-            let DigestResp(digest) = emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await;
+            let DigestResp(digest) =
+                emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await?;
             Ok(digest)
         }))
     }
@@ -268,7 +278,7 @@ impl DrivenStorage {
     ) -> DrivenFuture<'_, Result<Option<Blob>, DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
             let OptionalBlobResp(blob) =
-                emit::<LoadBlobEff, OptionalBlobResp>(LoadBlobEff(digest)).await;
+                emit::<LoadBlobEff, OptionalBlobResp>(LoadBlobEff(digest)).await?;
             Ok(blob)
         }))
     }
@@ -279,14 +289,14 @@ impl DrivenStorage {
     ) -> DrivenFuture<'_, Result<Vec<(Digest<Blob>, Blob)>, DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
             let BlobPairsResp(pairs) =
-                emit::<LoadBlobsEff, BlobPairsResp>(LoadBlobsEff(digests)).await;
+                emit::<LoadBlobsEff, BlobPairsResp>(LoadBlobsEff(digests)).await?;
             Ok(pairs)
         }))
     }
 
     pub fn delete_blob(&self, digest: Digest<Blob>) -> DrivenFuture<'_, Result<(), DrivenError>> {
         DrivenFuture::new(Box::pin(async move {
-            let UnitResp = emit::<DeleteBlobEff, UnitResp>(DeleteBlobEff(digest)).await;
+            let UnitResp = emit::<DeleteBlobEff, UnitResp>(DeleteBlobEff(digest)).await?;
             Ok(())
         }))
     }
@@ -305,11 +315,11 @@ impl DrivenStorage {
             // Step 1: save the commit
             let DigestResp(_commit_digest) =
                 emit::<SaveLooseCommitEff, DigestResp<LooseCommit>>(SaveLooseCommitEff(id, commit))
-                    .await;
+                    .await?;
 
             // Step 2: save the blob
             let DigestResp(blob_digest) =
-                emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await;
+                emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await?;
 
             Ok(blob_digest)
         }))
@@ -324,11 +334,12 @@ impl DrivenStorage {
         DrivenFuture::new(Box::pin(async move {
             // Step 1: save the fragment
             let DigestResp(_fragment_digest) =
-                emit::<SaveFragmentEff, DigestResp<Fragment>>(SaveFragmentEff(id, fragment)).await;
+                emit::<SaveFragmentEff, DigestResp<Fragment>>(SaveFragmentEff(id, fragment))
+                    .await?;
 
             // Step 2: save the blob
             let DigestResp(blob_digest) =
-                emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await;
+                emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await?;
 
             Ok(blob_digest)
         }))
@@ -349,22 +360,22 @@ impl DrivenStorage {
                 let DigestResp(cd) = emit::<SaveLooseCommitEff, DigestResp<LooseCommit>>(
                     SaveLooseCommitEff(id, commit),
                 )
-                .await;
+                .await?;
                 commit_digests.push(cd);
 
                 let DigestResp(_blob_digest) =
-                    emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await;
+                    emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await?;
             }
 
             // Save all fragments + their blobs
             for (fragment, blob) in fragments {
                 let DigestResp(fd) =
                     emit::<SaveFragmentEff, DigestResp<Fragment>>(SaveFragmentEff(id, fragment))
-                        .await;
+                        .await?;
                 fragment_digests.push(fd);
 
                 let DigestResp(_blob_digest) =
-                    emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await;
+                    emit::<SaveBlobEff, DigestResp<Blob>>(SaveBlobEff(blob)).await?;
             }
 
             Ok(BatchResult {

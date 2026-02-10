@@ -16,7 +16,6 @@ extern FfiEffect driven_next_effect(DrivenDriverHandle h);
 extern int32_t   driven_provide_response(DrivenDriverHandle h, const uint8_t *ptr, size_t len);
 extern int32_t   driven_is_complete(DrivenDriverHandle h);
 extern FfiResult driven_finish(DrivenDriverHandle h);
-extern void      driven_free(DrivenDriverHandle h);
 */
 import "C"
 import (
@@ -45,7 +44,7 @@ func driveDriven(handle C.DrivenDriverHandle, handler EffectHandler) ([]byte, er
 
 		responseData, err := handler(uint32(effect.tag), effectData)
 		if err != nil {
-			C.driven_free(handle)
+			C.driven_finish(handle) // always consumes the handle
 			return nil, fmt.Errorf("effect handler error (tag %d): %w", effect.tag, err)
 		}
 

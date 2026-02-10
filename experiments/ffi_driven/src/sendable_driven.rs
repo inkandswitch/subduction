@@ -16,19 +16,29 @@ use std::{
     task::{Context, Poll, RawWaker, RawWakerVTable, Waker},
 };
 
+use crate::effect_future::EffectError;
+
 /// Thread-safe communication channel between the inner future and the driver.
 ///
 /// Uses `Mutex` so it can be shared across threads (the `Send` requirement).
 /// In practice the lock is never contended — the driver and the future
 /// alternate strictly.
 pub struct SendableEffectSlot {
+    /// Sentinel checked by `slot_from_waker` to verify the Waker actually
+    /// carries a `SendableEffectSlot` and wasn't produced by a foreign executor.
+    magic: u64,
     effect: Mutex<Option<Box<dyn Any + Send>>>,
     response: Mutex<Option<Box<dyn Any + Send>>>,
 }
 
+/// Chosen to be unlikely to appear in a foreign waker's data pointer.
+/// Not cryptographic — just a runtime sanity check.
+const SLOT_MAGIC: u64 = 0xD01_ED51_0751_0700;
+
 impl SendableEffectSlot {
     pub fn new() -> Self {
         Self {
+            magic: SLOT_MAGIC,
             effect: Mutex::new(None),
             response: Mutex::new(None),
         }
@@ -54,9 +64,6 @@ impl SendableEffectSlot {
     }
 }
 
-// Mutex<Option<Box<dyn Any + Send>>> is already Send + Sync,
-// so SendableEffectSlot derives Send + Sync automatically.
-
 // ==================== Waker carrying slot pointer ====================
 //
 // The RawWaker's data pointer is a `*const SendableEffectSlot`.
@@ -80,10 +87,9 @@ unsafe fn slot_waker_drop(_data: *const ()) {}
 
 /// Create a `Waker` that carries a pointer to a `SendableEffectSlot`.
 ///
-/// # Safety
-///
 /// The `SendableEffectSlot` must outlive the returned `Waker` and any
-/// `Context` created from it.
+/// `Context` created from it. In practice, both are created and consumed
+/// within `poll_with_slot`.
 pub fn make_slot_waker(slot: &SendableEffectSlot) -> Waker {
     let data = slot as *const SendableEffectSlot as *const ();
     // Safety: the vtable functions are all safe (clone copies pointer,
@@ -91,15 +97,33 @@ pub fn make_slot_waker(slot: &SendableEffectSlot) -> Waker {
     unsafe { Waker::from_raw(RawWaker::new(data, &SLOT_WAKER_VTABLE)) }
 }
 
-/// Extract the `SendableEffectSlot` from a `Waker` created by `make_slot_waker`.
+/// Extract the `SendableEffectSlot` from a `Waker`, verifying the sentinel.
+///
+/// Returns `Err(EffectError::WrongWaker)` if the waker was not created
+/// by `make_slot_waker` (e.g., it came from tokio or another executor).
 ///
 /// # Safety
 ///
-/// The waker must have been created by `make_slot_waker` with a valid slot pointer.
-/// The returned reference is only valid for the duration of the current poll.
-pub unsafe fn slot_from_waker(waker: &Waker) -> &SendableEffectSlot {
+/// The waker's data pointer must either:
+/// - Point to a live `SendableEffectSlot` (created by `make_slot_waker`), or
+/// - Point to readable memory of at least 8 bytes (for the sentinel check
+///   to fail gracefully rather than segfault).
+///
+/// In practice this is always satisfied: foreign wakers point to their own
+/// valid allocations (tokio task headers, etc.), and the sentinel check
+/// rejects them before any `SendableEffectSlot` field access.
+pub(crate) unsafe fn slot_from_waker(waker: &Waker) -> Result<&SendableEffectSlot, EffectError> {
     let data_ptr = waker.data();
-    unsafe { &*(data_ptr as *const SendableEffectSlot) }
+    if data_ptr.is_null() {
+        return Err(EffectError::WrongWaker);
+    }
+
+    let slot = unsafe { &*(data_ptr as *const SendableEffectSlot) };
+    if slot.magic != SLOT_MAGIC {
+        return Err(EffectError::WrongWaker);
+    }
+
+    Ok(slot)
 }
 
 /// A `Send`-safe future driven by an external host via the effect slot protocol.
@@ -124,7 +148,3 @@ impl<'a, T> SendableDrivenFuture<'a, T> {
         self.inner.as_mut().poll(&mut cx)
     }
 }
-
-// SendableDrivenFuture is Send because its inner future is Send.
-// The slot reference doesn't live in the struct — it's passed per-poll.
-unsafe impl<T: Send> Send for SendableDrivenFuture<'_, T> {}

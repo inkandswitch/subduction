@@ -2,6 +2,8 @@
 //!
 //! Same two-poll yield-resume pattern, but extracts the `SendableEffectSlot`
 //! from the `Waker` (via `slot_from_waker`) instead of a thread-local.
+//!
+//! Returns `Result<R, EffectError>` instead of panicking on protocol violations.
 
 use std::{
     any::Any,
@@ -11,7 +13,7 @@ use std::{
     task::{Context, Poll},
 };
 
-use crate::sendable_driven::slot_from_waker;
+use crate::{effect_future::EffectError, sendable_driven::slot_from_waker};
 
 /// A `Send`-safe future that yields a single effect and waits for a response.
 ///
@@ -28,6 +30,8 @@ enum EffectState<E> {
     Done,
 }
 
+impl<E: Send + 'static, R: Send + 'static> Unpin for SendableEffectFuture<E, R> {}
+
 impl<E: Send + 'static, R: Send + 'static> SendableEffectFuture<E, R> {
     pub fn new(effect: E) -> Self {
         Self {
@@ -38,40 +42,40 @@ impl<E: Send + 'static, R: Send + 'static> SendableEffectFuture<E, R> {
 }
 
 impl<E: Send + 'static, R: Send + 'static> Future for SendableEffectFuture<E, R> {
-    type Output = R;
+    type Output = Result<R, EffectError>;
 
-    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<R> {
-        let this = unsafe { self.get_unchecked_mut() };
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        let this = self.get_mut();
 
         match std::mem::replace(&mut this.state, EffectState::Done) {
             EffectState::Ready(effect) => {
-                // First poll: extract slot from Waker, emit effect.
-                let slot = unsafe { slot_from_waker(cx.waker()) };
+                let slot = match unsafe { slot_from_waker(cx.waker()) } {
+                    Ok(s) => s,
+                    Err(e) => return Poll::Ready(Err(e)),
+                };
                 slot.emit_effect(Box::new(effect) as Box<dyn Any + Send>);
                 this.state = EffectState::Pending;
                 Poll::Pending
             }
             EffectState::Pending => {
-                // Second poll: extract slot from Waker, read response.
-                let slot = unsafe { slot_from_waker(cx.waker()) };
-                let response = slot
-                    .take_response()
-                    .expect("sendable driven: polled after Pending but no response provided");
-                let typed: Box<R> = response
-                    .downcast()
-                    .expect("sendable driven: response type mismatch");
-                Poll::Ready(*typed)
+                let slot = match unsafe { slot_from_waker(cx.waker()) } {
+                    Ok(s) => s,
+                    Err(e) => return Poll::Ready(Err(e)),
+                };
+                let Some(response) = slot.take_response() else {
+                    return Poll::Ready(Err(EffectError::MissingResponse));
+                };
+                match response.downcast::<R>() {
+                    Ok(typed) => Poll::Ready(Ok(*typed)),
+                    Err(_) => Poll::Ready(Err(EffectError::DowncastFailed {
+                        expected: std::any::type_name::<R>(),
+                    })),
+                }
             }
-            EffectState::Done => {
-                panic!("sendable driven: EffectFuture polled after completion");
-            }
+            EffectState::Done => Poll::Ready(Err(EffectError::PollAfterCompletion)),
         }
     }
 }
-
-// Safety: EffectState<E> is Send when E: Send. PhantomData<R> is always Send.
-// The future only accesses the slot during poll (via the Waker), never stores it.
-unsafe impl<E: Send + 'static, R: Send + 'static> Send for SendableEffectFuture<E, R> {}
 
 /// Convenience: create a sendable effect future.
 pub fn sendable_emit<E: Send + 'static, R: Send + 'static>(
