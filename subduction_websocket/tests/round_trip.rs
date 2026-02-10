@@ -14,7 +14,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
+    connection::{handshake::Audience, message::Message, nonce_cache::NonceCache, Connection},
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -22,7 +22,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -271,7 +271,7 @@ async fn batch_sync() -> TestResult {
     assert_eq!(client.connected_peer_ids().await.len(), 1);
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
-    client.full_sync(Some(Duration::from_millis(100))).await?;
+    client.full_sync(Some(Duration::from_millis(100))).await;
 
     let server_updated = server_subduction
         .get_commits(sed_id)

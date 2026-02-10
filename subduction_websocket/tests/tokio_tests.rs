@@ -13,7 +13,7 @@ use sedimentree_core::{
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
+        handshake::Audience, message::Message, nonce_cache::NonceCache, Connection, Reconnect,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
@@ -22,7 +22,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -639,7 +639,7 @@ async fn large_message_handling() -> TestResult {
     client.add_commit(sed_id, &commit, large_blob).await?;
 
     // Sync with server
-    client.full_sync(Some(Duration::from_secs(5))).await?;
+    client.full_sync(Some(Duration::from_secs(5))).await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -758,7 +758,7 @@ async fn message_ordering() -> TestResult {
     }
 
     // Sync all at once
-    client.full_sync(Some(Duration::from_millis(500))).await?;
+    client.full_sync(Some(Duration::from_millis(500))).await;
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 

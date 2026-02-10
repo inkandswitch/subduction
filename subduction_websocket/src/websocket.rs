@@ -13,15 +13,15 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
+    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -104,9 +104,6 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
     /// Channel for outbound messages. A dedicated sender task drains this to the WebSocket.
     /// This eliminates mutex contention when many tasks send concurrently.
     outbound_tx: async_channel::Sender<tungstenite::Message>,
-
-    /// Receiver end, held to keep channel alive and passed to sender task.
-    outbound_rx: async_channel::Receiver<tungstenite::Message>,
 
     /// The actual WebSocket sender, used only by the sender task.
     ws_sender: Arc<Mutex<WebSocketSender<T>>>,
@@ -242,14 +239,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
 impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
     /// Create a new WebSocket connection.
     ///
-    /// After creating the connection, you must call [`run_sender`](Self::run_sender)
-    /// to start the background task that sends outbound messages.
+    /// Returns the connection and the outbound channel receiver. The receiver
+    /// must be passed to [`sender_task`](Self::sender_task) (typically via a
+    /// spawned background task) for outbound messages to be delivered.
+    ///
+    /// The receiver is returned separately so that when the sender task exits
+    /// (e.g., due to a WebSocket write error), the receiver is dropped and the
+    /// channel closes. This causes subsequent `send()`/`call()` attempts to
+    /// fail fast with an error rather than blocking on a full channel.
     pub fn new(
         ws: WebSocketStream<T>,
         timeout_strategy: O,
         default_time_limit: Duration,
         peer_id: PeerId,
-    ) -> Self {
+    ) -> (Self, async_channel::Receiver<tungstenite::Message>) {
         tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
         let pending = Arc::new(Mutex::new(Map::<
@@ -261,7 +264,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
 
-        Self {
+        let ws = Self {
             peer_id,
             chan_id,
 
@@ -271,37 +274,51 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
             ws_reader: Arc::new(Mutex::new(ws_reader)),
             outbound_tx,
-            outbound_rx,
             ws_sender: Arc::new(Mutex::new(ws_writer)),
             pending,
             inbound_writer,
             inbound_reader,
 
             _phantom: PhantomData,
-        }
+        };
+
+        (ws, outbound_rx)
     }
 
-    /// Run the sender task that drains outbound messages to the WebSocket.
+    /// Build a sender task future that drains outbound messages to the WebSocket.
     ///
-    /// This task should be spawned as a background task. It will run until the
-    /// outbound channel is closed (when all senders are dropped) or a send error occurs.
+    /// The returned future should be spawned as a background task. It runs until
+    /// the outbound channel closes (all senders dropped) or a WebSocket write
+    /// error occurs.
     ///
-    /// # Errors
-    ///
-    /// Returns an error if sending to the WebSocket fails.
-    pub async fn run_sender(&self) -> Result<(), RunError> {
-        tracing::info!("starting WebSocket sender task for peer {:?}", self.peer_id);
+    /// The future captures only the `outbound_rx` and the WebSocket write half —
+    /// it does _not_ retain a clone of the full `WebSocket` (and therefore does
+    /// not keep an `outbound_tx` alive). This ensures that when the sender task
+    /// exits, the channel closes and producers observe errors immediately.
+    pub fn sender_task(
+        &self,
+        outbound_rx: async_channel::Receiver<tungstenite::Message>,
+    ) -> BoxFuture<'static, Result<(), RunError>>
+    where
+        T: Send + 'static,
+    {
+        let ws_sender = self.ws_sender.clone();
+        let peer_id = self.peer_id;
 
-        let rx = self.outbound_rx.clone();
-        let mut ws_sender = self.ws_sender.lock().await;
+        async move {
+            tracing::info!("starting WebSocket sender task for peer {:?}", peer_id);
 
-        while let Ok(msg) = rx.recv().await {
-            tracing::debug!("sender task: sending message to WebSocket");
-            ws_sender.send(msg).await?;
+            let mut ws_sender = ws_sender.lock().await;
+
+            while let Ok(msg) = outbound_rx.recv().await {
+                tracing::debug!("sender task: sending message to WebSocket");
+                ws_sender.send(msg).await?;
+            }
+
+            tracing::info!("sender task: outbound channel closed, shutting down");
+            Ok(())
         }
-
-        tracing::info!("sender task: outbound channel closed, shutting down");
-        Ok(())
+        .boxed()
     }
 
     /// The timeout strategy used for requests.
@@ -572,7 +589,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K> + Clone> Cl
             default_time_limit: self.default_time_limit,
             ws_reader: self.ws_reader.clone(),
             outbound_tx: self.outbound_tx.clone(),
-            outbound_rx: self.outbound_rx.clone(),
             ws_sender: self.ws_sender.clone(),
             pending: self.pending.clone(),
             inbound_writer: self.inbound_writer.clone(),
@@ -645,7 +661,8 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
+                WebSocket::new(ws, timeout, duration, peer_id);
 
             assert_eq!(websocket.peer_id(), peer_id);
         }
@@ -657,7 +674,8 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
+                WebSocket::new(ws, timeout, duration, peer_id);
 
             assert_eq!(*websocket.timeout_strategy(), MockTimeout);
         }
@@ -669,7 +687,8 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(42);
 
-            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
+                WebSocket::new(ws, timeout, duration, peer_id);
 
             assert_eq!(websocket.default_time_limit(), duration);
         }
@@ -685,7 +704,8 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
+                WebSocket::new(ws, timeout, duration, peer_id);
 
             assert_eq!(websocket.peer_id(), peer_id);
         }
@@ -697,7 +717,8 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket: WebSocket<_, Local, _> = WebSocket::new(ws, timeout, duration, peer_id);
+            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
+                WebSocket::new(ws, timeout, duration, peer_id);
 
             let strategy = websocket.timeout_strategy();
             assert_eq!(*strategy, MockTimeout);
@@ -710,7 +731,7 @@ mod tests {
             let timeout = MockTimeout;
             let expected_duration = Duration::from_millis(5000);
 
-            let websocket: WebSocket<_, Local, _> =
+            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
                 WebSocket::new(ws, timeout, expected_duration, peer_id);
 
             assert_eq!(websocket.default_time_limit(), expected_duration);
@@ -727,7 +748,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket: WebSocket<_, Sendable, _> =
+            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
             let req_id = websocket.next_request_id().await;
@@ -741,7 +762,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket: WebSocket<_, Sendable, _> =
+            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
             let req_id1 = websocket.next_request_id().await;
@@ -759,7 +780,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let websocket: WebSocket<_, Sendable, _> =
+            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
             let ws1 = websocket.clone();

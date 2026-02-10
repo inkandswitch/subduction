@@ -7,9 +7,9 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -524,33 +524,26 @@ impl WasmSubduction {
     }
 
     /// Request batch sync for all known Sedimentree IDs from all connected peers.
-    ///
-    /// # Errors
-    ///
-    /// Returns a [`WasmIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = fullSync)]
-    pub async fn full_sync(
-        &self,
-        timeout_milliseconds: Option<u64>,
-    ) -> Result<PeerBatchSyncResult, WasmIoError> {
+    pub async fn full_sync(&self, timeout_milliseconds: Option<u64>) -> PeerBatchSyncResult {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let (success, stats, errs) = self
-            .core
-            .full_sync(timeout)
-            .await
-            .map_err(WasmIoError::from)?;
+        let (success, stats, conn_errs, io_errs) = self.core.full_sync(timeout).await;
 
-        Ok(PeerBatchSyncResult {
+        for (id, err) in &io_errs {
+            tracing::error!("full_sync I/O error for sedimentree {:?}: {}", id, err);
+        }
+
+        PeerBatchSyncResult {
             success,
             stats: stats.into(),
-            conn_errors: errs
+            conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
                     conn,
                     err: WasmCallError::from(err),
                 })
                 .collect(),
-        })
+        }
     }
 
     /// Get all known Sedimentree IDs

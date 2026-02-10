@@ -463,70 +463,16 @@ impl<
     /// This method runs indefinitely, processing messages as they arrive.
     /// If no peers are connected, it will wait until a peer connects.
     ///
-    /// # Errors
-    ///
-    /// * Returns `ListenError` if a storage or network error occurs.
-    pub async fn listen(&self) -> Result<(), ListenError<F, S, C>> {
-        use core::pin::pin;
-        use futures::future::{Either, select};
-
-        tracing::info!("starting Subduction listener");
-
-        loop {
-            let msg_fut = pin!(self.msg_queue.recv().fuse());
-            let closed_fut = pin!(self.connection_closed.recv().fuse());
-
-            match select(msg_fut, closed_fut).await {
-                Either::Left((msg_result, _)) => {
-                    if let Ok((conn, msg)) = msg_result {
-                        let peer_id = conn.peer_id();
-                        tracing::debug!(
-                            "Subduction listener received message from peer {}: {:?}",
-                            peer_id,
-                            msg
-                        );
-
-                        if let Err(e) = self.dispatch(&conn, msg).await {
-                            tracing::error!(
-                                "error dispatching message from peer {}: {}",
-                                peer_id,
-                                e
-                            );
-                            // Connection is broken - unregister from conns map.
-                            // The stream in the actor will naturally end when recv fails.
-                            let _ = self.unregister(&conn).await;
-                            tracing::info!("unregistered failed connection from peer {}", peer_id);
-                        }
-                        // No re-registration needed - the stream handles continuous recv
-                    } else {
-                        tracing::info!("Message queue closed");
-                        break;
-                    }
-                }
-                Either::Right((closed_result, _)) => {
-                    if let Ok((conn_id, conn)) = closed_result {
-                        let peer_id = conn.peer_id();
-                        tracing::info!(
-                            "Connection {conn_id} from peer {peer_id} closed, unregistering"
-                        );
-                        self.unregister(&conn).await;
-                    }
-                }
-            }
-        }
-        Ok(())
-    }
-
     /// Listen for incoming messages with concurrent dispatch.
     ///
-    /// Like [`listen`](Self::listen), but dispatches messages concurrently.
-    /// This significantly improves throughput when handling many independent
+    /// Dispatches messages concurrently using [`FuturesUnordered`], which
+    /// significantly improves throughput when handling many independent
     /// requests (e.g., batch sync requests for different sedimentrees).
     ///
     /// # Errors
     ///
     /// * Returns `ListenError` if a storage or network error occurs.
-    pub async fn listen_concurrent(self: Arc<Self>) -> Result<(), ListenError<F, S, C>> {
+    pub async fn listen(self: Arc<Self>) -> Result<(), ListenError<F, S, C>> {
         tracing::info!("starting Subduction listener with concurrent dispatch");
 
         let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
@@ -2536,66 +2482,34 @@ impl<
         Ok(out)
     }
 
-    /// Request a batch sync from all connected peers for all known sedimentree IDs.
+    /// Perform a full sync of all sedimentrees with all peers.
+    ///
+    /// Syncs all sedimentrees concurrently using [`FuturesUnordered`], which
+    /// provides significantly better throughput when there are many sedimentrees
+    /// and network latency is high.
+    ///
+    /// Best-effort: per-sedimentree I/O errors are collected rather than
+    /// aborting the entire sync, so other sedimentrees can still make progress.
     ///
     /// # Returns
     ///
-    /// * `Ok(true)` if at least one sync was successful.
-    /// * `Ok(false)` if no syncs were performed (e.g., no sedimentrees or no peers).
-    ///
-    /// # Errors
-    ///
-    /// * `Err(IoError)` if any I/O error occurs during the sync process.
+    /// A tuple of:
+    /// - `bool` — `true` if at least one sync exchanged data successfully
+    /// - [`SyncStats`] — aggregate counts of commits/fragments sent and received
+    /// - `Vec<(C, C::CallError)>` — per-peer call errors encountered during sync
+    /// - `Vec<(SedimentreeId, IoError)>` — per-sedimentree I/O errors
     pub async fn full_sync(
         &self,
         timeout: Option<Duration>,
-    ) -> Result<(bool, SyncStats, Vec<(C, <C as Connection<F>>::CallError)>), IoError<F, S, C>>
-    {
+    ) -> (
+        bool,
+        SyncStats,
+        Vec<(C, <C as Connection<F>>::CallError)>,
+        Vec<(SedimentreeId, IoError<F, S, C>)>,
+    ) {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
         let tree_ids = self.sedimentrees.into_keys().await;
 
-        let mut had_success = false;
-        let mut stats = SyncStats::new();
-        let mut errs = Vec::new();
-        for id in tree_ids {
-            tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
-            let all_results = self.sync_all(id, true, timeout).await?;
-            if all_results
-                .values()
-                .any(|(success, _stats, _errs)| *success)
-            {
-                for (_, (_, step_stats, step_errs)) in all_results {
-                    stats.commits_received += step_stats.commits_received;
-                    stats.fragments_received += step_stats.fragments_received;
-                    stats.commits_sent += step_stats.commits_sent;
-                    stats.fragments_sent += step_stats.fragments_sent;
-                    errs.extend(step_errs);
-                }
-
-                had_success = true;
-            }
-        }
-        Ok((had_success, stats, errs))
-    }
-
-    /// Perform a full sync of all sedimentrees with all peers, concurrently.
-    ///
-    /// Like [`full_sync`](Self::full_sync), but syncs all sedimentrees concurrently
-    /// using `FuturesUnordered`. This provides significantly better throughput,
-    /// especially when there are many sedimentrees and network latency is high.
-    ///
-    /// # Errors
-    ///
-    /// * `Err(IoError)` if any I/O error occurs during the sync process.
-    pub async fn full_sync_concurrent(
-        &self,
-        timeout: Option<Duration>,
-    ) -> Result<(bool, SyncStats, Vec<(C, <C as Connection<F>>::CallError)>), IoError<F, S, C>>
-    {
-        tracing::info!("Requesting concurrent batch sync for all sedimentrees from all peers");
-        let tree_ids = self.sedimentrees.into_keys().await;
-
-        // Create concurrent sync futures for all sedimentrees
         let mut sync_futures: FuturesUnordered<_> = tree_ids
             .into_iter()
             .map(|id| async move {
@@ -2607,9 +2521,9 @@ impl<
 
         let mut had_success = false;
         let mut stats = SyncStats::new();
-        let mut errs = Vec::new();
+        let mut call_errs = Vec::new();
+        let mut io_errs = Vec::new();
 
-        // Process results as they complete
         while let Some((id, result)) = sync_futures.next().await {
             match result {
                 Ok(all_results) => {
@@ -2617,24 +2531,25 @@ impl<
                         .values()
                         .any(|(success, _stats, _errs)| *success)
                     {
-                        for (_, (_, step_stats, step_errs)) in all_results {
-                            stats.commits_received += step_stats.commits_received;
-                            stats.fragments_received += step_stats.fragments_received;
-                            stats.commits_sent += step_stats.commits_sent;
-                            stats.fragments_sent += step_stats.fragments_sent;
-                            errs.extend(step_errs);
-                        }
                         had_success = true;
+                    }
+
+                    for (_, (_, step_stats, step_errs)) in all_results {
+                        stats.commits_received += step_stats.commits_received;
+                        stats.fragments_received += step_stats.fragments_received;
+                        stats.commits_sent += step_stats.commits_sent;
+                        stats.fragments_sent += step_stats.fragments_sent;
+                        call_errs.extend(step_errs);
                     }
                 }
                 Err(e) => {
                     tracing::error!("Failed to sync sedimentree {:?}: {}", id, e);
-                    // Continue with other syncs rather than returning early
+                    io_errs.push((id, e));
                 }
             }
         }
 
-        Ok((had_success, stats, errs))
+        (had_success, stats, call_errs, io_errs)
     }
 
     /********************
@@ -3146,8 +3061,7 @@ impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
             K::from_future(async move {
-                // Use concurrent dispatch for improved throughput
-                if let Err(e) = subduction.listen_concurrent().await {
+                if let Err(e) = subduction.listen().await {
                     tracing::error!("Subduction listen error: {}", e.to_string());
                 }
             }),
