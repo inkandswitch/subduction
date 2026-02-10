@@ -1,0 +1,25 @@
+[package]
+name = "ffi_sansio"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "FFI experiment: Full sans-I/O state machine"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ffi_common = { path = "../ffi_common" }
+minicbor = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["getrandom", "std"] }
+
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "allow"
+
+[lints.clippy]
+missing_const_for_fn = "allow"
+must_use_candidate = "allow"

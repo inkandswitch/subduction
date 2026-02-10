@@ -1,0 +1,25 @@
+[package]
+name = "ffi_common"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "Shared FFI types and CBOR bridge for the subduction FFI experiment"
+
+[dependencies]
+minicbor = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["getrandom", "std"] }
+thiserror = { workspace = true }
+
+[lints.rust]
+# FFI crates need unsafe for extern "C" and raw pointer handling
+unsafe_code = "allow"
+# Experiment crate, docs not critical
+missing_docs = "allow"
+
+[lints.clippy]
+# Experiment — relax some workspace-level strictness
+missing_const_for_fn = "allow"
+must_use_candidate = "allow"

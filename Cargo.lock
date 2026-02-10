@@ -1158,6 +1158,49 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37909eebbb50d72f9059c3b6d82c0463f2ff062c9e95845c43a6c9c0355411be"
 
 [[package]]
+name = "ffi_common"
+version = "0.1.0"
+dependencies = [
+ "minicbor",
+ "sedimentree_core",
+ "subduction_core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ffi_driven"
+version = "0.1.0"
+dependencies = [
+ "ffi_common",
+ "minicbor",
+ "sedimentree_core",
+ "subduction_core",
+ "thiserror 2.0.18",
+]
+
+[[package]]
+name = "ffi_sansio"
+version = "0.1.0"
+dependencies = [
+ "ffi_common",
+ "minicbor",
+ "sedimentree_core",
+ "subduction_core",
+]
+
+[[package]]
+name = "ffi_tokio"
+version = "0.1.0"
+dependencies = [
+ "ffi_common",
+ "future_form",
+ "minicbor",
+ "sedimentree_core",
+ "subduction_core",
+ "tokio",
+]
+
+[[package]]
 name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"

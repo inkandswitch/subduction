@@ -1,0 +1,27 @@
+[package]
+name = "ffi_tokio"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+description = "FFI experiment: Tokio runtime behind synchronous C ABI"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ffi_common = { path = "../ffi_common" }
+future_form = { workspace = true }
+minicbor = { workspace = true }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["getrandom", "std"] }
+tokio = { workspace = true }
+
+[lints.rust]
+unsafe_code = "allow"
+missing_docs = "allow"
+
+[lints.clippy]
+missing_const_for_fn = "allow"
+must_use_candidate = "allow"
