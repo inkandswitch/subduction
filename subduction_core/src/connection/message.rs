@@ -286,6 +286,16 @@ pub struct SyncStats {
     pub fragments_sent: usize,
 }
 
+/// Number of commits and fragments sent in a single `send_requested_data` call.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct SendCount {
+    /// Number of commits sent.
+    pub commits: usize,
+
+    /// Number of fragments sent.
+    pub fragments: usize,
+}
+
 impl SyncStats {
     /// Create stats with zero counts.
     #[must_use]

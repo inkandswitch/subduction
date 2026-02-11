@@ -81,7 +81,7 @@ use crate::{
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, Message, RemoveSubscriptions, RequestId,
-            RequestedData, SyncDiff, SyncStats,
+            RequestedData, SendCount, SyncDiff, SyncStats,
         },
         nonce_cache::NonceCache,
     },
@@ -1922,14 +1922,14 @@ impl<
                     if !requesting.is_empty() {
                         tracing::debug!("Calling send_requested_data for {:?}", id);
                         match self.send_requested_data(&conn, id, &requesting).await {
-                            Ok((commits, fragments)) => {
+                            Ok(sent) => {
                                 tracing::debug!(
                                     "send_requested_data returned: {} commits, {} fragments",
-                                    commits,
-                                    fragments
+                                    sent.commits,
+                                    sent.fragments
                                 );
-                                stats.commits_sent += commits;
-                                stats.fragments_sent += fragments;
+                                stats.commits_sent += sent.commits;
+                                stats.fragments_sent += sent.fragments;
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -2444,9 +2444,9 @@ impl<
                                 // Send back data the responder requested (bidirectional sync)
                                 if !requesting.is_empty() {
                                     match self.send_requested_data(conn, id, &requesting).await {
-                                        Ok((commits, fragments)) => {
-                                            stats.commits_sent += commits;
-                                            stats.fragments_sent += fragments;
+                                        Ok(sent) => {
+                                            stats.commits_sent += sent.commits;
+                                            stats.fragments_sent += sent.fragments;
                                         }
                                         Err(e) => {
                                             tracing::warn!(
@@ -2708,9 +2708,9 @@ impl<
         conn: &C,
         id: SedimentreeId,
         requesting: &RequestedData,
-    ) -> Result<(usize, usize), IoError<F, S, C>> {
+    ) -> Result<SendCount, IoError<F, S, C>> {
         if requesting.is_empty() {
-            return Ok((0, 0));
+            return Ok(SendCount::default());
         }
 
         let peer_id = conn.peer_id();
@@ -2729,7 +2729,7 @@ impl<
                     peer_id,
                     id
                 );
-                return Ok((0, 0));
+                return Ok(SendCount::default());
             }
         };
 
@@ -2864,7 +2864,10 @@ impl<
             }
         }
 
-        Ok((commits_sent, fragments_sent))
+        Ok(SendCount {
+            commits: commits_sent,
+            fragments: fragments_sent,
+        })
     }
 
     /// Insert a commit locally, persisting to storage before updating in-memory state.
