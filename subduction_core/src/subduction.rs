@@ -128,10 +128,6 @@ use sedimentree_core::{
     sedimentree::{RemoteDiff, Sedimentree, SedimentreeSummary},
 };
 
-type CommitDigest = Digest<LooseCommit>;
-type FragmentDigest = Digest<Fragment>;
-type BlobDigest = Digest<Blob>;
-
 use crate::storage::traits::Storage;
 
 /// The main synchronization manager for sedimentrees.
@@ -164,6 +160,12 @@ pub struct Subduction<
     ///
     /// Used to restore subscriptions after reconnection.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
+
+    /// Blob digests we have requested and are expecting to receive.
+    ///
+    /// Used to reject unsolicited [`BlobsResponse`] messages — only blobs
+    /// whose digests appear in this set are saved to storage.
+    pending_blob_requests: Arc<Mutex<Set<Digest<Blob>>>>,
 
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(C, Message)>,
@@ -234,6 +236,7 @@ impl<
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
+            pending_blob_requests: Arc::new(Mutex::new(Set::new())),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -610,16 +613,28 @@ impl<
                 }
             },
             Message::BlobsResponse(blobs) => {
-                let len = blobs.len();
+                let total = blobs.len();
+                let blob_access = self.storage.blob_access::<F>();
+                let mut saved = 0usize;
+                let mut rejected = 0usize;
+
+                let mut pending = self.pending_blob_requests.lock().await;
                 for blob in blobs {
-                    self.storage
-                        .blob_access::<F>()
-                        .save_blob(blob)
-                        .await
-                        .map_err(IoError::Storage)?;
+                    let digest = Digest::hash_bytes(blob.as_slice());
+                    if pending.remove(&digest) {
+                        blob_access.save_blob(blob).await.map_err(IoError::Storage)?;
+                        saved += 1;
+                    } else {
+                        tracing::warn!(
+                            "rejecting unsolicited blob {digest:?} from peer {from}"
+                        );
+                        rejected += 1;
+                    }
                 }
+                drop(pending);
+
                 tracing::info!(
-                    "saved {len} blobs from blob response from peer {from}, no reply needed",
+                    "blob response from peer {from}: saved {saved}/{total}, rejected {rejected} unsolicited",
                 );
             }
             Message::RemoveSubscriptions(RemoveSubscriptions { ids }) => {
@@ -963,7 +978,7 @@ impl<
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_blob(&self, digest: BlobDigest) -> Result<Option<Blob>, S::Error> {
+    pub async fn get_blob(&self, digest: Digest<Blob>) -> Result<Option<Blob>, S::Error> {
         tracing::debug!("Looking for blob with digest {:?}", digest);
         self.storage.blob_access::<F>().load_blob(digest).await
     }
@@ -1091,7 +1106,7 @@ impl<
     pub async fn recv_blob_request(
         &self,
         conn: &C,
-        digests: &[BlobDigest],
+        digests: &[Digest<Blob>],
     ) -> Result<(), BlobRequestErr<F, S, C>> {
         let mut blobs = Vec::new();
         let mut missing = Vec::new();
@@ -1549,9 +1564,9 @@ impl<
             .map_err(IoError::Storage)?;
         let signed_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
 
-        let commit_by_digest: Map<CommitDigest, Signed<LooseCommit>> =
+        let commit_by_digest: Map<Digest<LooseCommit>, Signed<LooseCommit>> =
             signed_commits.into_iter().collect();
-        let fragment_by_digest: Map<FragmentDigest, Signed<Fragment>> =
+        let fragment_by_digest: Map<Digest<Fragment>, Signed<Fragment>> =
             signed_fragments.into_iter().collect();
 
         let sync_diff = {
@@ -1745,7 +1760,14 @@ impl<
     }
 
     /// Find blobs from connected peers.
-    pub async fn request_blobs(&self, digests: Vec<BlobDigest>) {
+    pub async fn request_blobs(&self, digests: Vec<Digest<Blob>>) {
+        {
+            let mut pending = self.pending_blob_requests.lock().await;
+            for digest in &digests {
+                pending.insert(*digest);
+            }
+        }
+
         let msg = Message::BlobsRequest(digests);
         let conns = self.all_connections().await;
         for conn in conns {
@@ -2741,7 +2763,7 @@ impl<
         };
 
         // Collect all blob digests we need to load
-        let mut blob_digests_needed: Vec<BlobDigest> = Vec::new();
+        let mut blob_digests_needed: Vec<Digest<Blob>> = Vec::new();
 
         for commit_digest in &requesting.commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(commit_digest)
