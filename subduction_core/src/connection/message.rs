@@ -5,7 +5,7 @@ use alloc::vec::Vec;
 use sedimentree_core::{
     blob::Blob,
     crypto::fingerprint::Fingerprint,
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::{Fragment, FragmentId},
     id::SedimentreeId,
     loose_commit::{CommitId, LooseCommit},

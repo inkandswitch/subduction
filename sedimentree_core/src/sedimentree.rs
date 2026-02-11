@@ -8,7 +8,7 @@ use crate::{
     collections::{Map, Set},
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::{Fragment, FragmentId, FragmentSpec, FragmentSummary},
     id::SedimentreeId,
     loose_commit::{CommitId, LooseCommit},

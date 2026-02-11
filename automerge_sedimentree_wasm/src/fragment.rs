@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use sedimentree_core::collections::{Map, Set};
 
-use sedimentree_core::{commit::FragmentState, digest::Digest, loose_commit::LooseCommit};
+use sedimentree_core::{commit::FragmentState, crypto::digest::Digest, loose_commit::LooseCommit};
 use sedimentree_wasm::{digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmBlobMeta};
 use wasm_bindgen::prelude::*;
 

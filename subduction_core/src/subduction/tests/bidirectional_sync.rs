@@ -33,7 +33,7 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::{Fragment, FragmentId, FragmentSummary},
     id::SedimentreeId,
     loose_commit::{CommitId, LooseCommit},

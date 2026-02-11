@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
-    blob::Blob, collections::Set, digest::Digest, fragment::Fragment, id::SedimentreeId,
+    blob::Blob, collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 

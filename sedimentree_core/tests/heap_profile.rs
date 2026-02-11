@@ -12,13 +12,13 @@ static ALLOC: dhat::Alloc = dhat::Alloc;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::Fragment,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,
 };
 
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 mod generators {
     use super::*;

@@ -1,6 +1,6 @@
 //! Causal identity for loose commits.
 
-use crate::{digest::Digest, loose_commit::LooseCommit};
+use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 
 /// The causal identity of a loose commit: its content digest.
 ///

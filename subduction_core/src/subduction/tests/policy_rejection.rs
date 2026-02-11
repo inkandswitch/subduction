@@ -16,7 +16,7 @@ use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    digest::Digest,
+    crypto::digest::Digest,
     id::SedimentreeId,
     sedimentree::Sedimentree,
 };

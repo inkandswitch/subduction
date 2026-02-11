@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Blob, digest::Digest};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest};
 use thiserror::Error;
 
 use crate::{connection::Connection, storage::traits::Storage};

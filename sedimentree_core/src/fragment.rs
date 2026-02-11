@@ -9,8 +9,8 @@ pub use self::id::FragmentId;
 use crate::{
     blob::BlobMeta,
     collections::Set,
+    crypto::digest::Digest,
     depth::{Depth, DepthMetric},
-    digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };

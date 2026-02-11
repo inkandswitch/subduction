@@ -6,7 +6,7 @@ use alloc::vec::Vec;
 
 pub use self::id::CommitId;
 
-use crate::{blob::BlobMeta, digest::Digest};
+use crate::{blob::BlobMeta, crypto::digest::Digest};
 
 /// The smallest unit of metadata in a Sedimentree.
 ///

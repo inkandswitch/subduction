@@ -123,7 +123,7 @@ use sedimentree_core::{
     commit::CountLeadingZeroBytes,
     crypto::fingerprint::{Fingerprint, FingerprintSeed},
     depth::{Depth, DepthMetric},
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::{Fragment, FragmentId},
     id::SedimentreeId,
     loose_commit::{CommitId, LooseCommit},

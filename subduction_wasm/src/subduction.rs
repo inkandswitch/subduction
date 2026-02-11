@@ -16,7 +16,7 @@ use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
     depth::{Depth, DepthMetric},
-    digest::Digest,
+    crypto::digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,

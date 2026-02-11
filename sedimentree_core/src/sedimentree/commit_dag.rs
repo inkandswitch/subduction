@@ -11,8 +11,8 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
+    crypto::digest::Digest,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    digest::Digest,
     fragment::Fragment,
     loose_commit::LooseCommit,
 };
@@ -497,14 +497,14 @@ mod tests {
         vec::Vec,
     };
 
-    use rand::{SeedableRng, rngs::SmallRng};
+    use rand::{rngs::SmallRng, SeedableRng};
 
     use super::CommitDag;
     use crate::{
         blob::BlobMeta,
         collections::{Map, Set},
         commit::CountLeadingZeroBytes,
-        digest::Digest,
+        crypto::digest::Digest,
         loose_commit::LooseCommit,
     };
 

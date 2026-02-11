@@ -9,7 +9,7 @@ use rand::RngCore;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    digest::Digest,
+    crypto::digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };

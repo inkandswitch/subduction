@@ -26,7 +26,6 @@ pub mod collections;
 pub mod commit;
 pub mod crypto;
 pub mod depth;
-pub mod digest;
 pub mod fragment;
 pub mod hex;
 pub mod id;

@@ -12,7 +12,7 @@ use futures::channel::oneshot;
 use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::Blob,
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::LooseCommit,

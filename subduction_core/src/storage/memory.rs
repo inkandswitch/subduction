@@ -7,7 +7,7 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
     blob::Blob,
     collections::{Map, Set},
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,

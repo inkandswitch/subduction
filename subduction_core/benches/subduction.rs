@@ -30,8 +30,7 @@ mod generators {
     use rand::{rngs::StdRng, Rng, SeedableRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
-        crypto::fingerprint::FingerprintSeed,
-        digest::Digest,
+        crypto::{digest::Digest, fingerprint::FingerprintSeed},
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::LooseCommit,

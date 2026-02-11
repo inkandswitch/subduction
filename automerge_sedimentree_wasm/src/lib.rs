@@ -20,7 +20,7 @@ use error::{WasmFragmentError, WasmFromBase58Error, WasmLookupError};
 use fragment::{WasmFragmentState, WasmFragmentStateStore};
 use js_sys::{Array, Uint8Array};
 use sedimentree_core::{
-    commit::CommitStore, digest::Digest, hex::decode_hex, loose_commit::LooseCommit,
+    commit::CommitStore, crypto::digest::Digest, hex::decode_hex, loose_commit::LooseCommit,
 };
 use sedimentree_wasm::digest::{JsDigest, WasmDigest};
 use subduction_wasm::subduction::WasmHashMetric;

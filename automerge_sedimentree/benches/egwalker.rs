@@ -25,7 +25,7 @@ use sedimentree_core::{
     blob::BlobMeta,
     commit::{CountLeadingZeroBytes, CountTrailingZerosInBase},
     depth::DepthMetric,
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::Fragment,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,

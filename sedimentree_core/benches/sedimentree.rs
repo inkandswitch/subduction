@@ -16,10 +16,10 @@
 use criterion::{criterion_group, criterion_main};
 
 mod generators {
-    use rand::{Rng, SeedableRng, rngs::SmallRng};
+    use rand::{rngs::SmallRng, Rng, SeedableRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
-        digest::Digest,
+        crypto::digest::Digest,
         fragment::Fragment,
         loose_commit::LooseCommit,
         sedimentree::Sedimentree,
@@ -253,7 +253,7 @@ mod digest {
 
     use criterion::{BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{
-        commit::CountLeadingZeroBytes, depth::DepthMetric, digest::Digest,
+        commit::CountLeadingZeroBytes, crypto::digest::Digest, depth::DepthMetric,
         loose_commit::LooseCommit,
     };
 
