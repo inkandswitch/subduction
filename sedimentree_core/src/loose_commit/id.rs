@@ -14,9 +14,10 @@ use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 #[derive(
     Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
 )]
+#[cbor(transparent)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct CommitId(#[n(0)] Digest<LooseCommit>);
+pub struct CommitId(Digest<LooseCommit>);
 
 impl CommitId {
     /// Create from a commit digest.

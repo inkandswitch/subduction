@@ -27,9 +27,9 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::Subduction,
 };
+use alloc::collections::BTreeSet;
 use core::time::Duration;
 use future_form::Sendable;
-use alloc::collections::BTreeSet;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
