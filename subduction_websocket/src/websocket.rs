@@ -2,7 +2,7 @@
 
 use alloc::{boxed::Box, sync::Arc};
 use core::{
-    future::IntoFuture,
+    future::{Future, IntoFuture},
     marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -13,15 +13,15 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
+    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -295,13 +295,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     /// it does _not_ retain a clone of the full `WebSocket` (and therefore does
     /// not keep an `outbound_tx` alive). This ensures that when the sender task
     /// exits, the channel closes and producers observe errors immediately.
+    /// Build a sender task future that drains outbound messages to the WebSocket.
+    ///
+    /// The returned future captures only the `outbound_rx` and the WebSocket
+    /// write half — it does _not_ retain a clone of the full `WebSocket` (and
+    /// therefore does not keep an `outbound_tx` alive). This ensures that when
+    /// the sender task exits, the channel closes and producers observe errors
+    /// immediately.
+    ///
+    /// The caller is responsible for boxing the returned future appropriately
+    /// (e.g., via [`FutureForm::from_future`] or [`FutureExt::boxed`]).
     pub fn sender_task(
         &self,
         outbound_rx: async_channel::Receiver<tungstenite::Message>,
-    ) -> BoxFuture<'static, Result<(), RunError>>
-    where
-        T: Send + 'static,
-    {
+    ) -> impl Future<Output = Result<(), RunError>> + use<T, K, O> {
         let ws_sender = self.ws_sender.clone();
         let peer_id = self.peer_id;
 
@@ -318,7 +325,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
             tracing::info!("sender task: outbound channel closed, shutting down");
             Ok(())
         }
-        .boxed()
     }
 
     /// The timeout strategy used for requests.

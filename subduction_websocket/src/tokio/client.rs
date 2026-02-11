@@ -1,21 +1,21 @@
 //! # Subduction [`WebSocket`] client for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    handshake::{WebSocketHandshakeError, client_handshake},
+    handshake::{client_handshake, WebSocketHandshakeError},
     timeout::Timeout,
     websocket::{ListenerTask, SenderTask, WebSocket},
+    MAX_MESSAGE_SIZE,
 };
-use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
+use async_tungstenite::tokio::{connect_async_with_config, ConnectStream};
 use core::time::Duration;
-use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use future_form::{FutureForm, Sendable};
+use futures::{future::BoxFuture, FutureExt};
 use subduction_core::{
     connection::{
-        Connection, Reconnect,
         handshake::Audience,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Reconnect,
     },
     crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
@@ -106,10 +106,8 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
             WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, server_id);
 
         let listener_socket = socket.clone();
-        let sender_fut = socket.sender_task(outbound_rx);
-
         let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
-        let sender = SenderTask::new(sender_fut);
+        let sender = SenderTask::new(Sendable::from_future(socket.sender_task(outbound_rx)));
 
         let client = TokioWebSocketClient {
             address,
@@ -180,9 +178,9 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
 }
 
 impl<
-    R: 'static + Signer<Sendable> + Clone + Send + Sync,
-    O: 'static + Timeout<Sendable> + Clone + Send + Sync,
-> Reconnect<Sendable> for TokioWebSocketClient<R, O>
+        R: 'static + Signer<Sendable> + Clone + Send + Sync,
+        O: 'static + Timeout<Sendable> + Clone + Send + Sync,
+    > Reconnect<Sendable> for TokioWebSocketClient<R, O>
 {
     type ReconnectionError = ClientConnectError;
 
