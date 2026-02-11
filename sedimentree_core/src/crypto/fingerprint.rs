@@ -11,7 +11,7 @@ use siphasher::sip::SipHasher24;
 /// A 128-bit seed for SipHash-2-4 fingerprinting.
 ///
 /// Generated randomly per sync request to prevent an attacker from
-/// precomputing collisions. The two `u64` keys are SipHash's native
+/// precomputing collisions. The two `u64` keys are `SipHash`'s native
 /// key format.
 ///
 /// # Examples
@@ -85,8 +85,18 @@ impl<'de> serde::Deserialize<'de> for FingerprintSeed {
                 if v.len() != 16 {
                     return Err(E::invalid_length(v.len(), &"16 bytes"));
                 }
-                let key0 = u64::from_le_bytes(v[..8].try_into().expect("checked length"));
-                let key1 = u64::from_le_bytes(v[8..].try_into().expect("checked length"));
+                let key0 = u64::from_le_bytes(
+                    v.get(..8)
+                        .expect("checked length")
+                        .try_into()
+                        .expect("checked length"),
+                );
+                let key1 = u64::from_le_bytes(
+                    v.get(8..)
+                        .expect("checked length")
+                        .try_into()
+                        .expect("checked length"),
+                );
                 Ok(FingerprintSeed::new(key0, key1))
             }
         }

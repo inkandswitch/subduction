@@ -75,6 +75,7 @@ impl SedimentreeSummary {
 /// per item with [`SedimentreeSummary`].
 #[derive(Clone, Debug, Hash, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct FingerprintSummary {
     #[n(0)]
     seed: FingerprintSeed,
@@ -362,7 +363,7 @@ impl Sedimentree {
             .map(|f| Fingerprint::new(seed, &f.fragment_id()))
             .collect();
 
-        FingerprintSummary::new(seed.clone(), commit_fingerprints, fragment_fingerprints)
+        FingerprintSummary::new(*seed, commit_fingerprints, fragment_fingerprints)
     }
 
     /// Compute the difference between a local [`Sedimentree`] and a remote

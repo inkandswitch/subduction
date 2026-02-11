@@ -1844,8 +1844,10 @@ impl<
                 .sedimentrees
                 .get_cloned(&id)
                 .await
-                .map(|t| t.fingerprint_summarize(&seed))
-                .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
+                .map_or_else(
+                    || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                    |t| t.fingerprint_summarize(&seed),
+                );
 
             tracing::debug!(
                 "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -2054,8 +2056,10 @@ impl<
                 .sedimentrees
                 .get_cloned(&id)
                 .await
-                .map(|t| t.fingerprint_summarize(&seed))
-                .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
+                .map_or_else(
+                    || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                    |t| t.fingerprint_summarize(&seed),
+                );
 
             tracing::debug!(
                 "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -2212,8 +2216,10 @@ impl<
             .sedimentrees
             .get_cloned(&id)
             .await
-            .map(|t| t.fingerprint_summarize(&seed))
-            .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
+            .map_or_else(
+                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                |t| t.fingerprint_summarize(&seed),
+            );
 
         tracing::debug!(
             "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -2377,8 +2383,10 @@ impl<
                             .sedimentrees
                             .get_cloned(&id)
                             .await
-                            .map(|t| t.fingerprint_summarize(&seed))
-                            .unwrap_or_else(|| FingerprintSummary::new(seed, Vec::new(), Vec::new()));
+                            .map_or_else(
+                                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                                |t| t.fingerprint_summarize(&seed),
+                            );
 
                         let req_id = conn.next_request_id().await;
 
