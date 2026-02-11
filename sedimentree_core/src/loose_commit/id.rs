@@ -4,6 +4,11 @@ use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 
 /// The causal identity of a loose commit: its content digest.
 ///
+/// For commits, the causal identity happens to be the content hash itself.
+/// This newtype exists for symmetry with [`FragmentId`](crate::fragment::id::FragmentId),
+/// where the causal identity (head + boundary range) is genuinely distinct
+/// from the content hash.
+///
 /// Two commits with the same [`CommitId`] are the same item for
 /// set reconciliation, regardless of parent or blob metadata.
 #[derive(
