@@ -11,9 +11,9 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{id::FragmentId, Fragment, FragmentSpec, FragmentSummary},
+    fragment::{Fragment, FragmentSpec, FragmentSummary, id::FragmentId},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 
 /// A less detailed representation of a Sedimentree that omits strata checkpoints.
