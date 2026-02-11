@@ -20,6 +20,7 @@ bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 futures = { workspace = true }
 future_form = { workspace = true }
 futures-util = { workspace = true }
+getrandom = { workspace = true, optional = true }
 minicbor = { workspace = true }
 nonempty = { workspace = true }
 num-bigint = { workspace = true }
@@ -44,6 +45,7 @@ harness = false
 default = []
 arbitrary = ["dep:arbitrary"]
 bolero = ["dep:bolero"]
+getrandom = ["dep:getrandom"]
 serde = ["dep:serde"]
 std = [
   "async-lock/std",

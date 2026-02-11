@@ -138,17 +138,6 @@ use crate::storage::traits::Storage;
 ///
 /// # Panics
 ///
-/// Panics if the system random number generator fails.
-#[cfg(feature = "getrandom")]
-#[allow(clippy::expect_used)]
-fn random_fingerprint_seed() -> FingerprintSeed {
-    let mut bytes = [0u8; 16];
-    getrandom::getrandom(&mut bytes).expect("getrandom failed");
-    let key0 = u64::from_le_bytes(bytes[..8].try_into().expect("checked length"));
-    let key1 = u64::from_le_bytes(bytes[8..].try_into().expect("checked length"));
-    FingerprintSeed::new(key0, key1)
-}
-
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
 pub struct Subduction<
@@ -1067,7 +1056,7 @@ impl<
             if let Some(tree) = tree {
                 let conns = self.all_connections().await;
                 for conn in conns {
-                    let seed = random_fingerprint_seed();
+                    let seed = FingerprintSeed::random();
                     let summary = tree.fingerprint_summarize(&seed);
                     let req_id = conn.next_request_id().await;
                     let BatchSyncResponse {
@@ -1841,7 +1830,7 @@ impl<
 
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
-            let seed = random_fingerprint_seed();
+            let seed = FingerprintSeed::random();
             let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
                 || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
                 |t| t.fingerprint_summarize(&seed),
@@ -2052,7 +2041,7 @@ impl<
 
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
-            let seed = random_fingerprint_seed();
+            let seed = FingerprintSeed::random();
             let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
                 || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
                 |t| t.fingerprint_summarize(&seed),
@@ -2208,7 +2197,7 @@ impl<
 
         let mut stats = SyncStats::new();
 
-        let seed = random_fingerprint_seed();
+        let seed = FingerprintSeed::random();
         let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
             || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
             |t| t.fingerprint_summarize(&seed),
@@ -2371,7 +2360,7 @@ impl<
 
                     for conn in peer_conns {
                         tracing::debug!("Using connection to peer {}", conn.peer_id());
-                        let seed = random_fingerprint_seed();
+                        let seed = FingerprintSeed::random();
                         let fp_summary = self
                             .sedimentrees
                             .get_cloned(&id)

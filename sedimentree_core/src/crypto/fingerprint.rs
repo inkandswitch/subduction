@@ -51,6 +51,25 @@ impl FingerprintSeed {
         self.key1
     }
 
+    /// Generate a random seed for one-time use in a sync session.
+    ///
+    /// Each sync request should use a fresh seed to prevent precomputing
+    /// collisions.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the OS random number generator is unavailable.
+    #[cfg(feature = "getrandom")]
+    #[must_use]
+    #[allow(clippy::expect_used)]
+    pub fn random() -> Self {
+        let mut bytes = [0u8; 16];
+        getrandom::getrandom(&mut bytes).expect("OS RNG unavailable");
+        let key0 = u64::from_le_bytes(bytes[..8].try_into().expect("checked length"));
+        let key1 = u64::from_le_bytes(bytes[8..].try_into().expect("checked length"));
+        Self::new(key0, key1)
+    }
+
     /// Create a new SipHash-2-4 hasher seeded with this value.
     #[must_use]
     pub fn hasher(&self) -> SipHasher24 {

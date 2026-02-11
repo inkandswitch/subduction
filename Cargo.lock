@@ -2799,6 +2799,7 @@ dependencies = [
  "future_form",
  "futures 0.3.31",
  "futures-util",
+ "getrandom 0.2.17",
  "minicbor",
  "nonempty 0.12.0",
  "num-bigint",
