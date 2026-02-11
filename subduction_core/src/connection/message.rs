@@ -270,7 +270,7 @@ impl RequestedData {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use alloc::collections::BTreeSet;
 
     use super::*;
     use alloc::vec;

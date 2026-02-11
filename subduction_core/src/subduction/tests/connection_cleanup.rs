@@ -13,7 +13,7 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::Subduction,
 };
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
 
 use future_form::Sendable;
 use sedimentree_core::{

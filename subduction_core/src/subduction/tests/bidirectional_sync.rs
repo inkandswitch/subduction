@@ -29,7 +29,7 @@ use crate::{
 };
 use core::time::Duration;
 use future_form::Sendable;
-use std::collections::BTreeSet;
+use alloc::collections::BTreeSet;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
