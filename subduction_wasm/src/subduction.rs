@@ -405,21 +405,20 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns a [`WasmIoError`] if storage or networking fail.
+    /// Returns a [`WasmWriteError`] if storage, networking, or policy fail.
     #[wasm_bindgen(js_name = addFragment)]
     pub async fn add_fragment(
         &self,
         id: &WasmSedimentreeId,
         fragment: &WasmFragment,
         blob: &Uint8Array,
-    ) -> Result<(), WasmIoError> {
+    ) -> Result<(), WasmWriteError> {
         let owned_id = id.clone().into();
         let owned_fragment = fragment.clone().into();
         let blob: Blob = blob.clone().to_vec().into();
         self.core
             .add_fragment(owned_id, &owned_fragment, blob)
-            .await
-            .map_err(WasmIoError::from)?;
+            .await?;
         Ok(())
     }
 

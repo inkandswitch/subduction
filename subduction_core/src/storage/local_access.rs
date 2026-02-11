@@ -20,10 +20,6 @@ use sedimentree_core::{
 use super::traits::Storage;
 use crate::crypto::signed::Signed;
 
-type CommitDigest = Digest<LooseCommit>;
-type FragmentDigest = Digest<Fragment>;
-type BlobDigest = Digest<Blob>;
-
 /// Direct storage access for trusted local operations.
 ///
 /// Use this for:
@@ -58,7 +54,7 @@ impl<S> LocalStorageAccess<S> {
     pub fn save_blob<K: FutureForm>(
         &self,
         blob: Blob,
-    ) -> K::Future<'_, Result<BlobDigest, S::Error>>
+    ) -> K::Future<'_, Result<Digest<Blob>, S::Error>>
     where
         S: Storage<K>,
     {
@@ -76,8 +72,8 @@ impl<S> LocalStorageAccess<S> {
     #[allow(clippy::type_complexity)]
     pub fn load_blobs<K: FutureForm>(
         &self,
-        digests: &[BlobDigest],
-    ) -> K::Future<'_, Result<Vec<(BlobDigest, Blob)>, S::Error>>
+        digests: &[Digest<Blob>],
+    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, S::Error>>
     where
         S: Storage<K>,
     {
@@ -91,7 +87,7 @@ impl<S> LocalStorageAccess<S> {
     /// Returns an error if the underlying storage fails to load the blob.
     pub async fn load_blob<K: FutureForm>(
         &self,
-        digest: BlobDigest,
+        digest: Digest<Blob>,
     ) -> Result<Option<Blob>, S::Error>
     where
         S: Storage<K>,
@@ -120,7 +116,7 @@ impl<S> LocalStorageAccess<S> {
     pub fn load_loose_commits<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(CommitDigest, Signed<LooseCommit>)>, S::Error>>
+    ) -> K::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, S::Error>>
     where
         S: Storage<K>,
     {
@@ -135,7 +131,7 @@ impl<S> LocalStorageAccess<S> {
     pub fn load_fragments<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(FragmentDigest, Signed<Fragment>)>, S::Error>>
+    ) -> K::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, S::Error>>
     where
         S: Storage<K>,
     {

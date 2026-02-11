@@ -30,7 +30,7 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     /// Create a new fetcher capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(crate) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
+    pub(super) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,
             sedimentree_id,
@@ -109,6 +109,18 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     #[must_use]
     pub fn load_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
         self.storage.load_blob(digest)
+    }
+
+    /// Load multiple blobs by their digests.
+    ///
+    /// Returns only the blobs that were found. Missing digests are silently skipped.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn load_blobs(
+        &self,
+        digests: &[Digest<Blob>],
+    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, S::Error>> {
+        self.storage.load_blobs(digests)
     }
 }
 
