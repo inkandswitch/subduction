@@ -5,11 +5,11 @@ use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshakeError, client_handshake},
     timeout::Timeout,
-    websocket::WebSocket,
+    websocket::{ListenerTask, SenderTask, WebSocket},
 };
 use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
 use core::time::Duration;
-use future_form::Sendable;
+use future_form::{FutureForm, Sendable};
 use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
@@ -63,6 +63,15 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
     /// * `audience` - The expected server identity ([`Audience::Known`] for a specific peer,
     ///   [`Audience::Discover`] for service discovery)
     ///
+    /// # Returns
+    ///
+    /// A tuple of:
+    /// - The client instance
+    /// - A future for the listener task (receives incoming messages)
+    /// - A future for the sender task (sends outgoing messages)
+    ///
+    /// Both futures should be spawned as background tasks.
+    ///
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
@@ -72,7 +81,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         default_time_limit: Duration,
         signer: R,
         audience: Audience,
-    ) -> Result<(Self, BoxFuture<'a, Result<(), RunError>>), ClientConnectError>
+    ) -> Result<(Self, ListenerTask<'a>, SenderTask<'a>), ClientConnectError>
     where
         O: 'a,
         R: 'a,
@@ -93,17 +102,21 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let socket = WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, server_id);
-        let fut_socket = socket.clone();
+        let (socket, sender_fut) =
+            WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, server_id);
 
-        let socket_listener = async move { fut_socket.listen().await }.boxed();
+        let listener_socket = socket.clone();
+
+        let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
+        let sender = SenderTask::new(Sendable::from_future(sender_fut));
+
         let client = TokioWebSocketClient {
             address,
             signer,
             audience,
             socket,
         };
-        Ok((client, socket_listener))
+        Ok((client, listener, sender))
     }
 
     /// Start listening for incoming messages.
@@ -174,7 +187,7 @@ impl<
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ReconnectionError>> {
         async move {
-            let (new_instance, new_fut) = TokioWebSocketClient::new(
+            let (new_instance, listener, sender) = TokioWebSocketClient::new(
                 self.address.clone(),
                 self.socket.timeout_strategy().clone(),
                 self.socket.default_time_limit(),
@@ -185,8 +198,13 @@ impl<
 
             *self = new_instance;
             tokio::spawn(async move {
-                if let Err(e) = new_fut.await {
+                if let Err(e) = listener.await {
                     tracing::error!("WebSocket client listener error after reconnect: {e:?}");
+                }
+            });
+            tokio::spawn(async move {
+                if let Err(e) = sender.await {
+                    tracing::error!("WebSocket client sender error after reconnect: {e:?}");
                 }
             });
 

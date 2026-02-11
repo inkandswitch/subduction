@@ -82,7 +82,7 @@ async fn rend_receive() -> TestResult {
 
     let bound = server_ws.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, actor) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -92,7 +92,12 @@ async fn rend_receive() -> TestResult {
     .await?;
 
     tokio::spawn(async move {
-        actor.await?;
+        listener_fut.await?;
+        Ok::<(), anyhow::Error>(())
+    });
+
+    tokio::spawn(async move {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -223,7 +228,7 @@ async fn batch_sync() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, socket_listener) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -233,13 +238,12 @@ async fn batch_sync() -> TestResult {
     .await?;
 
     tokio::spawn(async {
-        socket_listener.await?;
+        listener_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
-    let task_client_ws = client_ws.clone();
-    tokio::spawn(async move {
-        task_client_ws.listen().await?;
+    tokio::spawn(async {
+        sender_fut.await?;
         Ok::<(), anyhow::Error>(())
     });
 
@@ -267,7 +271,7 @@ async fn batch_sync() -> TestResult {
     assert_eq!(client.connected_peer_ids().await.len(), 1);
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
-    client.full_sync(Some(Duration::from_millis(100))).await?;
+    client.full_sync(Some(Duration::from_millis(100))).await;
 
     let server_updated = server_subduction
         .get_commits(sed_id)
