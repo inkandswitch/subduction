@@ -13,7 +13,7 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{TokioSpawn, test_signer};
+use super::common::{test_signer, TokioSpawn};
 use crate::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
@@ -36,9 +36,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, FragmentId, FragmentSummary},
+    fragment::{id::FragmentId, Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{CommitId, LooseCommit},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use testresult::TestResult;

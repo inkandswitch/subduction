@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use sedimentree_core::{
     blob::Blob,
     crypto::{digest::Digest, fingerprint::Fingerprint},
-    fragment::{Fragment, FragmentId},
+    fragment::{id::FragmentId, Fragment},
     id::SedimentreeId,
-    loose_commit::{CommitId, LooseCommit},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 

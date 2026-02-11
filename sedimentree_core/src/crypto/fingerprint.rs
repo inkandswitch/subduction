@@ -116,8 +116,8 @@ impl<'a> arbitrary::Arbitrary<'a> for FingerprintSeed {
 ///
 /// Computed via SipHash-2-4 with a per-request [`FingerprintSeed`].
 /// The phantom type `T` tracks what was fingerprinted:
-/// - [`Fingerprint<CommitId>`][crate::loose_commit::CommitId] — fingerprint of a commit's content digest
-/// - [`Fingerprint<FragmentId>`][crate::fragment::FragmentId] — fingerprint of a fragment's causal range
+/// - [`Fingerprint<CommitId>`][crate::loose_commit::id::CommitId] — fingerprint of a commit's content digest
+/// - [`Fingerprint<FragmentId>`][crate::fragment::id::FragmentId] — fingerprint of a fragment's causal range
 ///
 /// # Collision Probability
 ///

@@ -3,8 +3,7 @@
 pub mod id;
 
 use alloc::vec::Vec;
-
-pub use self::id::FragmentId;
+use id::FragmentId;
 
 use crate::{
     blob::BlobMeta,

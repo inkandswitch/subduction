@@ -3,8 +3,7 @@
 pub mod id;
 
 use alloc::vec::Vec;
-
-pub use self::id::CommitId;
+use id::CommitId;
 
 use crate::{blob::BlobMeta, crypto::digest::Digest};
 

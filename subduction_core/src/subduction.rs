@@ -126,9 +126,9 @@ use sedimentree_core::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric},
-    fragment::{Fragment, FragmentId},
+    fragment::{id::FragmentId, Fragment},
     id::SedimentreeId,
-    loose_commit::{CommitId, LooseCommit},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 
