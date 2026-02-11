@@ -81,9 +81,10 @@ use crate::{
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, Message, RemoveSubscriptions, RequestId,
-            RequestedData, SendCount, SyncDiff, SyncStats,
+            RequestedData, SyncDiff,
         },
         nonce_cache::NonceCache,
+        stats::{SendCount, SyncStats},
     },
     crypto::{signed::Signed, signer::Signer, verified::Verified},
     peer::id::PeerId,
@@ -1569,7 +1570,15 @@ impl<
         let fragment_by_digest: Map<Digest<Fragment>, Signed<Fragment>> =
             signed_fragments.into_iter().collect();
 
-        let sync_diff = {
+        // Compute the diff under the shard lock, then release it before blob I/O.
+        // This prevents slow blob loads from blocking all operations on
+        // other sedimentrees that share the same shard.
+        let (
+            local_commit_digests,
+            local_fragment_digests,
+            our_missing_commit_digests,
+            our_missing_fragment_summaries,
+        ) = {
             let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
 
             // If sedimentree not in memory, hydrate it from storage
@@ -1597,89 +1606,79 @@ impl<
                 their_summary.fragment_summaries().len()
             );
 
-            let (
-                local_commit_digests,
-                local_fragment_digests,
-                our_missing_commit_digests,
-                our_missing_fragment_summaries,
-            ) = {
-                let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
-                (
-                    diff.local_commits
-                        .iter()
-                        .map(|c| c.digest())
-                        .collect::<Vec<_>>(),
-                    diff.local_fragments
-                        .iter()
-                        .map(|f| f.digest())
-                        .collect::<Vec<_>>(),
-                    // What we (responder) are missing from requestor
-                    diff.remote_commits
-                        .iter()
-                        .map(|c| c.digest())
-                        .collect::<Vec<_>>(),
-                    diff.remote_fragment_summaries
-                        .iter()
-                        .map(|s| (*s).clone())
-                        .collect::<Vec<_>>(),
-                )
-            };
-
+            let diff: RemoteDiff<'_> = sedimentree.diff_remote(their_summary);
+            (
+                diff.local_commits
+                    .iter()
+                    .map(|c| c.digest())
+                    .collect::<Vec<_>>(),
+                diff.local_fragments
+                    .iter()
+                    .map(|f| f.digest())
+                    .collect::<Vec<_>>(),
+                diff.remote_commits
+                    .iter()
+                    .map(|c| c.digest())
+                    .collect::<Vec<_>>(),
+                diff.remote_fragment_summaries
+                    .iter()
+                    .map(|s| (*s).clone())
+                    .collect::<Vec<_>>(),
+            )
             // NOTE: We intentionally do NOT add remote commits to the in-memory tree here.
-            // The commits_to_add are just metadata from the summary - we don't have the actual
+            // The commits_to_add are just metadata from the summary — we don't have the actual
             // signed commits or blobs yet. We'll add them when they arrive via LooseCommit
             // messages (in response to our "requesting" field).
-            // Adding them here would cause the actual commits to be skipped as duplicates
-            // and never persisted to storage.
+        };
+        // Shard lock released. Blob I/O below does not block other sedimentrees.
 
-            for digest in local_commit_digests {
-                if let Some(signed_commit) = commit_by_digest.get(&digest)
-                    && let Ok(payload) = signed_commit.decode_payload()
+        for digest in local_commit_digests {
+            if let Some(signed_commit) = commit_by_digest.get(&digest)
+                && let Ok(payload) = signed_commit.decode_payload()
+            {
+                let blob_digest = payload.blob_meta().digest();
+                if let Some(blob) =
+                    fetcher.load_blob(blob_digest).await.map_err(IoError::Storage)?
                 {
-                    let blob_digest = payload.blob_meta().digest();
-                    if let Some(blob) =
-                        fetcher.load_blob(blob_digest).await.map_err(IoError::Storage)?
-                    {
-                        their_missing_commits.push((signed_commit.clone(), blob));
-                    } else {
-                        tracing::warn!("missing blob for commit {:?}", digest);
-                        our_missing_blobs.push(blob_digest);
-                    }
+                    their_missing_commits.push((signed_commit.clone(), blob));
+                } else {
+                    tracing::warn!("missing blob for commit {:?}", digest);
+                    our_missing_blobs.push(blob_digest);
                 }
             }
+        }
 
-            for digest in local_fragment_digests {
-                if let Some(signed_fragment) = fragment_by_digest.get(&digest)
-                    && let Ok(payload) = signed_fragment.decode_payload()
+        for digest in local_fragment_digests {
+            if let Some(signed_fragment) = fragment_by_digest.get(&digest)
+                && let Ok(payload) = signed_fragment.decode_payload()
+            {
+                let blob_digest = payload.summary().blob_meta().digest();
+                if let Some(blob) =
+                    fetcher.load_blob(blob_digest).await.map_err(IoError::Storage)?
                 {
-                    let blob_digest = payload.summary().blob_meta().digest();
-                    if let Some(blob) =
-                        fetcher.load_blob(blob_digest).await.map_err(IoError::Storage)?
-                    {
-                        their_missing_fragments.push((signed_fragment.clone(), blob));
-                    } else {
-                        tracing::warn!("missing blob for fragment {:?}", digest);
-                        our_missing_blobs.push(blob_digest);
-                    }
+                    their_missing_fragments.push((signed_fragment.clone(), blob));
+                } else {
+                    tracing::warn!("missing blob for fragment {:?}", digest);
+                    our_missing_blobs.push(blob_digest);
                 }
             }
+        }
 
-            tracing::info!(
-                "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments, requesting {} commits and {} fragments",
-                their_missing_commits.len(),
-                their_missing_fragments.len(),
-                our_missing_commit_digests.len(),
-                our_missing_fragment_summaries.len(),
-            );
+        tracing::info!(
+            "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments, requesting {} commits and {} fragments",
+            their_missing_commits.len(),
+            their_missing_fragments.len(),
+            our_missing_commit_digests.len(),
+            our_missing_fragment_summaries.len(),
+        );
 
-            SyncDiff {
-                missing_commits: their_missing_commits,
-                missing_fragments: their_missing_fragments,
-                requesting: RequestedData {
-                    commit_digests: our_missing_commit_digests,
-                    fragment_summaries: our_missing_fragment_summaries,
-                },
-            }
+        let sync_diff = SyncDiff {
+            missing_commits: their_missing_commits,
+            missing_fragments: their_missing_fragments,
+            requesting: RequestedData {
+                commit_digests: our_missing_commit_digests,
+                fragment_summaries: our_missing_fragment_summaries,
+            },
         };
 
         let msg: Message = BatchSyncResponse {

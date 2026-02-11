@@ -6,6 +6,7 @@ pub mod id;
 pub mod manager;
 pub mod message;
 pub mod nonce_cache;
+pub mod stats;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;

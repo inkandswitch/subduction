@@ -1,6 +1,6 @@
 //! Sync statistics for wasm bindings.
 
-use subduction_core::connection::message::SyncStats;
+use subduction_core::connection::stats::SyncStats;
 use wasm_bindgen::prelude::*;
 
 /// Statistics from a sync operation.
