@@ -8,8 +8,8 @@ use future_form::{FutureForm, Local, Sendable};
 use futures::FutureExt;
 
 use super::{
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     Connection,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use crate::peer::id::PeerId;
 

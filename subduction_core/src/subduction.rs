@@ -623,12 +623,13 @@ impl<
                 for blob in blobs {
                     let digest = Digest::hash_bytes(blob.as_slice());
                     if pending.remove(&digest) {
-                        blob_access.save_blob(blob).await.map_err(IoError::Storage)?;
+                        blob_access
+                            .save_blob(blob)
+                            .await
+                            .map_err(IoError::Storage)?;
                         saved += 1;
                     } else {
-                        tracing::warn!(
-                            "rejecting unsolicited blob {digest:?} from peer {from}"
-                        );
+                        tracing::warn!("rejecting unsolicited blob {digest:?} from peer {from}");
                         rejected += 1;
                     }
                 }
@@ -1637,8 +1638,10 @@ impl<
                 && let Ok(payload) = signed_commit.decode_payload()
             {
                 let blob_digest = payload.blob_meta().digest();
-                if let Some(blob) =
-                    fetcher.load_blob(blob_digest).await.map_err(IoError::Storage)?
+                if let Some(blob) = fetcher
+                    .load_blob(blob_digest)
+                    .await
+                    .map_err(IoError::Storage)?
                 {
                     their_missing_commits.push((signed_commit.clone(), blob));
                 } else {
@@ -1653,8 +1656,10 @@ impl<
                 && let Ok(payload) = signed_fragment.decode_payload()
             {
                 let blob_digest = payload.summary().blob_meta().digest();
-                if let Some(blob) =
-                    fetcher.load_blob(blob_digest).await.map_err(IoError::Storage)?
+                if let Some(blob) = fetcher
+                    .load_blob(blob_digest)
+                    .await
+                    .map_err(IoError::Storage)?
                 {
                     their_missing_fragments.push((signed_fragment.clone(), blob));
                 } else {
