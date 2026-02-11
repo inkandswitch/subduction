@@ -110,6 +110,18 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
     pub fn load_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
         self.storage.load_blob(digest)
     }
+
+    /// Load multiple blobs by their digests.
+    ///
+    /// Returns only the blobs that were found. Missing digests are silently skipped.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn load_blobs(
+        &self,
+        digests: &[Digest<Blob>],
+    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, S::Error>> {
+        self.storage.load_blobs(digests)
+    }
 }
 
 impl<K: FutureForm, S: Storage<K>> Clone for Fetcher<K, S> {

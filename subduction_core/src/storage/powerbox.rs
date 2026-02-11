@@ -1,10 +1,9 @@
 //! Storage powerbox for capability-gated access.
 //!
 //! The [`StoragePowerbox`] wraps a storage backend and policy, enforcing that all
-//! peer-facing operations go through capabilities ([`Fetcher`]/[`Putter`]/[`Destroyer`]).
+//! operations go through capabilities ([`Fetcher`]/[`Putter`]/[`Destroyer`]).
 //!
-//! For direct storage access (blobs, hydration), use [`LocalStorageAccess`] via
-//! [`local_access`][Self::local_access].
+//! For startup hydration only, use [`hydration_access`][StoragePowerbox::hydration_access].
 
 use alloc::sync::Arc;
 
@@ -12,8 +11,8 @@ use future_form::FutureForm;
 use sedimentree_core::id::SedimentreeId;
 
 use super::{
-    destroyer::Destroyer, fetcher::Fetcher, local_access::LocalStorageAccess, putter::Putter,
-    traits::Storage,
+    blob_access::BlobAccess, destroyer::Destroyer, fetcher::Fetcher,
+    local_access::LocalStorageAccess, putter::Putter, traits::Storage,
 };
 use crate::{peer::id::PeerId, policy::storage::StoragePolicy};
 
@@ -25,7 +24,7 @@ use crate::{peer::id::PeerId, policy::storage::StoragePolicy};
 /// - [`get_putter`][Self::get_putter] for authorized writes
 /// - [`local_destroyer`][Self::local_destroyer] for local cleanup
 ///
-/// For direct storage access (blobs, hydration), use [`local_access`][Self::local_access].
+/// For startup hydration, use [`hydration_access`][Self::hydration_access] (crate-internal).
 ///
 /// The powerbox holds both the storage backend and the authorization policy,
 /// making it the single trust boundary for capability minting.
@@ -115,16 +114,29 @@ impl<S, P> StoragePowerbox<S, P> {
         Ok(Putter::new(self.storage.clone(), sedimentree_id))
     }
 
-    /// Get direct storage access for local operations.
+    /// Get blob-only storage access.
     ///
-    /// Use this for:
-    /// - Blob operations (content-addressed, not sedimentree-scoped)
-    /// - Hydration (loading our own data at startup)
-    /// - Internal sync operations
-    ///
-    /// This bypasses the capability model — only use from trusted code paths.
+    /// Blobs are content-addressed and not sedimentree-scoped, so they
+    /// don't require a [`Fetcher`] or [`Putter`]. This provides the minimal
+    /// interface for blob I/O without exposing commit/fragment operations.
     #[must_use]
-    pub fn local_access(&self) -> LocalStorageAccess<S> {
+    pub fn blob_access<K: FutureForm>(&self) -> BlobAccess<K, S>
+    where
+        S: Storage<K>,
+    {
+        BlobAccess::new(self.storage.clone())
+    }
+
+    /// Get direct storage access for hydration (startup data loading).
+    ///
+    /// This bypasses the capability model and should only be used from
+    /// [`hydrate`][crate::subduction::Subduction::hydrate] to rebuild
+    /// in-memory state from storage.
+    ///
+    /// All other access should go through [`get_fetcher`](Self::get_fetcher)
+    /// or [`get_putter`](Self::get_putter).
+    #[must_use]
+    pub(crate) fn hydration_access(&self) -> LocalStorageAccess<S> {
         LocalStorageAccess::new(self.storage.clone())
     }
 }
