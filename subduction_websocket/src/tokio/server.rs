@@ -1,11 +1,11 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
-    handshake::{WebSocketHandshakeError, server_handshake},
+    handshake::{server_handshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
+    MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
@@ -25,7 +25,7 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::traits::Storage,
-    subduction::{Subduction, error::RegistrationError},
+    subduction::{error::RegistrationError, Subduction},
     timestamp::TimestampSeconds,
 };
 
@@ -78,12 +78,12 @@ where
 }
 
 impl<
-    S: 'static + Send + Sync + Storage<Sendable>,
-    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
-    M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-> TokioWebSocketServer<S, P, Sig, M, O>
+        S: 'static + Send + Sync + Storage<Sendable>,
+        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+        Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+    > TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
@@ -194,7 +194,7 @@ where
                                         };
 
                                         // Step 3: Create WebSocket wrapper with verified PeerId
-                                        let (ws, outbound_rx) = WebSocket::new(
+                                        let (ws, sender_fut) = WebSocket::new(
                                             ws_stream,
                                             tout,
                                             default_time_limit,
@@ -210,7 +210,6 @@ where
                                             }
                                         });
 
-                                        let sender_fut = ws.sender_task(outbound_rx);
                                         tokio::spawn(async move {
                                             if let Err(e) = sender_fut.await {
                                                 tracing::error!("WebSocket sender error: {e}");
@@ -401,7 +400,7 @@ where
         let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let (ws, outbound_rx) = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
+        let (ws, sender_fut) = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
         let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
         let listen_ws = ws.clone();
@@ -420,7 +419,6 @@ where
             }
         });
 
-        let sender_fut = ws.sender_task(outbound_rx);
         let sender_uri_str = uri_str.clone();
         let sender_cancel_token = self.cancellation_token.clone();
         tokio::spawn(async move {
@@ -498,7 +496,7 @@ where
         let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let (ws, outbound_rx) = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
+        let (ws, sender_fut) = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
         let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
         let listen_ws = ws.clone();
@@ -517,7 +515,6 @@ where
             }
         });
 
-        let sender_fut = ws.sender_task(outbound_rx);
         let sender_uri_str = uri_str.clone();
         let sender_cancel_token = self.cancellation_token.clone();
         tokio::spawn(async move {

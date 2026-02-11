@@ -102,12 +102,13 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let (socket, outbound_rx) =
+        let (socket, sender_fut) =
             WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, server_id);
 
         let listener_socket = socket.clone();
+
         let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
-        let sender = SenderTask::new(Sendable::from_future(socket.sender_task(outbound_rx)));
+        let sender = SenderTask::new(Sendable::from_future(sender_fut));
 
         let client = TokioWebSocketClient {
             address,

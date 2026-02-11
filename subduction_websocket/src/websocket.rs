@@ -239,20 +239,24 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
 impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
     /// Create a new WebSocket connection.
     ///
-    /// Returns the connection and the outbound channel receiver. The receiver
-    /// must be passed to [`sender_task`](Self::sender_task) (typically via a
-    /// spawned background task) for outbound messages to be delivered.
+    /// Returns the connection and a sender task future. The sender task drains
+    /// the outbound message channel to the WebSocket write half and should be
+    /// spawned as a background task.
     ///
-    /// The receiver is returned separately so that when the sender task exits
-    /// (e.g., due to a WebSocket write error), the receiver is dropped and the
-    /// channel closes. This causes subsequent `send()`/`call()` attempts to
-    /// fail fast with an error rather than blocking on a full channel.
+    /// The sender task captures only the channel receiver and write half — it
+    /// does _not_ retain a clone of the full `WebSocket` (and therefore does
+    /// not keep the outbound channel sender alive). When the sender task exits
+    /// (e.g., due to a WebSocket write error), the channel closes and
+    /// subsequent `send()`/`call()` attempts fail fast.
     pub fn new(
         ws: WebSocketStream<T>,
         timeout_strategy: O,
         default_time_limit: Duration,
         peer_id: PeerId,
-    ) -> (Self, async_channel::Receiver<tungstenite::Message>) {
+    ) -> (
+        Self,
+        impl Future<Output = Result<(), RunError>> + use<T, K, O>,
+    ) {
         tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
         let pending = Arc::new(Mutex::new(Map::<
@@ -264,6 +268,25 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
 
+        let ws_sender = Arc::new(Mutex::new(ws_writer));
+
+        let sender_task = {
+            let ws_sender = ws_sender.clone();
+            async move {
+                tracing::info!("starting WebSocket sender task for peer {:?}", peer_id);
+
+                let mut ws_sender = ws_sender.lock().await;
+
+                while let Ok(msg) = outbound_rx.recv().await {
+                    tracing::debug!("sender task: sending message to WebSocket");
+                    ws_sender.send(msg).await?;
+                }
+
+                tracing::info!("sender task: outbound channel closed, shutting down");
+                Ok(())
+            }
+        };
+
         let ws = Self {
             peer_id,
             chan_id,
@@ -274,7 +297,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
             ws_reader: Arc::new(Mutex::new(ws_reader)),
             outbound_tx,
-            ws_sender: Arc::new(Mutex::new(ws_writer)),
+            ws_sender,
             pending,
             inbound_writer,
             inbound_reader,
@@ -282,49 +305,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
             _phantom: PhantomData,
         };
 
-        (ws, outbound_rx)
-    }
-
-    /// Build a sender task future that drains outbound messages to the WebSocket.
-    ///
-    /// The returned future should be spawned as a background task. It runs until
-    /// the outbound channel closes (all senders dropped) or a WebSocket write
-    /// error occurs.
-    ///
-    /// The future captures only the `outbound_rx` and the WebSocket write half —
-    /// it does _not_ retain a clone of the full `WebSocket` (and therefore does
-    /// not keep an `outbound_tx` alive). This ensures that when the sender task
-    /// exits, the channel closes and producers observe errors immediately.
-    /// Build a sender task future that drains outbound messages to the WebSocket.
-    ///
-    /// The returned future captures only the `outbound_rx` and the WebSocket
-    /// write half — it does _not_ retain a clone of the full `WebSocket` (and
-    /// therefore does not keep an `outbound_tx` alive). This ensures that when
-    /// the sender task exits, the channel closes and producers observe errors
-    /// immediately.
-    ///
-    /// The caller is responsible for boxing the returned future appropriately
-    /// (e.g., via [`FutureForm::from_future`] or [`FutureExt::boxed`]).
-    pub fn sender_task(
-        &self,
-        outbound_rx: async_channel::Receiver<tungstenite::Message>,
-    ) -> impl Future<Output = Result<(), RunError>> + use<T, K, O> {
-        let ws_sender = self.ws_sender.clone();
-        let peer_id = self.peer_id;
-
-        async move {
-            tracing::info!("starting WebSocket sender task for peer {:?}", peer_id);
-
-            let mut ws_sender = ws_sender.lock().await;
-
-            while let Ok(msg) = outbound_rx.recv().await {
-                tracing::debug!("sender task: sending message to WebSocket");
-                ws_sender.send(msg).await?;
-            }
-
-            tracing::info!("sender task: outbound channel closed, shutting down");
-            Ok(())
-        }
+        (ws, sender_task)
     }
 
     /// The timeout strategy used for requests.
