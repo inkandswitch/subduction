@@ -436,7 +436,7 @@ async fn test_responder_requests_fragments() -> TestResult {
 
     // Create a fragment that Bob has but Alice doesn't
     let (_fragment, _blob, fragment_summary) = make_test_fragment(b"fragment - bob has this").await;
-    let frag_id = fragment_summary.fragment_id();
+    let frag_id = FragmentId::new(fragment_summary.head(), fragment_summary.boundary());
     let frag_fp: Fingerprint<FragmentId> = Fingerprint::new(&TEST_SEED, &frag_id);
 
     // Bob sends a BatchSyncRequest claiming to have this fragment (as a fingerprint)

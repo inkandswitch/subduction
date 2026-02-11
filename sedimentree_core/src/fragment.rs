@@ -21,18 +21,124 @@ use crate::{
 /// read the content in a particular fragment (e.g. because it's in
 /// an arbitrary format or is encrypted), it maintains some basic
 /// metadata about the the content to aid in deduplication and synchronization.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+///
+/// The [`FragmentId`] is precomputed at construction and cached. It is
+/// _not_ serialized — on deserialization it is recomputed from `head`
+/// and `boundary`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Fragment {
-    #[n(0)]
     summary: FragmentSummary,
-    #[n(1)]
     checkpoints: Vec<Digest<LooseCommit>>,
-    #[n(2)]
     digest: Digest<Fragment>,
+
+    /// Precomputed causal identity. Not serialized — recomputed on decode.
+    causal_id: FragmentId,
+}
+
+impl<Ctx> minicbor::Encode<Ctx> for Fragment {
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+        ctx: &mut Ctx,
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
+        e.map(3)?;
+        e.u32(0)?;
+        self.summary.encode(e, ctx)?;
+        e.u32(1)?;
+        self.checkpoints.encode(e, ctx)?;
+        e.u32(2)?;
+        self.digest.encode(e, ctx)?;
+        Ok(())
+    }
+}
+
+impl<'b, Ctx> minicbor::Decode<'b, Ctx> for Fragment {
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        ctx: &mut Ctx,
+    ) -> Result<Self, minicbor::decode::Error> {
+        let len = d.map()?;
+        let mut summary = None;
+        let mut checkpoints = None;
+        let mut digest = None;
+
+        let count = len.unwrap_or(0);
+        for _ in 0..count {
+            match d.u32()? {
+                0 => summary = Some(FragmentSummary::decode(d, ctx)?),
+                1 => checkpoints = Some(Vec::<Digest<LooseCommit>>::decode(d, ctx)?),
+                2 => digest = Some(Digest::<Fragment>::decode(d, ctx)?),
+                _ => {
+                    d.skip()?;
+                }
+            }
+        }
+
+        let summary =
+            summary.ok_or_else(|| minicbor::decode::Error::message("missing field: summary"))?;
+        let checkpoints = checkpoints
+            .ok_or_else(|| minicbor::decode::Error::message("missing field: checkpoints"))?;
+        let digest =
+            digest.ok_or_else(|| minicbor::decode::Error::message("missing field: digest"))?;
+
+        let causal_id = FragmentId::new(summary.head, &summary.boundary);
+
+        Ok(Self {
+            summary,
+            checkpoints,
+            digest,
+            causal_id,
+        })
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Fragment {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let summary = FragmentSummary::arbitrary(u)?;
+        let checkpoints = Vec::<Digest<LooseCommit>>::arbitrary(u)?;
+        let digest = Digest::<Fragment>::arbitrary(u)?;
+        let causal_id = FragmentId::new(summary.head, &summary.boundary);
+        Ok(Self {
+            summary,
+            checkpoints,
+            digest,
+            causal_id,
+        })
+    }
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Fragment {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut s = serializer.serialize_struct("Fragment", 3)?;
+        s.serialize_field("summary", &self.summary)?;
+        s.serialize_field("checkpoints", &self.checkpoints)?;
+        s.serialize_field("digest", &self.digest)?;
+        s.end()
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Fragment {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(serde::Deserialize)]
+        struct FragmentFields {
+            summary: FragmentSummary,
+            checkpoints: Vec<Digest<LooseCommit>>,
+            digest: Digest<Fragment>,
+        }
+
+        let fields = FragmentFields::deserialize(deserializer)?;
+        let causal_id = FragmentId::new(fields.summary.head, &fields.summary.boundary);
+        Ok(Self {
+            summary: fields.summary,
+            checkpoints: fields.checkpoints,
+            digest: fields.digest,
+            causal_id,
+        })
+    }
 }
 
 impl Fragment {
@@ -60,6 +166,8 @@ impl Fragment {
             Digest::from_bytes(*hasher.finalize().as_bytes())
         };
 
+        let causal_id = FragmentId::new(head, &boundary);
+
         Self {
             summary: FragmentSummary {
                 head,
@@ -68,6 +176,7 @@ impl Fragment {
             },
             checkpoints,
             digest,
+            causal_id,
         }
     }
 
@@ -157,10 +266,10 @@ impl Fragment {
         self.digest
     }
 
-    /// Extract the causal identity of this fragment.
+    /// The precomputed causal identity of this fragment.
     #[must_use]
-    pub fn fragment_id(&self) -> FragmentId {
-        self.summary.fragment_id()
+    pub const fn fragment_id(&self) -> FragmentId {
+        self.causal_id
     }
 }
 
@@ -216,12 +325,6 @@ impl FragmentSummary {
     #[must_use]
     pub fn depth<M: DepthMetric>(&self, hash_metric: &M) -> Depth {
         hash_metric.to_depth(self.head)
-    }
-
-    /// Extract the causal identity of this fragment summary.
-    #[must_use]
-    pub fn fragment_id(&self) -> FragmentId {
-        FragmentId::new(self.head, self.boundary.clone())
     }
 }
 

@@ -4,41 +4,72 @@ use alloc::vec::Vec;
 
 use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 
-/// The causal identity of a fragment: the range it covers.
+/// The causal identity of a fragment: a BLAKE3 hash of its head and boundary.
+///
+/// Computed from `BLAKE3(head || sorted(dedup(boundary)))`. The boundary is
+/// sorted and deduplicated before hashing to ensure deterministic output
+/// regardless of input ordering or duplicates.
 ///
 /// Two fragments with the same head and boundary cover the same causal
-/// range, regardless of blob content, size, or checkpoints. This enables
-/// future optimizations like re-compression and fragment covering without
-/// changing the reconciliation protocol.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+/// range, regardless of blob content, size, or checkpoints.
+///
+/// This newtype exists in parallel with
+/// [`CommitId`](crate::loose_commit::id::CommitId), which wraps a content
+/// digest directly. For fragments, the causal identity is the range (head +
+/// boundary), not the content hash.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct FragmentId {
-    #[n(0)]
-    head: Digest<LooseCommit>,
-
-    #[n(1)]
-    boundary: Vec<Digest<LooseCommit>>,
-}
+pub struct FragmentId([u8; 32]);
 
 impl FragmentId {
-    /// Create from head and boundary digests.
+    /// Compute the causal identity from head and boundary digests.
+    ///
+    /// The boundary is sorted and deduplicated internally before hashing,
+    /// so callers do not need to pre-sort.
     #[must_use]
-    pub const fn new(head: Digest<LooseCommit>, boundary: Vec<Digest<LooseCommit>>) -> Self {
-        Self { head, boundary }
+    pub fn new(head: Digest<LooseCommit>, boundary: &[Digest<LooseCommit>]) -> Self {
+        let mut sorted: Vec<Digest<LooseCommit>> = boundary.to_vec();
+        sorted.sort();
+        sorted.dedup();
+
+        let mut hasher = blake3::Hasher::new();
+        hasher.update(head.as_bytes());
+        for b in &sorted {
+            hasher.update(b.as_bytes());
+        }
+        Self(*hasher.finalize().as_bytes())
     }
 
-    /// The head commit digest.
+    /// The raw bytes of the identity hash.
     #[must_use]
-    pub const fn head(&self) -> Digest<LooseCommit> {
-        self.head
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0
     }
+}
 
-    /// The boundary commit digests.
-    #[must_use]
-    pub const fn boundary(&self) -> &[Digest<LooseCommit>] {
-        self.boundary.as_slice()
+impl core::fmt::Debug for FragmentId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "FragmentId(")?;
+        for byte in &self.0[..4] {
+            write!(f, "{byte:02x}")?;
+        }
+        write!(f, "…)")
+    }
+}
+
+impl core::fmt::Display for FragmentId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        for byte in &self.0 {
+            write!(f, "{byte:02x}")?;
+        }
+        Ok(())
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for FragmentId {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let bytes: [u8; 32] = u.arbitrary()?;
+        Ok(Self(bytes))
     }
 }
