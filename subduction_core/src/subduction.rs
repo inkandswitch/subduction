@@ -121,9 +121,11 @@ use sedimentree_core::{
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     commit::CountLeadingZeroBytes,
-    crypto::fingerprint::{Fingerprint, FingerprintSeed},
+    crypto::{
+        digest::Digest,
+        fingerprint::{Fingerprint, FingerprintSeed},
+    },
     depth::{Depth, DepthMetric},
-    crypto::digest::Digest,
     fragment::{Fragment, FragmentId},
     id::SedimentreeId,
     loose_commit::{CommitId, LooseCommit},
@@ -1840,14 +1842,10 @@ impl<
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = random_fingerprint_seed();
-            let fp_summary = self
-                .sedimentrees
-                .get_cloned(&id)
-                .await
-                .map_or_else(
-                    || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
-                    |t| t.fingerprint_summarize(&seed),
-                );
+            let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
+                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                |t| t.fingerprint_summarize(&seed),
+            );
 
             tracing::debug!(
                 "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -1938,7 +1936,10 @@ impl<
                     // Send back data the responder requested (bidirectional sync)
                     if !requesting.is_empty() {
                         tracing::debug!("Calling send_requested_data for {:?}", id);
-                        match self.send_requested_data(&conn, id, &seed, &requesting).await {
+                        match self
+                            .send_requested_data(&conn, id, &seed, &requesting)
+                            .await
+                        {
                             Ok(sent) => {
                                 tracing::debug!(
                                     "send_requested_data returned: {} commits, {} fragments",
@@ -2052,14 +2053,10 @@ impl<
         for conn in peer_conns {
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = random_fingerprint_seed();
-            let fp_summary = self
-                .sedimentrees
-                .get_cloned(&id)
-                .await
-                .map_or_else(
-                    || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
-                    |t| t.fingerprint_summarize(&seed),
-                );
+            let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
+                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                |t| t.fingerprint_summarize(&seed),
+            );
 
             tracing::debug!(
                 "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -2212,14 +2209,10 @@ impl<
         let mut stats = SyncStats::new();
 
         let seed = random_fingerprint_seed();
-        let fp_summary = self
-            .sedimentrees
-            .get_cloned(&id)
-            .await
-            .map_or_else(
-                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
-                |t| t.fingerprint_summarize(&seed),
-            );
+        let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
+            || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+            |t| t.fingerprint_summarize(&seed),
+        );
 
         tracing::debug!(
             "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
@@ -2833,9 +2826,8 @@ impl<
         };
 
         // Collect blob digests needed for resolved items
-        let mut blob_digests_needed: Vec<Digest<Blob>> = Vec::with_capacity(
-            requested_commit_digests.len() + requested_fragment_digests.len(),
-        );
+        let mut blob_digests_needed: Vec<Digest<Blob>> =
+            Vec::with_capacity(requested_commit_digests.len() + requested_fragment_digests.len());
 
         for commit_digest in &requested_commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(commit_digest)

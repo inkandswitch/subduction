@@ -6,9 +6,11 @@ use alloc::vec::Vec;
 
 use crate::{
     collections::{Map, Set},
-    crypto::fingerprint::{Fingerprint, FingerprintSeed},
+    crypto::{
+        digest::Digest,
+        fingerprint::{Fingerprint, FingerprintSeed},
+    },
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    crypto::digest::Digest,
     fragment::{Fragment, FragmentId, FragmentSpec, FragmentSummary},
     id::SedimentreeId,
     loose_commit::{CommitId, LooseCommit},

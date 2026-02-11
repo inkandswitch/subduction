@@ -4,7 +4,8 @@ use alloc::{format, string::ToString};
 use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
-    blob::Blob, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
+    blob::Blob, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
+    loose_commit::LooseCommit,
 };
 use subduction_core::{
     crypto::signed::Signed,

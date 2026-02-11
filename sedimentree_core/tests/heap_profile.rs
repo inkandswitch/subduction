@@ -18,7 +18,7 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 mod generators {
     use super::*;

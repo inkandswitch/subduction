@@ -32,8 +32,10 @@ use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    crypto::fingerprint::{Fingerprint, FingerprintSeed},
-    crypto::digest::Digest,
+    crypto::{
+        digest::Digest,
+        fingerprint::{Fingerprint, FingerprintSeed},
+    },
     fragment::{Fragment, FragmentId, FragmentSummary},
     id::SedimentreeId,
     loose_commit::{CommitId, LooseCommit},

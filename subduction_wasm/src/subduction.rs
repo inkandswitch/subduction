@@ -15,8 +15,8 @@ use js_sys::Uint8Array;
 use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
-    depth::{Depth, DepthMetric},
     crypto::digest::Digest,
+    depth::{Depth, DepthMetric},
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,

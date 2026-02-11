@@ -5,7 +5,7 @@ use alloc::{string::String, sync::Arc, vec::Vec};
 use crate::collections::{Map, Set};
 
 use async_lock::Mutex;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 
 use crate::{
     blob::Blob, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,

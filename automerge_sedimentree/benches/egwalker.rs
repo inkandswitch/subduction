@@ -24,8 +24,8 @@ use rand::{Rng, SeedableRng, rngs::SmallRng};
 use sedimentree_core::{
     blob::BlobMeta,
     commit::{CountLeadingZeroBytes, CountTrailingZerosInBase},
-    depth::DepthMetric,
     crypto::digest::Digest,
+    depth::DepthMetric,
     fragment::Fragment,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,
