@@ -1544,16 +1544,13 @@ impl<
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
 
         let peer_id = conn.peer_id();
-        let fetcher = match self.storage.get_fetcher::<F>(peer_id, id).await {
-            Ok(f) => f,
-            Err(_) => {
-                tracing::warn!(
-                    "peer {} not authorized to fetch sedimentree {:?}, ignoring request",
-                    peer_id,
-                    id
-                );
-                return Ok(());
-            }
+        let Ok(fetcher) = self.storage.get_fetcher::<F>(peer_id, id).await else {
+            tracing::warn!(
+                "peer {} not authorized to fetch sedimentree {:?}, ignoring request",
+                peer_id,
+                id
+            );
+            return Ok(());
         };
 
         let mut their_missing_commits = Vec::new();
@@ -2725,16 +2722,13 @@ impl<
             peer_id
         );
 
-        let fetcher = match self.storage.get_fetcher::<F>(peer_id, id).await {
-            Ok(f) => f,
-            Err(_) => {
-                tracing::warn!(
-                    "peer {} not authorized to fetch sedimentree {:?}, skipping requested data",
-                    peer_id,
-                    id
-                );
-                return Ok(SendCount::default());
-            }
+        let Ok(fetcher) = self.storage.get_fetcher::<F>(peer_id, id).await else {
+            tracing::warn!(
+                "peer {} not authorized to fetch sedimentree {:?}, skipping requested data",
+                peer_id,
+                id
+            );
+            return Ok(SendCount::default());
         };
 
         // Load commits and fragments from storage

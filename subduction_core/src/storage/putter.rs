@@ -32,7 +32,7 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
     /// Create a new putter capability.
     ///
     /// This should only be called after authorization has been verified.
-    pub(crate) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
+    pub(super) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,
             sedimentree_id,

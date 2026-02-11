@@ -30,7 +30,7 @@ pub struct BlobAccess<K: FutureForm, S: Storage<K>> {
 }
 
 impl<K: FutureForm, S: Storage<K>> BlobAccess<K, S> {
-    pub(crate) fn new(storage: Arc<S>) -> Self {
+    pub(super) const fn new(storage: Arc<S>) -> Self {
         Self {
             storage,
             _phantom: PhantomData,
