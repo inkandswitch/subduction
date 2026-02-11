@@ -247,7 +247,7 @@ pub struct SyncDiff {
 /// The fingerprints are echoed back from the requestor's original
 /// [`FingerprintSummary`]. The requestor reverse-lookups each fingerprint
 /// to find the corresponding local item.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestedData {
@@ -270,21 +270,12 @@ impl RequestedData {
 
 #[cfg(test)]
 mod tests {
-    use alloc::collections::BTreeSet;
-
     use super::*;
-    use alloc::vec;
+    use alloc::{collections::BTreeSet, vec};
     use sedimentree_core::crypto::fingerprint::FingerprintSeed;
 
     fn empty_fingerprint_summary() -> FingerprintSummary {
         FingerprintSummary::new(FingerprintSeed::new(0, 0), BTreeSet::new(), BTreeSet::new())
-    }
-
-    fn empty_requested_data() -> RequestedData {
-        RequestedData {
-            commit_fingerprints: Vec::new(),
-            fragment_fingerprints: Vec::new(),
-        }
     }
 
     mod message_request_id {
@@ -374,7 +365,7 @@ mod tests {
                 diff: SyncDiff {
                     missing_commits: Vec::new(),
                     missing_fragments: Vec::new(),
-                    requesting: empty_requested_data(),
+                    requesting: RequestedData::default(),
                 },
             });
             assert_eq!(msg.request_id(), Some(req_id));
@@ -476,7 +467,7 @@ mod tests {
                 diff: SyncDiff {
                     missing_commits: Vec::new(),
                     missing_fragments: Vec::new(),
-                    requesting: empty_requested_data(),
+                    requesting: RequestedData::default(),
                 },
             };
 
@@ -512,7 +503,7 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
                 missing_fragments: Vec::new(),
-                requesting: empty_requested_data(),
+                requesting: RequestedData::default(),
             };
 
             assert_eq!(diff.missing_commits.len(), 0);
@@ -536,7 +527,7 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: vec![(signed_commit.clone(), blob.clone())],
                 missing_fragments: Vec::new(),
-                requesting: empty_requested_data(),
+                requesting: RequestedData::default(),
             };
 
             assert_eq!(diff.missing_commits.len(), 1);
@@ -564,7 +555,7 @@ mod tests {
             let diff = SyncDiff {
                 missing_commits: Vec::new(),
                 missing_fragments: vec![(signed_fragment, blob)],
-                requesting: empty_requested_data(),
+                requesting: RequestedData::default(),
             };
 
             assert_eq!(diff.missing_fragments.len(), 1);
