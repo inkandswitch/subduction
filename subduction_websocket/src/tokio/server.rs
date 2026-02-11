@@ -1,11 +1,11 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    handshake::{server_handshake, WebSocketHandshakeError},
+    MAX_MESSAGE_SIZE,
+    handshake::{WebSocketHandshakeError, server_handshake},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
-    MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
@@ -25,7 +25,7 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::traits::Storage,
-    subduction::{error::RegistrationError, Subduction},
+    subduction::{Subduction, error::RegistrationError},
     timestamp::TimestampSeconds,
 };
 
@@ -78,12 +78,12 @@ where
 }
 
 impl<
-        S: 'static + Send + Sync + Storage<Sendable>,
-        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-        Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
-        M: 'static + Send + Sync + DepthMetric,
-        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-    > TokioWebSocketServer<S, P, Sig, M, O>
+    S: 'static + Send + Sync + Storage<Sendable>,
+    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
+    M: 'static + Send + Sync + DepthMetric,
+    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+> TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,

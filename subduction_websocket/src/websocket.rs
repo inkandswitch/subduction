@@ -13,15 +13,15 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
+    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
-    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,
 };
