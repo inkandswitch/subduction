@@ -277,7 +277,7 @@ mod tests {
     use sedimentree_core::crypto::fingerprint::FingerprintSeed;
 
     fn empty_fingerprint_summary() -> FingerprintSummary {
-        FingerprintSummary::new(FingerprintSeed::new(0, 0), Vec::new(), Vec::new())
+        FingerprintSummary::new(FingerprintSeed::new(0, 0), BTreeSet::new(), BTreeSet::new())
     }
 
     fn empty_requested_data() -> RequestedData {

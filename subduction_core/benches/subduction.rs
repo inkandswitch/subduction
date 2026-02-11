@@ -195,8 +195,8 @@ mod generators {
             req_id: request_id_from_seed(seed.wrapping_add(1), seed),
             fingerprint_summary: FingerprintSummary::new(
                 FingerprintSeed::new(seed, seed.wrapping_add(1)),
-                Vec::new(),
-                Vec::new(),
+                BTreeSet::new(),
+                BTreeSet::new(),
             ),
             subscribe: false,
         }
@@ -488,6 +488,8 @@ mod message {
 }
 
 mod sync {
+    use std::collections::BTreeSet;
+
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{BatchSyncRequest, BatchSyncResponse, Message};
@@ -568,8 +570,11 @@ mod sync {
         group.bench_function("request_new", |b| {
             let id = sedimentree_id_from_seed(1);
             let req_id = request_id_from_seed(1, 42);
-            let fp_summary =
-                FingerprintSummary::new(FingerprintSeed::new(1, 2), Vec::new(), Vec::new());
+            let fp_summary = FingerprintSummary::new(
+                FingerprintSeed::new(1, 2),
+                BTreeSet::new(),
+                BTreeSet::new(),
+            );
             b.iter(|| BatchSyncRequest {
                 id: black_box(id),
                 req_id: black_box(req_id),

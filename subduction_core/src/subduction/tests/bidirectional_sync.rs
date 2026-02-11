@@ -125,7 +125,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
             requestor: peer_id,
             nonce: 1,
         },
-        fingerprint_summary: FingerprintSummary::new(TEST_SEED, Vec::new(), Vec::new()),
+        fingerprint_summary: FingerprintSummary::new(TEST_SEED, BTreeSet::new(), BTreeSet::new()),
         subscribe: false,
     };
 
@@ -203,7 +203,11 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
             requestor: peer_id,
             nonce: 1,
         },
-        fingerprint_summary: FingerprintSummary::new(TEST_SEED, vec![commit_b_fp], Vec::new()),
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([commit_b_fp]),
+            BTreeSet::new(),
+        ),
         subscribe: false,
     };
 
@@ -343,7 +347,11 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             requestor: bob_peer_id,
             nonce: 1,
         },
-        fingerprint_summary: FingerprintSummary::new(TEST_SEED, vec![commit_b_fp], Vec::new()),
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([commit_b_fp]),
+            BTreeSet::new(),
+        ),
         subscribe: false,
     };
 
@@ -448,7 +456,11 @@ async fn test_responder_requests_fragments() -> TestResult {
             requestor: peer_id,
             nonce: 1,
         },
-        fingerprint_summary: FingerprintSummary::new(TEST_SEED, Vec::new(), vec![frag_fp]),
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::new(),
+            BTreeSet::from([frag_fp]),
+        ),
         subscribe: false,
     };
 
@@ -527,7 +539,11 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
             requestor: peer_id,
             nonce: 1,
         },
-        fingerprint_summary: FingerprintSummary::new(TEST_SEED, vec![commit_fp], Vec::new()),
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([commit_fp]),
+            BTreeSet::new(),
+        ),
         subscribe: false,
     };
 

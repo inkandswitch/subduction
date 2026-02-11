@@ -92,7 +92,7 @@ use crate::{
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter},
 };
-use alloc::{boxed::Box, string::ToString, sync::Arc, vec::Vec};
+use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::Mutex;
 use core::{
@@ -1843,7 +1843,7 @@ impl<
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = random_fingerprint_seed();
             let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
-                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
                 |t| t.fingerprint_summarize(&seed),
             );
 
@@ -2054,7 +2054,7 @@ impl<
             tracing::info!("Using connection to peer {}", to_ask);
             let seed = random_fingerprint_seed();
             let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
-                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
                 |t| t.fingerprint_summarize(&seed),
             );
 
@@ -2210,7 +2210,7 @@ impl<
 
         let seed = random_fingerprint_seed();
         let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
-            || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+            || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
             |t| t.fingerprint_summarize(&seed),
         );
 
@@ -2377,7 +2377,7 @@ impl<
                             .get_cloned(&id)
                             .await
                             .map_or_else(
-                                || FingerprintSummary::new(seed, Vec::new(), Vec::new()),
+                                || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
                                 |t| t.fingerprint_summarize(&seed),
                             );
 

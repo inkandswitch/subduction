@@ -83,10 +83,10 @@ pub struct FingerprintSummary {
     seed: FingerprintSeed,
 
     #[n(1)]
-    commit_fingerprints: Vec<Fingerprint<CommitId>>,
+    commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
 
     #[n(2)]
-    fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
+    fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
 }
 
 impl FingerprintSummary {
@@ -94,8 +94,8 @@ impl FingerprintSummary {
     #[must_use]
     pub const fn new(
         seed: FingerprintSeed,
-        commit_fingerprints: Vec<Fingerprint<CommitId>>,
-        fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
+        commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
+        fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
     ) -> Self {
         Self {
             seed,
@@ -112,14 +112,14 @@ impl FingerprintSummary {
 
     /// The fingerprints of commit causal identities.
     #[must_use]
-    pub const fn commit_fingerprints(&self) -> &[Fingerprint<CommitId>] {
-        self.commit_fingerprints.as_slice()
+    pub const fn commit_fingerprints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
+        &self.commit_fingerprints
     }
 
     /// The fingerprints of fragment causal identities.
     #[must_use]
-    pub const fn fragment_fingerprints(&self) -> &[Fingerprint<FragmentId>] {
-        self.fragment_fingerprints.as_slice()
+    pub const fn fragment_fingerprints(&self) -> &BTreeSet<Fingerprint<FragmentId>> {
+        &self.fragment_fingerprints
     }
 }
 
@@ -382,33 +382,35 @@ impl Sedimentree {
     ) -> FingerprintDiff<'a> {
         let seed = remote.seed();
 
-        // Build sets of the requestor's fingerprints for O(1) lookup
-        let remote_commit_fps: Set<Fingerprint<CommitId>> =
-            remote.commit_fingerprints.iter().copied().collect();
-        let remote_fragment_fps: Set<Fingerprint<FragmentId>> =
-            remote.fragment_fingerprints.iter().copied().collect();
-
         // Find local items the requestor doesn't have
         let local_only_commits: Vec<&LooseCommit> = self
             .commits
             .iter()
-            .filter(|c| !remote_commit_fps.contains(&Fingerprint::new(seed, &c.commit_id())))
+            .filter(|c| {
+                !remote
+                    .commit_fingerprints
+                    .contains(&Fingerprint::new(seed, &c.commit_id()))
+            })
             .collect();
 
         let local_only_fragments: Vec<&Fragment> = self
             .fragments
             .iter()
-            .filter(|f| !remote_fragment_fps.contains(&Fingerprint::new(seed, &f.fragment_id())))
+            .filter(|f| {
+                !remote
+                    .fragment_fingerprints
+                    .contains(&Fingerprint::new(seed, &f.fragment_id()))
+            })
             .collect();
 
         // Find requestor fingerprints we don't have locally (echo back)
-        let local_commit_fps: Set<Fingerprint<CommitId>> = self
+        let local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
             .commits
             .iter()
             .map(|c| Fingerprint::new(seed, &c.commit_id()))
             .collect();
 
-        let local_fragment_fps: Set<Fingerprint<FragmentId>> = self
+        let local_fragment_fps: BTreeSet<Fingerprint<FragmentId>> = self
             .fragments
             .iter()
             .map(|f| Fingerprint::new(seed, &f.fragment_id()))
