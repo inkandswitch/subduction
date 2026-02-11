@@ -2,7 +2,7 @@
 
 mod commit_dag;
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
@@ -471,7 +471,7 @@ impl Sedimentree {
                     .iter()
                     .all(|end| !dag.contains_commit(end))
             {
-                heads.extend(fragment.boundary());
+                heads.extend(fragment.boundary().iter().copied());
             }
         }
         heads.extend(dag.heads());
@@ -493,8 +493,6 @@ impl Sedimentree {
         id: SedimentreeId,
         depth_metric: &M,
     ) -> Vec<FragmentSpec> {
-        use alloc::vec;
-
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level =
             Map::<crate::depth::Depth, (Digest<LooseCommit>, Vec<Digest<LooseCommit>>)>::new();
@@ -516,7 +514,7 @@ impl Sedimentree {
                         id,
                         head,
                         checkpoints.clone(),
-                        vec![commit_hash],
+                        BTreeSet::from([commit_hash]),
                     ));
                 }
             }
@@ -613,7 +611,7 @@ mod tests {
         let blob_meta = BlobMeta::new(&[seed]);
         Fragment::new(
             Digest::from_bytes(head_bytes),
-            vec![Digest::from_bytes(boundary_bytes)],
+            BTreeSet::from([Digest::from_bytes(boundary_bytes)]),
             vec![],
             blob_meta,
         )
@@ -854,13 +852,13 @@ mod tests {
 
                     let deeper = Fragment::new(
                         start_hash,
-                        vec![deeper_boundary_hash],
+                        BTreeSet::from([deeper_boundary_hash]),
                         checkpoints,
                         BlobMeta::arbitrary(u)?,
                     );
                     let shallower = FragmentSummary::new(
                         shallower_start_hash,
-                        vec![shallower_boundary_hash],
+                        BTreeSet::from([shallower_boundary_hash]),
                         BlobMeta::arbitrary(u)?,
                     );
 

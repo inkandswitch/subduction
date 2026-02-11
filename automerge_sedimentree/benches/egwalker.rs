@@ -16,7 +16,7 @@
 
 #![allow(missing_docs, unreachable_pub)]
 
-use std::{hint::black_box, num::NonZero};
+use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
@@ -112,7 +112,7 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
 
         // Generate 1-3 boundary commits at same or higher depth
         let boundary_count = rng.gen_range(1..=3);
-        let boundary: Vec<_> = (0..boundary_count)
+        let boundary: BTreeSet<_> = (0..boundary_count)
             .map(|_| random_digest_with_depth(&mut rng, depth))
             .collect();
 
@@ -214,7 +214,7 @@ fn generate_fragments_for_metric(
         let head = random_digest_with_depth(&mut rng, depth);
 
         let boundary_count = rng.gen_range(1..=3);
-        let boundary: Vec<_> = (0..boundary_count)
+        let boundary: BTreeSet<_> = (0..boundary_count)
             .map(|_| random_digest_with_depth(&mut rng, depth))
             .collect();
 

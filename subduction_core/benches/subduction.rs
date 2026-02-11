@@ -27,6 +27,8 @@ use criterion::{criterion_group, criterion_main};
 mod generators {
     use future_form::Sendable;
     use futures::executor::block_on;
+    use std::collections::BTreeSet;
+
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
@@ -102,7 +104,7 @@ mod generators {
         num_members: usize,
     ) -> Fragment {
         let digest = digest_from_seed(seed);
-        let parents: Vec<Digest<LooseCommit>> = (0..num_parents)
+        let parents: BTreeSet<Digest<LooseCommit>> = (0..num_parents)
             .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
             .collect();
         let members: Vec<Digest<LooseCommit>> = (0..num_members)

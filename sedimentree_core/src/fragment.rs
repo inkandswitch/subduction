@@ -2,12 +2,11 @@
 
 pub mod id;
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 use id::FragmentId;
 
 use crate::{
     blob::BlobMeta,
-    collections::Set,
     crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
@@ -81,7 +80,7 @@ impl<'b, Ctx> minicbor::Decode<'b, Ctx> for Fragment {
         let digest =
             digest.ok_or_else(|| minicbor::decode::Error::message("missing field: digest"))?;
 
-        let causal_id = FragmentId::new(summary.head, &summary.boundary);
+        let causal_id = FragmentId::new(summary.head(), &summary.boundary);
 
         Ok(Self {
             summary,
@@ -98,7 +97,7 @@ impl<'a> arbitrary::Arbitrary<'a> for Fragment {
         let summary = FragmentSummary::arbitrary(u)?;
         let checkpoints = Vec::<Digest<LooseCommit>>::arbitrary(u)?;
         let digest = Digest::<Fragment>::arbitrary(u)?;
-        let causal_id = FragmentId::new(summary.head, &summary.boundary);
+        let causal_id = FragmentId::new(summary.head(), &summary.boundary);
         Ok(Self {
             summary,
             checkpoints,
@@ -131,7 +130,7 @@ impl<'de> serde::Deserialize<'de> for Fragment {
         }
 
         let fields = FragmentFields::deserialize(deserializer)?;
-        let causal_id = FragmentId::new(fields.summary.head, &fields.summary.boundary);
+        let causal_id = FragmentId::new(fields.summary.head(), &fields.summary.boundary);
         Ok(Self {
             summary: fields.summary,
             checkpoints: fields.checkpoints,
@@ -146,7 +145,7 @@ impl Fragment {
     #[must_use]
     pub fn new(
         head: Digest<LooseCommit>,
-        boundary: Vec<Digest<LooseCommit>>,
+        boundary: BTreeSet<Digest<LooseCommit>>,
         checkpoints: Vec<Digest<LooseCommit>>,
         blob_meta: BlobMeta,
     ) -> Self {
@@ -192,11 +191,10 @@ impl Fragment {
         }
 
         if self.summary.head == other.head
-            && self
-                .checkpoints
+            && other
+                .boundary
                 .iter()
-                .collect::<Set<_>>()
-                .is_superset(&other.boundary.iter().collect::<Set<_>>())
+                .all(|end| self.checkpoints.contains(end))
         {
             return true;
         }
@@ -211,12 +209,7 @@ impl Fragment {
         }
 
         if self.checkpoints.contains(&other.head)
-            && self
-                .summary
-                .boundary
-                .iter()
-                .collect::<Set<_>>()
-                .is_superset(&other.boundary.iter().collect::<Set<_>>())
+            && self.summary.boundary.is_superset(&other.boundary)
         {
             return true;
         }
@@ -250,8 +243,8 @@ impl Fragment {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &[Digest<LooseCommit>] {
-        self.summary.boundary.as_slice()
+    pub const fn boundary(&self) -> &BTreeSet<Digest<LooseCommit>> {
+        &self.summary.boundary
     }
 
     /// The inner checkpoints of the fragment.
@@ -283,7 +276,7 @@ pub struct FragmentSummary {
     #[n(0)]
     head: Digest<LooseCommit>,
     #[n(1)]
-    boundary: Vec<Digest<LooseCommit>>,
+    boundary: BTreeSet<Digest<LooseCommit>>,
     #[n(2)]
     blob_meta: BlobMeta,
 }
@@ -293,7 +286,7 @@ impl FragmentSummary {
     #[must_use]
     pub const fn new(
         head: Digest<LooseCommit>,
-        boundary: Vec<Digest<LooseCommit>>,
+        boundary: BTreeSet<Digest<LooseCommit>>,
         blob_meta: BlobMeta,
     ) -> Self {
         Self {
@@ -311,8 +304,8 @@ impl FragmentSummary {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &[Digest<LooseCommit>] {
-        self.boundary.as_slice()
+    pub const fn boundary(&self) -> &BTreeSet<Digest<LooseCommit>> {
+        &self.boundary
     }
 
     /// Basic information about the payload blob.
@@ -334,7 +327,7 @@ pub struct FragmentSpec {
     id: SedimentreeId,
     head: Digest<LooseCommit>,
     checkpoints: Vec<Digest<LooseCommit>>,
-    boundary: Vec<Digest<LooseCommit>>,
+    boundary: BTreeSet<Digest<LooseCommit>>,
 }
 
 impl FragmentSpec {
@@ -344,7 +337,7 @@ impl FragmentSpec {
         id: SedimentreeId,
         head: Digest<LooseCommit>,
         checkpoints: Vec<Digest<LooseCommit>>,
-        boundary: Vec<Digest<LooseCommit>>,
+        boundary: BTreeSet<Digest<LooseCommit>>,
     ) -> Self {
         Self {
             id,
@@ -368,8 +361,8 @@ impl FragmentSpec {
 
     /// The (possibly ragged) end(s) of the fragment.
     #[must_use]
-    pub const fn boundary(&self) -> &[Digest<LooseCommit>] {
-        self.boundary.as_slice()
+    pub const fn boundary(&self) -> &BTreeSet<Digest<LooseCommit>> {
+        &self.boundary
     }
 
     /// The inner checkpoints of the fragment.

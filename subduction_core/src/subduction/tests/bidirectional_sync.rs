@@ -29,6 +29,8 @@ use crate::{
 };
 use core::time::Duration;
 use future_form::Sendable;
+use std::collections::BTreeSet;
+
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
@@ -60,7 +62,7 @@ async fn make_test_fragment(data: &[u8]) -> (Signed<Fragment>, Blob, FragmentSum
     let blob_meta = BlobMeta::new(data);
     // Fragment head is a LooseCommit digest (the starting point of the fragment)
     let head = Digest::<LooseCommit>::hash_bytes(data);
-    let fragment = Fragment::new(head, vec![], vec![], blob_meta);
+    let fragment = Fragment::new(head, BTreeSet::new(), vec![], blob_meta);
     let summary = fragment.summary().clone();
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob, summary)

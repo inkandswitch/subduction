@@ -1,6 +1,6 @@
 //! Causal identity for fragments.
 
-use alloc::vec::Vec;
+use alloc::collections::BTreeSet;
 
 use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 
@@ -24,17 +24,13 @@ pub struct FragmentId([u8; 32]);
 impl FragmentId {
     /// Compute the causal identity from head and boundary digests.
     ///
-    /// The boundary is sorted and deduplicated internally before hashing,
-    /// so callers do not need to pre-sort.
+    /// The boundary must be a [`BTreeSet`], which guarantees sorted,
+    /// deduplicated iteration order.
     #[must_use]
-    pub fn new(head: Digest<LooseCommit>, boundary: &[Digest<LooseCommit>]) -> Self {
-        let mut sorted: Vec<Digest<LooseCommit>> = boundary.to_vec();
-        sorted.sort();
-        sorted.dedup();
-
+    pub fn new(head: Digest<LooseCommit>, boundary: &BTreeSet<Digest<LooseCommit>>) -> Self {
         let mut hasher = blake3::Hasher::new();
         hasher.update(head.as_bytes());
-        for b in &sorted {
+        for b in boundary {
             hasher.update(b.as_bytes());
         }
         Self(*hasher.finalize().as_bytes())

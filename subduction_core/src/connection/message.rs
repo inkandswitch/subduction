@@ -270,6 +270,8 @@ impl RequestedData {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
     use alloc::vec;
     use sedimentree_core::crypto::fingerprint::FingerprintSeed;
@@ -318,7 +320,7 @@ mod tests {
             let signer = test_signer();
             let fragment = Fragment::new(
                 Digest::from_bytes([2u8; 32]),
-                Vec::new(),
+                BTreeSet::new(),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
@@ -550,7 +552,7 @@ mod tests {
             let signer = test_signer();
             let fragment = Fragment::new(
                 Digest::from_bytes([2u8; 32]),
-                Vec::new(),
+                BTreeSet::new(),
                 Vec::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
