@@ -93,7 +93,7 @@ mod generators {
         let parent = digest_from_seed(seed.wrapping_add(1));
         #[allow(clippy::cast_possible_truncation)]
         let blob_meta = BlobMeta::new(&[seed as u8; 64]);
-        LooseCommit::new(digest, vec![parent], blob_meta)
+        LooseCommit::new(digest, BTreeSet::from([parent]), blob_meta)
     }
 
     /// Generate a fragment from a seed.
@@ -423,7 +423,10 @@ mod message {
                 &num_digests,
                 |b, &n| {
                     let digests: Vec<_> = (0..n).map(|i| blob_digest_from_seed(i as u64)).collect();
-                    b.iter(|| Message::BlobsRequest(black_box(digests.clone())));
+                    b.iter(|| Message::BlobsRequest {
+                        id: black_box(sedimentree_id_from_seed(1)),
+                        digests: black_box(digests.clone()),
+                    });
                 },
             );
         }
@@ -439,7 +442,10 @@ mod message {
                 &(num_blobs, blob_size),
                 |b, &(n, size)| {
                     let blobs: Vec<_> = (0..n).map(|i| blob_from_seed(i as u64, size)).collect();
-                    b.iter(|| Message::BlobsResponse(black_box(blobs.clone())));
+                    b.iter(|| Message::BlobsResponse {
+                        id: black_box(sedimentree_id_from_seed(1)),
+                        blobs: black_box(blobs.clone()),
+                    });
                 },
             );
         }
@@ -466,7 +472,10 @@ mod message {
             b.iter(|| black_box(&msg_loose).request_id());
         });
 
-        let msg_blobs_req = Message::BlobsRequest(vec![blob_digest_from_seed(1)]);
+        let msg_blobs_req = Message::BlobsRequest {
+            id: sedimentree_id_from_seed(1),
+            digests: vec![blob_digest_from_seed(1)],
+        };
         group.bench_function("blobs_request_none", |b| {
             b.iter(|| black_box(&msg_blobs_req).request_id());
         });

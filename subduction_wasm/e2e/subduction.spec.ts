@@ -197,16 +197,17 @@ test.describe("Subduction", () => {
 
     test("should return undefined for non-existent blob", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, Digest, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
+        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const testDigest = new Uint8Array(32);
         testDigest[0] = 255;
         const digest = new Digest(testDigest);
 
-        const blob = await syncer.getBlob(digest);
+        const blob = await syncer.getBlob(sedimentreeId, digest);
 
         return {
           blob,
@@ -219,16 +220,17 @@ test.describe("Subduction", () => {
 
     test("should return undefined for non-existent blob digest", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, Digest, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
+        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const testDigest = new Uint8Array(32);
         testDigest[0] = 1;
         const digest = new Digest(testDigest);
 
-        const blob = await syncer.getBlob(digest);
+        const blob = await syncer.getBlob(sedimentreeId, digest);
 
         return {
           blob,
@@ -396,13 +398,12 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Message, SedimentreeId, Digest } = window.subduction;
 
+        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const digestBytes = new Uint8Array(32);
         digestBytes[0] = 42;
         const digest = new Digest(digestBytes);
-        const original = Message.blobsRequest([digest]);
-
+        const original = Message.blobsRequest(sedimentreeId, [digest]);
         const cborBytes = original.toCborBytes();
-
         const restored = Message.fromCborBytes(cborBytes);
 
         return {
@@ -507,16 +508,17 @@ test.describe("Subduction", () => {
   test.describe("API Smoke Tests", () => {
     test("should call requestBlobs without throwing", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Subduction, MemoryStorage, Digest, WebCryptoSigner } = window.subduction;
+        const { Subduction, MemoryStorage, Digest, SedimentreeId, WebCryptoSigner } = window.subduction;
         const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
         const syncer = new Subduction(signer, storage);
 
+        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const digest1 = new Digest(new Uint8Array(32));
         const digest2 = new Digest(new Uint8Array(32).fill(1));
 
         try {
-          await syncer.requestBlobs([digest1, digest2]);
+          await syncer.requestBlobs(sedimentreeId, [digest1, digest2]);
           return { error: null };
         } catch (error) {
           return { error: error.message };

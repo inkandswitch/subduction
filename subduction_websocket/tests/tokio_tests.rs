@@ -10,7 +10,7 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
-use std::{net::SocketAddr, sync::OnceLock, time::Duration};
+use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
         Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
@@ -59,7 +59,7 @@ fn random_digest() -> Digest<LooseCommit> {
 fn random_commit() -> (LooseCommit, Blob) {
     let blob = random_blob();
     let digest = random_digest();
-    let commit = LooseCommit::new(digest, vec![], BlobMeta::new(blob.as_slice()));
+    let commit = LooseCommit::new(digest, BTreeSet::new(), BlobMeta::new(blob.as_slice()));
     (commit, blob)
 }
 
@@ -128,7 +128,10 @@ async fn client_reconnect() -> TestResult {
     let initial_peer_id = client_ws.peer_id();
 
     // Send a message to verify connection works
-    let test_msg = Message::BlobsRequest(vec![]);
+    let test_msg = Message::BlobsRequest {
+        id: sedimentree_core::id::SedimentreeId::new([0u8; 32]),
+        digests: vec![],
+    };
     client_ws.send(&test_msg).await?;
 
     // Trigger reconnect
@@ -633,7 +636,11 @@ async fn large_message_handling() -> TestResult {
     let large_data = vec![42u8; 1024 * 1024];
     let large_blob = Blob::new(large_data);
     let digest = random_digest();
-    let commit = LooseCommit::new(digest, vec![], BlobMeta::new(large_blob.as_slice()));
+    let commit = LooseCommit::new(
+        digest,
+        BTreeSet::new(),
+        BlobMeta::new(large_blob.as_slice()),
+    );
 
     // Add large commit
     client.add_commit(sed_id, &commit, large_blob).await?;

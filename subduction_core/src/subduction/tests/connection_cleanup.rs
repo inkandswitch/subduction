@@ -31,7 +31,7 @@ fn make_test_commit() -> (LooseCommit, Blob) {
     let blob = Blob::new(contents.clone());
     let blob_meta = BlobMeta::new(&contents);
     let digest = Digest::<LooseCommit>::from_bytes([0u8; 32]);
-    let commit = LooseCommit::new(digest, vec![], blob_meta);
+    let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
     (commit, blob)
 }
 
@@ -251,7 +251,9 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
 
     // Request blobs - the send will fail
     let digests = vec![Digest::<Blob>::from_bytes([1u8; 32])];
-    subduction.request_blobs(digests).await;
+    subduction
+        .request_blobs(SedimentreeId::new([42u8; 32]), digests)
+        .await;
 
     // Connection should be unregistered after send failure
     assert_eq!(

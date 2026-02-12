@@ -9,7 +9,7 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::Subduction,
 };
-use alloc::{vec, vec::Vec};
+use alloc::{collections::BTreeSet, vec::Vec};
 use core::fmt;
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
@@ -142,8 +142,11 @@ fn make_loose_commit(data: &[u8]) -> (sedimentree_core::loose_commit::LooseCommi
     let blob = make_test_blob(data);
     let blob_meta = BlobMeta::new(blob.as_slice());
     let content_digest = Digest::<sedimentree_core::loose_commit::LooseCommit>::hash_bytes(data);
-    let commit =
-        sedimentree_core::loose_commit::LooseCommit::new(content_digest, vec![], blob_meta);
+    let commit = sedimentree_core::loose_commit::LooseCommit::new(
+        content_digest,
+        BTreeSet::new(),
+        blob_meta,
+    );
     (commit, blob)
 }
 

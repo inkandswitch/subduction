@@ -329,25 +329,27 @@ impl MemoryStorage {
 
     /// Save a blob and return its digest.
     #[wasm_bindgen(js_name = saveBlob)]
-    pub fn save_blob(&self, data: &Uint8Array) -> Promise {
+    pub fn save_blob(&self, id: &WasmSedimentreeId, data: &Uint8Array) -> Promise {
         let inner = self.inner.clone();
+        let id: SedimentreeId = id.clone().into();
         let bytes = data.to_vec();
         future_to_promise(async move {
             let blob = Blob::from(bytes);
-            let digest = Storage::<Local>::save_blob(&inner, blob)
+            let digest = Storage::<Local>::save_blob(&inner, id, blob)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsDigest::from(WasmDigest::from(digest)).into())
         })
     }
 
-    /// Load a blob by digest.
+    /// Load a blob by digest within a sedimentree.
     #[wasm_bindgen(js_name = loadBlob)]
-    pub fn load_blob(&self, digest: &WasmDigest) -> Promise {
+    pub fn load_blob(&self, id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
+        let id: SedimentreeId = id.clone().into();
         let digest: Digest<Blob> = digest.clone().into();
         future_to_promise(async move {
-            let result = Storage::<Local>::load_blob(&inner, digest)
+            let result = Storage::<Local>::load_blob(&inner, id, digest)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
@@ -357,13 +359,14 @@ impl MemoryStorage {
         })
     }
 
-    /// Delete a blob by digest.
+    /// Delete a blob by digest within a sedimentree.
     #[wasm_bindgen(js_name = deleteBlob)]
-    pub fn delete_blob(&self, digest: &WasmDigest) -> Promise {
+    pub fn delete_blob(&self, id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
+        let id: SedimentreeId = id.clone().into();
         let digest: Digest<Blob> = digest.clone().into();
         future_to_promise(async move {
-            Storage::<Local>::delete_blob(&inner, digest)
+            Storage::<Local>::delete_blob(&inner, id, digest)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

@@ -7,6 +7,8 @@
 //! Tests run for both `Sendable` and `Local` future kinds to ensure
 //! behavior is consistent across native and WASM-like environments.
 
+use alloc::collections::BTreeSet;
+
 use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
@@ -32,7 +34,7 @@ async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) 
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(digest, vec![], blob_meta);
+    let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }

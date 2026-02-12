@@ -25,7 +25,7 @@ pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
     commits: Arc<Mutex<Map<SedimentreeId, Map<Digest<LooseCommit>, Signed<LooseCommit>>>>>,
     fragments: Arc<Mutex<Map<SedimentreeId, Map<Digest<Fragment>, Signed<Fragment>>>>>,
-    blobs: Arc<Mutex<Map<Digest<Blob>, Blob>>>,
+    blobs: Arc<Mutex<Map<SedimentreeId, Map<Digest<Blob>, Blob>>>>,
 }
 
 impl MemoryStorage {
@@ -269,46 +269,77 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
-    // ==================== Blobs (CAS) ====================
+    // ==================== Blobs (per-sedimentree CAS) ====================
 
-    fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
+    fn save_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
         K::from_future(async move {
             let digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-            tracing::debug!(?digest, "MemoryStorage::save_blob");
-            self.blobs.lock().await.entry(digest).or_insert(blob);
+            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_blob");
+            self.blobs
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .entry(digest)
+                .or_insert(blob);
             Ok(digest)
         })
     }
 
     fn load_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?blob_digest, "MemoryStorage::load_blob");
-            Ok(self.blobs.lock().await.get(&blob_digest).cloned())
+            tracing::debug!(?sedimentree_id, ?blob_digest, "MemoryStorage::load_blob");
+            Ok(self
+                .blobs
+                .lock()
+                .await
+                .get(&sedimentree_id)
+                .and_then(|blobs| blobs.get(&blob_digest).cloned()))
         })
     }
 
     fn load_blobs(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digests: &[Digest<Blob>],
     ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
         let blob_digests = blob_digests.to_vec();
         K::from_future(async move {
-            tracing::debug!(count = blob_digests.len(), "MemoryStorage::load_blobs");
-            let blobs = self.blobs.lock().await;
+            tracing::debug!(
+                ?sedimentree_id,
+                count = blob_digests.len(),
+                "MemoryStorage::load_blobs"
+            );
+            let all_blobs = self.blobs.lock().await;
+            let tree_blobs = all_blobs.get(&sedimentree_id);
             Ok(blob_digests
                 .into_iter()
-                .filter_map(|digest| blobs.get(&digest).map(|blob| (digest, blob.clone())))
+                .filter_map(|digest| {
+                    tree_blobs
+                        .and_then(|blobs| blobs.get(&digest).map(|blob| (digest, blob.clone())))
+                })
                 .collect())
         })
     }
 
-    fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>> {
+    fn delete_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            tracing::debug!(?blob_digest, "MemoryStorage::delete_blob");
-            self.blobs.lock().await.remove(&blob_digest);
+            tracing::debug!(?sedimentree_id, ?blob_digest, "MemoryStorage::delete_blob");
+            if let Some(blobs) = self.blobs.lock().await.get_mut(&sedimentree_id) {
+                blobs.remove(&blob_digest);
+            }
             Ok(())
         })
     }
@@ -324,7 +355,13 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::save_commit_with_blob");
             let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-            self.blobs.lock().await.entry(blob_digest).or_insert(blob);
+            self.blobs
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .entry(blob_digest)
+                .or_insert(blob);
 
             #[allow(clippy::expect_used)]
             let commit_digest = Self::commit_digest(&commit)
@@ -348,7 +385,13 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::save_fragment_with_blob");
             let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-            self.blobs.lock().await.entry(blob_digest).or_insert(blob);
+            self.blobs
+                .lock()
+                .await
+                .entry(sedimentree_id)
+                .or_default()
+                .entry(blob_digest)
+                .or_insert(blob);
 
             #[allow(clippy::expect_used)]
             let fragment_digest = Self::fragment_digest(&fragment)
@@ -384,7 +427,13 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
 
             for (commit, blob) in commits {
                 let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-                self.blobs.lock().await.entry(blob_digest).or_insert(blob);
+                self.blobs
+                    .lock()
+                    .await
+                    .entry(sedimentree_id)
+                    .or_default()
+                    .entry(blob_digest)
+                    .or_insert(blob);
 
                 #[allow(clippy::expect_used)]
                 let commit_digest = Self::commit_digest(&commit)
@@ -400,7 +449,13 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
 
             for (fragment, blob) in fragments {
                 let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-                self.blobs.lock().await.entry(blob_digest).or_insert(blob);
+                self.blobs
+                    .lock()
+                    .await
+                    .entry(sedimentree_id)
+                    .or_default()
+                    .entry(blob_digest)
+                    .or_insert(blob);
 
                 #[allow(clippy::expect_used)]
                 let fragment_digest = Self::fragment_digest(&fragment)

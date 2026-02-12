@@ -51,13 +51,27 @@ pub enum Message {
         blob: Blob,
     },
 
-    /// A request for blobs by their [`Digest`]s.
+    /// A request for blobs by their [`Digest`]s within a specific sedimentree.
     #[n(2)]
-    BlobsRequest(#[n(0)] Vec<Digest<Blob>>),
+    BlobsRequest {
+        /// The sedimentree to fetch blobs from.
+        #[n(0)]
+        id: SedimentreeId,
+        /// The blob digests being requested.
+        #[n(1)]
+        digests: Vec<Digest<Blob>>,
+    },
 
-    /// A response to a [`BlobRequest`].
+    /// A response to a [`BlobsRequest`] with blobs for a specific sedimentree.
     #[n(3)]
-    BlobsResponse(#[n(0)] Vec<Blob>),
+    BlobsResponse {
+        /// The sedimentree these blobs belong to.
+        #[n(0)]
+        id: SedimentreeId,
+        /// The requested blobs.
+        #[n(1)]
+        blobs: Vec<Blob>,
+    },
 
     /// A request to "batch sync" an entire [`Sedimentree`].
     #[n(4)]
@@ -81,8 +95,8 @@ impl Message {
             | Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
-            | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
+            | Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
             | Message::RemoveSubscriptions(_) => None,
         }
     }
@@ -93,8 +107,8 @@ impl Message {
         match self {
             Message::LooseCommit { .. } => "LooseCommit",
             Message::Fragment { .. } => "Fragment",
-            Message::BlobsRequest(_) => "BlobsRequest",
-            Message::BlobsResponse(_) => "BlobsResponse",
+            Message::BlobsRequest { .. } => "BlobsRequest",
+            Message::BlobsResponse { .. } => "BlobsResponse",
             Message::BatchSyncRequest(_) => "BatchSyncRequest",
             Message::BatchSyncResponse(_) => "BatchSyncResponse",
             Message::RemoveSubscriptions(_) => "RemoveSubscriptions",
@@ -102,19 +116,16 @@ impl Message {
     }
 
     /// Get the sedimentree ID associated with this message, if any.
-    ///
-    /// Returns `None` for messages that don't have a single associated ID
-    /// (e.g., `BlobsRequest`, `RemoveSubscriptions` with multiple IDs).
     #[must_use]
     pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
         match self {
             Message::LooseCommit { id, .. }
             | Message::Fragment { id, .. }
+            | Message::BlobsRequest { id, .. }
+            | Message::BlobsResponse { id, .. }
             | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
             | Message::BatchSyncResponse(BatchSyncResponse { id, .. }) => Some(*id),
-            Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            Message::RemoveSubscriptions(_) => None,
         }
     }
 }
@@ -292,7 +303,7 @@ mod tests {
             let signer = test_signer();
             let commit = LooseCommit::new(
                 Digest::from_bytes([2u8; 32]),
-                Vec::new(),
+                BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
@@ -328,13 +339,19 @@ mod tests {
 
         #[test]
         fn test_blobs_request_has_no_request_id() {
-            let msg = Message::BlobsRequest(vec![Digest::from_bytes([1u8; 32])]);
+            let msg = Message::BlobsRequest {
+                id: SedimentreeId::new([0u8; 32]),
+                digests: vec![Digest::from_bytes([1u8; 32])],
+            };
             assert_eq!(msg.request_id(), None);
         }
 
         #[test]
         fn test_blobs_response_has_no_request_id() {
-            let msg = Message::BlobsResponse(vec![Blob::new(Vec::from([1u8; 16]))]);
+            let msg = Message::BlobsResponse {
+                id: SedimentreeId::new([0u8; 32]),
+                blobs: vec![Blob::new(Vec::from([1u8; 16]))],
+            };
             assert_eq!(msg.request_id(), None);
         }
 
@@ -447,8 +464,8 @@ mod tests {
                 }
                 Message::LooseCommit { .. }
                 | Message::Fragment { .. }
-                | Message::BlobsRequest(_)
-                | Message::BlobsResponse(_)
+                | Message::BlobsRequest { .. }
+                | Message::BlobsResponse { .. }
                 | Message::BatchSyncResponse(_)
                 | Message::RemoveSubscriptions(_) => {
                     unreachable!("Expected BatchSyncRequest")
@@ -479,8 +496,8 @@ mod tests {
                 }
                 Message::LooseCommit { .. }
                 | Message::Fragment { .. }
-                | Message::BlobsRequest(_)
-                | Message::BlobsResponse(_)
+                | Message::BlobsRequest { .. }
+                | Message::BlobsResponse { .. }
                 | Message::BatchSyncRequest(_)
                 | Message::RemoveSubscriptions(_) => {
                     unreachable!("Expected BatchSyncResponse")
@@ -516,7 +533,7 @@ mod tests {
             let signer = test_signer();
             let commit = LooseCommit::new(
                 Digest::from_bytes([1u8; 32]),
-                Vec::new(),
+                BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([2u8; 16]));

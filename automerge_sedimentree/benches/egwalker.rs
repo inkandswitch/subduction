@@ -246,7 +246,7 @@ fn generate_loose_commits(count: usize, seed: u64) -> Vec<LooseCommit> {
         .map(|_| {
             let digest = random_digest_with_depth(&mut rng, 0);
             let parent_count = rng.gen_range(0..=2);
-            let parents: Vec<_> = (0..parent_count)
+            let parents: BTreeSet<_> = (0..parent_count)
                 .map(|_| random_digest_with_depth(&mut rng, 0))
                 .collect();
             let blob_digest = Digest::from_bytes({

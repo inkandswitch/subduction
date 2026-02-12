@@ -119,8 +119,8 @@ impl WasmWebSocket {
                             }
                             other @ (Message::LooseCommit { .. }
                             | Message::Fragment { .. }
-                            | Message::BlobsRequest(_)
-                            | Message::BlobsResponse(_)
+                            | Message::BlobsRequest { .. }
+                            | Message::BlobsResponse { .. }
                             | Message::BatchSyncRequest(_)
                             | Message::RemoveSubscriptions(_)) => {
                                 if let Err(e) = inner_inbound_writer.clone().send(other).await {

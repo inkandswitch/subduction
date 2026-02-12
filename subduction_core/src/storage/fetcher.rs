@@ -104,14 +104,13 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
 
     /// Load a blob by its digest.
     ///
-    /// Note: Blob storage is content-addressed and not per-sedimentree,
-    /// but this capability implies access to blobs referenced by the sedimentree's commits.
+    /// Load a blob by its digest within this sedimentree.
     #[must_use]
     pub fn load_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
-        self.storage.load_blob(digest)
+        self.storage.load_blob(self.sedimentree_id, digest)
     }
 
-    /// Load multiple blobs by their digests.
+    /// Load multiple blobs by their digests within this sedimentree.
     ///
     /// Returns only the blobs that were found. Missing digests are silently skipped.
     #[must_use]
@@ -120,7 +119,7 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
         &self,
         digests: &[Digest<Blob>],
     ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, S::Error>> {
-        self.storage.load_blobs(digests)
+        self.storage.load_blobs(self.sedimentree_id, digests)
     }
 }
 

@@ -69,7 +69,10 @@ mod generators {
     }
 
     /// Generate a synthetic loose commit with the given number of parents.
-    pub(super) fn synthetic_commit(seed: u64, parents: Vec<Digest<LooseCommit>>) -> LooseCommit {
+    pub(super) fn synthetic_commit(
+        seed: u64,
+        parents: BTreeSet<Digest<LooseCommit>>,
+    ) -> LooseCommit {
         let digest = digest_from_seed(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
         LooseCommit::new(digest, parents, blob_meta)
@@ -99,7 +102,7 @@ mod generators {
         let mut prev_digest = None;
 
         for i in 0..count {
-            let parents = prev_digest.map(|d| vec![d]).unwrap_or_default();
+            let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
             let commit = synthetic_commit(base_seed + i as u64, parents);
             prev_digest = Some(commit.digest());
             commits.push(commit);
@@ -118,18 +121,17 @@ mod generators {
         let mut recent_digests: Vec<Digest<LooseCommit>> = Vec::new();
 
         for i in 0..count {
-            let parents = if i == 0 {
-                vec![]
+            let parents: BTreeSet<_> = if i == 0 {
+                BTreeSet::new()
             } else if i % merge_frequency == 0 && recent_digests.len() >= 2 {
-                // Merge commit: take last two
-                vec![
+                BTreeSet::from([
                     recent_digests[recent_digests.len() - 1],
                     recent_digests[recent_digests.len() - 2],
-                ]
+                ])
             } else if !recent_digests.is_empty() {
-                vec![recent_digests[recent_digests.len() - 1]]
+                BTreeSet::from([recent_digests[recent_digests.len() - 1]])
             } else {
-                vec![]
+                BTreeSet::new()
             };
 
             let commit = synthetic_commit(base_seed + i as u64, parents);
@@ -155,7 +157,7 @@ mod generators {
             let mut prev_digest = None;
 
             for i in 0..depth_per_branch {
-                let parents = prev_digest.map(|d| vec![d]).unwrap_or_default();
+                let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
                 let commit = synthetic_commit(branch_seed + i as u64, parents);
                 prev_digest = Some(commit.digest());
                 commits.push(commit);
@@ -316,7 +318,7 @@ mod digest {
 }
 
 mod sedimentree {
-    use std::hint::black_box;
+    use std::{collections::BTreeSet, hint::black_box};
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{
@@ -685,7 +687,7 @@ mod sedimentree {
             group.throughput(Throughput::Elements(1));
 
             let tree = synthetic_sedimentree(size, size, 1);
-            let new_commit = synthetic_commit(999_999, vec![]);
+            let new_commit = synthetic_commit(999_999, BTreeSet::new());
 
             group.bench_with_input(
                 BenchmarkId::new("add_commit", size),
@@ -733,7 +735,7 @@ mod sedimentree {
 
             let tree = synthetic_sedimentree(100, 100, 1);
             let new_commits: Vec<LooseCommit> = (0..batch_size)
-                .map(|i| synthetic_commit(900_000 + i as u64, vec![]))
+                .map(|i| synthetic_commit(900_000 + i as u64, BTreeSet::new()))
                 .collect();
 
             group.bench_with_input(

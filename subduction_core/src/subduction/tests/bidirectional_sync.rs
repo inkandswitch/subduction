@@ -52,7 +52,7 @@ async fn make_test_commit(data: &[u8]) -> (Signed<LooseCommit>, Blob, LooseCommi
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(digest, vec![], blob_meta);
+    let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit.clone()).await;
     (verified.into_signed(), blob, commit)
 }

@@ -2,7 +2,7 @@
 
 pub mod id;
 
-use alloc::vec::Vec;
+use alloc::collections::BTreeSet;
 use id::CommitId;
 
 use crate::{blob::BlobMeta, crypto::digest::Digest};
@@ -20,7 +20,7 @@ pub struct LooseCommit {
     digest: Digest<LooseCommit>,
 
     #[n(1)]
-    parents: Vec<Digest<LooseCommit>>,
+    parents: BTreeSet<Digest<LooseCommit>>,
 
     #[n(2)]
     blob_meta: BlobMeta,
@@ -37,7 +37,7 @@ impl LooseCommit {
     #[must_use]
     pub const fn new(
         digest: Digest<LooseCommit>,
-        parents: Vec<Digest<LooseCommit>>,
+        parents: BTreeSet<Digest<LooseCommit>>,
         blob_meta: BlobMeta,
     ) -> Self {
         Self {
@@ -53,9 +53,9 @@ impl LooseCommit {
         self.digest
     }
 
-    /// The (possibly empty) list of parent commits.
+    /// The (possibly empty) set of parent commits.
     #[must_use]
-    pub const fn parents(&self) -> &Vec<Digest<LooseCommit>> {
+    pub const fn parents(&self) -> &BTreeSet<Digest<LooseCommit>> {
         &self.parents
     }
 

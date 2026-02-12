@@ -392,8 +392,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                         }
                         other @ (Message::LooseCommit { .. }
                         | Message::Fragment { .. }
-                        | Message::BlobsRequest(_)
-                        | Message::BlobsResponse(_)
+                        | Message::BlobsRequest { .. }
+                        | Message::BlobsResponse { .. }
                         | Message::BatchSyncRequest(_)
                         | Message::RemoveSubscriptions(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {

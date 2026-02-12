@@ -493,6 +493,7 @@ impl Sedimentree {
     pub fn missing_fragments<M: DepthMetric>(
         &self,
         id: SedimentreeId,
+        seed: &FingerprintSeed,
         depth_metric: &M,
     ) -> Vec<FragmentSpec> {
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
@@ -512,10 +513,20 @@ impl Sedimentree {
                 if self.fragments.iter().any(|s| s.supports_block(commit_hash)) {
                     runs_by_level.insert(level, (commit_hash, Vec::new()));
                 } else {
+                    let checkpoint_fps = checkpoints
+                        .iter()
+                        .map(|d| {
+                            Fingerprint::new(
+                                seed,
+                                &CommitId::new(Digest::from_bytes(d.into_bytes())),
+                            )
+                        })
+                        .collect();
                     all_bundles.push(FragmentSpec::new(
                         id,
                         head,
-                        checkpoints.clone(),
+                        *seed,
+                        checkpoint_fps,
                         BTreeSet::from([commit_hash]),
                     ));
                 }
@@ -601,7 +612,7 @@ mod tests {
         bytes[0] = seed;
         let digest = Digest::from_bytes(bytes);
         let blob_meta = BlobMeta::new(&[seed]);
-        LooseCommit::new(digest, vec![], blob_meta)
+        LooseCommit::new(digest, BTreeSet::new(), blob_meta)
     }
 
     fn make_fragment(seed: u8) -> Fragment {
@@ -889,12 +900,12 @@ mod tests {
                         let contents = Vec::<u8>::arbitrary(u)?;
                         let blob_meta = BlobMeta::new(&contents);
                         let hash = Digest::<LooseCommit>::arbitrary(u)?;
-                        let mut parents = Vec::new();
+                        let mut parents = BTreeSet::new();
                         let mut num_parents = u.int_in_range(0..=frontier.len())?;
                         let mut parent_choices = frontier.iter().collect::<Vec<_>>();
                         while num_parents > 0 {
                             let parent = u.choose(&parent_choices)?;
-                            parents.push(**parent);
+                            parents.insert(**parent);
                             #[allow(clippy::unwrap_used)]
                             parent_choices
                                 .remove(parent_choices.iter().position(|p| p == parent).unwrap());

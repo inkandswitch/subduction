@@ -49,19 +49,20 @@ impl<S> LocalStorageAccess<S> {
 
     // ==================== Blob Operations ====================
 
-    /// Save a blob, returning its digest.
+    /// Save a blob under a sedimentree, returning its digest.
     #[must_use]
     pub fn save_blob<K: FutureForm>(
         &self,
+        sedimentree_id: SedimentreeId,
         blob: Blob,
     ) -> K::Future<'_, Result<Digest<Blob>, S::Error>>
     where
         S: Storage<K>,
     {
-        self.storage.save_blob(blob)
+        self.storage.save_blob(sedimentree_id, blob)
     }
 
-    /// Load blobs by their digests.
+    /// Load blobs by their digests within a sedimentree.
     ///
     /// Returns only the blobs that were found. Missing digests are silently skipped.
     ///
@@ -72,27 +73,29 @@ impl<S> LocalStorageAccess<S> {
     #[allow(clippy::type_complexity)]
     pub fn load_blobs<K: FutureForm>(
         &self,
+        sedimentree_id: SedimentreeId,
         digests: &[Digest<Blob>],
     ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, S::Error>>
     where
         S: Storage<K>,
     {
-        self.storage.load_blobs(digests)
+        self.storage.load_blobs(sedimentree_id, digests)
     }
 
-    /// Load a single blob by its digest.
+    /// Load a single blob by its digest within a sedimentree.
     ///
     /// # Errors
     ///
     /// Returns an error if the underlying storage fails to load the blob.
     pub async fn load_blob<K: FutureForm>(
         &self,
+        sedimentree_id: SedimentreeId,
         digest: Digest<Blob>,
     ) -> Result<Option<Blob>, S::Error>
     where
         S: Storage<K>,
     {
-        self.storage.load_blob(digest).await
+        self.storage.load_blob(sedimentree_id, digest).await
     }
 
     // ==================== Hydration Operations ====================

@@ -499,6 +499,7 @@ impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sedimentree_core::id::SedimentreeId;
     use testresult::TestResult;
 
     #[test]
@@ -535,15 +536,21 @@ mod tests {
         let peer_id = PeerId::new([1u8; 32]);
         let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
 
-        let msg = Message::BlobsRequest(vec![]);
+        let msg = Message::BlobsRequest {
+            id: SedimentreeId::new([0u8; 32]),
+            digests: vec![],
+        };
         Connection::<Sendable>::send(&conn, &msg).await?;
         let received = handle.outbound_rx.recv().await?;
-        assert!(matches!(received, Message::BlobsRequest(_)));
+        assert!(matches!(received, Message::BlobsRequest { .. }));
 
-        let inject_msg = Message::BlobsResponse(vec![]);
+        let inject_msg = Message::BlobsResponse {
+            id: SedimentreeId::new([0u8; 32]),
+            blobs: vec![],
+        };
         handle.inbound_tx.send(inject_msg).await?;
         let received = Connection::<Sendable>::recv(&conn).await?;
-        assert!(matches!(received, Message::BlobsResponse(_)));
+        assert!(matches!(received, Message::BlobsResponse { .. }));
 
         Ok(())
     }

@@ -114,17 +114,17 @@ impl<S, P> StoragePowerbox<S, P> {
         Ok(Putter::new(self.storage.clone(), sedimentree_id))
     }
 
-    /// Get blob-only storage access.
+    /// Get per-sedimentree blob-only storage access.
     ///
-    /// Blobs are content-addressed and not sedimentree-scoped, so they
-    /// don't require a [`Fetcher`] or [`Putter`]. This provides the minimal
-    /// interface for blob I/O without exposing commit/fragment operations.
+    /// Provides blob I/O scoped to a specific sedimentree without exposing
+    /// commit/fragment operations. For full sedimentree access, use
+    /// [`get_fetcher`](Self::get_fetcher) or [`get_putter`](Self::get_putter).
     #[must_use]
-    pub fn blob_access<K: FutureForm>(&self) -> BlobAccess<K, S>
+    pub fn blob_access<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> BlobAccess<K, S>
     where
         S: Storage<K>,
     {
-        BlobAccess::new(self.storage.clone())
+        BlobAccess::new(self.storage.clone(), sedimentree_id)
     }
 
     /// Get direct storage access for hydration (startup data loading).
