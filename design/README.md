@@ -37,9 +37,9 @@ sequenceDiagram
     Note over A,B: Identities established
 
     Note over A,B: 2. Initial Sync + Subscribe (Batch)
-    A->>B: BatchSyncRequest { summary, subscribe: true }
+    A->>B: BatchSyncRequest { fingerprint_summary, subscribe: true }
     B->>A: BatchSyncResponse { diff }
-    Note over A,B: States reconciled, A subscribed
+    Note over A,B: States reconciled via fingerprint diffing, A subscribed
 
     Note over A,B: 3. Ongoing Sync (Incremental)
     A->>B: LooseCommit { commit, blob }

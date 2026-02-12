@@ -145,15 +145,18 @@ See [`handshake.md`](./handshake.md) for details.
 ### Sync Messages
 
 ```rust
-enum SyncMessage {
+enum Message {
+    LooseCommit { id, commit, blob },
+    Fragment { id, fragment, blob },
+    BlobsRequest { id, digests },
+    BlobsResponse { id, blobs },
     BatchSyncRequest(BatchSyncRequest),
     BatchSyncResponse(BatchSyncResponse),
-    LooseCommit(LooseCommit),
     RemoveSubscriptions(RemoveSubscriptions),
 }
 ```
 
-See [`sync/`](./sync/) for details.
+See [`sync/`](./sync/) for details. Batch sync uses [fingerprint-based reconciliation](./sync/batch.md#fingerprint-based-reconciliation) for compact set diffing.
 
 ## Future Considerations
 
