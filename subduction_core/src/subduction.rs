@@ -546,6 +546,7 @@ impl<
         Ok(())
     }
 
+    #[allow(clippy::too_many_lines)]
     async fn dispatch(&self, conn: &C, message: Message) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
         tracing::info!(
