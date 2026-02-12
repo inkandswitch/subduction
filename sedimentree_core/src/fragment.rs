@@ -7,10 +7,13 @@ use id::FragmentId;
 
 use crate::{
     blob::BlobMeta,
-    crypto::digest::Digest,
+    crypto::{
+        digest::Digest,
+        fingerprint::{Fingerprint, FingerprintSeed},
+    },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -326,7 +329,8 @@ impl FragmentSummary {
 pub struct FragmentSpec {
     id: SedimentreeId,
     head: Digest<LooseCommit>,
-    checkpoints: Vec<Digest<LooseCommit>>,
+    seed: FingerprintSeed,
+    checkpoints: BTreeSet<Fingerprint<CommitId>>,
     boundary: BTreeSet<Digest<LooseCommit>>,
 }
 
@@ -336,12 +340,14 @@ impl FragmentSpec {
     pub const fn new(
         id: SedimentreeId,
         head: Digest<LooseCommit>,
-        checkpoints: Vec<Digest<LooseCommit>>,
+        seed: FingerprintSeed,
+        checkpoints: BTreeSet<Fingerprint<CommitId>>,
         boundary: BTreeSet<Digest<LooseCommit>>,
     ) -> Self {
         Self {
             id,
             head,
+            seed,
             checkpoints,
             boundary,
         }
@@ -365,9 +371,15 @@ impl FragmentSpec {
         &self.boundary
     }
 
-    /// The inner checkpoints of the fragment.
+    /// The fingerprint seed used for checkpoint fingerprints.
     #[must_use]
-    pub const fn checkpoints(&self) -> &Vec<Digest<LooseCommit>> {
+    pub const fn seed(&self) -> &FingerprintSeed {
+        &self.seed
+    }
+
+    /// The inner checkpoint fingerprints of the fragment.
+    #[must_use]
+    pub const fn checkpoints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
         &self.checkpoints
     }
 }

@@ -7,9 +7,9 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -322,11 +322,12 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = getBlob)]
     pub async fn get_blob(
         &self,
+        id: &WasmSedimentreeId,
         digest: &WasmDigest,
     ) -> Result<Option<Uint8Array>, JsSedimentreeStorageError> {
         Ok(self
             .core
-            .get_blob(digest.clone().into())
+            .get_blob(id.clone().into(), digest.clone().into())
             .await?
             .map(|blob| Uint8Array::from(blob.as_slice())))
     }
@@ -422,14 +423,14 @@ impl WasmSubduction {
         Ok(())
     }
 
-    /// Request blobs by their digests from connected peers.
+    /// Request blobs by their digests from connected peers for a specific sedimentree.
     #[wasm_bindgen(js_name = requestBlobs)]
-    pub async fn request_blobs(&self, digests: Vec<JsDigest>) {
+    pub async fn request_blobs(&self, id: &WasmSedimentreeId, digests: Vec<JsDigest>) {
         let digests: Vec<_> = digests
             .iter()
             .map(|js_digest| WasmDigest::from(js_digest).into())
             .collect();
-        self.core.request_blobs(digests).await;
+        self.core.request_blobs(id.clone().into(), digests).await;
     }
 
     /// Request batch sync for a given Sedimentree ID from a specific peer.

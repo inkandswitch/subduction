@@ -173,6 +173,7 @@ pub struct Subduction<
     ///
     /// Used to reject unsolicited [`BlobsResponse`] messages — only blobs
     /// whose `(SedimentreeId, Digest)` pairs appear in this set are saved.
+    #[allow(clippy::type_complexity)]
     pending_blob_requests: Arc<Mutex<Set<(SedimentreeId, Digest<Blob>)>>>,
 
     manager_channel: Sender<Command<C>>,

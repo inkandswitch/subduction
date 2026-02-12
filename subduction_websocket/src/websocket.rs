@@ -13,15 +13,15 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
+    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -392,8 +392,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                         }
                         other @ (Message::LooseCommit { .. }
                         | Message::Fragment { .. }
-                        | Message::BlobsRequest(_)
-                        | Message::BlobsResponse(_)
+                        | Message::BlobsRequest { .. }
+                        | Message::BlobsResponse { .. }
                         | Message::BatchSyncRequest(_)
                         | Message::RemoveSubscriptions(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {

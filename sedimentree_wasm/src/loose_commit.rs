@@ -1,6 +1,6 @@
 //! Individual/"loose" commits.
 
-use alloc::{borrow::ToOwned, vec::Vec};
+use alloc::{borrow::ToOwned, collections::BTreeSet, vec::Vec};
 use sedimentree_core::{blob::BlobMeta, crypto::digest::Digest, loose_commit::LooseCommit};
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
@@ -20,7 +20,7 @@ impl WasmLooseCommit {
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(digest: &WasmDigest, parents: Vec<JsDigest>, blob_meta: &WasmBlobMeta) -> Self {
-        let core_parents: Vec<Digest<LooseCommit>> =
+        let core_parents: BTreeSet<Digest<LooseCommit>> =
             parents.iter().map(|d| WasmDigest::from(d).into()).collect();
 
         let core_commit = LooseCommit::new(

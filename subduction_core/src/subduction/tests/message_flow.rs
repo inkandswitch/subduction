@@ -32,7 +32,7 @@ async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) 
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(digest, vec![], blob_meta);
+    let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }

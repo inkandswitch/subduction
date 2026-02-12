@@ -26,7 +26,7 @@ pub struct BlobAccess<K: FutureForm, S: Storage<K>> {
 }
 
 impl<K: FutureForm, S: Storage<K>> BlobAccess<K, S> {
-    pub(super) fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
+    pub(super) const fn new(storage: Arc<S>, sedimentree_id: SedimentreeId) -> Self {
         Self {
             storage,
             sedimentree_id,

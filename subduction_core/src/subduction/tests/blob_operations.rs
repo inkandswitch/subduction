@@ -19,12 +19,17 @@ use sedimentree_core::{
 };
 use testresult::TestResult;
 
+const TEST_TREE: SedimentreeId = SedimentreeId::new([42u8; 32]);
+
 #[tokio::test]
 async fn test_get_blob_returns_none_for_missing() {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
     let digest = Digest::<Blob>::from_bytes([1u8; 32]);
-    let blob = subduction.get_blob(digest).await.expect("storage error");
+    let blob = subduction
+        .get_blob(TEST_TREE, digest)
+        .await
+        .expect("storage error");
     assert!(blob.is_none());
 }
 
@@ -85,26 +90,32 @@ async fn requested_blobs_are_saved_and_removed_from_pending() -> TestResult {
     let digest = Digest::<Blob>::hash_bytes(blob_data);
 
     // Request this blob — populates pending_blob_requests
-    subduction.request_blobs(vec![digest]).await;
+    subduction.request_blobs(TEST_TREE, vec![digest]).await;
 
     // Drain the outbound BlobsRequest message
     let outbound = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
         .await?
         .expect("should receive BlobsRequest");
     assert!(
-        matches!(outbound, Message::BlobsRequest(ref digests) if digests.contains(&digest)),
-        "expected BlobsRequest containing our digest"
+        matches!(outbound, Message::BlobsRequest { id, ref digests, .. } if id == TEST_TREE && digests.contains(&digest)),
+        "expected BlobsRequest containing our digest for the right tree"
     );
 
     // Simulate peer responding with the requested blob
     handle
         .inbound_tx
-        .send(Message::BlobsResponse(vec![blob.clone()]))
+        .send(Message::BlobsResponse {
+            id: TEST_TREE,
+            blobs: vec![blob.clone()],
+        })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Verify blob was saved to storage
-    let loaded = subduction.get_blob(digest).await.expect("storage error");
+    let loaded = subduction
+        .get_blob(TEST_TREE, digest)
+        .await
+        .expect("storage error");
     assert_eq!(
         loaded.as_ref(),
         Some(&blob),
@@ -115,13 +126,12 @@ async fn requested_blobs_are_saved_and_removed_from_pending() -> TestResult {
     // the same blob — it should now be rejected as unsolicited)
     handle
         .inbound_tx
-        .send(Message::BlobsResponse(vec![blob]))
+        .send(Message::BlobsResponse {
+            id: TEST_TREE,
+            blobs: vec![blob],
+        })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
-
-    // The blob is still in storage (from the first save), but the key assertion
-    // is that the second response didn't panic or error — it was silently rejected.
-    // We can't directly observe the pending set, but the tracing::warn log would fire.
 
     actor_task.abort();
     listener_task.abort();
@@ -148,12 +158,18 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
     // Peer sends an unsolicited BlobsResponse
     handle
         .inbound_tx
-        .send(Message::BlobsResponse(vec![blob]))
+        .send(Message::BlobsResponse {
+            id: TEST_TREE,
+            blobs: vec![blob],
+        })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Verify blob was NOT saved to storage
-    let loaded = subduction.get_blob(digest).await.expect("storage error");
+    let loaded = subduction
+        .get_blob(TEST_TREE, digest)
+        .await
+        .expect("storage error");
     assert!(loaded.is_none(), "unsolicited blob should not be persisted");
 
     actor_task.abort();
@@ -183,7 +199,9 @@ async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
     let unsolicited_digest = Digest::<Blob>::hash_bytes(unsolicited_data);
 
     // Only request the first blob
-    subduction.request_blobs(vec![requested_digest]).await;
+    subduction
+        .request_blobs(TEST_TREE, vec![requested_digest])
+        .await;
 
     // Drain the outbound BlobsRequest
     let _outbound = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
@@ -193,16 +211,16 @@ async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
     // Peer responds with both blobs in a single BlobsResponse
     handle
         .inbound_tx
-        .send(Message::BlobsResponse(vec![
-            requested_blob.clone(),
-            unsolicited_blob,
-        ]))
+        .send(Message::BlobsResponse {
+            id: TEST_TREE,
+            blobs: vec![requested_blob.clone(), unsolicited_blob],
+        })
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
     // Verify: requested blob was saved
     let loaded_requested = subduction
-        .get_blob(requested_digest)
+        .get_blob(TEST_TREE, requested_digest)
         .await
         .expect("storage error");
     assert_eq!(
@@ -213,12 +231,130 @@ async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
 
     // Verify: unsolicited blob was NOT saved
     let loaded_unsolicited = subduction
-        .get_blob(unsolicited_digest)
+        .get_blob(TEST_TREE, unsolicited_digest)
         .await
         .expect("storage error");
     assert!(
         loaded_unsolicited.is_none(),
         "unsolicited blob should not be persisted"
+    );
+
+    actor_task.abort();
+    listener_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn blobs_from_different_sedimentrees_are_isolated() -> TestResult {
+    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+
+    let peer_id = PeerId::new([4u8; 32]);
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    subduction.register(conn).await?;
+
+    let actor_task = tokio::spawn(actor_fut);
+    let listener_task = tokio::spawn(listener_fut);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let tree_a = SedimentreeId::new([1u8; 32]);
+    let tree_b = SedimentreeId::new([2u8; 32]);
+
+    let blob_data = b"blob for tree A only";
+    let blob = Blob::new(blob_data.to_vec());
+    let digest = Digest::<Blob>::hash_bytes(blob_data);
+
+    // Request blob for tree A
+    subduction.request_blobs(tree_a, vec![digest]).await;
+    let _outbound = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
+        .await?
+        .expect("should receive BlobsRequest");
+
+    // Respond with the blob for tree A
+    handle
+        .inbound_tx
+        .send(Message::BlobsResponse {
+            id: tree_a,
+            blobs: vec![blob.clone()],
+        })
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Blob is visible under tree A
+    let loaded_a = subduction
+        .get_blob(tree_a, digest)
+        .await
+        .expect("storage error");
+    assert_eq!(
+        loaded_a.as_ref(),
+        Some(&blob),
+        "blob should exist under tree A"
+    );
+
+    // Blob is NOT visible under tree B
+    let loaded_b = subduction
+        .get_blob(tree_b, digest)
+        .await
+        .expect("storage error");
+    assert!(loaded_b.is_none(), "blob should not exist under tree B");
+
+    actor_task.abort();
+    listener_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
+    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+
+    let peer_id = PeerId::new([5u8; 32]);
+    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    subduction.register(conn).await?;
+
+    let actor_task = tokio::spawn(actor_fut);
+    let listener_task = tokio::spawn(listener_fut);
+    tokio::time::sleep(Duration::from_millis(10)).await;
+
+    let tree_a = SedimentreeId::new([1u8; 32]);
+    let tree_b = SedimentreeId::new([2u8; 32]);
+
+    let blob_data = b"blob requested for tree A";
+    let blob = Blob::new(blob_data.to_vec());
+    let digest = Digest::<Blob>::hash_bytes(blob_data);
+
+    // Request blob for tree A
+    subduction.request_blobs(tree_a, vec![digest]).await;
+    let _outbound = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
+        .await?
+        .expect("should receive BlobsRequest");
+
+    // Peer responds with the blob but claims it's for tree B
+    handle
+        .inbound_tx
+        .send(Message::BlobsResponse {
+            id: tree_b,
+            blobs: vec![blob],
+        })
+        .await?;
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Blob should not be saved under tree A (we requested for A, response claims B)
+    let loaded_a = subduction
+        .get_blob(tree_a, digest)
+        .await
+        .expect("storage error");
+    assert!(
+        loaded_a.is_none(),
+        "blob should not be saved when SedimentreeId doesn't match pending request"
+    );
+
+    // Also not saved under tree B (the (tree_b, digest) pair was never in pending)
+    let loaded_b = subduction
+        .get_blob(tree_b, digest)
+        .await
+        .expect("storage error");
+    assert!(
+        loaded_b.is_none(),
+        "blob should not be saved under the wrong SedimentreeId"
     );
 
     actor_task.abort();

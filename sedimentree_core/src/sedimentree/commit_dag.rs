@@ -493,11 +493,12 @@ impl Iterator for Parents<'_> {
 #[cfg(test)]
 mod tests {
     use alloc::{
+        collections::BTreeSet,
         string::{String, ToString},
         vec::Vec,
     };
 
-    use rand::{SeedableRng, rngs::SmallRng};
+    use rand::{rngs::SmallRng, SeedableRng};
 
     use super::CommitDag;
     use crate::{
@@ -561,7 +562,11 @@ mod tests {
             let mut commits = Vec::new();
             for hash in self.nodes.values() {
                 #[allow(clippy::unwrap_used)]
-                let parents = self.parents.get(hash).unwrap_or(&Vec::new()).clone();
+                let parents: BTreeSet<_> = self
+                    .parents
+                    .get(hash)
+                    .map(|p| p.iter().copied().collect())
+                    .unwrap_or_default();
                 #[allow(clippy::unwrap_used)]
                 let blob_meta = *self.commits.get(hash).unwrap();
                 commits.push(LooseCommit::new(*hash, parents, blob_meta));
@@ -742,22 +747,32 @@ mod tests {
     #[test]
     fn test_parents() {
         let mut rng = SmallRng::seed_from_u64(44);
-        let a = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
-        let b = LooseCommit::new(random_commit_hash(&mut rng), vec![], random_blob(&mut rng));
+        let a = LooseCommit::new(
+            random_commit_hash(&mut rng),
+            BTreeSet::new(),
+            random_blob(&mut rng),
+        );
+        let b = LooseCommit::new(
+            random_commit_hash(&mut rng),
+            BTreeSet::new(),
+            random_blob(&mut rng),
+        );
         let c = LooseCommit::new(
             random_commit_hash(&mut rng),
-            vec![a.digest(), b.digest()],
+            BTreeSet::from([a.digest(), b.digest()]),
             random_blob(&mut rng),
         );
         let d = LooseCommit::new(
             random_commit_hash(&mut rng),
-            vec![c.digest()],
+            BTreeSet::from([c.digest()]),
             random_blob(&mut rng),
         );
         let graph = CommitDag::from_commits(vec![&a, &b, &c, &d].into_iter());
         assert_eq!(
             graph.parents_of_hash(c.digest()).collect::<Set<_>>(),
-            vec![a.digest(), b.digest()].into_iter().collect::<Set<_>>()
+            BTreeSet::from([a.digest(), b.digest()])
+                .into_iter()
+                .collect::<Set<_>>()
         );
     }
 }

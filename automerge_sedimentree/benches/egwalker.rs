@@ -19,8 +19,8 @@
 use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 use sedimentree_core::{
     blob::BlobMeta,
     commit::{CountLeadingZeroBytes, CountTrailingZerosInBase},
@@ -103,7 +103,11 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
         let rand_byte: u8 = rng.gen_range(0..=255);
         let depth = if rand_byte == 0 {
             let rand_byte2: u8 = rng.gen_range(0..=255);
-            if rand_byte2 == 0 { 2 } else { 1 }
+            if rand_byte2 == 0 {
+                2
+            } else {
+                1
+            }
         } else {
             0
         };
@@ -194,7 +198,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..=255);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..=255);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }
@@ -204,7 +212,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..10);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..10);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }
@@ -246,7 +258,7 @@ fn generate_loose_commits(count: usize, seed: u64) -> Vec<LooseCommit> {
         .map(|_| {
             let digest = random_digest_with_depth(&mut rng, 0);
             let parent_count = rng.gen_range(0..=2);
-            let parents: Vec<_> = (0..parent_count)
+            let parents: BTreeSet<_> = (0..parent_count)
                 .map(|_| random_digest_with_depth(&mut rng, 0))
                 .collect();
             let blob_digest = Digest::from_bytes({

@@ -53,16 +53,24 @@ impl WasmMessage {
     #[wasm_bindgen(js_name = blobsRequest)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn blobs_request(digests: Vec<WasmDigest>) -> Self {
-        Message::BlobsRequest(digests.into_iter().map(Into::into).collect()).into()
+    pub fn blobs_request(id: &WasmSedimentreeId, digests: Vec<WasmDigest>) -> Self {
+        Message::BlobsRequest {
+            id: id.clone().into(),
+            digests: digests.into_iter().map(Into::into).collect(),
+        }
+        .into()
     }
 
     /// Create a [`Message::BlobsResponse`] message.
     #[wasm_bindgen(js_name = blobsResponse)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)]
-    pub fn blobs_response(blobs: Vec<Uint8Array>) -> Self {
-        Message::BlobsResponse(blobs.iter().map(|b| Blob::from(b.to_vec())).collect()).into()
+    pub fn blobs_response(id: &WasmSedimentreeId, blobs: Vec<Uint8Array>) -> Self {
+        Message::BlobsResponse {
+            id: id.clone().into(),
+            blobs: blobs.iter().map(|b| Blob::from(b.to_vec())).collect(),
+        }
+        .into()
     }
 
     /// Create a [`Message::BatchSyncRequest`] message.
@@ -104,8 +112,8 @@ impl WasmMessage {
                 commit.decode_payload().ok().map(WasmLooseCommit::from)
             }
             Message::Fragment { .. }
-            | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
+            | Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
             | Message::RemoveSubscriptions(_) => None,
@@ -123,8 +131,8 @@ impl WasmMessage {
                 fragment.decode_payload().ok().map(WasmFragment::from)
             }
             Message::LooseCommit { .. }
-            | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
+            | Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
             | Message::RemoveSubscriptions(_) => None,
@@ -139,8 +147,8 @@ impl WasmMessage {
             Message::LooseCommit { blob, .. } | Message::Fragment { blob, .. } => {
                 Some(Uint8Array::from(blob.as_slice()))
             }
-            Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
+            Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
             | Message::RemoveSubscriptions(_) => None,
@@ -152,12 +160,12 @@ impl WasmMessage {
     #[must_use]
     pub fn digests(&self) -> Option<Vec<WasmDigest>> {
         match &self.0 {
-            Message::BlobsRequest(digests) => {
+            Message::BlobsRequest { digests, .. } => {
                 Some(digests.iter().copied().map(WasmDigest::from).collect())
             }
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
-            | Message::BlobsResponse(_)
+            | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
             | Message::RemoveSubscriptions(_) => None,
@@ -169,7 +177,7 @@ impl WasmMessage {
     #[must_use]
     pub fn blobs(&self) -> Option<Vec<Uint8Array>> {
         match &self.0 {
-            Message::BlobsResponse(blobs) => Some(
+            Message::BlobsResponse { blobs, .. } => Some(
                 blobs
                     .iter()
                     .map(|b| Uint8Array::from(b.as_slice()))
@@ -177,7 +185,7 @@ impl WasmMessage {
             ),
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
-            | Message::BlobsRequest(_)
+            | Message::BlobsRequest { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
             | Message::RemoveSubscriptions(_) => None,
@@ -192,8 +200,8 @@ impl WasmMessage {
             Message::BatchSyncRequest(req) => Some(req.clone().into()),
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
-            | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
+            | Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
             | Message::BatchSyncResponse(_)
             | Message::RemoveSubscriptions(_) => None,
         }
@@ -207,8 +215,8 @@ impl WasmMessage {
             Message::BatchSyncResponse(resp) => Some(resp.clone().into()),
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
-            | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
+            | Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::RemoveSubscriptions(_) => None,
         }

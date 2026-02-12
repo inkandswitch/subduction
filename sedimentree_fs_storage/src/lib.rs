@@ -149,9 +149,10 @@ impl FsStorage {
             .join(format!("{}.cbor", hex::encode(digest.as_bytes())))
     }
 
-    fn blob_path(&self, digest: Digest<Blob>) -> PathBuf {
-        let hex = hex::encode(digest.as_bytes());
-        self.root.join("blobs").join(hex)
+    fn blob_path(&self, sedimentree_id: SedimentreeId, digest: Digest<Blob>) -> PathBuf {
+        let tree_hex = hex::encode(sedimentree_id.as_bytes());
+        let blob_hex = hex::encode(digest.as_bytes());
+        self.root.join("trees").join(tree_hex).join("blobs").join(blob_hex)
     }
 
     fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest<LooseCommit>> {
@@ -544,15 +545,20 @@ impl Storage<Sendable> for FsStorage {
 
     fn save_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob: Blob,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Digest<Blob>, Self::Error>> {
         Sendable::from_future(async move {
             let digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-            tracing::debug!(?digest, "FsStorage::save_blob");
+            tracing::debug!(?sedimentree_id, ?digest, "FsStorage::save_blob");
 
-            let blob_path = self.blob_path(digest);
+            let blob_path = self.blob_path(sedimentree_id, digest);
             if tokio::fs::try_exists(&blob_path).await.unwrap_or(false) {
                 return Ok(digest);
+            }
+
+            if let Some(parent) = blob_path.parent() {
+                tokio::fs::create_dir_all(parent).await?;
             }
 
             let temp_path = blob_path.with_extension("tmp");
@@ -565,11 +571,12 @@ impl Storage<Sendable> for FsStorage {
 
     fn load_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?blob_digest, "FsStorage::load_blob");
-            let blob_path = self.blob_path(blob_digest);
+            tracing::debug!(?sedimentree_id, ?blob_digest, "FsStorage::load_blob");
+            let blob_path = self.blob_path(sedimentree_id, blob_digest);
             match tokio::fs::read(&blob_path).await {
                 Ok(data) => Ok(Some(Blob::new(data))),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -580,20 +587,19 @@ impl Storage<Sendable> for FsStorage {
 
     fn load_blobs(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digests: &[Digest<Blob>],
     ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
         let blob_digests = blob_digests.to_vec();
         Sendable::from_future(async move {
-            tracing::debug!(count = blob_digests.len(), "FsStorage::load_blobs");
+            tracing::debug!(?sedimentree_id, count = blob_digests.len(), "FsStorage::load_blobs");
 
             let mut results = Vec::with_capacity(blob_digests.len());
             for digest in blob_digests {
-                let blob_path = self.blob_path(digest);
+                let blob_path = self.blob_path(sedimentree_id, digest);
                 match tokio::fs::read(&blob_path).await {
                     Ok(data) => results.push((digest, Blob::new(data))),
-                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-                        // Skip missing blobs
-                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
                     Err(e) => return Err(e.into()),
                 }
             }
@@ -603,12 +609,13 @@ impl Storage<Sendable> for FsStorage {
 
     fn delete_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            tracing::debug!(?blob_digest, "FsStorage::delete_blob");
+            tracing::debug!(?sedimentree_id, ?blob_digest, "FsStorage::delete_blob");
 
-            let blob_path = self.blob_path(blob_digest);
+            let blob_path = self.blob_path(sedimentree_id, blob_digest);
             if let Err(e) = tokio::fs::remove_file(&blob_path).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
@@ -629,7 +636,7 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Digest<Blob>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::save_commit_with_blob");
-            let blob_digest = Storage::<Sendable>::save_blob(self, blob).await?;
+            let blob_digest = Storage::<Sendable>::save_blob(self, sedimentree_id, blob).await?;
             Storage::<Sendable>::save_loose_commit(self, sedimentree_id, commit).await?;
             Ok(blob_digest)
         })
@@ -643,7 +650,7 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Digest<Blob>, Self::Error>> {
         Sendable::from_future(async move {
             tracing::debug!(?sedimentree_id, "FsStorage::save_fragment_with_blob");
-            let blob_digest = Storage::<Sendable>::save_blob(self, blob).await?;
+            let blob_digest = Storage::<Sendable>::save_blob(self, sedimentree_id, blob).await?;
             Storage::<Sendable>::save_fragment(self, sedimentree_id, fragment).await?;
             Ok(blob_digest)
         })
@@ -669,14 +676,14 @@ impl Storage<Sendable> for FsStorage {
             let mut fragment_digests = Vec::with_capacity(fragments.len());
 
             for (commit, blob) in commits {
-                Storage::<Sendable>::save_blob(self, blob).await?;
+                Storage::<Sendable>::save_blob(self, sedimentree_id, blob).await?;
                 let digest =
                     Storage::<Sendable>::save_loose_commit(self, sedimentree_id, commit).await?;
                 commit_digests.push(digest);
             }
 
             for (fragment, blob) in fragments {
-                Storage::<Sendable>::save_blob(self, blob).await?;
+                Storage::<Sendable>::save_blob(self, sedimentree_id, blob).await?;
                 let digest =
                     Storage::<Sendable>::save_fragment(self, sedimentree_id, fragment).await?;
                 fragment_digests.push(digest);
@@ -859,30 +866,34 @@ impl Storage<Local> for FsStorage {
 
     fn save_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob: Blob,
     ) -> <Local as FutureForm>::Future<'_, Result<Digest<Blob>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::save_blob(self, blob))
+        Local::from_future(<Self as Storage<Sendable>>::save_blob(self, sedimentree_id, blob))
     }
 
     fn load_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::load_blob(self, blob_digest))
+        Local::from_future(<Self as Storage<Sendable>>::load_blob(self, sedimentree_id, blob_digest))
     }
 
     fn load_blobs(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digests: &[Digest<Blob>],
     ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::load_blobs(self, blob_digests))
+        Local::from_future(<Self as Storage<Sendable>>::load_blobs(self, sedimentree_id, blob_digests))
     }
 
     fn delete_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::delete_blob(self, blob_digest))
+        Local::from_future(<Self as Storage<Sendable>>::delete_blob(self, sedimentree_id, blob_digest))
     }
 
     fn save_commit_with_blob(

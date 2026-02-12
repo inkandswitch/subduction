@@ -1,5 +1,6 @@
 //! Tests for round-trip communication between Subduction peers using `WebSocket`s.
 
+use std::collections::BTreeSet;
 use std::{net::SocketAddr, sync::OnceLock, time::Duration};
 use testresult::TestResult;
 
@@ -14,7 +15,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
+    connection::{handshake::Audience, message::Message, nonce_cache::NonceCache, Connection},
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -22,7 +23,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -107,7 +108,10 @@ async fn rend_receive() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    let expected = Message::BlobsRequest(Vec::new());
+    let expected = Message::BlobsRequest {
+        id: sedimentree_core::id::SedimentreeId::new([0u8; 32]),
+        digests: Vec::new(),
+    };
     client_ws.send(&expected).await?;
 
     Ok(())
@@ -144,15 +148,15 @@ async fn batch_sync() -> TestResult {
 
     let commit_digest1: Digest<LooseCommit> =
         Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
-    let commit1 = LooseCommit::new(commit_digest1, vec![], BlobMeta::new(blob1.as_slice()));
+    let commit1 = LooseCommit::new(commit_digest1, BTreeSet::new(), BlobMeta::new(blob1.as_slice()));
 
     let commit_digest2: Digest<LooseCommit> =
         Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
-    let commit2 = LooseCommit::new(commit_digest2, vec![], BlobMeta::new(blob2.as_slice()));
+    let commit2 = LooseCommit::new(commit_digest2, BTreeSet::new(), BlobMeta::new(blob2.as_slice()));
 
     let commit_digest3: Digest<LooseCommit> =
         Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
-    let commit3 = LooseCommit::new(commit_digest3, vec![], BlobMeta::new(blob3.as_slice()));
+    let commit3 = LooseCommit::new(commit_digest3, BTreeSet::new(), BlobMeta::new(blob3.as_slice()));
 
     ///////////////////
     // SERVER SETUP //

@@ -20,7 +20,7 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 
 mod generators {
     use super::*;
@@ -55,7 +55,7 @@ mod generators {
         BlobMeta::from_digest_size(blob_digest_from_seed(seed), size)
     }
 
-    fn synthetic_commit(seed: u64, parents: Vec<Digest<LooseCommit>>) -> LooseCommit {
+    fn synthetic_commit(seed: u64, parents: BTreeSet<Digest<LooseCommit>>) -> LooseCommit {
         let digest = digest_from_seed(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
         LooseCommit::new(digest, parents, blob_meta)
@@ -83,7 +83,7 @@ mod generators {
         let mut prev_digest = None;
 
         for i in 0..count {
-            let parents = prev_digest.map(|d| vec![d]).unwrap_or_default();
+            let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
             let commit = synthetic_commit(base_seed + i as u64, parents);
             prev_digest = Some(commit.digest());
             commits.push(commit);
