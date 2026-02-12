@@ -27,7 +27,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
-serde = ["dep:serde"]
+serde = ["dep:serde", "std"]
 std = ["thiserror/std"]
 
 [dev-dependencies]

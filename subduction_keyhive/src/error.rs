@@ -4,9 +4,11 @@ use alloc::string::String;
 
 use thiserror::Error;
 
+#[cfg(feature = "std")]
 use crate::peer_id::KeyhivePeerId;
 
 /// Errors that can occur during message signing.
+#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum SigningError {
     /// Failed to serialize the message payload.
@@ -14,11 +16,12 @@ pub enum SigningError {
     Serialization(String),
 
     /// The signing operation failed.
-    #[error("signing failed: {0}")]
-    SigningFailed(String),
+    #[error("signing failed")]
+    SigningFailed(#[source] keyhive_core::crypto::signed::SigningError),
 }
 
 /// Errors that can occur during message verification.
+#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum VerificationError {
     /// Failed to deserialize the signed message.
@@ -37,25 +40,25 @@ pub enum VerificationError {
         /// The actual sender (from the signature).
         actual: KeyhivePeerId,
     },
-
 }
 
 /// Errors that can occur during protocol operations.
+#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum ProtocolError<SendErr>
 where
     SendErr: core::error::Error + 'static,
 {
     /// Failed to send a message.
-    #[error("send error: {0}")]
+    #[error("send error")]
     Send(#[source] SendErr),
 
     /// Message signing failed.
-    #[error("signing error: {0}")]
+    #[error("signing error")]
     Signing(#[from] SigningError),
 
     /// Message verification failed.
-    #[error("verification error: {0}")]
+    #[error("verification error")]
     Verification(#[from] VerificationError),
 
     /// The peer is unknown (no contact card).
@@ -71,9 +74,21 @@ where
         actual: &'static str,
     },
 
-    /// Keyhive operation failed.
-    #[error("keyhive error: {0}")]
-    Keyhive(String),
+    /// Failed to convert peer ID to identifier.
+    #[error("failed to convert peer ID")]
+    InvalidIdentifier(#[source] ed25519_dalek::SignatureError),
+
+    /// Failed to receive contact card.
+    #[error("failed to receive contact card")]
+    ReceiveContactCard(#[source] keyhive_core::principal::individual::ReceivePrekeyOpError),
+
+    /// Serialization failed.
+    #[error("serialization error: {0}")]
+    Serialization(String),
+
+    /// Deserialization failed.
+    #[error("deserialization error: {0}")]
+    Deserialization(String),
 }
 
 /// Errors that can occur during storage operations.
@@ -99,4 +114,3 @@ pub enum StorageError {
     #[error("deserialization error: {0}")]
     Deserialization(String),
 }
-

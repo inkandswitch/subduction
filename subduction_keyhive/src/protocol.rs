@@ -284,7 +284,7 @@ where
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
                 let bytes =
-                    cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+                    cbor_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
                 found_ops.push(bytes);
             }
         }
@@ -453,7 +453,7 @@ where
             keyhive
                 .try_sign(msg_bytes)
                 .await
-                .map_err(|e| SigningError::SigningFailed(e.to_string()))?
+                .map_err(SigningError::SigningFailed)?
         };
 
         let signed_bytes =
@@ -489,10 +489,10 @@ where
         let our_id = self
             .peer_id
             .to_identifier()
-            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+            .map_err(ProtocolError::InvalidIdentifier)?;
         let their_id = peer_id
             .to_identifier()
-            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+            .map_err(ProtocolError::InvalidIdentifier)?;
 
         let keyhive = self.keyhive.lock().await;
 
@@ -535,7 +535,7 @@ where
         let peer_id = self
             .peer_id
             .to_identifier()
-            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+            .map_err(ProtocolError::InvalidIdentifier)?;
 
         let keyhive = self.keyhive.lock().await;
 
@@ -550,7 +550,7 @@ where
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
                 let bytes =
-                    cbor_serialize(event).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+                    cbor_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
                 result.push(bytes);
             }
         }
@@ -570,7 +570,7 @@ where
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
             .collect::<Result<_, _>>()
-            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
 
         let pending = {
             let keyhive = self.keyhive.lock().await;
@@ -638,13 +638,13 @@ where
         cc_bytes: &[u8],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
         let contact_card: ContactCard =
-            cbor_deserialize(cc_bytes).map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+            cbor_deserialize(cc_bytes).map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
 
         let keyhive = self.keyhive.lock().await;
         keyhive
             .receive_contact_card(&contact_card)
             .await
-            .map_err(|e| ProtocolError::Keyhive(e.to_string()))?;
+            .map_err(ProtocolError::ReceiveContactCard)?;
 
         tracing::debug!("ingested contact card");
         Ok(())
