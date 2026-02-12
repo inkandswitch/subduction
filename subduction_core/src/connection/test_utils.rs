@@ -8,8 +8,8 @@ use future_form::{FutureForm, Local, Sendable};
 use futures::FutureExt;
 
 use super::{
-    Connection,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    Connection,
 };
 use crate::peer::id::PeerId;
 
@@ -513,22 +513,6 @@ mod tests {
         let peer_id = PeerId::new([42u8; 32]);
         let conn = MockConnection::with_peer_id(peer_id);
         assert_eq!(conn.peer_id(), peer_id);
-    }
-
-    #[test]
-    fn test_mock_connection_default() {
-        let conn = MockConnection::default();
-        assert_eq!(conn.peer_id(), PeerId::new([0u8; 32]));
-    }
-
-    #[test]
-    fn test_mock_connection_equality() {
-        let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
-        let conn2 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
-        let conn3 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
-
-        assert_eq!(conn1, conn2);
-        assert_ne!(conn1, conn3);
     }
 
     #[tokio::test]

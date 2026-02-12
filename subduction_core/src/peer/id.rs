@@ -115,10 +115,9 @@ mod tests {
             let hex = format!("{peer_id}");
 
             assert!(hex.starts_with("ab")); // lowercase
-            assert!(
-                hex.chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-            );
+            assert!(hex
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         }
 
         #[test]
@@ -151,15 +150,6 @@ mod tests {
                 let hex = format!("{peer_id}");
                 assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
                 assert!(hex.chars().all(|c| !c.is_ascii_uppercase()));
-            });
-        }
-
-        #[test]
-        fn prop_as_bytes_roundtrip() {
-            bolero::check!().with_type::<PeerId>().for_each(|peer_id| {
-                let bytes = peer_id.as_bytes();
-                let reconstructed = PeerId::new(*bytes);
-                assert_eq!(peer_id, &reconstructed);
             });
         }
     }

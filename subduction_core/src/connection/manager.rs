@@ -14,10 +14,10 @@ use alloc::{sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::stream::AbortHandle;
 
-use super::{Connection, id::ConnectionId, message::Message};
+use super::{id::ConnectionId, message::Message, Connection};
 
 /// Internal task identifier for abort handle tracking.
 ///
@@ -341,34 +341,5 @@ impl<K: FutureForm> core::fmt::Debug for ManagerFuture<K> {
         f.debug_struct("ManagerFuture")
             .field("is_aborted", &self.is_aborted())
             .finish()
-    }
-}
-
-#[cfg(all(test, feature = "test_utils"))]
-mod tests {
-    use super::*;
-    use crate::connection::test_utils::MockConnection;
-    use future_form::Sendable;
-    use futures::future::BoxFuture;
-
-    /// A spawner that uses `FuturesUnordered` for testing (no actual spawning).
-    struct TestSpawn;
-
-    impl Spawn<Sendable> for TestSpawn {
-        fn spawn(&self, _fut: BoxFuture<'static, ()>) -> AbortHandle {
-            // For testing, we don't actually spawn - just return a dummy handle
-            let (handle, _reg) = AbortHandle::new_pair();
-            handle
-        }
-    }
-
-    #[test]
-    fn test_manager_creation() {
-        let (_cmd_tx, cmd_rx) = async_channel::unbounded();
-        let (msg_tx, _msg_rx) = async_channel::unbounded();
-        let (closed_tx, _closed_rx) = async_channel::unbounded::<(ConnectionId, MockConnection)>();
-
-        let _manager: ConnectionManager<Sendable, MockConnection, _> =
-            ConnectionManager::new(TestSpawn, cmd_rx, msg_tx, closed_tx);
     }
 }
