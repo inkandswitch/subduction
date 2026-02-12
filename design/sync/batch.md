@@ -253,7 +253,7 @@ sequenceDiagram
 ### Initiating a Batch Sync
 
 ```rust
-let seed = random_fingerprint_seed();
+let seed = FingerprintSeed::random();
 let summary = local_sedimentree.fingerprint_summarize(&seed);
 let req_id = conn.next_request_id().await;
 
@@ -329,7 +329,7 @@ let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> =
 for fp in response.diff.requesting.commit_fingerprints {
     if let Some(digest) = commit_fp_to_digest.get(&fp) {
         if let Some(commit) = storage.load_commit(id, *digest).await? {
-            let blob = storage.load_blob(commit.blob_meta().digest()).await?;
+            let blob = storage.load_blob(id, commit.blob_meta().digest()).await?;
             conn.send(Message::LooseCommit { id, commit, blob }).await?;
         }
     }

@@ -166,7 +166,7 @@ sequenceDiagram
 ```rust
 // Store locally first
 storage.save_loose_commit(id, commit.clone()).await?;
-storage.save_blob(blob.clone()).await?;
+storage.save_blob(id, blob.clone()).await?;
 sedimentree.add_commit(commit.clone());
 
 // Forward to subscribed and authorized peers
