@@ -14,10 +14,10 @@ use alloc::{sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_lock::Mutex;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::stream::AbortHandle;
 
-use super::{id::ConnectionId, message::Message, Connection};
+use super::{Connection, id::ConnectionId, message::Message};
 
 /// Internal task identifier for abort handle tracking.
 ///
