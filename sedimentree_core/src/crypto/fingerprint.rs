@@ -281,3 +281,16 @@ impl<'a, T: 'static> arbitrary::Arbitrary<'a> for Fingerprint<T> {
         Ok(Self::from_u64(u.arbitrary()?))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    #[cfg(feature = "getrandom")]
+    fn random_produces_distinct_seeds() {
+        let a = FingerprintSeed::random();
+        let b = FingerprintSeed::random();
+        assert_ne!(a, b);
+    }
+}

@@ -69,3 +69,43 @@ impl<'a> arbitrary::Arbitrary<'a> for FragmentId {
         Ok(Self(bytes))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use alloc::collections::BTreeSet;
+
+    #[test]
+    fn same_head_and_boundary_produce_same_id() {
+        let head = Digest::from_bytes([1u8; 32]);
+        let boundary =
+            BTreeSet::from([Digest::from_bytes([2u8; 32]), Digest::from_bytes([3u8; 32])]);
+        let id1 = FragmentId::new(head, &boundary);
+        let id2 = FragmentId::new(head, &boundary);
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn different_head_produces_different_id() {
+        let boundary = BTreeSet::from([Digest::from_bytes([2u8; 32])]);
+        let id1 = FragmentId::new(Digest::from_bytes([1u8; 32]), &boundary);
+        let id2 = FragmentId::new(Digest::from_bytes([9u8; 32]), &boundary);
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn different_boundary_produces_different_id() {
+        let head = Digest::from_bytes([1u8; 32]);
+        let id1 = FragmentId::new(head, &BTreeSet::from([Digest::from_bytes([2u8; 32])]));
+        let id2 = FragmentId::new(head, &BTreeSet::from([Digest::from_bytes([3u8; 32])]));
+        assert_ne!(id1, id2);
+    }
+
+    #[test]
+    fn empty_boundary_is_valid() {
+        let head = Digest::from_bytes([1u8; 32]);
+        let id1 = FragmentId::new(head, &BTreeSet::new());
+        let id2 = FragmentId::new(head, &BTreeSet::new());
+        assert_eq!(id1, id2);
+    }
+}
