@@ -1,6 +1,6 @@
 //! Tests for policy rejection behavior.
 
-use super::common::{test_signer, TestSpawn, TokioSpawn};
+use super::common::{TestSpawn, TokioSpawn, test_signer};
 use crate::{
     connection::{
         message::Message,
@@ -16,7 +16,7 @@ use crate::{
 use alloc::{collections::BTreeSet, vec::Vec};
 use core::{fmt, time::Duration};
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,

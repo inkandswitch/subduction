@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-use super::common::{new_test_subduction, test_signer, TestSpawn};
+use super::common::{TestSpawn, new_test_subduction, test_signer};
 use crate::{
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     peer::id::PeerId,
@@ -14,7 +14,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::fmt;
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
 use testresult::TestResult;
 
