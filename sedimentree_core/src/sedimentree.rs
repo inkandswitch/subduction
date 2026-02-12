@@ -333,7 +333,7 @@ impl Sedimentree {
         let mut fragments = self.fragments.iter().collect::<Vec<_>>();
         fragments.sort_by_key(|a| a.depth(depth_metric));
 
-        let mut minimized_fragments = Vec::<Fragment>::new();
+        let mut minimized_fragments = Vec::<IndexedFragment>::new();
 
         for fragment in fragments {
             if !minimized_fragments
@@ -355,7 +355,7 @@ impl Sedimentree {
             .cloned()
             .collect();
 
-        Sedimentree::new(minimized_fragments, commits)
+        Sedimentree::from_indexed(minimized_fragments, commits)
     }
 
     /// Create a [`FingerprintSummary`] from this [`Sedimentree`].
@@ -1047,16 +1047,16 @@ mod tests {
                     let mut b_updated = b.clone();
 
                     // Add what a is missing (from b)
-                    for fragment in diff.left_missing_fragments {
-                        a_updated.add_fragment(fragment.clone());
+                    for indexed in diff.left_missing_fragments {
+                        a_updated.add_fragment(indexed.fragment().clone());
                     }
                     for commit in diff.left_missing_commits {
                         a_updated.add_commit(commit.clone());
                     }
 
                     // Add what b is missing (from a)
-                    for fragment in diff.right_missing_fragments {
-                        b_updated.add_fragment(fragment.clone());
+                    for indexed in diff.right_missing_fragments {
+                        b_updated.add_fragment(indexed.fragment().clone());
                     }
                     for commit in diff.right_missing_commits {
                         b_updated.add_commit(commit.clone());

@@ -13,7 +13,7 @@ use crate::{
     collections::{Map, Set},
     crypto::digest::Digest,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::Fragment,
+    fragment::{Fragment, IndexedFragment},
     loose_commit::LooseCommit,
 };
 
@@ -146,7 +146,11 @@ impl CommitDag {
         }
     }
 
-    pub(crate) fn simplify<S: DepthMetric>(&self, fragments: &[Fragment], strategy: &S) -> Self {
+    pub(crate) fn simplify<S: DepthMetric>(
+        &self,
+        fragments: &[IndexedFragment],
+        strategy: &S,
+    ) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -354,7 +358,8 @@ impl CommitDag {
     /// be bundled into strata
     pub(crate) fn canonical_sequence<
         'a,
-        I: Iterator<Item = &'a Fragment> + Clone + 'a,
+        F: core::ops::Deref<Target = Fragment> + 'a,
+        I: Iterator<Item = &'a F> + Clone + 'a,
         M: DepthMetric,
     >(
         &'a self,
@@ -498,7 +503,7 @@ mod tests {
         vec::Vec,
     };
 
-    use rand::{SeedableRng, rngs::SmallRng};
+    use rand::{rngs::SmallRng, SeedableRng};
 
     use super::CommitDag;
     use crate::{
