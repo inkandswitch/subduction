@@ -7,14 +7,14 @@
 //!
 //! ```text
 //! root/
-//! ├── trees/
-//! │   └── {sedimentree_id_hex}/
-//! │       ├── commits/
-//! │       │   └── {digest_hex}.cbor  ← Signed<LooseCommit>
-//! │       └── fragments/
-//! │           └── {digest_hex}.cbor  ← Signed<Fragment>
-//! └── blobs/
-//!     └── {digest_hex}               ← raw bytes
+//! └── trees/
+//!     └── {sedimentree_id_hex}/
+//!         ├── blobs/
+//!         │   └── {digest_hex}           ← raw bytes
+//!         ├── commits/
+//!         │   └── {digest_hex}.cbor      ← Signed<LooseCommit>
+//!         └── fragments/
+//!             └── {digest_hex}.cbor      ← Signed<Fragment>
 //! ```
 //!
 //! # Example
@@ -69,14 +69,14 @@ pub enum FsStorageError {
 /// Uses a CAS layout:
 /// ```text
 /// root/
-/// ├── trees/
-/// │   └── {sedimentree_id_hex}/
-/// │       ├── commits/
-/// │       │   └── {digest_hex}.cbor  ← Signed<LooseCommit>
-/// │       └── fragments/
-/// │           └── {digest_hex}.cbor  ← Signed<Fragment>
-/// └── blobs/
-///     └── {digest_hex}               ← raw bytes
+/// └── trees/
+///     └── {sedimentree_id_hex}/
+///         ├── blobs/
+///         │   └── {digest_hex}           ← raw bytes
+///         ├── commits/
+///         │   └── {digest_hex}.cbor      ← Signed<LooseCommit>
+///         └── fragments/
+///             └── {digest_hex}.cbor      ← Signed<Fragment>
 /// ```
 #[derive(Debug, Clone)]
 pub struct FsStorage {
