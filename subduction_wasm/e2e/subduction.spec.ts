@@ -398,13 +398,12 @@ test.describe("Subduction", () => {
       const result = await page.evaluate(async () => {
         const { Message, SedimentreeId, Digest } = window.subduction;
 
+        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const digestBytes = new Uint8Array(32);
         digestBytes[0] = 42;
         const digest = new Digest(digestBytes);
-        const original = Message.blobsRequest([digest]);
-
+        const original = Message.blobsRequest(sedimentreeId, [digest]);
         const cborBytes = original.toCborBytes();
-
         const restored = Message.fromCborBytes(cborBytes);
 
         return {
