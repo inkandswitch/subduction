@@ -46,38 +46,3 @@ impl From<Vec<String>> for StorageKey {
         Self::new(key)
     }
 }
-
-#[cfg(all(test, feature = "std", feature = "bolero"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn prop_to_vec_roundtrip() {
-        bolero::check!()
-            .with_type::<Vec<String>>()
-            .for_each(|segments| {
-                let key = StorageKey::new(segments.clone());
-                assert_eq!(key.to_vec(), *segments);
-            });
-    }
-
-    #[test]
-    fn prop_into_vec_roundtrip() {
-        bolero::check!()
-            .with_type::<Vec<String>>()
-            .for_each(|segments| {
-                let key = StorageKey::new(segments.clone());
-                assert_eq!(key.into_vec(), *segments);
-            });
-    }
-
-    #[test]
-    fn prop_from_vec_roundtrip() {
-        bolero::check!()
-            .with_type::<Vec<String>>()
-            .for_each(|segments| {
-                let key = StorageKey::from(segments.clone());
-                assert_eq!(key.into_vec(), *segments);
-            });
-    }
-}

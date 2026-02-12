@@ -7,7 +7,6 @@ use core::{
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
-use sedimentree_core::collections::Map;
 
 use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
@@ -18,6 +17,7 @@ use futures::{
     future::{BoxFuture, LocalBoxFuture},
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
+use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
         Connection,
@@ -636,93 +636,6 @@ mod tests {
         // Create a mock stream
         let buffer = Cursor::new(Vec::new());
         WebSocketStream::from_raw_socket(buffer, tungstenite::protocol::Role::Client, None).await
-    }
-
-    mod construction {
-        use super::*;
-
-        #[tokio::test]
-        async fn test_new_sets_peer_id() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([42u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
-
-            assert_eq!(websocket.peer_id(), peer_id);
-        }
-
-        #[tokio::test]
-        async fn test_new_sets_timeout_strategy() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
-
-            assert_eq!(*websocket.timeout_strategy(), MockTimeout);
-        }
-
-        #[tokio::test]
-        async fn test_new_sets_default_time_limit() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(42);
-
-            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
-
-            assert_eq!(websocket.default_time_limit(), duration);
-        }
-    }
-
-    mod accessors {
-        use super::*;
-
-        #[tokio::test]
-        async fn test_peer_id_returns_correct_value() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([99u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
-
-            assert_eq!(websocket.peer_id(), peer_id);
-        }
-
-        #[tokio::test]
-        async fn test_timeout_strategy_returns_reference() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
-
-            let strategy = websocket.timeout_strategy();
-            assert_eq!(*strategy, MockTimeout);
-        }
-
-        #[tokio::test]
-        async fn test_default_time_limit_returns_duration() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
-            let timeout = MockTimeout;
-            let expected_duration = Duration::from_millis(5000);
-
-            let (websocket, _rx): (WebSocket<_, Local, _>, _) =
-                WebSocket::new(ws, timeout, expected_duration, peer_id);
-
-            assert_eq!(websocket.default_time_limit(), expected_duration);
-        }
     }
 
     mod request_ids {

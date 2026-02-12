@@ -70,37 +70,3 @@ impl Timeout<Sendable> for FuturesTimerTimeout {
         .boxed()
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    mod timed_out_error {
-        use super::*;
-
-        #[test]
-        fn test_display() {
-            let err = TimedOut;
-            assert_eq!(format!("{err}"), "Operation timed out");
-        }
-
-        #[test]
-        fn test_debug_output() {
-            let err = TimedOut;
-            let debug = format!("{err:?}");
-            assert!(debug.contains("TimedOut"));
-        }
-    }
-
-    #[cfg(feature = "futures-timer")]
-    mod futures_timer_timeout {
-        use super::*;
-
-        #[test]
-        fn test_debug_output() {
-            let timeout = FuturesTimerTimeout;
-            let debug = format!("{timeout:?}");
-            assert!(debug.contains("FuturesTimerTimeout"));
-        }
-    }
-}

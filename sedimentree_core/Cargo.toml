@@ -44,7 +44,7 @@ harness = false
 [features]
 default = []
 arbitrary = ["dep:arbitrary"]
-bolero = ["dep:bolero"]
+bolero = ["dep:bolero", "arbitrary", "std"]
 getrandom = ["dep:getrandom"]
 serde = ["dep:serde"]
 std = [

@@ -53,7 +53,6 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
     /// # Panics
     ///
     /// Panics if the system random number generator fails.
-    #[cfg(feature = "getrandom")]
     #[must_use]
     pub fn new() -> Self {
         let mut key_bytes = [0u8; 16];
@@ -315,7 +314,6 @@ impl<K: Hash + Ord, V, const N: usize> ShardedMap<K, V, N> {
     }
 }
 
-#[cfg(feature = "getrandom")]
 impl<K: Hash + Ord, V, const N: usize> Default for ShardedMap<K, V, N> {
     fn default() -> Self {
         Self::new()

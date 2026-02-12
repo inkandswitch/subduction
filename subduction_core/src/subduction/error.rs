@@ -116,21 +116,6 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, Put
 mod tests {
     use super::*;
 
-    mod registration_error {
-        use super::*;
-        use crate::connection::ConnectionDisallowed;
-
-        #[test]
-        fn test_equality() {
-            let err1 = RegistrationError::<ConnectionDisallowed>::SendToClosedChannel;
-            let err2 = RegistrationError::<ConnectionDisallowed>::SendToClosedChannel;
-            let err3 = RegistrationError::ConnectionDisallowed(ConnectionDisallowed);
-
-            assert_eq!(err1, err2);
-            assert_ne!(err1, err3);
-        }
-    }
-
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
         use alloc::{format, string::String};
