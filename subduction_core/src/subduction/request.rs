@@ -1,6 +1,6 @@
 //! Messages handed back to the caller.
 
-use sedimentree_core::{depth::Depth, digest::Digest, loose_commit::LooseCommit};
+use sedimentree_core::{crypto::digest::Digest, depth::Depth, loose_commit::LooseCommit};
 
 /// A request for a fragment at a certain depth, starting from a given head.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

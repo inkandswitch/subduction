@@ -2,7 +2,7 @@
 
 use alloc::boxed::Box;
 
-use crate::{digest::Digest, loose_commit::LooseCommit};
+use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 
 /// The maximum depth of strata that a [`Sedimentree`] can go to.
 pub const MAX_STRATA_DEPTH: Depth = Depth(2);

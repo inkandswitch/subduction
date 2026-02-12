@@ -10,7 +10,7 @@ use core::marker::PhantomData;
 use alloc::sync::Arc;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Blob, digest::Digest, id::SedimentreeId};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 
 use super::traits::Storage;
 

@@ -11,8 +11,8 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
+    crypto::digest::Digest,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    digest::Digest,
     fragment::Fragment,
     loose_commit::LooseCommit,
 };
@@ -504,7 +504,7 @@ mod tests {
         blob::BlobMeta,
         collections::{Map, Set},
         commit::CountLeadingZeroBytes,
-        digest::Digest,
+        crypto::digest::Digest,
         loose_commit::LooseCommit,
     };
 
@@ -628,11 +628,13 @@ mod tests {
             fragments => [$({start: $fragment_start: ident, end: $fragment_end: ident, checkpoints: [$($checkpoint: ident),*]})*],
             simplified => [$($remaining: ident),*]
         ) => {
+            #[allow(unused_imports)]
+            use alloc::collections::BTreeSet;
             let node_info = vec![$((stringify!($node), $level)),*];
             let graph = TestGraph::new($rng, node_info, vec![$((stringify!($from), stringify!($to)),)*]);
             let fragments = vec![$(Fragment::new(
                 graph.node_hash(stringify!($fragment_start)),
-                vec![graph.node_hash(stringify!($fragment_end))],
+                BTreeSet::from([graph.node_hash(stringify!($fragment_end))]),
                 vec![$(graph.node_hash(stringify!($checkpoint)),)*],
                 random_blob($rng),
             ),)*];

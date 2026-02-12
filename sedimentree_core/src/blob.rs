@@ -4,7 +4,7 @@ use core::cmp::min;
 
 use alloc::vec::Vec;
 
-use crate::digest::Digest;
+use crate::crypto::digest::Digest;
 
 /// A binary object.
 ///

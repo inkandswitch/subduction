@@ -27,14 +27,16 @@ use criterion::{criterion_group, criterion_main};
 mod generators {
     use future_form::Sendable;
     use futures::executor::block_on;
+    use std::collections::BTreeSet;
+
     use rand::{Rng, SeedableRng, rngs::StdRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
-        digest::Digest,
+        crypto::{digest::Digest, fingerprint::FingerprintSeed},
         fragment::Fragment,
         id::SedimentreeId,
         loose_commit::LooseCommit,
-        sedimentree::SedimentreeSummary,
+        sedimentree::FingerprintSummary,
     };
     use subduction_core::{
         connection::message::{
@@ -102,7 +104,7 @@ mod generators {
         num_members: usize,
     ) -> Fragment {
         let digest = digest_from_seed(seed);
-        let parents: Vec<Digest<LooseCommit>> = (0..num_parents)
+        let parents: BTreeSet<Digest<LooseCommit>> = (0..num_parents)
             .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
             .collect();
         let members: Vec<Digest<LooseCommit>> = (0..num_members)
@@ -180,8 +182,8 @@ mod generators {
             missing_commits,
             missing_fragments,
             requesting: RequestedData {
-                commit_digests: Vec::new(),
-                fragment_summaries: Vec::new(),
+                commit_fingerprints: Vec::new(),
+                fragment_fingerprints: Vec::new(),
             },
         }
     }
@@ -191,7 +193,11 @@ mod generators {
         BatchSyncRequest {
             id: sedimentree_id_from_seed(seed),
             req_id: request_id_from_seed(seed.wrapping_add(1), seed),
-            sedimentree_summary: SedimentreeSummary::default(),
+            fingerprint_summary: FingerprintSummary::new(
+                FingerprintSeed::new(seed, seed.wrapping_add(1)),
+                BTreeSet::new(),
+                BTreeSet::new(),
+            ),
             subscribe: false,
         }
     }
@@ -482,8 +488,10 @@ mod message {
 }
 
 mod sync {
+    use std::collections::BTreeSet;
+
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
-    use sedimentree_core::sedimentree::SedimentreeSummary;
+    use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{BatchSyncRequest, BatchSyncResponse, Message};
 
     use super::generators::{
@@ -562,11 +570,15 @@ mod sync {
         group.bench_function("request_new", |b| {
             let id = sedimentree_id_from_seed(1);
             let req_id = request_id_from_seed(1, 42);
-            let summary = SedimentreeSummary::default();
+            let fp_summary = FingerprintSummary::new(
+                FingerprintSeed::new(1, 2),
+                BTreeSet::new(),
+                BTreeSet::new(),
+            );
             b.iter(|| BatchSyncRequest {
                 id: black_box(id),
                 req_id: black_box(req_id),
-                sedimentree_summary: black_box(summary.clone()),
+                fingerprint_summary: black_box(fp_summary.clone()),
                 subscribe: false,
             });
         });

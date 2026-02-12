@@ -1,8 +1,11 @@
 //! Loose commit metadata for Sedimentree.
 
-use alloc::vec::Vec;
+pub mod id;
 
-use crate::{blob::BlobMeta, digest::Digest};
+use alloc::vec::Vec;
+use id::CommitId;
+
+use crate::{blob::BlobMeta, crypto::digest::Digest};
 
 /// The smallest unit of metadata in a Sedimentree.
 ///
@@ -24,6 +27,12 @@ pub struct LooseCommit {
 }
 
 impl LooseCommit {
+    /// Extract the causal identity of this commit.
+    #[must_use]
+    pub const fn commit_id(&self) -> CommitId {
+        CommitId::new(self.digest)
+    }
+
     /// Constructor for a [`LooseCommit`].
     #[must_use]
     pub const fn new(

@@ -15,7 +15,7 @@ use sedimentree_core::collections::Set;
 use automerge::{AutoCommit, Automerge, ChangeHash, ChangeMetadata};
 use sedimentree_core::{
     commit::{CommitStore, Parents},
-    digest::Digest,
+    crypto::digest::Digest,
     loose_commit::LooseCommit,
 };
 

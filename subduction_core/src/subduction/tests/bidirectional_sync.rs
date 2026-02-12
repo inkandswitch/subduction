@@ -1,11 +1,11 @@
 //! Tests for bidirectional sync (1.5 RT protocol).
 //!
 //! The bidirectional sync protocol works as follows:
-//! 1. Requestor sends `BatchSyncRequest` with their sedimentree summary
+//! 1. Requestor sends `BatchSyncRequest` with their fingerprint summary
 //! 2. Responder calculates what requestor is missing AND what responder is missing
 //! 3. Responder sends `BatchSyncResponse` with:
 //!    - `missing_commits`/`missing_fragments`: data requestor needs
-//!    - `requesting`: data responder wants back from requestor
+//!    - `requesting`: fingerprints of data responder wants back from requestor
 //! 4. Requestor receives response and sends requested data (fire-and-forget)
 //!
 //! This completes sync in 1.5 round trips instead of requiring a second
@@ -27,19 +27,26 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::Subduction,
 };
+use alloc::collections::BTreeSet;
 use core::time::Duration;
 use future_form::Sendable;
+
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    collections::Set,
     commit::CountLeadingZeroBytes,
-    digest::Digest,
-    fragment::{Fragment, FragmentSummary},
+    crypto::{
+        digest::Digest,
+        fingerprint::{Fingerprint, FingerprintSeed},
+    },
+    fragment::{Fragment, FragmentSummary, id::FragmentId},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
-    sedimentree::SedimentreeSummary,
+    loose_commit::{LooseCommit, id::CommitId},
+    sedimentree::FingerprintSummary,
 };
 use testresult::TestResult;
+
+/// A deterministic seed for tests (not security-sensitive).
+const TEST_SEED: FingerprintSeed = FingerprintSeed::new(12345, 67890);
 
 async fn make_test_commit(data: &[u8]) -> (Signed<LooseCommit>, Blob, LooseCommit) {
     let blob = Blob::new(data.to_vec());
@@ -55,14 +62,14 @@ async fn make_test_fragment(data: &[u8]) -> (Signed<Fragment>, Blob, FragmentSum
     let blob_meta = BlobMeta::new(data);
     // Fragment head is a LooseCommit digest (the starting point of the fragment)
     let head = Digest::<LooseCommit>::hash_bytes(data);
-    let fragment = Fragment::new(head, vec![], vec![], blob_meta);
+    let fragment = Fragment::new(head, BTreeSet::new(), vec![], blob_meta);
     let summary = fragment.summary().clone();
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob, summary)
 }
 
 /// Test that when responder has commits the requestor doesn't know about,
-/// the response includes them in `requesting`.
+/// the response includes them in `missing_commits` (and `requesting` is empty).
 #[tokio::test]
 async fn test_responder_requests_missing_commits() -> TestResult {
     // Set up responder (Alice) - has commit A
@@ -118,7 +125,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
             requestor: peer_id,
             nonce: 1,
         },
-        sedimentree_summary: SedimentreeSummary::default(), // Bob has nothing
+        fingerprint_summary: FingerprintSummary::new(TEST_SEED, BTreeSet::new(), BTreeSet::new()),
         subscribe: false,
     };
 
@@ -157,7 +164,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
 }
 
 /// Test that when requestor has commits the responder doesn't have,
-/// the responder's `requesting` field asks for them.
+/// the responder's `requesting` field asks for them (via fingerprints).
 #[tokio::test]
 async fn test_responder_requests_commits_from_requestor() -> TestResult {
     // Set up responder (Alice) - starts empty
@@ -186,22 +193,21 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
 
     // Create a commit that Bob has but Alice doesn't
     let (_commit_b, _blob_b, raw_commit_b) = make_test_commit(b"commit B - bob has this").await;
-    let digest_b = raw_commit_b.digest();
+    let commit_b_id = raw_commit_b.commit_id();
+    let commit_b_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_b_id);
 
-    // Bob sends a BatchSyncRequest claiming to have commit B
-    // SedimentreeSummary stores full LooseCommit objects
-    let bob_summary = SedimentreeSummary::new(
-        Set::new(), // no fragments
-        core::iter::once(raw_commit_b).collect(),
-    );
-
+    // Bob sends a BatchSyncRequest claiming to have commit B (as a fingerprint)
     let request = BatchSyncRequest {
         id: sedimentree_id,
         req_id: RequestId {
             requestor: peer_id,
             nonce: 1,
         },
-        sedimentree_summary: bob_summary,
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([commit_b_fp]),
+            BTreeSet::new(),
+        ),
         subscribe: false,
     };
 
@@ -213,7 +219,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
 
     // Alice should respond with:
     // - missing_commits: empty (Bob already has everything Alice has, which is nothing)
-    // - requesting: should include digest_b (Alice wants what Bob has)
+    // - requesting: should include commit_b_fp (Alice wants what Bob has)
     let response = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
         .await?
         .expect("should receive response");
@@ -227,9 +233,9 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
         "Alice has nothing to send to Bob"
     );
     assert!(
-        diff.requesting.commit_digests.contains(&digest_b),
+        diff.requesting.commit_fingerprints.contains(&commit_b_fp),
         "Alice should request commit B from Bob. Got: {:?}",
-        diff.requesting.commit_digests
+        diff.requesting.commit_fingerprints
     );
 
     alice_actor_task.abort();
@@ -252,7 +258,8 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Create commits
     let (commit_a, blob_a, _raw_commit_a) = make_test_commit(b"commit A - alice").await;
     let (commit_b, blob_b, raw_commit_b) = make_test_commit(b"commit B - bob").await;
-    let digest_b = raw_commit_b.digest();
+    let commit_b_id = raw_commit_b.commit_id();
+    let commit_b_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_b_id);
 
     // Set up Alice with commit A
     let alice_storage = MemoryStorage::new();
@@ -334,18 +341,17 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 
     // Now simulate the sync:
     // Bob sends BatchSyncRequest to Alice (via Alice's inbound channel)
-    let bob_summary = SedimentreeSummary::new(
-        Set::new(), // no fragments
-        core::iter::once(raw_commit_b).collect(),
-    );
-
     let request = BatchSyncRequest {
         id: sedimentree_id,
         req_id: RequestId {
             requestor: bob_peer_id,
             nonce: 1,
         },
-        sedimentree_summary: bob_summary,
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([commit_b_fp]),
+            BTreeSet::new(),
+        ),
         subscribe: false,
     };
 
@@ -357,7 +363,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 
     // Alice should send BatchSyncResponse with:
     // - missing_commits: [commit_a] (what Bob needs)
-    // - requesting: [digest_b] (what Alice wants from Bob)
+    // - requesting: [commit_b_fp] (what Alice wants from Bob, echoed as fingerprint)
     let response =
         tokio::time::timeout(Duration::from_millis(100), alice_handle.outbound_rx.recv())
             .await?
@@ -373,7 +379,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
         "Alice should send commit A to Bob"
     );
     assert!(
-        diff.requesting.commit_digests.contains(&digest_b),
+        diff.requesting.commit_fingerprints.contains(&commit_b_fp),
         "Alice should request commit B"
     );
 
@@ -412,7 +418,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     Ok(())
 }
 
-/// Test that requesting field includes fragment summaries.
+/// Test that requesting field includes fragment fingerprints.
 #[tokio::test]
 async fn test_responder_requests_fragments() -> TestResult {
     let alice_storage = MemoryStorage::new();
@@ -440,20 +446,21 @@ async fn test_responder_requests_fragments() -> TestResult {
 
     // Create a fragment that Bob has but Alice doesn't
     let (_fragment, _blob, fragment_summary) = make_test_fragment(b"fragment - bob has this").await;
+    let frag_id = FragmentId::new(fragment_summary.head(), fragment_summary.boundary());
+    let frag_fp: Fingerprint<FragmentId> = Fingerprint::new(&TEST_SEED, &frag_id);
 
-    // Bob sends a BatchSyncRequest claiming to have this fragment
-    let bob_summary = SedimentreeSummary::new(
-        core::iter::once(fragment_summary.clone()).collect(),
-        Set::new(), // no commits
-    );
-
+    // Bob sends a BatchSyncRequest claiming to have this fragment (as a fingerprint)
     let request = BatchSyncRequest {
         id: sedimentree_id,
         req_id: RequestId {
             requestor: peer_id,
             nonce: 1,
         },
-        sedimentree_summary: bob_summary,
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::new(),
+            BTreeSet::from([frag_fp]),
+        ),
         subscribe: false,
     };
 
@@ -472,11 +479,9 @@ async fn test_responder_requests_fragments() -> TestResult {
     };
 
     assert!(
-        diff.requesting
-            .fragment_summaries
-            .contains(&fragment_summary),
+        diff.requesting.fragment_fingerprints.contains(&frag_fp),
         "Alice should request the fragment from Bob. Got: {:?}",
-        diff.requesting.fragment_summaries
+        diff.requesting.fragment_fingerprints
     );
 
     alice_actor_task.abort();
@@ -524,11 +529,9 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Bob sends a request claiming to have the same commit
-    let bob_summary = SedimentreeSummary::new(
-        Set::new(), // no fragments
-        core::iter::once(raw_commit).collect(),
-    );
+    // Bob sends a request claiming to have the same commit (as a fingerprint)
+    let commit_id = raw_commit.commit_id();
+    let commit_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_id);
 
     let request = BatchSyncRequest {
         id: sedimentree_id,
@@ -536,7 +539,11 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
             requestor: peer_id,
             nonce: 1,
         },
-        sedimentree_summary: bob_summary,
+        fingerprint_summary: FingerprintSummary::new(
+            TEST_SEED,
+            BTreeSet::from([commit_fp]),
+            BTreeSet::new(),
+        ),
         subscribe: false,
     };
 

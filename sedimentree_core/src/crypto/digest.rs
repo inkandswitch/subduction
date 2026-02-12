@@ -51,10 +51,16 @@ impl<T> Digest<T> {
         }
     }
 
-    /// Get the raw bytes of the digest.
+    /// Get the raw bytes of the digest by reference.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
         &self.bytes
+    }
+
+    /// Consume the digest and return the raw bytes.
+    #[must_use]
+    pub const fn into_bytes(self) -> [u8; 32] {
+        self.bytes
     }
 
     /// Hash raw bytes and create a digest.

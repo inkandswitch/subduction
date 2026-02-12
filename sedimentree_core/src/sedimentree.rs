@@ -2,15 +2,18 @@
 
 mod commit_dag;
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
+    crypto::{
+        digest::Digest,
+        fingerprint::{Fingerprint, FingerprintSeed},
+    },
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    digest::Digest,
-    fragment::{Fragment, FragmentSpec, FragmentSummary},
+    fragment::{Fragment, FragmentSpec, FragmentSummary, id::FragmentId},
     id::SedimentreeId,
-    loose_commit::LooseCommit,
+    loose_commit::{LooseCommit, id::CommitId},
 };
 
 /// A less detailed representation of a Sedimentree that omits strata checkpoints.
@@ -62,6 +65,85 @@ impl SedimentreeSummary {
             local_commits: Vec::new(),
         }
     }
+}
+
+/// A compact summary of a [`Sedimentree`] for wire transmission.
+///
+/// Uses SipHash-2-4 fingerprints instead of full structural data.
+/// Each side computes fingerprints with the shared [`FingerprintSeed`]
+/// and performs set difference on u64 values.
+///
+/// Bandwidth: ~16 bytes (seed) + 8 bytes per item, vs ~100+ bytes
+/// per item with [`SedimentreeSummary`].
+#[derive(Clone, Debug, Hash, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct FingerprintSummary {
+    #[n(0)]
+    seed: FingerprintSeed,
+
+    #[n(1)]
+    commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
+
+    #[n(2)]
+    fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
+}
+
+impl FingerprintSummary {
+    /// Constructor for a [`FingerprintSummary`].
+    #[must_use]
+    pub const fn new(
+        seed: FingerprintSeed,
+        commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
+        fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
+    ) -> Self {
+        Self {
+            seed,
+            commit_fingerprints,
+            fragment_fingerprints,
+        }
+    }
+
+    /// The seed used to compute the fingerprints.
+    #[must_use]
+    pub const fn seed(&self) -> &FingerprintSeed {
+        &self.seed
+    }
+
+    /// The fingerprints of commit causal identities.
+    #[must_use]
+    pub const fn commit_fingerprints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
+        &self.commit_fingerprints
+    }
+
+    /// The fingerprints of fragment causal identities.
+    #[must_use]
+    pub const fn fragment_fingerprints(&self) -> &BTreeSet<Fingerprint<FragmentId>> {
+        &self.fragment_fingerprints
+    }
+}
+
+/// The result of diffing a local [`Sedimentree`] against a remote
+/// [`FingerprintSummary`].
+///
+/// The responder knows:
+/// - Which of its own items the requestor is missing (full data available)
+/// - Which of the requestor's fingerprints it doesn't recognize (echoed back)
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FingerprintDiff<'a> {
+    /// Fragments the responder has that the requestor is missing.
+    pub local_only_fragments: Vec<&'a Fragment>,
+
+    /// Commits the responder has that the requestor is missing.
+    pub local_only_commits: Vec<&'a LooseCommit>,
+
+    /// Requestor's commit fingerprints that the responder doesn't have locally.
+    /// Echoed back so the requestor can reverse-lookup and send the data.
+    pub remote_only_commit_fingerprints: Vec<Fingerprint<CommitId>>,
+
+    /// Requestor's fragment fingerprints that the responder doesn't have locally.
+    /// Echoed back so the requestor can reverse-lookup and send the data.
+    pub remote_only_fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
 }
 
 /// The difference between two [`Sedimentree`]s.
@@ -264,6 +346,98 @@ impl Sedimentree {
         Sedimentree::new(minimized_fragments, commits)
     }
 
+    /// Create a [`FingerprintSummary`] from this [`Sedimentree`].
+    ///
+    /// Computes SipHash-2-4 fingerprints of each item's causal identity
+    /// using the given seed. Much smaller than [`summarize`](Self::summarize)
+    /// for wire transmission.
+    #[must_use]
+    pub fn fingerprint_summarize(&self, seed: &FingerprintSeed) -> FingerprintSummary {
+        let commit_fingerprints = self
+            .commits
+            .iter()
+            .map(|c| Fingerprint::new(seed, &c.commit_id()))
+            .collect();
+
+        let fragment_fingerprints = self
+            .fragments
+            .iter()
+            .map(|f| Fingerprint::new(seed, &f.fragment_id()))
+            .collect();
+
+        FingerprintSummary::new(*seed, commit_fingerprints, fragment_fingerprints)
+    }
+
+    /// Compute the difference between a local [`Sedimentree`] and a remote
+    /// [`FingerprintSummary`].
+    ///
+    /// The responder uses the requestor's seed to fingerprint its own items,
+    /// then performs set difference on u64 values. Returns full data for
+    /// items the requestor is missing, and echoed fingerprints for items
+    /// the responder is missing.
+    #[must_use]
+    pub fn diff_remote_fingerprints<'a>(
+        &'a self,
+        remote: &FingerprintSummary,
+    ) -> FingerprintDiff<'a> {
+        let seed = remote.seed();
+
+        // Find local items the requestor doesn't have
+        let local_only_commits: Vec<&LooseCommit> = self
+            .commits
+            .iter()
+            .filter(|c| {
+                !remote
+                    .commit_fingerprints
+                    .contains(&Fingerprint::new(seed, &c.commit_id()))
+            })
+            .collect();
+
+        let local_only_fragments: Vec<&Fragment> = self
+            .fragments
+            .iter()
+            .filter(|f| {
+                !remote
+                    .fragment_fingerprints
+                    .contains(&Fingerprint::new(seed, &f.fragment_id()))
+            })
+            .collect();
+
+        // Find requestor fingerprints we don't have locally (echo back)
+        let local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
+            .commits
+            .iter()
+            .map(|c| Fingerprint::new(seed, &c.commit_id()))
+            .collect();
+
+        let local_fragment_fps: BTreeSet<Fingerprint<FragmentId>> = self
+            .fragments
+            .iter()
+            .map(|f| Fingerprint::new(seed, &f.fragment_id()))
+            .collect();
+
+        let remote_only_commit_fingerprints: Vec<Fingerprint<CommitId>> = remote
+            .commit_fingerprints
+            .iter()
+            .filter(|fp| !local_commit_fps.contains(fp))
+            .copied()
+            .collect();
+
+        let remote_only_fragment_fingerprints: Vec<Fingerprint<FragmentId>> = remote
+            .fragment_fingerprints
+            .iter()
+            .filter(|fp| !local_fragment_fps.contains(fp))
+            .copied()
+            .collect();
+
+        FingerprintDiff {
+            local_only_fragments,
+            local_only_commits,
+            remote_only_commit_fingerprints,
+            remote_only_fragment_fingerprints,
+        }
+    }
+
     /// Create a [`SedimentreeSummary`] from this [`Sedimentree`].
     ///
     /// This omits the checkpoints from each fragment.
@@ -299,7 +473,7 @@ impl Sedimentree {
                     .iter()
                     .all(|end| !dag.contains_commit(end))
             {
-                heads.extend(fragment.boundary());
+                heads.extend(fragment.boundary().iter().copied());
             }
         }
         heads.extend(dag.heads());
@@ -321,8 +495,6 @@ impl Sedimentree {
         id: SedimentreeId,
         depth_metric: &M,
     ) -> Vec<FragmentSpec> {
-        use alloc::vec;
-
         let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
         let mut runs_by_level =
             Map::<crate::depth::Depth, (Digest<LooseCommit>, Vec<Digest<LooseCommit>>)>::new();
@@ -344,7 +516,7 @@ impl Sedimentree {
                         id,
                         head,
                         checkpoints.clone(),
-                        vec![commit_hash],
+                        BTreeSet::from([commit_hash]),
                     ));
                 }
             }
@@ -441,7 +613,7 @@ mod tests {
         let blob_meta = BlobMeta::new(&[seed]);
         Fragment::new(
             Digest::from_bytes(head_bytes),
-            vec![Digest::from_bytes(boundary_bytes)],
+            BTreeSet::from([Digest::from_bytes(boundary_bytes)]),
             vec![],
             blob_meta,
         )
@@ -682,13 +854,13 @@ mod tests {
 
                     let deeper = Fragment::new(
                         start_hash,
-                        vec![deeper_boundary_hash],
+                        BTreeSet::from([deeper_boundary_hash]),
                         checkpoints,
                         BlobMeta::arbitrary(u)?,
                     );
                     let shallower = FragmentSummary::new(
                         shallower_start_hash,
-                        vec![shallower_boundary_hash],
+                        BTreeSet::from([shallower_boundary_hash]),
                         BlobMeta::arbitrary(u)?,
                     );
 

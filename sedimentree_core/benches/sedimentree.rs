@@ -16,10 +16,12 @@
 use criterion::{criterion_group, criterion_main};
 
 mod generators {
+    use std::collections::BTreeSet;
+
     use rand::{Rng, SeedableRng, rngs::SmallRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
-        digest::Digest,
+        crypto::digest::Digest,
         fragment::Fragment,
         loose_commit::LooseCommit,
         sedimentree::Sedimentree,
@@ -81,7 +83,7 @@ mod generators {
         leading_zeros: usize,
     ) -> Fragment {
         let head = digest_with_leading_zeros(leading_zeros, head_seed);
-        let boundary: Vec<Digest<LooseCommit>> = (0..boundary_count)
+        let boundary: BTreeSet<Digest<LooseCommit>> = (0..boundary_count)
             .map(|i| digest_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
             .collect();
         let checkpoints: Vec<Digest<LooseCommit>> = (0..checkpoint_count)
@@ -253,7 +255,7 @@ mod digest {
 
     use criterion::{BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{
-        commit::CountLeadingZeroBytes, depth::DepthMetric, digest::Digest,
+        commit::CountLeadingZeroBytes, crypto::digest::Digest, depth::DepthMetric,
         loose_commit::LooseCommit,
     };
 

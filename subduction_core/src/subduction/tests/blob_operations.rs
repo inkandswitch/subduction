@@ -1,7 +1,7 @@
 //! Tests for blob operations (`get`, `get_blobs`).
 
 use super::common::new_test_subduction;
-use sedimentree_core::{blob::Blob, digest::Digest, id::SedimentreeId};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 
 #[tokio::test]
 async fn test_get_blob_returns_none_for_missing() {

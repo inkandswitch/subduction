@@ -28,7 +28,7 @@
 use core::time::Duration;
 
 use future_form::FutureForm;
-use sedimentree_core::digest::Digest as RawDigest;
+use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
 use crate::{
@@ -36,7 +36,7 @@ use crate::{
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
-use sedimentree_core::digest::Digest;
+use sedimentree_core::crypto::digest::Digest;
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);

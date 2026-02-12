@@ -15,7 +15,7 @@ use alloc::{sync::Arc, vec::Vec};
 use core::marker::PhantomData;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Blob, digest::Digest};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest};
 
 use super::traits::Storage;
 

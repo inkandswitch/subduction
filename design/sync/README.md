@@ -11,6 +11,8 @@ Subduction uses two complementary sync protocols to keep sedimentrees consistent
 | [Subscriptions](./subscriptions.md) | Opt-in | Per sedimentree | Live update filtering |
 | [Reconnection](./reconnection.md) | Automatic | Per connection | Connection recovery |
 
+Batch sync uses [fingerprint-based reconciliation](./batch.md#fingerprint-based-reconciliation) — compact 8-byte SipHash keyed hashes instead of full 32-byte digests — to minimize request payload (~75% reduction).
+
 ## Typical Usage
 
 ```mermaid
@@ -19,7 +21,7 @@ sequenceDiagram
     participant B as Peer B
 
     Note over A,B: 1. Initial Sync + Subscribe (Batch)
-    A->>B: BatchSyncRequest { summary, subscribe: true }
+    A->>B: BatchSyncRequest { fingerprint_summary, subscribe: true }
     B->>A: BatchSyncResponse { diff }
     Note over A,B: States reconciled, A subscribed
 
@@ -31,7 +33,7 @@ sequenceDiagram
     Note over A,B: 3. Reconnection (Batch)
     Note over A: Connection lost...
     Note over A: Connection restored
-    A->>B: BatchSyncRequest { summary, subscribe: true }
+    A->>B: BatchSyncRequest { fingerprint_summary, subscribe: true }
     B->>A: BatchSyncResponse { diff }
     Note over A,B: Caught up, re-subscribed
 ```

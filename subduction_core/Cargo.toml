@@ -23,7 +23,7 @@ getrandom = { workspace = true, optional = true }
 metrics = { workspace = true, optional = true }
 minicbor = { workspace = true }
 nonempty = { workspace = true }
-sedimentree_core = { workspace = true }
+sedimentree_core = { workspace = true, features = ["getrandom"] }
 serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
 thiserror = { workspace = true }

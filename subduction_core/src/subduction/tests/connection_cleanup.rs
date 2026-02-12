@@ -13,11 +13,13 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::Subduction,
 };
+use alloc::collections::BTreeSet;
+
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    digest::Digest,
+    crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -44,7 +46,7 @@ fn make_test_fragment() -> (Fragment, Blob) {
     let blob = Blob::new(contents.clone());
     let blob_meta = BlobMeta::new(&contents);
     let head = Digest::<LooseCommit>::from_bytes([1u8; 32]);
-    let boundary = vec![Digest::<LooseCommit>::from_bytes([2u8; 32])];
+    let boundary = BTreeSet::from([Digest::<LooseCommit>::from_bytes([2u8; 32])]);
     let checkpoints = vec![Digest::<LooseCommit>::from_bytes([3u8; 32])];
     let fragment = Fragment::new(head, boundary, checkpoints, blob_meta);
     (fragment, blob)

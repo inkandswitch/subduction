@@ -8,8 +8,8 @@ use thiserror::Error;
 
 use crate::{
     blob::BlobMeta,
+    crypto::digest::Digest,
     depth::{Depth, DepthMetric},
-    digest::Digest,
     fragment::Fragment,
     loose_commit::LooseCommit,
 };
