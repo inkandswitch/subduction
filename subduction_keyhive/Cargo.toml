@@ -1,0 +1,39 @@
+[package]
+name = "subduction_keyhive"
+version = "0.1.0"
+description = "Keyhive protocol"
+
+categories = ["web-programming"]
+keywords = ["sync", "subduction"]
+readme = "./README.md"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-lock = { workspace = true }
+base64 = { workspace = true }
+blake3 = { workspace = true }
+ciborium = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["serde"] }
+futures = { workspace = true }
+futures_kind = { workspace = true }
+keyhive_core = { workspace = true }
+rand = "0.8.5"
+serde = { workspace = true, optional = true, features = ["derive"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[features]
+default = []
+serde = ["dep:serde", "std"]
+std = ["thiserror/std"]
+
+[dev-dependencies]
+async-channel = { workspace = true }
+nonempty = "0.10.0"
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[lints]
+workspace = true
