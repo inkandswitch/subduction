@@ -283,8 +283,8 @@ where
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes =
-                    cbor_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event)
+                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
                 found_ops.push(bytes);
             }
         }
@@ -482,10 +482,8 @@ where
     async fn get_hashes_for_peer_pair(
         &self,
         peer_id: &KeyhivePeerId,
-    ) -> Result<
-        Option<Map<Digest<StaticEvent<T>>, StaticEvent<T>>>,
-        ProtocolError<Conn::SendError>,
-    > {
+    ) -> Result<Option<Map<Digest<StaticEvent<T>>, StaticEvent<T>>>, ProtocolError<Conn::SendError>>
+    {
         let our_id = self
             .peer_id
             .to_identifier()
@@ -517,9 +515,7 @@ where
     }
 
     /// Get pending event hashes as `Vec<EventHash>`.
-    async fn get_pending_hashes(
-        &self,
-    ) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError>> {
+    async fn get_pending_hashes(&self) -> Result<Vec<EventHash>, ProtocolError<Conn::SendError>> {
         let keyhive = self.keyhive.lock().await;
         let digests = keyhive.pending_event_hashes().await;
         Ok(digests.into_iter().map(|d| digest_to_bytes(&d)).collect())
@@ -549,8 +545,8 @@ where
         for (digest, event) in &events {
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
-                let bytes =
-                    cbor_serialize(event).map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event)
+                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
                 result.push(bytes);
             }
         }
@@ -637,8 +633,8 @@ where
         &self,
         cc_bytes: &[u8],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let contact_card: ContactCard =
-            cbor_deserialize(cc_bytes).map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
+        let contact_card: ContactCard = cbor_deserialize(cc_bytes)
+            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
 
         let keyhive = self.keyhive.lock().await;
         keyhive
