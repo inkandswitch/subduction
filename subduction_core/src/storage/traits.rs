@@ -157,27 +157,37 @@ pub trait Storage<K: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    // ==================== Blobs (CAS) ====================
+    // ==================== Blobs (per-sedimentree CAS) ====================
 
-    /// Save a blob, returning its digest.
-    fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest<Blob>, Self::Error>>;
+    /// Save a blob under a sedimentree, returning its digest.
+    fn save_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>>;
 
-    /// Load a blob by its digest.
+    /// Load a blob by its digest within a sedimentree.
     fn load_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> K::Future<'_, Result<Option<Blob>, Self::Error>>;
 
-    /// Load blobs by their digests.
+    /// Load blobs by their digests within a sedimentree.
     ///
     /// Returns only the blobs that were found. Missing digests are silently skipped.
     fn load_blobs(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digests: &[Digest<Blob>],
     ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>>;
 
-    /// Delete a blob by its digest.
-    fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>>;
+    /// Delete a blob by its digest within a sedimentree.
+    fn delete_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<(), Self::Error>>;
 
     // ==================== Convenience Methods ====================
 

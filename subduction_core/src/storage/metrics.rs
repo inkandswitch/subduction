@@ -8,7 +8,7 @@ use std::{sync::Arc, time::Instant};
 use alloc::vec::Vec;
 
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use sedimentree_core::{
     blob::Blob, collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -365,12 +365,16 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
         })
     }
 
-    // ==================== Blobs (CAS) ====================
+    // ==================== Blobs (per-sedimentree CAS) ====================
 
-    fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
+    fn save_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        blob: Blob,
+    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
-            let result = self.inner.save_blob(blob).await;
+            let result = self.inner.save_blob(sedimentree_id, blob).await;
             metrics::storage_operation_duration("save_blob", start.elapsed().as_secs_f64());
             result
         })
@@ -378,11 +382,12 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
 
     fn load_blob(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
-            let result = self.inner.load_blob(blob_digest).await;
+            let result = self.inner.load_blob(sedimentree_id, blob_digest).await;
             metrics::storage_operation_duration("load_blob", start.elapsed().as_secs_f64());
             result
         })
@@ -390,21 +395,26 @@ impl<K: FutureForm, S> Storage<K> for MetricsStorage<S> {
 
     fn load_blobs(
         &self,
+        sedimentree_id: SedimentreeId,
         blob_digests: &[Digest<Blob>],
     ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
         let blob_digests = blob_digests.to_vec();
         K::from_future(async move {
             let start = Instant::now();
-            let result = self.inner.load_blobs(&blob_digests).await;
+            let result = self.inner.load_blobs(sedimentree_id, &blob_digests).await;
             metrics::storage_operation_duration("load_blobs", start.elapsed().as_secs_f64());
             result
         })
     }
 
-    fn delete_blob(&self, blob_digest: Digest<Blob>) -> K::Future<'_, Result<(), Self::Error>> {
+    fn delete_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        blob_digest: Digest<Blob>,
+    ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
             let start = Instant::now();
-            let result = self.inner.delete_blob(blob_digest).await;
+            let result = self.inner.delete_blob(sedimentree_id, blob_digest).await;
             metrics::storage_operation_duration("delete_blob", start.elapsed().as_secs_f64());
             result
         })

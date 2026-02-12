@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use sedimentree_core::{
     blob::Blob,
     crypto::{digest::Digest, fingerprint::Fingerprint},
-    fragment::{Fragment, id::FragmentId},
+    fragment::{id::FragmentId, Fragment},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 
@@ -51,13 +51,23 @@ pub enum Message {
         blob: Blob,
     },
 
-    /// A request for blobs by their [`Digest`]s.
+    /// A request for blobs by their [`Digest`]s within a specific sedimentree.
     #[n(2)]
-    BlobsRequest(#[n(0)] Vec<Digest<Blob>>),
+    BlobsRequest {
+        #[n(0)]
+        id: SedimentreeId,
+        #[n(1)]
+        digests: Vec<Digest<Blob>>,
+    },
 
-    /// A response to a [`BlobRequest`].
+    /// A response to a [`BlobsRequest`] with blobs for a specific sedimentree.
     #[n(3)]
-    BlobsResponse(#[n(0)] Vec<Blob>),
+    BlobsResponse {
+        #[n(0)]
+        id: SedimentreeId,
+        #[n(1)]
+        blobs: Vec<Blob>,
+    },
 
     /// A request to "batch sync" an entire [`Sedimentree`].
     #[n(4)]
@@ -81,8 +91,8 @@ impl Message {
             | Message::BatchSyncResponse(BatchSyncResponse { req_id, .. }) => Some(*req_id),
             Message::LooseCommit { .. }
             | Message::Fragment { .. }
-            | Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
+            | Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
             | Message::RemoveSubscriptions(_) => None,
         }
     }
@@ -93,8 +103,8 @@ impl Message {
         match self {
             Message::LooseCommit { .. } => "LooseCommit",
             Message::Fragment { .. } => "Fragment",
-            Message::BlobsRequest(_) => "BlobsRequest",
-            Message::BlobsResponse(_) => "BlobsResponse",
+            Message::BlobsRequest { .. } => "BlobsRequest",
+            Message::BlobsResponse { .. } => "BlobsResponse",
             Message::BatchSyncRequest(_) => "BatchSyncRequest",
             Message::BatchSyncResponse(_) => "BatchSyncResponse",
             Message::RemoveSubscriptions(_) => "RemoveSubscriptions",
@@ -102,19 +112,16 @@ impl Message {
     }
 
     /// Get the sedimentree ID associated with this message, if any.
-    ///
-    /// Returns `None` for messages that don't have a single associated ID
-    /// (e.g., `BlobsRequest`, `RemoveSubscriptions` with multiple IDs).
     #[must_use]
     pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
         match self {
             Message::LooseCommit { id, .. }
             | Message::Fragment { id, .. }
+            | Message::BlobsRequest { id, .. }
+            | Message::BlobsResponse { id, .. }
             | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
             | Message::BatchSyncResponse(BatchSyncResponse { id, .. }) => Some(*id),
-            Message::BlobsRequest(_)
-            | Message::BlobsResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            Message::RemoveSubscriptions(_) => None,
         }
     }
 }

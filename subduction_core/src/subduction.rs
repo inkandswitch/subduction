@@ -172,8 +172,8 @@ pub struct Subduction<
     /// Blob digests we have requested and are expecting to receive.
     ///
     /// Used to reject unsolicited [`BlobsResponse`] messages — only blobs
-    /// whose digests appear in this set are saved to storage.
-    pending_blob_requests: Arc<Mutex<Set<Digest<Blob>>>>,
+    /// whose `(SedimentreeId, Digest)` pairs appear in this set are saved.
+    pending_blob_requests: Arc<Mutex<Set<(SedimentreeId, Digest<Blob>)>>>,
 
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(C, Message)>,
@@ -596,7 +596,7 @@ impl<
                         from,
                         missing
                     );
-                    self.request_blobs(missing).await;
+                    self.request_blobs(id, missing).await;
                     self.recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
                         .await?; // try responing again
                 }
@@ -607,43 +607,47 @@ impl<
 
                 self.recv_batch_sync_response(&from, id, diff).await?;
             }
-            Message::BlobsRequest(digests) => match self.recv_blob_request(conn, &digests).await {
-                Ok(()) => {
-                    tracing::info!("successfully handled blob request from peer {:?}", from);
+            Message::BlobsRequest { id, digests } => {
+                match self.recv_blob_request(conn, id, &digests).await {
+                    Ok(()) => {
+                        tracing::info!("successfully handled blob request from peer {:?}", from);
+                    }
+                    Err(BlobRequestErr::IoError(e)) => Err(e)?,
+                    Err(BlobRequestErr::MissingBlobs(missing)) => {
+                        tracing::warn!(
+                            "missing blobs for request from peer {:?}: {:?}",
+                            from,
+                            missing
+                        );
+                    }
                 }
-                Err(BlobRequestErr::IoError(e)) => Err(e)?,
-                Err(BlobRequestErr::MissingBlobs(missing)) => {
-                    tracing::warn!(
-                        "missing blobs for request from peer {:?}: {:?}",
-                        from,
-                        missing
-                    );
-                }
-            },
-            Message::BlobsResponse(blobs) => {
+            }
+            Message::BlobsResponse { id, blobs } => {
                 let total = blobs.len();
-                let blob_access = self.storage.blob_access::<F>();
+                let blob_access = self.storage.blob_access::<F>(id);
                 let mut saved = 0usize;
                 let mut rejected = 0usize;
 
                 let mut pending = self.pending_blob_requests.lock().await;
                 for blob in blobs {
                     let digest = Digest::hash_bytes(blob.as_slice());
-                    if pending.remove(&digest) {
+                    if pending.remove(&(id, digest)) {
                         blob_access
                             .save_blob(blob)
                             .await
                             .map_err(IoError::Storage)?;
                         saved += 1;
                     } else {
-                        tracing::warn!("rejecting unsolicited blob {digest:?} from peer {from}");
+                        tracing::warn!(
+                            "rejecting unsolicited blob {digest:?} for {id:?} from peer {from}"
+                        );
                         rejected += 1;
                     }
                 }
                 drop(pending);
 
                 tracing::info!(
-                    "blob response from peer {from}: saved {saved}/{total}, rejected {rejected} unsolicited",
+                    "blob response from peer {from} for {id:?}: saved {saved}/{total}, rejected {rejected} unsolicited",
                 );
             }
             Message::RemoveSubscriptions(RemoveSubscriptions { ids }) => {
@@ -987,9 +991,13 @@ impl<
     /// # Errors
     ///
     /// * Returns `S::Error` if the storage backend encounters an error.
-    pub async fn get_blob(&self, digest: Digest<Blob>) -> Result<Option<Blob>, S::Error> {
-        tracing::debug!("Looking for blob with digest {:?}", digest);
-        self.storage.blob_access::<F>().load_blob(digest).await
+    pub async fn get_blob(
+        &self,
+        id: SedimentreeId,
+        digest: Digest<Blob>,
+    ) -> Result<Option<Blob>, S::Error> {
+        tracing::debug!(?id, ?digest, "Looking for blob");
+        self.storage.blob_access::<F>(id).load_blob(digest).await
     }
 
     /// Get all blobs associated with a given sedimentree ID from local storage.
@@ -1007,6 +1015,7 @@ impl<
         let tree = self.sedimentrees.get_cloned(&id).await;
         if let Some(sedimentree) = tree {
             tracing::debug!("Found sedimentree with id {:?}", id);
+            let blob_access = self.storage.blob_access::<F>(id);
             let mut results = Vec::new();
 
             for digest in sedimentree
@@ -1018,7 +1027,7 @@ impl<
                         .map(|fragment| fragment.summary().blob_meta().digest()),
                 )
             {
-                if let Some(blob) = self.storage.blob_access::<F>().load_blob(digest).await? {
+                if let Some(blob) = blob_access.load_blob(digest).await? {
                     results.push(blob);
                 } else {
                     tracing::warn!("Missing blob for digest {:?}", digest);
@@ -1118,19 +1127,20 @@ impl<
     pub async fn recv_blob_request(
         &self,
         conn: &C,
+        id: SedimentreeId,
         digests: &[Digest<Blob>],
     ) -> Result<(), BlobRequestErr<F, S, C>> {
         let mut blobs = Vec::new();
         let mut missing = Vec::new();
         for digest in digests {
-            if let Some(blob) = self.get_blob(*digest).await.map_err(IoError::Storage)? {
+            if let Some(blob) = self.get_blob(id, *digest).await.map_err(IoError::Storage)? {
                 blobs.push(blob);
             } else {
                 missing.push(*digest);
             }
         }
 
-        conn.send(&Message::BlobsResponse(blobs))
+        conn.send(&Message::BlobsResponse { id, blobs })
             .await
             .map_err(IoError::ConnSend)?;
 
@@ -1764,16 +1774,16 @@ impl<
         Ok(())
     }
 
-    /// Find blobs from connected peers.
-    pub async fn request_blobs(&self, digests: Vec<Digest<Blob>>) {
+    /// Find blobs from connected peers for a specific sedimentree.
+    pub async fn request_blobs(&self, id: SedimentreeId, digests: Vec<Digest<Blob>>) {
         {
             let mut pending = self.pending_blob_requests.lock().await;
             for digest in &digests {
-                pending.insert(*digest);
+                pending.insert((id, *digest));
             }
         }
 
-        let msg = Message::BlobsRequest(digests);
+        let msg = Message::BlobsRequest { id, digests };
         let conns = self.all_connections().await;
         for conn in conns {
             let peer_id = conn.peer_id();

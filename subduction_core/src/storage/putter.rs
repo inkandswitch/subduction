@@ -138,18 +138,16 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
 
     // ==================== Blobs ====================
 
-    /// Save a blob and return its digest.
-    ///
-    /// Note: Blob storage is content-addressed and not per-sedimentree.
+    /// Save a blob under this sedimentree and return its digest.
     #[must_use]
     pub fn save_blob(&self, blob: Blob) -> K::Future<'_, Result<Digest<Blob>, S::Error>> {
-        self.storage.save_blob(blob)
+        self.storage.save_blob(self.sedimentree_id, blob)
     }
 
-    /// Load a blob by its digest.
+    /// Load a blob by its digest within this sedimentree.
     #[must_use]
     pub fn load_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
-        self.storage.load_blob(digest)
+        self.storage.load_blob(self.sedimentree_id, digest)
     }
 
     // ==================== Bookkeeping ====================

@@ -59,10 +59,10 @@ impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
         self.storage.delete_fragments(self.sedimentree_id)
     }
 
-    /// Delete a blob by its digest.
+    /// Delete a blob by its digest within this sedimentree.
     #[must_use]
     pub fn delete_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<(), S::Error>> {
-        self.storage.delete_blob(digest)
+        self.storage.delete_blob(self.sedimentree_id, digest)
     }
 }
 
