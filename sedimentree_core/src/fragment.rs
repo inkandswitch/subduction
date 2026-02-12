@@ -10,10 +10,11 @@ use crate::{
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
+        truncated::Truncated,
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -32,13 +33,16 @@ pub struct Fragment {
     #[n(0)]
     summary: FragmentSummary,
     #[n(1)]
-    checkpoints: Vec<Digest<LooseCommit>>,
+    checkpoints: BTreeSet<Truncated<Digest<LooseCommit>>>,
     #[n(2)]
     digest: Digest<Fragment>,
 }
 
 impl Fragment {
     /// Constructor for a [`Fragment`].
+    ///
+    /// The `checkpoints` are raw commit digests that fall within the fragment's
+    /// range. They are truncated to 8 bytes internally for compact storage.
     #[must_use]
     pub fn new(
         head: Digest<LooseCommit>,
@@ -46,6 +50,9 @@ impl Fragment {
         checkpoints: Vec<Digest<LooseCommit>>,
         blob_meta: BlobMeta,
     ) -> Self {
+        let truncated_checkpoints: BTreeSet<Truncated<Digest<LooseCommit>>> =
+            checkpoints.iter().map(|d| Truncated::new(*d)).collect();
+
         let digest = {
             let mut hasher = blake3::Hasher::new();
             hasher.update(head.as_bytes());
@@ -55,7 +62,7 @@ impl Fragment {
             }
             hasher.update(blob_meta.digest().as_bytes());
 
-            for checkpoint in &checkpoints {
+            for checkpoint in &truncated_checkpoints {
                 hasher.update(checkpoint.as_bytes());
             }
 
@@ -68,7 +75,7 @@ impl Fragment {
                 boundary,
                 blob_meta,
             },
-            checkpoints,
+            checkpoints: truncated_checkpoints,
             digest,
         }
     }
@@ -85,26 +92,18 @@ impl Fragment {
         }
 
         if self.summary.head == other.head
-            && other
-                .boundary
-                .iter()
-                .all(|end| self.checkpoints.contains(end))
+            && other.boundary.iter().all(|end| self.supports_block(*end))
         {
             return true;
         }
 
-        if self.checkpoints.contains(&other.head)
-            && other
-                .boundary
-                .iter()
-                .all(|end| self.checkpoints.contains(end))
+        if self.supports_block(other.head)
+            && other.boundary.iter().all(|end| self.supports_block(*end))
         {
             return true;
         }
 
-        if self.checkpoints.contains(&other.head)
-            && self.summary.boundary.is_superset(&other.boundary)
-        {
+        if self.supports_block(other.head) && self.summary.boundary.is_superset(&other.boundary) {
             return true;
         }
 
@@ -112,9 +111,12 @@ impl Fragment {
     }
 
     /// Returns true if this [`Fragment`] covers the given [`Digest`].
+    ///
+    /// Checks the truncated checkpoint set and the boundary set.
     #[must_use]
-    pub fn supports_block(&self, fragment_end: Digest<LooseCommit>) -> bool {
-        self.checkpoints.contains(&fragment_end) || self.summary.boundary.contains(&fragment_end)
+    pub fn supports_block(&self, digest: Digest<LooseCommit>) -> bool {
+        self.checkpoints.contains(&Truncated::new(digest))
+            || self.summary.boundary.contains(&digest)
     }
 
     /// Convert to a [`FragmentSummary`].
@@ -141,9 +143,9 @@ impl Fragment {
         &self.summary.boundary
     }
 
-    /// The inner checkpoints of the fragment.
+    /// The truncated checkpoint set for compact covering checks.
     #[must_use]
-    pub const fn checkpoints(&self) -> &Vec<Digest<LooseCommit>> {
+    pub const fn checkpoints(&self) -> &BTreeSet<Truncated<Digest<LooseCommit>>> {
         &self.checkpoints
     }
 
@@ -152,85 +154,10 @@ impl Fragment {
     pub const fn digest(&self) -> Digest<Fragment> {
         self.digest
     }
-}
-
-/// A [`Fragment`] paired with its precomputed [`FragmentId`].
-///
-/// The [`FragmentId`] is computed once at construction and cached for fast
-/// lookup during fingerprinting and sync operations. This is an in-memory
-/// optimization — `IndexedFragment` is never serialized. Use
-/// [`IndexedFragment::new`] to wrap a decoded [`Fragment`].
-#[derive(Debug, Clone)]
-pub struct IndexedFragment {
-    fragment: Fragment,
-    id: FragmentId,
-}
-
-impl IndexedFragment {
-    /// Wrap a [`Fragment`] with its precomputed [`FragmentId`].
-    #[must_use]
-    pub fn new(fragment: Fragment) -> Self {
-        let id = FragmentId::new(fragment.head(), fragment.boundary());
-        Self { fragment, id }
-    }
-
-    /// The precomputed causal identity of this fragment.
+    /// The causal identity of this fragment (its head digest).
     #[must_use]
     pub const fn fragment_id(&self) -> FragmentId {
-        self.id
-    }
-
-    /// The inner [`Fragment`].
-    #[must_use]
-    pub const fn fragment(&self) -> &Fragment {
-        &self.fragment
-    }
-
-    /// Consume the wrapper and return the inner [`Fragment`].
-    #[must_use]
-    pub fn into_fragment(self) -> Fragment {
-        self.fragment
-    }
-}
-
-impl core::ops::Deref for IndexedFragment {
-    type Target = Fragment;
-
-    fn deref(&self) -> &Fragment {
-        &self.fragment
-    }
-}
-
-impl PartialEq for IndexedFragment {
-    fn eq(&self, other: &Self) -> bool {
-        self.fragment == other.fragment
-    }
-}
-
-impl Eq for IndexedFragment {}
-
-impl PartialOrd for IndexedFragment {
-    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for IndexedFragment {
-    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
-        self.fragment.cmp(&other.fragment)
-    }
-}
-
-impl core::hash::Hash for IndexedFragment {
-    fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        self.fragment.hash(state);
-    }
-}
-
-#[cfg(feature = "arbitrary")]
-impl<'a> arbitrary::Arbitrary<'a> for IndexedFragment {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        Ok(Self::new(Fragment::arbitrary(u)?))
+        FragmentId::new(self.summary.head)
     }
 }
 

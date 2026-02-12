@@ -1182,8 +1182,8 @@ impl<
         }
 
         let mut verified_fragments = Vec::with_capacity(sedimentree.fragments().count());
-        for indexed in sedimentree.fragments() {
-            let verified = Signed::seal::<F, _>(&self.signer, indexed.fragment().clone()).await;
+        for fragment in sedimentree.fragments() {
+            let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
             verified_fragments.push(verified);
         }
 
@@ -2618,7 +2618,7 @@ impl<
         self.sedimentrees
             .get_cloned(&id)
             .await
-            .map(|tree| tree.fragments().map(|f| f.fragment().clone()).collect())
+            .map(|tree| tree.fragments().cloned().collect())
     }
 
     /// Get the set of all connected peer IDs.

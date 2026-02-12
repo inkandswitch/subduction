@@ -9,9 +9,10 @@ use crate::{
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
+        truncated::Truncated,
     },
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, FragmentSpec, FragmentSummary, IndexedFragment, id::FragmentId},
+    fragment::{Fragment, FragmentSpec, FragmentSummary, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -132,7 +133,7 @@ impl FingerprintSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintDiff<'a> {
     /// Fragments the responder has that the requestor is missing.
-    pub local_only_fragments: Vec<&'a IndexedFragment>,
+    pub local_only_fragments: Vec<&'a Fragment>,
 
     /// Commits the responder has that the requestor is missing.
     pub local_only_commits: Vec<&'a LooseCommit>,
@@ -150,13 +151,13 @@ pub struct FingerprintDiff<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diff<'a> {
     /// Fragments present in the right tree but not the left.
-    pub left_missing_fragments: Vec<&'a IndexedFragment>,
+    pub left_missing_fragments: Vec<&'a Fragment>,
 
     /// Commits present in the right tree but not the left.
     pub left_missing_commits: Vec<&'a LooseCommit>,
 
     /// Fragments present in the left tree but not the right.
-    pub right_missing_fragments: Vec<&'a IndexedFragment>,
+    pub right_missing_fragments: Vec<&'a Fragment>,
 
     /// Commits present in the left tree but not the right.
     pub right_missing_commits: Vec<&'a LooseCommit>,
@@ -172,7 +173,7 @@ pub struct RemoteDiff<'a> {
     pub remote_commits: Vec<&'a LooseCommit>,
 
     /// Fragments present in the local tree but not the remote.
-    pub local_fragments: Vec<&'a IndexedFragment>,
+    pub local_fragments: Vec<&'a Fragment>,
 
     /// Commits present in the local tree but not the remote.
     pub local_commits: Vec<&'a LooseCommit>,
@@ -183,26 +184,14 @@ pub struct RemoteDiff<'a> {
 #[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Sedimentree {
-    fragments: Set<IndexedFragment>,
+    fragments: Set<Fragment>,
     commits: Set<LooseCommit>,
 }
 
 impl Sedimentree {
     /// Constructor for a [`Sedimentree`].
-    ///
-    /// Fragments are wrapped in [`IndexedFragment`] which precomputes their
-    /// [`FragmentId`] for fast fingerprinting.
     #[must_use]
     pub fn new(fragments: Vec<Fragment>, commits: Vec<LooseCommit>) -> Self {
-        Self {
-            fragments: fragments.into_iter().map(IndexedFragment::new).collect(),
-            commits: commits.into_iter().collect(),
-        }
-    }
-
-    /// Constructor from pre-indexed fragments (avoids recomputing [`FragmentId`]s).
-    #[must_use]
-    fn from_indexed(fragments: Vec<IndexedFragment>, commits: Vec<LooseCommit>) -> Self {
         Self {
             fragments: fragments.into_iter().collect(),
             commits: commits.into_iter().collect(),
@@ -219,20 +208,28 @@ impl Sedimentree {
     #[must_use]
     pub fn minimal_hash<M: DepthMetric>(&self, depth_metric: &M) -> MinimalTreeHash {
         let minimal = self.minimize(depth_metric);
-        let mut hashes = minimal
+
+        // Hash full digests (head, boundary, commits)
+        let mut digests: Vec<Digest<LooseCommit>> = minimal
             .fragments()
-            .flat_map(|s| {
-                core::iter::once(s.head())
-                    .chain(s.boundary().iter().copied())
-                    .chain(s.checkpoints().iter().copied())
-            })
+            .flat_map(|s| core::iter::once(s.head()).chain(s.boundary().iter().copied()))
             .chain(minimal.commits.iter().map(LooseCommit::digest))
-            .collect::<Vec<_>>();
-        hashes.sort();
+            .collect();
+        digests.sort();
 
         let mut h = blake3::Hasher::new();
-        for hash in hashes {
-            h.update(hash.as_bytes());
+        for d in &digests {
+            h.update(d.as_bytes());
+        }
+
+        // Hash truncated checkpoints separately
+        let mut checkpoints: Vec<Truncated<Digest<LooseCommit>>> = minimal
+            .fragments()
+            .flat_map(|s| s.checkpoints().iter().copied())
+            .collect();
+        checkpoints.sort();
+        for cp in &checkpoints {
+            h.update(cp.as_bytes());
         }
         MinimalTreeHash(*h.finalize().as_bytes())
     }
@@ -248,7 +245,7 @@ impl Sedimentree {
     ///
     /// Returns `true` if the stratum was not already present
     pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        self.fragments.insert(IndexedFragment::new(fragment))
+        self.fragments.insert(fragment)
     }
 
     /// Compute the difference between two local [`Sedimentree`]s.
@@ -267,14 +264,14 @@ impl Sedimentree {
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
     pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
-        let fragment_by_summary: Map<&FragmentSummary, &IndexedFragment> =
+        let fragment_by_summary: Map<&FragmentSummary, &Fragment> =
             self.fragments.iter().map(|f| (f.summary(), f)).collect();
 
         let our_fragments_meta: Set<&FragmentSummary> =
             fragment_by_summary.keys().copied().collect();
         let their_fragments: Set<&FragmentSummary> = remote.fragment_summaries.iter().collect();
 
-        let local_fragments: Vec<&IndexedFragment> = our_fragments_meta
+        let local_fragments: Vec<&Fragment> = our_fragments_meta
             .difference(&their_fragments)
             .filter_map(|summary| fragment_by_summary.get(summary).copied())
             .collect();
@@ -295,7 +292,7 @@ impl Sedimentree {
     }
 
     /// Iterate over all fragments in this [`Sedimentree`].
-    pub fn fragments(&self) -> impl Iterator<Item = &IndexedFragment> {
+    pub fn fragments(&self) -> impl Iterator<Item = &Fragment> {
         self.fragments.iter()
     }
 
@@ -333,7 +330,7 @@ impl Sedimentree {
         let mut fragments = self.fragments.iter().collect::<Vec<_>>();
         fragments.sort_by_key(|a| a.depth(depth_metric));
 
-        let mut minimized_fragments = Vec::<IndexedFragment>::new();
+        let mut minimized_fragments = Vec::<Fragment>::new();
 
         for fragment in fragments {
             if !minimized_fragments
@@ -355,7 +352,7 @@ impl Sedimentree {
             .cloned()
             .collect();
 
-        Sedimentree::from_indexed(minimized_fragments, commits)
+        Sedimentree::new(minimized_fragments, commits)
     }
 
     /// Create a [`FingerprintSummary`] from this [`Sedimentree`].
@@ -405,7 +402,7 @@ impl Sedimentree {
             })
             .collect();
 
-        let local_only_fragments: Vec<&IndexedFragment> = self
+        let local_only_fragments: Vec<&Fragment> = self
             .fragments
             .iter()
             .filter(|f| {
@@ -496,7 +493,7 @@ impl Sedimentree {
     pub fn into_items(self) -> impl Iterator<Item = CommitOrFragment> {
         self.fragments
             .into_iter()
-            .map(|f| CommitOrFragment::Fragment(f.into_fragment()))
+            .map(|f| CommitOrFragment::Fragment(f))
             .chain(self.commits.into_iter().map(CommitOrFragment::Commit))
     }
 
@@ -1047,16 +1044,16 @@ mod tests {
                     let mut b_updated = b.clone();
 
                     // Add what a is missing (from b)
-                    for indexed in diff.left_missing_fragments {
-                        a_updated.add_fragment(indexed.fragment().clone());
+                    for fragment in diff.left_missing_fragments {
+                        a_updated.add_fragment(fragment.clone());
                     }
                     for commit in diff.left_missing_commits {
                         a_updated.add_commit(commit.clone());
                     }
 
                     // Add what b is missing (from a)
-                    for indexed in diff.right_missing_fragments {
-                        b_updated.add_fragment(indexed.fragment().clone());
+                    for fragment in diff.right_missing_fragments {
+                        b_updated.add_fragment(fragment.clone());
                     }
                     for commit in diff.right_missing_commits {
                         b_updated.add_commit(commit.clone());

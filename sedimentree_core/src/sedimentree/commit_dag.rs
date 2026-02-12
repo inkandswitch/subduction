@@ -11,9 +11,9 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
-    crypto::digest::Digest,
+    crypto::{digest::Digest, truncated::Truncated},
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, IndexedFragment},
+    fragment::Fragment,
     loose_commit::LooseCommit,
 };
 
@@ -146,11 +146,7 @@ impl CommitDag {
         }
     }
 
-    pub(crate) fn simplify<S: DepthMetric>(
-        &self,
-        fragments: &[IndexedFragment],
-        strategy: &S,
-    ) -> Self {
+    pub(crate) fn simplify<S: DepthMetric>(&self, fragments: &[Fragment], strategy: &S) -> Self {
         // The work here is to identify which parts of a commit DAG can be
         // discarded based on the strata we have. This is a little bit fiddly.
         // Imagine this graph:
@@ -358,17 +354,33 @@ impl CommitDag {
     /// be bundled into strata
     pub(crate) fn canonical_sequence<
         'a,
-        F: core::ops::Deref<Target = Fragment> + 'a,
-        I: Iterator<Item = &'a F> + Clone + 'a,
+        I: Iterator<Item = &'a Fragment> + Clone + 'a,
         M: DepthMetric,
     >(
         &'a self,
         fragments: I,
         hash_metric: &'a M,
     ) -> impl Iterator<Item = Digest<LooseCommit>> + 'a {
-        // First find the tips of the DAG, which is the heads of the commit DAG,
-        // plus the end hashes of any fragments which are not contained in the
-        // commit DAG
+        // Pre-index: map boundary commits → fragments (deepest first)
+        let mut fragments_by_boundary: Map<Digest<LooseCommit>, Vec<&'a F>> = Map::new();
+        for fragment in fragments.clone() {
+            for end in fragment.boundary() {
+                fragments_by_boundary
+                    .entry(*end)
+                    .or_default()
+                    .push(fragment);
+            }
+        }
+
+        // Pre-index: reverse map for truncated checkpoint resolution
+        let truncated_to_digest: Map<Truncated<Digest<LooseCommit>>, Digest<LooseCommit>> = self
+            .nodes
+            .iter()
+            .map(|node| (Truncated::new(node.hash), node.hash))
+            .collect();
+
+        // Find the tips: heads of the commit DAG + fragment boundary commits
+        // not contained in the commit DAG
         let mut boundary = Vec::new();
         for fragment in fragments.clone() {
             for end in fragment.boundary() {
@@ -380,13 +392,14 @@ impl CommitDag {
         let mut heads = self.heads().chain(boundary).collect::<Vec<_>>();
         heads.sort();
 
-        // Then for each tip, do a reverse depth first traversal. When we reach
-        // a commit which has a parent which is in a stratum, we just extend the
-        // traversal with the commits and checkpoints from the given stratum
+        // For each tip, do a reverse depth first traversal. When we reach
+        // a commit which is in a stratum, resolve its checkpoints via the
+        // reverse map and extend the traversal.
         heads.into_iter().flat_map(move |head| {
             let mut stack = vec![head];
             let mut visited = Set::new();
-            let fragments = fragments.clone();
+            let fragments_by_boundary = &fragments_by_boundary;
+            let truncated_to_digest = &truncated_to_digest;
             core::iter::from_fn(move || {
                 while let Some(commit) = stack.pop() {
                     if visited.contains(&commit) {
@@ -403,15 +416,15 @@ impl CommitDag {
                             .collect::<Vec<_>>();
                         parents.sort();
                         stack.extend(parents);
-                    } else {
-                        let mut supporting_fragments = fragments
-                            .clone()
-                            .filter(|s| s.boundary().contains(&commit))
-                            .collect::<Vec<_>>();
-                        supporting_fragments.sort_by_key(|s| s.depth(hash_metric));
-                        if let Some(fragment) = supporting_fragments.pop() {
-                            for commit in fragment.checkpoints() {
-                                stack.push(*commit);
+                    } else if let Some(supporting) = fragments_by_boundary.get(&commit) {
+                        if let Some(fragment) =
+                            supporting.iter().max_by_key(|s| s.depth(hash_metric))
+                        {
+                            // Resolve truncated checkpoints → full digests via reverse map
+                            for truncated_cp in fragment.checkpoints() {
+                                if let Some(full_digest) = truncated_to_digest.get(truncated_cp) {
+                                    stack.push(*full_digest);
+                                }
                             }
                             stack.push(fragment.head());
                         }
@@ -503,7 +516,7 @@ mod tests {
         vec::Vec,
     };
 
-    use rand::{SeedableRng, rngs::SmallRng};
+    use rand::{rngs::SmallRng, SeedableRng};
 
     use super::CommitDag;
     use crate::{
