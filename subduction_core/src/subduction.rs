@@ -2746,152 +2746,130 @@ impl<
             return Ok(SendCount::default());
         };
 
-        // Build reverse-lookup tables: Fingerprint → Digest
-        // from the in-memory sedimentree + seed. Dropped after resolution.
-        let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
+        // Resolve requested fingerprints → digests via reverse-lookup tables
+        let (requested_commit_digests, requested_fragment_digests) = {
+            let sedimentree = self.sedimentrees.get_cloned(&id).await.unwrap_or_default();
 
-        let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = sedimentree
-            .loose_commits()
-            .map(|c| (Fingerprint::new(seed, &c.commit_id()), c.digest()))
-            .collect();
+            let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = sedimentree
+                .loose_commits()
+                .map(|c| (Fingerprint::new(seed, &c.commit_id()), c.digest()))
+                .collect();
 
-        let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>> = sedimentree
-            .fragments()
-            .map(|f| (Fingerprint::new(seed, &f.fragment_id()), f.digest()))
-            .collect();
+            let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>> = sedimentree
+                .fragments()
+                .map(|f| (Fingerprint::new(seed, &f.fragment_id()), f.digest()))
+                .collect();
 
-        drop(sedimentree);
+            let commit_digests: Vec<Digest<LooseCommit>> = requesting
+                .commit_fingerprints
+                .iter()
+                .filter_map(|fp| {
+                    let resolved = commit_fp_to_digest.get(fp).copied();
+                    if resolved.is_none() {
+                        tracing::warn!("requested commit fingerprint {fp} not found locally");
+                    }
+                    resolved
+                })
+                .collect();
 
-        // Resolve requested fingerprints → digests, then drop the lookup tables
-        let requested_commit_digests: Vec<Digest<LooseCommit>> = requesting
-            .commit_fingerprints
-            .iter()
-            .filter_map(|fp| {
-                let resolved = commit_fp_to_digest.get(fp).copied();
-                if resolved.is_none() {
-                    tracing::warn!("requested commit fingerprint {fp} not found locally");
-                }
-                resolved
-            })
-            .collect();
+            let fragment_digests: Vec<Digest<Fragment>> = requesting
+                .fragment_fingerprints
+                .iter()
+                .filter_map(|fp| {
+                    let resolved = fragment_fp_to_digest.get(fp).copied();
+                    if resolved.is_none() {
+                        tracing::warn!("requested fragment fingerprint {fp} not found locally");
+                    }
+                    resolved
+                })
+                .collect();
 
-        drop(commit_fp_to_digest);
-
-        let requested_fragment_digests: Vec<Digest<Fragment>> = requesting
-            .fragment_fingerprints
-            .iter()
-            .filter_map(|fp| {
-                let resolved = fragment_fp_to_digest.get(fp).copied();
-                if resolved.is_none() {
-                    tracing::warn!("requested fragment fingerprint {fp} not found locally");
-                }
-                resolved
-            })
-            .collect();
-
-        drop(fragment_fp_to_digest);
-
-        // Load signed items from storage (only if we have items to send)
-        let commit_by_digest: Map<_, _> = if requested_commit_digests.is_empty() {
-            Map::default()
-        } else {
-            fetcher
-                .load_loose_commits()
-                .await
-                .map_err(IoError::Storage)?
-                .into_iter()
-                .collect()
+            (commit_digests, fragment_digests)
         };
 
-        let fragment_by_digest: Map<_, _> = if requested_fragment_digests.is_empty() {
-            Map::default()
-        } else {
-            fetcher
-                .load_fragments()
-                .await
-                .map_err(IoError::Storage)?
-                .into_iter()
-                .collect()
+        // Load signed items and blobs from storage, build wire messages
+        let (commit_messages, fragment_messages) = {
+            let commit_by_digest: Map<_, _> = if requested_commit_digests.is_empty() {
+                Map::default()
+            } else {
+                fetcher
+                    .load_loose_commits()
+                    .await
+                    .map_err(IoError::Storage)?
+                    .into_iter()
+                    .collect()
+            };
+
+            let fragment_by_digest: Map<_, _> = if requested_fragment_digests.is_empty() {
+                Map::default()
+            } else {
+                fetcher
+                    .load_fragments()
+                    .await
+                    .map_err(IoError::Storage)?
+                    .into_iter()
+                    .collect()
+            };
+
+            let blob_by_digest: Map<_, _> = {
+                let mut blob_digests: Vec<Digest<Blob>> = Vec::with_capacity(
+                    requested_commit_digests.len() + requested_fragment_digests.len(),
+                );
+
+                for commit_digest in &requested_commit_digests {
+                    if let Some(signed_commit) = commit_by_digest.get(commit_digest)
+                        && let Ok(payload) = signed_commit.decode_payload()
+                    {
+                        blob_digests.push(payload.blob_meta().digest());
+                    }
+                }
+
+                for fragment_digest in &requested_fragment_digests {
+                    if let Some(signed_fragment) = fragment_by_digest.get(fragment_digest)
+                        && let Ok(payload) = signed_fragment.decode_payload()
+                    {
+                        blob_digests.push(payload.summary().blob_meta().digest());
+                    }
+                }
+
+                fetcher
+                    .load_blobs(&blob_digests)
+                    .await
+                    .map_err(IoError::Storage)?
+                    .into_iter()
+                    .collect()
+            };
+
+            let commit_msgs: Vec<Message> = requested_commit_digests
+                .iter()
+                .filter_map(|commit_digest| {
+                    let signed_commit = commit_by_digest.get(commit_digest)?;
+                    let payload = signed_commit.decode_payload().ok()?;
+                    let blob = blob_by_digest.get(&payload.blob_meta().digest())?;
+                    Some(Message::LooseCommit {
+                        id,
+                        commit: signed_commit.clone(),
+                        blob: blob.clone(),
+                    })
+                })
+                .collect();
+
+            let fragment_msgs: Vec<Message> = requested_fragment_digests
+                .iter()
+                .filter_map(|fragment_digest| {
+                    let signed_fragment = fragment_by_digest.get(fragment_digest)?;
+                    let payload = signed_fragment.decode_payload().ok()?;
+                    let blob = blob_by_digest.get(&payload.summary().blob_meta().digest())?;
+                    Some(Message::Fragment {
+                        id,
+                        fragment: signed_fragment.clone(),
+                        blob: blob.clone(),
+                    })
+                })
+                .collect();
+
+            (commit_msgs, fragment_msgs)
         };
-
-        // Collect blob digests needed for resolved items
-        let mut blob_digests_needed: Vec<Digest<Blob>> =
-            Vec::with_capacity(requested_commit_digests.len() + requested_fragment_digests.len());
-
-        for commit_digest in &requested_commit_digests {
-            if let Some(signed_commit) = commit_by_digest.get(commit_digest)
-                && let Ok(payload) = signed_commit.decode_payload()
-            {
-                blob_digests_needed.push(payload.blob_meta().digest());
-            }
-        }
-
-        for fragment_digest in &requested_fragment_digests {
-            if let Some(signed_fragment) = fragment_by_digest.get(fragment_digest)
-                && let Ok(payload) = signed_fragment.decode_payload()
-            {
-                blob_digests_needed.push(payload.summary().blob_meta().digest());
-            }
-        }
-
-        // Batch load all blobs
-        let blob_by_digest: Map<_, _> = fetcher
-            .load_blobs(&blob_digests_needed)
-            .await
-            .map_err(IoError::Storage)?
-            .into_iter()
-            .collect();
-
-        drop(blob_digests_needed);
-
-        // Build messages from resolved digests, then drop storage maps
-        let mut commit_messages: Vec<Message> = Vec::with_capacity(requested_commit_digests.len());
-
-        for commit_digest in requested_commit_digests {
-            if let Some(signed_commit) = commit_by_digest.get(&commit_digest) {
-                if let Ok(payload) = signed_commit.decode_payload() {
-                    let blob_digest = payload.blob_meta().digest();
-                    if let Some(blob) = blob_by_digest.get(&blob_digest) {
-                        commit_messages.push(Message::LooseCommit {
-                            id,
-                            commit: signed_commit.clone(),
-                            blob: blob.clone(),
-                        });
-                    } else {
-                        tracing::warn!("missing blob for commit {:?}", commit_digest);
-                    }
-                }
-            } else {
-                tracing::warn!("commit {:?} not in storage", commit_digest);
-            }
-        }
-
-        drop(commit_by_digest);
-
-        let mut fragment_messages: Vec<Message> =
-            Vec::with_capacity(requested_fragment_digests.len());
-
-        for fragment_digest in requested_fragment_digests {
-            if let Some(signed_fragment) = fragment_by_digest.get(&fragment_digest) {
-                if let Ok(payload) = signed_fragment.decode_payload() {
-                    let blob_digest = payload.summary().blob_meta().digest();
-                    if let Some(blob) = blob_by_digest.get(&blob_digest) {
-                        fragment_messages.push(Message::Fragment {
-                            id,
-                            fragment: signed_fragment.clone(),
-                            blob: blob.clone(),
-                        });
-                    } else {
-                        tracing::warn!("missing blob for fragment {:?}", fragment_digest);
-                    }
-                }
-            } else {
-                tracing::warn!("fragment {:?} not in storage", fragment_digest);
-            }
-        }
-
-        drop(fragment_by_digest);
-        drop(blob_by_digest);
 
         // Send all messages concurrently using FuturesUnordered
         let mut send_futures: FuturesUnordered<_> = commit_messages
