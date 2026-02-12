@@ -1,7 +1,6 @@
 //! Tests for round-trip communication between Subduction peers using `WebSocket`s.
 
-use std::collections::BTreeSet;
-use std::{net::SocketAddr, sync::OnceLock, time::Duration};
+use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use testresult::TestResult;
 
 use arbitrary::{Arbitrary, Unstructured};
@@ -15,7 +14,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    connection::{handshake::Audience, message::Message, nonce_cache::NonceCache, Connection},
+    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -23,7 +22,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
+    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -148,15 +147,27 @@ async fn batch_sync() -> TestResult {
 
     let commit_digest1: Digest<LooseCommit> =
         Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
-    let commit1 = LooseCommit::new(commit_digest1, BTreeSet::new(), BlobMeta::new(blob1.as_slice()));
+    let commit1 = LooseCommit::new(
+        commit_digest1,
+        BTreeSet::new(),
+        BlobMeta::new(blob1.as_slice()),
+    );
 
     let commit_digest2: Digest<LooseCommit> =
         Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
-    let commit2 = LooseCommit::new(commit_digest2, BTreeSet::new(), BlobMeta::new(blob2.as_slice()));
+    let commit2 = LooseCommit::new(
+        commit_digest2,
+        BTreeSet::new(),
+        BlobMeta::new(blob2.as_slice()),
+    );
 
     let commit_digest3: Digest<LooseCommit> =
         Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
-    let commit3 = LooseCommit::new(commit_digest3, BTreeSet::new(), BlobMeta::new(blob3.as_slice()));
+    let commit3 = LooseCommit::new(
+        commit_digest3,
+        BTreeSet::new(),
+        BlobMeta::new(blob3.as_slice()),
+    );
 
     ///////////////////
     // SERVER SETUP //

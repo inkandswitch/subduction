@@ -498,7 +498,7 @@ mod tests {
         vec::Vec,
     };
 
-    use rand::{rngs::SmallRng, SeedableRng};
+    use rand::{SeedableRng, rngs::SmallRng};
 
     use super::CommitDag;
     use crate::{

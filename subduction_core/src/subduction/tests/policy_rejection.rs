@@ -1,6 +1,6 @@
 //! Tests for policy rejection behavior.
 
-use super::common::{test_signer, TestSpawn};
+use super::common::{TestSpawn, test_signer};
 use crate::{
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     peer::id::PeerId,
@@ -12,7 +12,7 @@ use crate::{
 use alloc::{collections::BTreeSet, vec::Vec};
 use core::fmt;
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,

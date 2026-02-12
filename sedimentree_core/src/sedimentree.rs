@@ -516,7 +516,10 @@ impl Sedimentree {
                     let checkpoint_fps = checkpoints
                         .iter()
                         .map(|d| {
-                            Fingerprint::new(seed, &CommitId::new(Digest::from_bytes(d.into_bytes())))
+                            Fingerprint::new(
+                                seed,
+                                &CommitId::new(Digest::from_bytes(d.into_bytes())),
+                            )
                         })
                         .collect();
                     all_bundles.push(FragmentSpec::new(

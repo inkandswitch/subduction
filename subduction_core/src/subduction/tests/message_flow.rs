@@ -9,7 +9,7 @@
 
 use alloc::collections::BTreeSet;
 
-use super::common::{test_signer, TokioSpawn};
+use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,

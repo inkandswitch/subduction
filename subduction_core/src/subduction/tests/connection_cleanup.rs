@@ -1,6 +1,6 @@
 //! Tests for connection cleanup on send failure.
 
-use super::common::{test_signer, TestSpawn};
+use super::common::{TestSpawn, test_signer};
 use crate::{
     connection::{
         nonce_cache::NonceCache,

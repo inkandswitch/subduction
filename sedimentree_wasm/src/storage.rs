@@ -600,7 +600,11 @@ impl Storage<Local> for JsSedimentreeStorage {
 
     // ==================== Blobs ====================
 
-    fn save_blob(&self, sedimentree_id: SedimentreeId, blob: Blob) -> LocalBoxFuture<'_, Result<Digest<Blob>, Self::Error>> {
+    fn save_blob(
+        &self,
+        sedimentree_id: SedimentreeId,
+        blob: Blob,
+    ) -> LocalBoxFuture<'_, Result<Digest<Blob>, Self::Error>> {
         Local::from_future(async move {
             let js_id = WasmSedimentreeId::from(sedimentree_id);
             let promise = self.js_save_blob(&js_id.into(), blob.as_slice());
@@ -621,7 +625,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         blob_digest: Digest<Blob>,
     ) -> LocalBoxFuture<'_, Result<Option<Blob>, Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?blob_digest, "JsSedimentreeStorage::load_blob");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?blob_digest,
+                "JsSedimentreeStorage::load_blob"
+            );
             let js_id = WasmSedimentreeId::from(sedimentree_id);
             let promise = self.js_load_blob(&js_id.into(), &WasmDigest::from(blob_digest).into());
             let js_value = JsFuture::from(promise)
@@ -656,7 +664,8 @@ impl Storage<Local> for JsSedimentreeStorage {
             let js_id = WasmSedimentreeId::from(sedimentree_id);
             let mut results = Vec::with_capacity(blob_digests.len());
             for digest in blob_digests {
-                let promise = self.js_load_blob(&js_id.clone().into(), &WasmDigest::from(digest).into());
+                let promise =
+                    self.js_load_blob(&js_id.clone().into(), &WasmDigest::from(digest).into());
                 let js_value = JsFuture::from(promise)
                     .await
                     .map_err(JsSedimentreeStorageError::JsError)?;
@@ -681,7 +690,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         blob_digest: Digest<Blob>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?blob_digest, "JsSedimentreeStorage::delete_blob");
+            tracing::debug!(
+                ?sedimentree_id,
+                ?blob_digest,
+                "JsSedimentreeStorage::delete_blob"
+            );
             let js_id = WasmSedimentreeId::from(sedimentree_id);
             let promise = self.js_delete_blob(&js_id.into(), &WasmDigest::from(blob_digest).into());
             JsFuture::from(promise)

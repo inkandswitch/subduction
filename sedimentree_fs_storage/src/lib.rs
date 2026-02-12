@@ -152,7 +152,11 @@ impl FsStorage {
     fn blob_path(&self, sedimentree_id: SedimentreeId, digest: Digest<Blob>) -> PathBuf {
         let tree_hex = hex::encode(sedimentree_id.as_bytes());
         let blob_hex = hex::encode(digest.as_bytes());
-        self.root.join("trees").join(tree_hex).join("blobs").join(blob_hex)
+        self.root
+            .join("trees")
+            .join(tree_hex)
+            .join("blobs")
+            .join(blob_hex)
     }
 
     fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest<LooseCommit>> {
@@ -592,7 +596,11 @@ impl Storage<Sendable> for FsStorage {
     ) -> <Sendable as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
         let blob_digests = blob_digests.to_vec();
         Sendable::from_future(async move {
-            tracing::debug!(?sedimentree_id, count = blob_digests.len(), "FsStorage::load_blobs");
+            tracing::debug!(
+                ?sedimentree_id,
+                count = blob_digests.len(),
+                "FsStorage::load_blobs"
+            );
 
             let mut results = Vec::with_capacity(blob_digests.len());
             for digest in blob_digests {
@@ -869,7 +877,11 @@ impl Storage<Local> for FsStorage {
         sedimentree_id: SedimentreeId,
         blob: Blob,
     ) -> <Local as FutureForm>::Future<'_, Result<Digest<Blob>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::save_blob(self, sedimentree_id, blob))
+        Local::from_future(<Self as Storage<Sendable>>::save_blob(
+            self,
+            sedimentree_id,
+            blob,
+        ))
     }
 
     fn load_blob(
@@ -877,7 +889,11 @@ impl Storage<Local> for FsStorage {
         sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> <Local as FutureForm>::Future<'_, Result<Option<Blob>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::load_blob(self, sedimentree_id, blob_digest))
+        Local::from_future(<Self as Storage<Sendable>>::load_blob(
+            self,
+            sedimentree_id,
+            blob_digest,
+        ))
     }
 
     fn load_blobs(
@@ -885,7 +901,11 @@ impl Storage<Local> for FsStorage {
         sedimentree_id: SedimentreeId,
         blob_digests: &[Digest<Blob>],
     ) -> <Local as FutureForm>::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::load_blobs(self, sedimentree_id, blob_digests))
+        Local::from_future(<Self as Storage<Sendable>>::load_blobs(
+            self,
+            sedimentree_id,
+            blob_digests,
+        ))
     }
 
     fn delete_blob(
@@ -893,7 +913,11 @@ impl Storage<Local> for FsStorage {
         sedimentree_id: SedimentreeId,
         blob_digest: Digest<Blob>,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::Error>> {
-        Local::from_future(<Self as Storage<Sendable>>::delete_blob(self, sedimentree_id, blob_digest))
+        Local::from_future(<Self as Storage<Sendable>>::delete_blob(
+            self,
+            sedimentree_id,
+            blob_digest,
+        ))
     }
 
     fn save_commit_with_blob(

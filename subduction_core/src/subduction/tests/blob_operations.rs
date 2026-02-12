@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{new_test_subduction, test_signer, TokioSpawn};
+use super::common::{TokioSpawn, new_test_subduction, test_signer};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     peer::id::PeerId,

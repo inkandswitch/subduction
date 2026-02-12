@@ -1,6 +1,5 @@
 //! Comprehensive tests for tokio WebSocket client and server
 
-use std::collections::BTreeSet;
 use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use rand::RngCore;
@@ -11,10 +10,10 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
-use std::{net::SocketAddr, sync::OnceLock, time::Duration};
+use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        handshake::Audience, message::Message, nonce_cache::NonceCache, Connection, Reconnect,
+        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
@@ -23,7 +22,7 @@ use subduction_core::{
     subduction::Subduction,
 };
 use subduction_websocket::tokio::{
-    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
+    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -637,7 +636,11 @@ async fn large_message_handling() -> TestResult {
     let large_data = vec![42u8; 1024 * 1024];
     let large_blob = Blob::new(large_data);
     let digest = random_digest();
-    let commit = LooseCommit::new(digest, BTreeSet::new(), BlobMeta::new(large_blob.as_slice()));
+    let commit = LooseCommit::new(
+        digest,
+        BTreeSet::new(),
+        BlobMeta::new(large_blob.as_slice()),
+    );
 
     // Add large commit
     client.add_commit(sed_id, &commit, large_blob).await?;
