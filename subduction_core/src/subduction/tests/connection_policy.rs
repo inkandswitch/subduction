@@ -1,6 +1,8 @@
 //! Tests for connection authorization policy.
 
-use super::common::{TestSpawn, new_test_subduction, test_signer};
+#![allow(clippy::expect_used)]
+
+use super::common::{new_test_subduction, test_signer, TestSpawn};
 use crate::{
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     peer::id::PeerId,
@@ -12,7 +14,7 @@ use crate::{
 use alloc::vec::Vec;
 use core::fmt;
 use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
 use testresult::TestResult;
 
@@ -102,7 +104,8 @@ async fn rejected_connection_is_not_registered() -> TestResult {
     let result = subduction.register(conn).await;
     assert!(result.is_err(), "register should fail when policy rejects");
 
-    let err_string = format!("{}", result.unwrap_err());
+    let err = result.expect_err("register should have failed");
+    let err_string = format!("{err}");
     assert!(
         err_string.contains("connection rejected"),
         "error should indicate connection rejection, got: {err_string}"

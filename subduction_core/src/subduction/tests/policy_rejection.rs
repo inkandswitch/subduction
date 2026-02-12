@@ -1,6 +1,6 @@
 //! Tests for policy rejection behavior.
 
-use super::common::{TestSpawn, TokioSpawn, test_signer};
+use super::common::{test_signer, TestSpawn, TokioSpawn};
 use crate::{
     connection::{
         message::Message,
@@ -13,10 +13,10 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::Subduction,
 };
-use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeSet, vec::Vec};
 use core::{fmt, time::Duration};
 use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
@@ -390,7 +390,7 @@ async fn multiple_rejections_all_fail_cleanly() {
 /// skip the request — no response sent, no error propagated.
 #[tokio::test]
 async fn unauthorized_fetch_is_silently_skipped() -> TestResult {
-    use sedimentree_core::crypto::fingerprint::{FingerprintSeed, FingerprintSummary};
+    use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
 
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
@@ -421,7 +421,10 @@ async fn unauthorized_fetch_is_silently_skipped() -> TestResult {
         .send(Message::BatchSyncRequest(
             crate::connection::message::BatchSyncRequest {
                 id: sedimentree_id,
-                req_id: crate::connection::message::RequestId::new(peer_id, 1),
+                req_id: crate::connection::message::RequestId {
+                    requestor: peer_id,
+                    nonce: 1,
+                },
                 fingerprint_summary: FingerprintSummary::new(
                     seed,
                     BTreeSet::new(),
