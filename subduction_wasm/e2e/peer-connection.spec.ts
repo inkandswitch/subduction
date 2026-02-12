@@ -312,7 +312,7 @@ test.describe("Peer Connection Tests", () => {
 
   test("should request blobs from connected peer", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, SubductionWebSocket, PeerId, Digest } = window.subduction;
+      const { Subduction, MemoryStorage, SubductionWebSocket, PeerId, Digest, SedimentreeId } = window.subduction;
 
       try {
         const storage = new MemoryStorage();
@@ -326,10 +326,11 @@ test.describe("Peer Connection Tests", () => {
         const subductionWs = await SubductionWebSocket.connect(url, peerId, 5000);
         await syncer.register(subductionWs);
 
+        const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const digest1 = new Digest(new Uint8Array(32).fill(1));
         const digest2 = new Digest(new Uint8Array(32).fill(2));
 
-        await syncer.requestBlobs([digest1, digest2]);
+        await syncer.requestBlobs(sedimentreeId, [digest1, digest2]);
 
         return {
           requested: true,
