@@ -11,7 +11,7 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, FragmentSpec, FragmentSummary, id::FragmentId},
+    fragment::{Fragment, FragmentSpec, FragmentSummary, IndexedFragment, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -132,7 +132,7 @@ impl FingerprintSummary {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FingerprintDiff<'a> {
     /// Fragments the responder has that the requestor is missing.
-    pub local_only_fragments: Vec<&'a Fragment>,
+    pub local_only_fragments: Vec<&'a IndexedFragment>,
 
     /// Commits the responder has that the requestor is missing.
     pub local_only_commits: Vec<&'a LooseCommit>,
@@ -150,13 +150,13 @@ pub struct FingerprintDiff<'a> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diff<'a> {
     /// Fragments present in the right tree but not the left.
-    pub left_missing_fragments: Vec<&'a Fragment>,
+    pub left_missing_fragments: Vec<&'a IndexedFragment>,
 
     /// Commits present in the right tree but not the left.
     pub left_missing_commits: Vec<&'a LooseCommit>,
 
     /// Fragments present in the left tree but not the right.
-    pub right_missing_fragments: Vec<&'a Fragment>,
+    pub right_missing_fragments: Vec<&'a IndexedFragment>,
 
     /// Commits present in the left tree but not the right.
     pub right_missing_commits: Vec<&'a LooseCommit>,
@@ -172,7 +172,7 @@ pub struct RemoteDiff<'a> {
     pub remote_commits: Vec<&'a LooseCommit>,
 
     /// Fragments present in the local tree but not the remote.
-    pub local_fragments: Vec<&'a Fragment>,
+    pub local_fragments: Vec<&'a IndexedFragment>,
 
     /// Commits present in the local tree but not the remote.
     pub local_commits: Vec<&'a LooseCommit>,
@@ -183,14 +183,26 @@ pub struct RemoteDiff<'a> {
 #[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Sedimentree {
-    fragments: Set<Fragment>,
+    fragments: Set<IndexedFragment>,
     commits: Set<LooseCommit>,
 }
 
 impl Sedimentree {
     /// Constructor for a [`Sedimentree`].
+    ///
+    /// Fragments are wrapped in [`IndexedFragment`] which precomputes their
+    /// [`FragmentId`] for fast fingerprinting.
     #[must_use]
     pub fn new(fragments: Vec<Fragment>, commits: Vec<LooseCommit>) -> Self {
+        Self {
+            fragments: fragments.into_iter().map(IndexedFragment::new).collect(),
+            commits: commits.into_iter().collect(),
+        }
+    }
+
+    /// Constructor from pre-indexed fragments (avoids recomputing [`FragmentId`]s).
+    #[must_use]
+    fn from_indexed(fragments: Vec<IndexedFragment>, commits: Vec<LooseCommit>) -> Self {
         Self {
             fragments: fragments.into_iter().collect(),
             commits: commits.into_iter().collect(),
@@ -236,7 +248,7 @@ impl Sedimentree {
     ///
     /// Returns `true` if the stratum was not already present
     pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        self.fragments.insert(fragment)
+        self.fragments.insert(IndexedFragment::new(fragment))
     }
 
     /// Compute the difference between two local [`Sedimentree`]s.
@@ -255,14 +267,14 @@ impl Sedimentree {
     /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
     #[must_use]
     pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
-        let fragment_by_summary: Map<&FragmentSummary, &Fragment> =
+        let fragment_by_summary: Map<&FragmentSummary, &IndexedFragment> =
             self.fragments.iter().map(|f| (f.summary(), f)).collect();
 
         let our_fragments_meta: Set<&FragmentSummary> =
             fragment_by_summary.keys().copied().collect();
         let their_fragments: Set<&FragmentSummary> = remote.fragment_summaries.iter().collect();
 
-        let local_fragments: Vec<&Fragment> = our_fragments_meta
+        let local_fragments: Vec<&IndexedFragment> = our_fragments_meta
             .difference(&their_fragments)
             .filter_map(|summary| fragment_by_summary.get(summary).copied())
             .collect();
@@ -283,7 +295,7 @@ impl Sedimentree {
     }
 
     /// Iterate over all fragments in this [`Sedimentree`].
-    pub fn fragments(&self) -> impl Iterator<Item = &Fragment> {
+    pub fn fragments(&self) -> impl Iterator<Item = &IndexedFragment> {
         self.fragments.iter()
     }
 
@@ -393,7 +405,7 @@ impl Sedimentree {
             })
             .collect();
 
-        let local_only_fragments: Vec<&Fragment> = self
+        let local_only_fragments: Vec<&IndexedFragment> = self
             .fragments
             .iter()
             .filter(|f| {
@@ -484,7 +496,7 @@ impl Sedimentree {
     pub fn into_items(self) -> impl Iterator<Item = CommitOrFragment> {
         self.fragments
             .into_iter()
-            .map(CommitOrFragment::Fragment)
+            .map(|f| CommitOrFragment::Fragment(f.into_fragment()))
             .chain(self.commits.into_iter().map(CommitOrFragment::Commit))
     }
 
