@@ -318,7 +318,7 @@ mod digest {
 }
 
 mod sedimentree {
-    use std::hint::black_box;
+    use std::{collections::BTreeSet, hint::black_box};
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{

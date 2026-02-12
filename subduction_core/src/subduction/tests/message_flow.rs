@@ -7,7 +7,9 @@
 //! Tests run for both `Sendable` and `Local` future kinds to ensure
 //! behavior is consistent across native and WASM-like environments.
 
-use super::common::{TokioSpawn, test_signer};
+use alloc::collections::BTreeSet;
+
+use super::common::{test_signer, TokioSpawn};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,

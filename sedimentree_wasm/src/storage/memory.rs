@@ -328,7 +328,6 @@ impl MemoryStorage {
     // ==================== Blobs ====================
 
     /// Save a blob and return its digest.
-    // TODO: Accept WasmSedimentreeId from JS once TypeScript interface is updated
     #[wasm_bindgen(js_name = saveBlob)]
     pub fn save_blob(&self, id: &WasmSedimentreeId, data: &Uint8Array) -> Promise {
         let inner = self.inner.clone();

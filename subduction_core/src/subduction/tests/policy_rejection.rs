@@ -9,7 +9,7 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::Subduction,
 };
-use alloc::{collections::BTreeSet, vec, vec::Vec};
+use alloc::{collections::BTreeSet, vec::Vec};
 use core::fmt;
 use future_form::Sendable;
 use futures::{future::BoxFuture, FutureExt};
