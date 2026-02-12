@@ -49,8 +49,6 @@ impl MemorySigner {
     /// # Panics
     ///
     /// Panics if the system random number generator fails.
-    #[cfg(feature = "getrandom")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "getrandom")))]
     #[allow(clippy::expect_used)]
     #[must_use]
     pub fn generate() -> Self {

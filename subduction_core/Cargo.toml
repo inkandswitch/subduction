@@ -19,7 +19,7 @@ bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures = { workspace = true }
 future_form = { workspace = true }
-getrandom = { workspace = true, optional = true }
+getrandom = { workspace = true }
 metrics = { workspace = true, optional = true }
 minicbor = { workspace = true }
 nonempty = { workspace = true }
@@ -44,7 +44,6 @@ harness = false
 [features]
 default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
-getrandom = ["dep:getrandom"]
 bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero"]
 metrics = ["dep:metrics", "std"]
 serde = ["dep:serde", "ed25519-dalek/serde"]
@@ -54,7 +53,6 @@ std = [
   "async-lock/std",
   "ed25519-dalek/std",
   "futures/std",
-  "getrandom",
   "nonempty/std",
   "sedimentree_core/std",
   "thiserror/std"

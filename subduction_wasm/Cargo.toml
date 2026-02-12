@@ -33,7 +33,7 @@ js-sys = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
-subduction_core = { workspace = true, features = ["getrandom"] }
+subduction_core = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
