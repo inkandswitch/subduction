@@ -134,10 +134,6 @@ use sedimentree_core::{
 
 use crate::storage::traits::Storage;
 
-/// Generate a random [`FingerprintSeed`] for a sync request.
-///
-/// # Panics
-///
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
 pub struct Subduction<
@@ -624,28 +620,34 @@ impl<
                 }
             }
             Message::BlobsResponse { id, blobs } => {
-                let total = blobs.len();
+                let (accepted, rejected) = {
+                    let mut pending = self.pending_blob_requests.lock().await;
+                    let mut accepted = Vec::new();
+                    let mut rejected_count = 0usize;
+                    for blob in blobs {
+                        let digest = Digest::hash_bytes(blob.as_slice());
+                        if pending.remove(&(id, digest)) {
+                            accepted.push(blob);
+                        } else {
+                            tracing::warn!(
+                                "rejecting unsolicited blob {digest:?} for {id:?} from peer {from}"
+                            );
+                            rejected_count += 1;
+                        }
+                    }
+                    (accepted, rejected_count)
+                };
+
+                let total = accepted.len() + rejected;
                 let blob_access = self.storage.blob_access::<F>(id);
                 let mut saved = 0usize;
-                let mut rejected = 0usize;
-
-                let mut pending = self.pending_blob_requests.lock().await;
-                for blob in blobs {
-                    let digest = Digest::hash_bytes(blob.as_slice());
-                    if pending.remove(&(id, digest)) {
-                        blob_access
-                            .save_blob(blob)
-                            .await
-                            .map_err(IoError::Storage)?;
-                        saved += 1;
-                    } else {
-                        tracing::warn!(
-                            "rejecting unsolicited blob {digest:?} for {id:?} from peer {from}"
-                        );
-                        rejected += 1;
-                    }
+                for blob in accepted {
+                    blob_access
+                        .save_blob(blob)
+                        .await
+                        .map_err(IoError::Storage)?;
+                    saved += 1;
                 }
-                drop(pending);
 
                 tracing::info!(
                     "blob response from peer {from} for {id:?}: saved {saved}/{total}, rejected {rejected} unsolicited",
