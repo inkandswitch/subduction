@@ -2618,11 +2618,7 @@ impl<
         self.sedimentrees
             .get_cloned(&id)
             .await
-            .map(|tree| {
-                tree.fragments()
-                    .map(|f| f.fragment().clone())
-                    .collect()
-            })
+            .map(|tree| tree.fragments().map(|f| f.fragment().clone()).collect())
     }
 
     /// Get the set of all connected peer IDs.
