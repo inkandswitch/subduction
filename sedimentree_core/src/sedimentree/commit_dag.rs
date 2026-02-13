@@ -352,19 +352,14 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    #[allow(clippy::needless_pass_by_value)]
-    pub(crate) fn canonical_sequence<
-        'a,
-        I: Iterator<Item = &'a Fragment> + Clone + 'a,
-        M: DepthMetric,
-    >(
-        &'a self,
-        fragments: I,
-        hash_metric: &'a M,
-    ) -> impl Iterator<Item = Digest<LooseCommit>> + 'a {
+    pub(crate) fn canonical_sequence<M: DepthMetric>(
+        &self,
+        fragments: &[&Fragment],
+        hash_metric: &M,
+    ) -> Vec<Digest<LooseCommit>> {
         // Pre-index: map boundary commits → fragments (deepest first)
-        let mut fragments_by_boundary: Map<Digest<LooseCommit>, Vec<&'a Fragment>> = Map::new();
-        for fragment in fragments.clone() {
+        let mut fragments_by_boundary: Map<Digest<LooseCommit>, Vec<&&Fragment>> = Map::new();
+        for fragment in fragments {
             for end in fragment.boundary() {
                 fragments_by_boundary
                     .entry(*end)
@@ -383,7 +378,7 @@ impl CommitDag {
         // Find the tips: heads of the commit DAG + fragment boundary commits
         // not contained in the commit DAG
         let mut boundary = Vec::new();
-        for fragment in fragments.clone() {
+        for fragment in fragments {
             for end in fragment.boundary() {
                 if !self.contains_commit(end) {
                     boundary.push(*end);
@@ -430,7 +425,7 @@ impl CommitDag {
             }
         }
 
-        result.into_iter()
+        result
     }
 
     #[cfg(test)]

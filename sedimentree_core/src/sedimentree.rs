@@ -509,7 +509,8 @@ impl Sedimentree {
         let mut runs_by_level =
             Map::<crate::depth::Depth, (Digest<LooseCommit>, Vec<Digest<LooseCommit>>)>::new();
         let mut all_bundles = Vec::new();
-        for commit_hash in dag.canonical_sequence(self.fragments.iter(), depth_metric) {
+        let fragment_refs: Vec<&Fragment> = self.fragments.iter().collect();
+        for commit_hash in dag.canonical_sequence(&fragment_refs, depth_metric) {
             let level = depth_metric.to_depth(commit_hash);
             for (run_level, (_start, checkpoints)) in &mut runs_by_level {
                 if run_level < &level {
