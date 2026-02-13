@@ -493,7 +493,7 @@ impl Sedimentree {
     pub fn into_items(self) -> impl Iterator<Item = CommitOrFragment> {
         self.fragments
             .into_iter()
-            .map(|f| CommitOrFragment::Fragment(f))
+            .map(CommitOrFragment::Fragment)
             .chain(self.commits.into_iter().map(CommitOrFragment::Commit))
     }
 

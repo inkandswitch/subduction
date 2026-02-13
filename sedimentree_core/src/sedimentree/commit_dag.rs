@@ -362,7 +362,7 @@ impl CommitDag {
         hash_metric: &'a M,
     ) -> impl Iterator<Item = Digest<LooseCommit>> + 'a {
         // Pre-index: map boundary commits → fragments (deepest first)
-        let mut fragments_by_boundary: Map<Digest<LooseCommit>, Vec<&'a F>> = Map::new();
+        let mut fragments_by_boundary: Map<Digest<LooseCommit>, Vec<&'a Fragment>> = Map::new();
         for fragment in fragments.clone() {
             for end in fragment.boundary() {
                 fragments_by_boundary
@@ -392,48 +392,44 @@ impl CommitDag {
         let mut heads = self.heads().chain(boundary).collect::<Vec<_>>();
         heads.sort();
 
-        // For each tip, do a reverse depth first traversal. When we reach
-        // a commit which is in a stratum, resolve its checkpoints via the
-        // reverse map and extend the traversal.
-        heads.into_iter().flat_map(move |head| {
+        // Collect all commits via DFS from each head. When we reach a commit
+        // that's in a fragment, resolve its checkpoints via the reverse map.
+        let mut result = Vec::new();
+        let mut visited = Set::new();
+
+        for head in heads {
             let mut stack = vec![head];
-            let mut visited = Set::new();
-            let fragments_by_boundary = &fragments_by_boundary;
-            let truncated_to_digest = &truncated_to_digest;
-            core::iter::from_fn(move || {
-                while let Some(commit) = stack.pop() {
-                    if visited.contains(&commit) {
-                        continue;
-                    }
-                    visited.insert(commit);
-                    if let Some(idx) = self.node_map.get(&commit) {
-                        let mut parents = self
-                            .parents(*idx)
-                            .map(|i| {
-                                #[allow(clippy::expect_used)]
-                                self.nodes.get(i.0).expect("node is not in self.nodes").hash
-                            })
-                            .collect::<Vec<_>>();
-                        parents.sort();
-                        stack.extend(parents);
-                    } else if let Some(supporting) = fragments_by_boundary.get(&commit) {
-                        if let Some(fragment) =
-                            supporting.iter().max_by_key(|s| s.depth(hash_metric))
-                        {
-                            // Resolve truncated checkpoints → full digests via reverse map
-                            for truncated_cp in fragment.checkpoints() {
-                                if let Some(full_digest) = truncated_to_digest.get(truncated_cp) {
-                                    stack.push(*full_digest);
-                                }
-                            }
-                            stack.push(fragment.head());
+            while let Some(commit) = stack.pop() {
+                if visited.contains(&commit) {
+                    continue;
+                }
+                visited.insert(commit);
+                result.push(commit);
+
+                if let Some(idx) = self.node_map.get(&commit) {
+                    let mut parents = self
+                        .parents(*idx)
+                        .map(|i| {
+                            #[allow(clippy::expect_used)]
+                            self.nodes.get(i.0).expect("node is not in self.nodes").hash
+                        })
+                        .collect::<Vec<_>>();
+                    parents.sort();
+                    stack.extend(parents);
+                } else if let Some(supporting) = fragments_by_boundary.get(&commit)
+                    && let Some(fragment) = supporting.iter().max_by_key(|s| s.depth(hash_metric))
+                {
+                    for truncated_cp in fragment.checkpoints() {
+                        if let Some(full_digest) = truncated_to_digest.get(truncated_cp) {
+                            stack.push(*full_digest);
                         }
                     }
-                    return Some(commit);
+                    stack.push(fragment.head());
                 }
-                None
-            })
-        })
+            }
+        }
+
+        result.into_iter()
     }
 
     #[cfg(test)]

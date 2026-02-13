@@ -58,18 +58,6 @@ impl WasmFragment {
         self.0.boundary().iter().copied().map(Into::into).collect()
     }
 
-    /// Get the checkpoints of the fragment.
-    #[must_use]
-    #[wasm_bindgen(getter)]
-    pub fn checkpoints(&self) -> Vec<WasmDigest> {
-        self.0
-            .checkpoints()
-            .iter()
-            .copied()
-            .map(Into::into)
-            .collect()
-    }
-
     /// Get the blob metadata of the fragment.
     #[must_use]
     #[wasm_bindgen(getter, js_name = blobMeta)]

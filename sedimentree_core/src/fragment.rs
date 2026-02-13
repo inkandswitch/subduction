@@ -2,7 +2,7 @@
 
 pub mod id;
 
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::collections::BTreeSet;
 use id::FragmentId;
 
 use crate::{
@@ -47,7 +47,7 @@ impl Fragment {
     pub fn new(
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
-        checkpoints: Vec<Digest<LooseCommit>>,
+        #[allow(clippy::needless_pass_by_value)] checkpoints: Vec<Digest<LooseCommit>>,
         blob_meta: BlobMeta,
     ) -> Self {
         let truncated_checkpoints: BTreeSet<Truncated<Digest<LooseCommit>>> =
