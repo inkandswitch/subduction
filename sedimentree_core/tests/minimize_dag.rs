@@ -8,17 +8,18 @@ use std::collections::BTreeSet;
 
 use sedimentree_core::{
     commit::CountLeadingZeroBytes,
-    test_utils::{TestGraph, seeded_rng},
+    test_utils::{seeded_rng, TestGraph},
 };
 
 /// Diamond merge: A diverges to B and C, which merge at D.
+/// Fragment covers entire diamond.
 ///
 /// ```text
-///     A (depth 2)
-///    / \
-///   B   C  (depth 0)
-///    \ /
-///     D (depth 2)
+///        A (head)     ┐
+///       / \           │
+///      B   C          │ FRAG(2)
+///       \ /           │
+///        D (boundary) ┘
 /// ```
 #[test]
 fn diamond_merge_fragment_covers_interior() {
@@ -51,16 +52,15 @@ fn diamond_merge_fragment_covers_interior() {
     );
 }
 
-/// Diamond with partial fragment coverage - only one branch covered.
+/// Diamond with partial fragment coverage — only one branch in checkpoints.
 ///
 /// ```text
-///     A (depth 2)
-///    / \
-///   B   C  (depth 0)
-///    \ /
-///     D (depth 2)
+///        A (head)     ┐
+///       / \           │
+///      B  (C)         │ FRAG(2) — checkpoints: B only
+///       \ /           │
+///        D (boundary) ┘
 /// ```
-/// Fragment covers A to D but only includes B in checkpoints.
 #[test]
 fn diamond_partial_coverage() {
     let mut rng = seeded_rng(101);
@@ -80,10 +80,12 @@ fn diamond_partial_coverage() {
     assert_eq!(minimized.fragments().count(), 1);
 }
 
-/// Two independent branches with separate fragments.
+/// Two independent branches with separate fragments (both depth 2).
 ///
 /// ```text
-///   A ─── B    C ─── D
+///   (boundary)       (head)        (boundary)       (head)
+///       B ───────────── A              D ───────────── C
+///         └── FRAG(2) ──┘                └── FRAG(2) ──┘
 /// ```
 #[test]
 fn independent_branches_separate_fragments() {
@@ -104,10 +106,12 @@ fn independent_branches_separate_fragments() {
     assert_eq!(minimized.fragments().count(), 2);
 }
 
-/// Deep linear chain covered by single fragment.
+/// Deep linear chain covered by single fragment (depth 3).
 ///
 /// ```text
-///   A ─── B ─── C ─── D ─── E
+///   (boundary)                          (head)
+///       E ─────── D ─── C ─── B ─────── A
+///         └───────── FRAG(3) ───────────┘
 /// ```
 #[test]
 fn deep_linear_chain() {
@@ -243,13 +247,13 @@ fn overlapping_same_depth_both_kept() {
 /// Fragment boundary at merge point.
 ///
 /// ```text
-///     A (depth 2)
-///    / \
-///   B   C  (depth 0)
-///    \ /
-///     D (depth 2) <- fragment boundary
-///     |
-///     E (depth 0)
+///        A (head)     ┐
+///       / \           │
+///      B   C          │ FRAG(2)
+///       \ /           │
+///        D (boundary) ┘
+///        |
+///        E (loose commit, below fragment)
 /// ```
 #[test]
 fn fragment_boundary_at_merge() {
