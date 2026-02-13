@@ -14,7 +14,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -47,7 +47,7 @@ impl Fragment {
     pub fn new(
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
-        #[allow(clippy::needless_pass_by_value)] checkpoints: Vec<Digest<LooseCommit>>,
+        checkpoints: &[Digest<LooseCommit>],
         blob_meta: BlobMeta,
     ) -> Self {
         let truncated_checkpoints: BTreeSet<Truncated<Digest<LooseCommit>>> =

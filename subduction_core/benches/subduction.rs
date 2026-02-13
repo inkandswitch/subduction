@@ -112,7 +112,7 @@ mod generators {
             .collect();
         #[allow(clippy::cast_possible_truncation)]
         let blob_meta = BlobMeta::new(&[seed as u8; 128]);
-        Fragment::new(digest, parents, members, blob_meta)
+        Fragment::new(digest, parents, &members, blob_meta)
     }
 
     /// Generate a request ID from seeds.

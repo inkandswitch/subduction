@@ -352,6 +352,7 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
+    #[allow(clippy::needless_pass_by_value)]
     pub(crate) fn canonical_sequence<
         'a,
         I: Iterator<Item = &'a Fragment> + Clone + 'a,
@@ -512,7 +513,7 @@ mod tests {
         vec::Vec,
     };
 
-    use rand::{rngs::SmallRng, SeedableRng};
+    use rand::{SeedableRng, rngs::SmallRng};
 
     use super::CommitDag;
     use crate::{

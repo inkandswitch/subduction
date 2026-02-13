@@ -634,7 +634,7 @@ mod tests {
         Fragment::new(
             Digest::from_bytes(head_bytes),
             BTreeSet::from([Digest::from_bytes(boundary_bytes)]),
-            vec![],
+            &[],
             blob_meta,
         )
     }
@@ -875,7 +875,7 @@ mod tests {
                     let deeper = Fragment::new(
                         start_hash,
                         BTreeSet::from([deeper_boundary_hash]),
-                        checkpoints,
+                        &checkpoints,
                         BlobMeta::arbitrary(u)?,
                     );
                     let shallower = FragmentSummary::new(

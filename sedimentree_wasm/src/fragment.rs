@@ -29,16 +29,17 @@ impl WasmFragment {
         checkpoints: Vec<JsDigest>,
         blob_meta: WasmBlobMeta,
     ) -> Self {
+        let cps: Vec<_> = checkpoints
+            .iter()
+            .map(|d| WasmDigest::from(d).into())
+            .collect();
         Fragment::new(
             head.into(),
             boundary
                 .iter()
                 .map(|d| WasmDigest::from(d).into())
                 .collect(),
-            checkpoints
-                .iter()
-                .map(|d| WasmDigest::from(d).into())
-                .collect(),
+            &cps,
             blob_meta.into(),
         )
         .into()

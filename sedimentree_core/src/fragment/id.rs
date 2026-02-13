@@ -1,7 +1,6 @@
 //! Causal identity for fragments.
 
-use crate::crypto::digest::Digest;
-use crate::loose_commit::LooseCommit;
+use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 
 /// The causal identity of a fragment: its head commit digest.
 ///

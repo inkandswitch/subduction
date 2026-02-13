@@ -48,7 +48,7 @@ fn make_test_fragment() -> (Fragment, Blob) {
     let head = Digest::<LooseCommit>::from_bytes([1u8; 32]);
     let boundary = BTreeSet::from([Digest::<LooseCommit>::from_bytes([2u8; 32])]);
     let checkpoints = vec![Digest::<LooseCommit>::from_bytes([3u8; 32])];
-    let fragment = Fragment::new(head, boundary, checkpoints, blob_meta);
+    let fragment = Fragment::new(head, boundary, &checkpoints, blob_meta);
     (fragment, blob)
 }
 
