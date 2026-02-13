@@ -1160,44 +1160,16 @@ mod tests {
         use alloc::{collections::BTreeSet, vec, vec::Vec};
 
         use crate::{
-            blob::BlobMeta, commit::CountLeadingZeroBytes, crypto::digest::Digest,
-            fragment::Fragment, loose_commit::LooseCommit, sedimentree::Sedimentree,
+            blob::BlobMeta,
+            commit::CountLeadingZeroBytes,
+            fragment::Fragment,
+            sedimentree::Sedimentree,
+            test_utils::{digest_with_depth, make_fragment_at_depth},
         };
 
         /// Helper to collect fragments from a Sedimentree for easier assertions.
         fn collect_fragments(tree: &Sedimentree) -> Vec<Fragment> {
             tree.fragments().cloned().collect()
-        }
-
-        /// Create a digest with a specific number of leading zero bytes.
-        /// The `seed` ensures different digests with the same depth.
-        fn digest_with_depth(leading_zeros: u8, seed: u8) -> Digest<LooseCommit> {
-            let mut bytes = [0u8; 32];
-            // Set leading zeros
-            for i in 0..leading_zeros as usize {
-                bytes[i] = 0;
-            }
-            // First non-zero byte (ensures exact depth)
-            if (leading_zeros as usize) < 32 {
-                bytes[leading_zeros as usize] = 1;
-            }
-            // Seed for uniqueness
-            if (leading_zeros as usize + 1) < 32 {
-                bytes[leading_zeros as usize + 1] = seed;
-            }
-            Digest::from_bytes(bytes)
-        }
-
-        /// Create a fragment at a given depth with specified boundary.
-        fn make_fragment_at_depth(
-            depth: u8,
-            seed: u8,
-            boundary: BTreeSet<Digest<LooseCommit>>,
-            checkpoints: &[Digest<LooseCommit>],
-        ) -> Fragment {
-            let head = digest_with_depth(depth, seed);
-            let blob_meta = BlobMeta::new(&[seed]);
-            Fragment::new(head, boundary, checkpoints, blob_meta)
         }
 
         // ============================================================

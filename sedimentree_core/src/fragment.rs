@@ -14,7 +14,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -292,22 +292,8 @@ mod tests {
         crypto::digest::Digest,
         fragment::{Fragment, FragmentSummary},
         loose_commit::LooseCommit,
+        test_utils::digest_with_depth,
     };
-
-    /// Create a digest with a specific number of leading zero bytes.
-    fn digest_with_depth(leading_zeros: u8, seed: u8) -> Digest<LooseCommit> {
-        let mut bytes = [0u8; 32];
-        for i in 0..leading_zeros as usize {
-            bytes[i] = 0;
-        }
-        if (leading_zeros as usize) < 32 {
-            bytes[leading_zeros as usize] = 1;
-        }
-        if (leading_zeros as usize + 1) < 32 {
-            bytes[leading_zeros as usize + 1] = seed;
-        }
-        Digest::from_bytes(bytes)
-    }
 
     fn make_fragment(
         head: Digest<LooseCommit>,

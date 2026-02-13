@@ -12,7 +12,7 @@ use alloc::{
     vec::Vec,
 };
 
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::{
     blob::BlobMeta, collections::Map, crypto::digest::Digest, fragment::Fragment,
