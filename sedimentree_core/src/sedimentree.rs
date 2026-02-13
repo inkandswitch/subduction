@@ -1098,6 +1098,62 @@ mod tests {
                     );
                 });
         }
+
+        #[test]
+        fn minimize_output_subset_of_input() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let minimized = tree.minimize(&CountLeadingZeroBytes);
+                    let input_set: Set<_> = tree.fragments().cloned().collect();
+                    for fragment in minimized.fragments() {
+                        assert!(
+                            input_set.contains(fragment),
+                            "minimized output contains fragment not in input"
+                        );
+                    }
+                });
+        }
+
+        #[test]
+        fn minimize_no_mutual_support() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let minimized = tree.minimize(&CountLeadingZeroBytes);
+                    let fragments: Vec<_> = minimized.fragments().collect();
+                    for (i, f1) in fragments.iter().enumerate() {
+                        for (j, f2) in fragments.iter().enumerate() {
+                            if i != j {
+                                assert!(
+                                    !f1.supports(f2.summary(), &CountLeadingZeroBytes),
+                                    "fragment {} supports fragment {} in minimized output",
+                                    i,
+                                    j
+                                );
+                            }
+                        }
+                    }
+                });
+        }
+
+        #[test]
+        fn minimize_idempotent() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let once = tree.minimize(&CountLeadingZeroBytes);
+                    let twice = once.minimize(&CountLeadingZeroBytes);
+
+                    let once_set: Set<_> = once.fragments().cloned().collect();
+                    let twice_set: Set<_> = twice.fragments().cloned().collect();
+
+                    assert_eq!(
+                        once_set, twice_set,
+                        "minimize should be idempotent: minimize(minimize(x)) == minimize(x)"
+                    );
+                });
+        }
     }
 
     mod minimize_tests {

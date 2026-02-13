@@ -14,7 +14,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -512,5 +512,81 @@ mod tests {
         );
 
         assert!(!deep.supports(&shallow_summary, &CountLeadingZeroBytes));
+    }
+
+    #[cfg(feature = "bolero")]
+    mod proptests {
+        use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
+
+        #[test]
+        fn supports_self() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    assert!(
+                        fragment.supports(fragment.summary(), &CountLeadingZeroBytes),
+                        "every fragment should support its own summary"
+                    );
+                });
+        }
+
+        #[test]
+        fn shallower_never_supports_deeper() {
+            #[derive(Debug)]
+            struct DepthPair {
+                shallow: Fragment,
+                deep: Fragment,
+            }
+
+            impl<'a> arbitrary::Arbitrary<'a> for DepthPair {
+                fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                    let shallow: Fragment = u.arbitrary()?;
+                    let deep: Fragment = u.arbitrary()?;
+                    Ok(Self { shallow, deep })
+                }
+            }
+
+            bolero::check!()
+                .with_arbitrary::<DepthPair>()
+                .for_each(|pair| {
+                    let shallow_depth = pair.shallow.depth(&CountLeadingZeroBytes);
+                    let deep_depth = pair.deep.depth(&CountLeadingZeroBytes);
+
+                    if shallow_depth < deep_depth {
+                        assert!(
+                            !pair.shallow.supports(pair.deep.summary(), &CountLeadingZeroBytes),
+                            "shallower fragment (depth {:?}) should never support deeper (depth {:?})",
+                            shallow_depth,
+                            deep_depth
+                        );
+                    }
+                });
+        }
+
+        #[test]
+        fn supports_block_includes_head() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    assert!(
+                        fragment.supports_block(fragment.head()),
+                        "supports_block should always include the fragment's head"
+                    );
+                });
+        }
+
+        #[test]
+        fn supports_block_includes_boundary() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    for boundary_commit in fragment.summary().boundary() {
+                        assert!(
+                            fragment.supports_block(*boundary_commit),
+                            "supports_block should include all boundary commits"
+                        );
+                    }
+                });
+        }
     }
 }

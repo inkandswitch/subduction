@@ -24,6 +24,7 @@ getrandom = { workspace = true, optional = true }
 minicbor = { workspace = true }
 nonempty = { workspace = true }
 num-bigint = { workspace = true }
+rand = { workspace = true, optional = true, features = ["small_rng"] }
 serde = { workspace = true, optional = true, features = ["derive"]}
 siphasher = { workspace = true }
 thiserror = { workspace = true }
@@ -57,6 +58,7 @@ std = [
   "thiserror/std",
   "tracing/std"
 ]
+test_utils = ["std", "arbitrary", "dep:rand"]
 
 [lints]
 workspace = true
