@@ -23,7 +23,9 @@ use siphasher::sip::SipHasher24;
 /// assert_eq!(seed.key0(), 42);
 /// assert_eq!(seed.key1(), 99);
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
+)]
 pub struct FingerprintSeed {
     #[n(0)]
     key0: u64,
@@ -284,13 +286,11 @@ impl<'a, T: 'static> arbitrary::Arbitrary<'a> for Fingerprint<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     #[test]
     #[cfg(feature = "getrandom")]
     fn random_produces_distinct_seeds() {
-        let a = FingerprintSeed::random();
-        let b = FingerprintSeed::random();
+        let a = super::FingerprintSeed::random();
+        let b = super::FingerprintSeed::random();
         assert_ne!(a, b);
     }
 }

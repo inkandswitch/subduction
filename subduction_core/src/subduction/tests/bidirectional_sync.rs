@@ -62,7 +62,7 @@ async fn make_test_fragment(data: &[u8]) -> (Signed<Fragment>, Blob, FragmentSum
     let blob_meta = BlobMeta::new(data);
     // Fragment head is a LooseCommit digest (the starting point of the fragment)
     let head = Digest::<LooseCommit>::hash_bytes(data);
-    let fragment = Fragment::new(head, BTreeSet::new(), vec![], blob_meta);
+    let fragment = Fragment::new(head, BTreeSet::new(), &[], blob_meta);
     let summary = fragment.summary().clone();
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob, summary)
@@ -446,7 +446,7 @@ async fn test_responder_requests_fragments() -> TestResult {
 
     // Create a fragment that Bob has but Alice doesn't
     let (_fragment, _blob, fragment_summary) = make_test_fragment(b"fragment - bob has this").await;
-    let frag_id = FragmentId::new(fragment_summary.head(), fragment_summary.boundary());
+    let frag_id = FragmentId::new(fragment_summary.head());
     let frag_fp: Fingerprint<FragmentId> = Fingerprint::new(&TEST_SEED, &frag_id);
 
     // Bob sends a BatchSyncRequest claiming to have this fragment (as a fingerprint)

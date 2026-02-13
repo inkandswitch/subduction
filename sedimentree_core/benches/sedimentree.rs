@@ -93,7 +93,7 @@ mod generators {
             .map(|i| digest_from_seed(head_seed + 200 + i as u64))
             .collect();
         let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
-        Fragment::new(head, boundary, checkpoints, blob_meta)
+        Fragment::new(head, boundary, &checkpoints, blob_meta)
     }
 
     /// Generate a linear chain of commits (each has one parent).
