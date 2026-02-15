@@ -12,7 +12,7 @@ use std::collections::BTreeSet;
 
 use sedimentree_core::{
     commit::CountLeadingZeroBytes,
-    test_utils::{seeded_rng, TestGraph},
+    test_utils::{TestGraph, seeded_rng},
 };
 
 /// Diamond merge: A diverges to B and C, which merge at D.
