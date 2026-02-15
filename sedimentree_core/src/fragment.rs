@@ -16,7 +16,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -502,9 +502,33 @@ mod tests {
         assert!(!deep.supports(&shallow_summary, &CountLeadingZeroBytes));
     }
 
+    #[test]
+    fn cbor_round_trip() {
+        let head = digest_with_depth(2, 1);
+        let boundary = digest_with_depth(1, 100);
+        let checkpoint = digest_with_depth(1, 50);
+        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[checkpoint]);
+
+        let encoded = minicbor::to_vec(&fragment).expect("encode");
+        let decoded: Fragment = minicbor::decode(&encoded).expect("decode");
+
+        assert_eq!(fragment, decoded);
+    }
+
     #[cfg(feature = "bolero")]
     mod proptests {
         use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
+
+        #[test]
+        fn cbor_round_trip() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    let encoded = minicbor::to_vec(fragment).expect("encode");
+                    let decoded: Fragment = minicbor::decode(&encoded).expect("decode");
+                    assert_eq!(fragment, &decoded, "CBOR round-trip should preserve data");
+                });
+        }
 
         #[test]
         fn supports_self() {
