@@ -3143,6 +3143,7 @@ dependencies = [
  "sedimentree_core",
  "serde",
  "siphasher",
+ "subduction_core",
  "testresult",
  "thiserror 2.0.18",
  "tokio",
