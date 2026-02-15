@@ -9,10 +9,9 @@ use crate::{
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
-        truncated::Truncated,
     },
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, FragmentSpec, FragmentSummary, id::FragmentId},
+    fragment::{Fragment, FragmentSpec, FragmentSummary, checkpoint::Checkpoint, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
@@ -222,8 +221,8 @@ impl Sedimentree {
             h.update(d.as_bytes());
         }
 
-        // Hash truncated checkpoints separately
-        let mut checkpoints: Vec<Truncated<Digest<LooseCommit>>> = minimal
+        // Hash checkpoints separately
+        let mut checkpoints: Vec<Checkpoint> = minimal
             .fragments()
             .flat_map(|s| s.checkpoints().iter().copied())
             .collect();
@@ -346,25 +345,25 @@ impl Sedimentree {
 
         // 3. Process deepest first, building supported set
         let mut minimized_fragments = Vec::<Fragment>::new();
-        let mut supported: Set<Truncated<Digest<LooseCommit>>> = Set::new();
+        let mut supported: Set<Checkpoint> = Set::new();
 
         for depth in depths {
             if let Some(group) = by_depth.remove(&depth) {
                 for fragment in group {
                     // Check if this fragment is fully supported by deeper fragments
-                    let dominated = supported.contains(&Truncated::new(fragment.head()))
+                    let dominated = supported.contains(&Checkpoint::new(fragment.head()))
                         && fragment
                             .summary()
                             .boundary()
                             .iter()
-                            .all(|b| supported.contains(&Truncated::new(*b)));
+                            .all(|b| supported.contains(&Checkpoint::new(*b)));
 
                     if !dominated {
                         // Accept this fragment and add its commits to supported set
-                        supported.insert(Truncated::new(fragment.head()));
-                        supported.extend(fragment.checkpoints().iter().cloned());
+                        supported.insert(Checkpoint::new(fragment.head()));
+                        supported.extend(fragment.checkpoints().iter().copied());
                         for b in fragment.summary().boundary() {
-                            supported.insert(Truncated::new(*b));
+                            supported.insert(Checkpoint::new(*b));
                         }
 
                         minimized_fragments.push(fragment.clone());

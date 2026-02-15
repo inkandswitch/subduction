@@ -1,8 +1,11 @@
 //! Fragment types for Sedimentree data partitioning.
 
+pub mod checkpoint;
 pub mod id;
 
 use alloc::collections::BTreeSet;
+
+use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
@@ -10,11 +13,10 @@ use crate::{
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
-        truncated::Truncated,
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -33,7 +35,7 @@ pub struct Fragment {
     #[n(0)]
     summary: FragmentSummary,
     #[n(1)]
-    checkpoints: BTreeSet<Truncated<Digest<LooseCommit>>>,
+    checkpoints: BTreeSet<Checkpoint>,
     #[n(2)]
     digest: Digest<Fragment>,
 }
@@ -42,7 +44,7 @@ impl Fragment {
     /// Constructor for a [`Fragment`].
     ///
     /// The `checkpoints` are raw commit digests that fall within the fragment's
-    /// range. They are truncated to 8 bytes internally for compact storage.
+    /// range. They are truncated to 16 bytes internally for compact storage.
     #[must_use]
     pub fn new(
         head: Digest<LooseCommit>,
@@ -50,8 +52,8 @@ impl Fragment {
         checkpoints: &[Digest<LooseCommit>],
         blob_meta: BlobMeta,
     ) -> Self {
-        let truncated_checkpoints: BTreeSet<Truncated<Digest<LooseCommit>>> =
-            checkpoints.iter().map(|d| Truncated::new(*d)).collect();
+        let truncated_checkpoints: BTreeSet<Checkpoint> =
+            checkpoints.iter().map(|d| Checkpoint::new(*d)).collect();
 
         let digest = {
             let mut hasher = blake3::Hasher::new();
@@ -121,7 +123,7 @@ impl Fragment {
     #[must_use]
     pub fn supports_block(&self, digest: Digest<LooseCommit>) -> bool {
         self.summary.head == digest
-            || self.checkpoints.contains(&Truncated::new(digest))
+            || self.checkpoints.contains(&Checkpoint::new(digest))
             || self.summary.boundary.contains(&digest)
     }
 
@@ -149,9 +151,9 @@ impl Fragment {
         &self.summary.boundary
     }
 
-    /// The truncated checkpoint set for compact covering checks.
+    /// The checkpoint set for compact covering checks.
     #[must_use]
-    pub const fn checkpoints(&self) -> &BTreeSet<Truncated<Digest<LooseCommit>>> {
+    pub const fn checkpoints(&self) -> &BTreeSet<Checkpoint> {
         &self.checkpoints
     }
 

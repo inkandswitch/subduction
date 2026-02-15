@@ -11,9 +11,9 @@ use alloc::{vec, vec::Vec};
 
 use crate::{
     collections::{Map, Set},
-    crypto::{digest::Digest, truncated::Truncated},
+    crypto::digest::Digest,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::Fragment,
+    fragment::{Fragment, checkpoint::Checkpoint},
     loose_commit::LooseCommit,
 };
 
@@ -368,11 +368,11 @@ impl CommitDag {
             }
         }
 
-        // Pre-index: reverse map for truncated checkpoint resolution
-        let truncated_to_digest: Map<Truncated<Digest<LooseCommit>>, Digest<LooseCommit>> = self
+        // Pre-index: reverse map for checkpoint resolution
+        let checkpoint_to_digest: Map<Checkpoint, Digest<LooseCommit>> = self
             .nodes
             .iter()
-            .map(|node| (Truncated::new(node.hash), node.hash))
+            .map(|node| (Checkpoint::new(node.hash), node.hash))
             .collect();
 
         // Find the tips: heads of the commit DAG + fragment boundary commits
@@ -415,8 +415,8 @@ impl CommitDag {
                 } else if let Some(supporting) = fragments_by_boundary.get(&commit)
                     && let Some(fragment) = supporting.iter().max_by_key(|s| s.depth(hash_metric))
                 {
-                    for truncated_cp in fragment.checkpoints() {
-                        if let Some(full_digest) = truncated_to_digest.get(truncated_cp) {
+                    for checkpoint in fragment.checkpoints() {
+                        if let Some(full_digest) = checkpoint_to_digest.get(checkpoint) {
                             stack.push(*full_digest);
                         }
                     }
