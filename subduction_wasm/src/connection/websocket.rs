@@ -148,7 +148,10 @@ impl WasmWebSocket {
                     }
                 }
             } else {
-                tracing::error!("unexpected message event (not ArrayBuffer): {:?}", event.data());
+                tracing::error!(
+                    "unexpected message event (not ArrayBuffer): {:?}",
+                    event.data()
+                );
             }
         });
 
