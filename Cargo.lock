@@ -2826,6 +2826,7 @@ dependencies = [
  "nonempty 0.12.0",
  "num-bigint",
  "rand 0.8.5",
+ "sedimentree_core",
  "serde",
  "siphasher",
  "thiserror 2.0.18",

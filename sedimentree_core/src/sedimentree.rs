@@ -830,6 +830,7 @@ mod tests {
         assert_eq!(diff.remote_commits.len(), 2);
     }
 
+    #[cfg(all(test, feature = "bolero"))]
     mod proptests {
         use alloc::vec;
         use core::sync::atomic::{AtomicU64, Ordering};

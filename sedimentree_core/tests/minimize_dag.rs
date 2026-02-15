@@ -3,12 +3,16 @@
 //! These tests verify that the minimize algorithm correctly handles
 //! non-trivial commit graph structures including diamonds, multi-head
 //! divergence, and nested fragment depths.
+//!
+//! Requires the `test_utils` feature to be enabled.
+
+#![cfg(feature = "test_utils")]
 
 use std::collections::BTreeSet;
 
 use sedimentree_core::{
     commit::CountLeadingZeroBytes,
-    test_utils::{TestGraph, seeded_rng},
+    test_utils::{seeded_rng, TestGraph},
 };
 
 /// Diamond merge: A diverges to B and C, which merge at D.

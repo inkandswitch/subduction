@@ -36,6 +36,7 @@ bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
 dhat = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
+sedimentree_core = { path = ".", features = ["bolero", "getrandom", "test_utils"] }
 tracing-subscriber = { workspace = true }
 
 [[bench]]
