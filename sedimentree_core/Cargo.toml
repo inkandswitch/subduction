@@ -24,7 +24,7 @@ getrandom = { workspace = true, optional = true }
 minicbor = { workspace = true }
 nonempty = { workspace = true }
 num-bigint = { workspace = true }
-rand = { workspace = true, optional = true, features = ["small_rng"] }
+rand = { workspace = true, optional = true }
 serde = { workspace = true, optional = true, features = ["derive"]}
 siphasher = { workspace = true }
 thiserror = { workspace = true }
@@ -35,7 +35,6 @@ arbitrary = { workspace = true, optional = false, features = ["derive"] }
 bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
 dhat = { workspace = true }
-rand = { workspace = true, features = ["small_rng"] }
 sedimentree_core = { path = ".", features = ["bolero", "getrandom", "test_utils"] }
 tracing-subscriber = { workspace = true }
 
@@ -59,7 +58,7 @@ std = [
   "thiserror/std",
   "tracing/std"
 ]
-test_utils = ["std", "arbitrary", "dep:rand"]
+test_utils = ["std", "arbitrary", "dep:rand", "rand/small_rng"]
 
 [lints]
 workspace = true
