@@ -2829,6 +2829,7 @@ dependencies = [
  "sedimentree_core",
  "serde",
  "siphasher",
+ "testresult",
  "thiserror 2.0.18",
  "tracing",
  "tracing-subscriber",

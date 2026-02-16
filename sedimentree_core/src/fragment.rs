@@ -16,7 +16,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -288,6 +288,8 @@ impl FragmentSpec {
 mod tests {
     use alloc::collections::BTreeSet;
 
+    use testresult::TestResult;
+
     use crate::{
         blob::BlobMeta,
         commit::CountLeadingZeroBytes,
@@ -503,16 +505,17 @@ mod tests {
     }
 
     #[test]
-    fn cbor_round_trip() {
+    fn cbor_round_trip() -> TestResult {
         let head = digest_with_depth(2, 1);
         let boundary = digest_with_depth(1, 100);
         let checkpoint = digest_with_depth(1, 50);
         let fragment = make_fragment(head, BTreeSet::from([boundary]), &[checkpoint]);
 
-        let encoded = minicbor::to_vec(&fragment).expect("encode");
-        let decoded: Fragment = minicbor::decode(&encoded).expect("decode");
+        let encoded = minicbor::to_vec(&fragment)?;
+        let decoded: Fragment = minicbor::decode(&encoded)?;
 
         assert_eq!(fragment, decoded);
+        Ok(())
     }
 
     #[cfg(feature = "bolero")]
@@ -520,12 +523,14 @@ mod tests {
         use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
 
         #[test]
+        #[allow(clippy::expect_used)]
         fn cbor_round_trip() {
             bolero::check!()
                 .with_arbitrary::<Fragment>()
                 .for_each(|fragment| {
-                    let encoded = minicbor::to_vec(fragment).expect("encode");
-                    let decoded: Fragment = minicbor::decode(&encoded).expect("decode");
+                    let encoded = minicbor::to_vec(fragment).expect("encoding should succeed");
+                    let decoded: Fragment =
+                        minicbor::decode(&encoded).expect("decoding should succeed");
                     assert_eq!(fragment, &decoded, "CBOR round-trip should preserve data");
                 });
         }
@@ -567,9 +572,7 @@ mod tests {
                     if shallow_depth < deep_depth {
                         assert!(
                             !pair.shallow.supports(pair.deep.summary(), &CountLeadingZeroBytes),
-                            "shallower fragment (depth {:?}) should never support deeper (depth {:?})",
-                            shallow_depth,
-                            deep_depth
+                            "shallower fragment (depth {shallow_depth:?}) should never support deeper (depth {deep_depth:?})"
                         );
                     }
                 });

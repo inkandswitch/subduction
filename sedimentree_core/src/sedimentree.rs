@@ -831,6 +831,7 @@ mod tests {
     }
 
     #[cfg(all(test, feature = "bolero"))]
+    #[allow(clippy::similar_names)]
     mod proptests {
         use alloc::vec;
         use core::sync::atomic::{AtomicU64, Ordering};
@@ -1127,9 +1128,7 @@ mod tests {
                             if i != j {
                                 assert!(
                                     !f1.supports(f2.summary(), &CountLeadingZeroBytes),
-                                    "fragment {} supports fragment {} in minimized output",
-                                    i,
-                                    j
+                                    "fragment {i} supports fragment {j} in minimized output"
                                 );
                             }
                         }
@@ -1156,6 +1155,7 @@ mod tests {
         }
     }
 
+    #[allow(clippy::similar_names)]
     mod minimize_tests {
         use alloc::{collections::BTreeSet, vec, vec::Vec};
 
@@ -1458,9 +1458,7 @@ mod tests {
                     if i != j {
                         assert!(
                             !f1.supports(f2.summary(), &CountLeadingZeroBytes),
-                            "fragment {} supports fragment {} in minimized output",
-                            i,
-                            j
+                            "fragment {i} supports fragment {j} in minimized output"
                         );
                     }
                 }

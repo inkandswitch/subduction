@@ -1,4 +1,4 @@
-//! Integration tests for minimize() + simplify() interaction with complex DAGs.
+//! Integration tests for `minimize()` + `simplify()` interaction with complex DAGs.
 //!
 //! These tests verify that the minimize algorithm correctly handles
 //! non-trivial commit graph structures including diamonds, multi-head
@@ -7,6 +7,7 @@
 //! Requires the `test_utils` feature to be enabled.
 
 #![cfg(feature = "test_utils")]
+#![allow(clippy::similar_names)]
 
 use std::collections::BTreeSet;
 
@@ -140,8 +141,7 @@ fn deep_linear_chain() {
         let hash = graph.node_hash(node);
         assert!(
             !minimized.has_loose_commit(hash),
-            "commit {} should be pruned",
-            node
+            "commit {node} should be pruned"
         );
     }
 }

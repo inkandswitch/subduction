@@ -281,6 +281,7 @@ pub fn seeded_rng(seed: u64) -> SmallRng {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use testresult::TestResult;
 
     #[test]
     fn digest_with_depth_produces_correct_leading_zeros() {
@@ -313,7 +314,7 @@ mod tests {
     }
 
     #[test]
-    fn test_graph_diamond() {
+    fn test_graph_diamond() -> TestResult {
         let mut rng = seeded_rng(42);
         let graph = TestGraph::new(
             &mut rng,
@@ -326,7 +327,12 @@ mod tests {
 
         // Find commit d and verify it has two parents
         let d_hash = graph.node_hash("d");
-        let d_commit = commits.iter().find(|c| c.digest() == d_hash).unwrap();
+        let d_commit = commits
+            .iter()
+            .find(|c| c.digest() == d_hash)
+            .ok_or("commit d not found")?;
         assert_eq!(d_commit.parents().len(), 2);
+
+        Ok(())
     }
 }
