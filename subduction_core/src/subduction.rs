@@ -104,7 +104,7 @@ use core::{
 };
 use error::{
     AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
-    SendRequestedDataError, WriteError,
+    SendRequestedDataError, Unauthorized, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -1578,7 +1578,7 @@ impl<
                     error = %e,
                     "policy rejected fetch request"
                 );
-                error::Unauthorized {
+                Unauthorized {
                     peer: peer_id,
                     sedimentree_id: id,
                 }
@@ -2720,7 +2720,7 @@ impl<
                     error = %e,
                     "policy rejected fetch request"
                 );
-                error::Unauthorized {
+                Unauthorized {
                     peer: peer_id,
                     sedimentree_id: id,
                 }
