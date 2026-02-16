@@ -124,6 +124,8 @@ impl<T: 'static, const N: usize> Truncated<Digest<T>, N> {
             "truncation size cannot exceed digest size (32 bytes)"
         );
         let mut bytes = [0u8; N];
+        // SAFETY: We assert N <= 32 above, and digest is always 32 bytes
+        #[allow(clippy::indexing_slicing)]
         bytes.copy_from_slice(&digest.as_bytes()[..N]);
         Self {
             bytes,

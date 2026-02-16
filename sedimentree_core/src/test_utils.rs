@@ -37,19 +37,17 @@ use crate::{
 #[must_use]
 pub fn digest_with_depth(leading_zeros: u8, seed: u8) -> Digest<LooseCommit> {
     let mut bytes = [0u8; 32];
-    // Set leading zeros
-    for i in 0..leading_zeros as usize {
-        if i < 32 {
-            bytes[i] = 0;
-        }
+    // Set leading zeros (bytes already initialized to 0, but explicit for clarity)
+    for slot in bytes.iter_mut().take(leading_zeros as usize) {
+        *slot = 0;
     }
     // First non-zero byte (ensures exact depth)
-    if (leading_zeros as usize) < 32 {
-        bytes[leading_zeros as usize] = 1;
+    if let Some(slot) = bytes.get_mut(leading_zeros as usize) {
+        *slot = 1;
     }
     // Seed for uniqueness
-    if (leading_zeros as usize + 1) < 32 {
-        bytes[leading_zeros as usize + 1] = seed;
+    if let Some(slot) = bytes.get_mut(leading_zeros as usize + 1) {
+        *slot = seed;
     }
     Digest::from_bytes(bytes)
 }
@@ -65,8 +63,10 @@ pub fn random_digest_with_depth<R: Rng>(rng: &mut R, leading_zeros: u32) -> Dige
         *slot = 0;
     }
     // Ensure the byte after zeros is non-zero to get exact depth
-    if (leading_zeros as usize) < 32 && bytes[leading_zeros as usize] == 0 {
-        bytes[leading_zeros as usize] = 1;
+    if let Some(slot) = bytes.get_mut(leading_zeros as usize)
+        && *slot == 0
+    {
+        *slot = 1;
     }
     Digest::from_bytes(bytes)
 }
@@ -127,6 +127,10 @@ impl TestGraph {
     /// * `node_info` - List of (name, depth) pairs defining nodes
     /// * `edges` - List of (parent, child) pairs defining edges
     ///
+    /// # Panics
+    ///
+    /// Panics if an edge references a node name that doesn't exist in `node_info`.
+    ///
     /// # Example
     ///
     /// ```
@@ -136,16 +140,13 @@ impl TestGraph {
     /// let mut rng = SmallRng::seed_from_u64(42);
     /// let graph = TestGraph::new(
     ///     &mut rng,
-    ///     vec![("a", 2), ("b", 0), ("c", 0), ("d", 2)],
-    ///     vec![("a", "b"), ("b", "d"), ("a", "c"), ("c", "d")],
+    ///     &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
+    ///     &[("a", "b"), ("b", "d"), ("a", "c"), ("c", "d")],
     /// );
     /// ```
-    pub fn new<R: Rng>(
-        rng: &mut R,
-        node_info: Vec<(&str, usize)>,
-        edges: Vec<(&str, &str)>,
-    ) -> Self {
-        let commit_hashes = Self::make_commit_hashes(rng, &node_info);
+    #[allow(clippy::panic)]
+    pub fn new<R: Rng>(rng: &mut R, node_info: &[(&str, usize)], edges: &[(&str, &str)]) -> Self {
+        let commit_hashes = Self::make_commit_hashes(rng, node_info);
         let mut nodes = Map::new();
         let mut blob_metas = Map::new();
 
@@ -157,16 +158,13 @@ impl TestGraph {
         let mut parents: Map<Digest<LooseCommit>, Vec<Digest<LooseCommit>>> = Map::new();
 
         for (parent_name, child_name) in edges {
-            let Some(child_hash) = nodes.get(child_name) else {
+            let Some(child_hash) = nodes.get(*child_name) else {
                 panic!("Child node not found: {child_name}");
             };
-            let Some(parent_hash) = nodes.get(parent_name) else {
+            let Some(parent_hash) = nodes.get(*parent_name) else {
                 panic!("Parent node not found: {parent_name}");
             };
-            parents
-                .entry(*child_hash)
-                .or_insert_with(Vec::new)
-                .push(*parent_hash);
+            parents.entry(*child_hash).or_default().push(*parent_hash);
         }
 
         Self {
@@ -220,6 +218,7 @@ impl TestGraph {
     ///
     /// Panics if the node name doesn't exist.
     #[must_use]
+    #[allow(clippy::panic)]
     pub fn node_hash(&self, node: &str) -> Digest<LooseCommit> {
         *self
             .nodes
@@ -303,7 +302,7 @@ mod tests {
     #[test]
     fn test_graph_basic_construction() {
         let mut rng = seeded_rng(42);
-        let graph = TestGraph::new(&mut rng, vec![("a", 2), ("b", 0)], vec![("a", "b")]);
+        let graph = TestGraph::new(&mut rng, &[("a", 2), ("b", 0)], &[("a", "b")]);
 
         assert!(graph.has_node("a"));
         assert!(graph.has_node("b"));
@@ -318,8 +317,8 @@ mod tests {
         let mut rng = seeded_rng(42);
         let graph = TestGraph::new(
             &mut rng,
-            vec![("a", 2), ("b", 0), ("c", 0), ("d", 2)],
-            vec![("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+            &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
+            &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
         );
 
         let commits = graph.commits();

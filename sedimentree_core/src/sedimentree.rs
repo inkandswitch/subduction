@@ -327,7 +327,7 @@ impl Sedimentree {
     /// shallower fragments are discarded if their entire range (head + boundary)
     /// is supported by already-accepted deeper fragments.
     ///
-    /// Complexity: O(M × avg_checkpoints) where M = total fragments.
+    /// Complexity: `O(|M| × avg_checkpoints)` where M = total fragments.
     #[must_use]
     pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
         // 1. Group fragments by depth

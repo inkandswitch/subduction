@@ -30,8 +30,8 @@ fn diamond_merge_fragment_covers_interior() {
     let mut rng = seeded_rng(100);
     let graph = TestGraph::new(
         &mut rng,
-        vec![("a", 2), ("b", 0), ("c", 0), ("d", 2)],
-        vec![("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+        &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
+        &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
     );
 
     // Fragment from A to D, with B and C as checkpoints
@@ -70,8 +70,8 @@ fn diamond_partial_coverage() {
     let mut rng = seeded_rng(101);
     let graph = TestGraph::new(
         &mut rng,
-        vec![("a", 2), ("b", 0), ("c", 0), ("d", 2)],
-        vec![("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
+        &[("a", 2), ("b", 0), ("c", 0), ("d", 2)],
+        &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d")],
     );
 
     // Fragment from A to D, only B in checkpoints (C not included)
@@ -96,8 +96,8 @@ fn independent_branches_separate_fragments() {
     let mut rng = seeded_rng(102);
     let graph = TestGraph::new(
         &mut rng,
-        vec![("a", 2), ("b", 2), ("c", 2), ("d", 2)],
-        vec![("a", "b"), ("c", "d")],
+        &[("a", 2), ("b", 2), ("c", 2), ("d", 2)],
+        &[("a", "b"), ("c", "d")],
     );
 
     let fragment1 = graph.make_fragment("a", &["b"], &[]);
@@ -122,8 +122,8 @@ fn deep_linear_chain() {
     let mut rng = seeded_rng(103);
     let graph = TestGraph::new(
         &mut rng,
-        vec![("a", 3), ("b", 0), ("c", 0), ("d", 0), ("e", 2)],
-        vec![("a", "b"), ("b", "c"), ("c", "d"), ("d", "e")],
+        &[("a", 3), ("b", 0), ("c", 0), ("d", 0), ("e", 2)],
+        &[("a", "b"), ("b", "c"), ("c", "d"), ("d", "e")],
     );
 
     // Fragment covers entire chain
@@ -264,8 +264,8 @@ fn fragment_boundary_at_merge() {
     let mut rng = seeded_rng(105);
     let graph = TestGraph::new(
         &mut rng,
-        vec![("a", 2), ("b", 0), ("c", 0), ("d", 2), ("e", 0)],
-        vec![("a", "b"), ("a", "c"), ("b", "d"), ("c", "d"), ("d", "e")],
+        &[("a", 2), ("b", 0), ("c", 0), ("d", 2), ("e", 0)],
+        &[("a", "b"), ("a", "c"), ("b", "d"), ("c", "d"), ("d", "e")],
     );
 
     // Fragment from A to D (boundary at merge point)
