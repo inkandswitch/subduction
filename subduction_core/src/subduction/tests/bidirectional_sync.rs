@@ -16,7 +16,7 @@
 use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
         nonce_cache::NonceCache,
         test_utils::ChannelMockConnection,
     },
@@ -144,8 +144,11 @@ async fn test_responder_requests_missing_commits() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert_eq!(
@@ -224,8 +227,11 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert!(
@@ -369,8 +375,11 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             .await?
             .expect("should receive response from Alice");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert_eq!(
@@ -395,7 +404,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
                 requestor: bob_peer_id,
                 nonce: 1,
             },
-            diff: diff.clone(),
+            result: SyncResult::Ok(diff.clone()),
         }))
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -474,8 +483,11 @@ async fn test_responder_requests_fragments() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert!(
@@ -557,8 +569,11 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { diff, .. }) = response else {
+    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
+    };
+    let SyncResult::Ok(diff) = result else {
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert!(

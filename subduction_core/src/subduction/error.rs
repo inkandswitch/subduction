@@ -3,10 +3,21 @@
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Blob, crypto::digest::Digest};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
-use crate::{connection::Connection, storage::traits::Storage};
+use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
+
+/// The peer is not authorized to perform the requested operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+#[error("peer {peer} not authorized to access sedimentree {sedimentree_id}")]
+pub struct Unauthorized {
+    /// The peer that attempted the operation.
+    pub peer: PeerId,
+
+    /// The sedimentree they attempted to access.
+    pub sedimentree_id: SedimentreeId,
+}
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
 #[derive(Debug, Clone, Copy, Error)]
@@ -110,6 +121,30 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, Put
     /// The storage policy rejected the write.
     #[error("put disallowed: {0}")]
     PutDisallowed(PutErr),
+}
+
+/// An error that can occur when sending requested data to a peer.
+#[derive(Debug, Error)]
+pub enum SendRequestedDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+    /// An I/O error occurred.
+    #[error(transparent)]
+    Io(#[from] IoError<F, S, C>),
+
+    /// The peer is not authorized to access the requested sedimentree.
+    #[error(transparent)]
+    Unauthorized(#[from] Unauthorized),
+}
+
+/// Error when a sync request is rejected by the remote peer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+pub enum SyncRejected {
+    /// The sedimentree was not found on the remote peer.
+    #[error("sedimentree {0} not found on remote peer")]
+    NotFound(SedimentreeId),
+
+    /// Not authorized to access the sedimentree.
+    #[error("not authorized to access sedimentree {0}")]
+    Unauthorized(SedimentreeId),
 }
 
 #[cfg(test)]

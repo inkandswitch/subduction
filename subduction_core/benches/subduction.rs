@@ -40,7 +40,7 @@ mod generators {
     };
     use subduction_core::{
         connection::message::{
-            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff,
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncResult,
         },
         crypto::{signed::Signed, signer::MemorySigner},
         peer::id::PeerId,
@@ -192,9 +192,9 @@ mod generators {
     pub(super) fn batch_sync_request_from_seed(seed: u64) -> BatchSyncRequest {
         BatchSyncRequest {
             id: sedimentree_id_from_seed(seed),
-            req_id: request_id_from_seed(seed.wrapping_add(1), seed),
+            req_id: request_id_from_seed(seed, seed),
             fingerprint_summary: FingerprintSummary::new(
-                FingerprintSeed::new(seed, seed.wrapping_add(1)),
+                FingerprintSeed::new(seed, seed),
                 BTreeSet::new(),
                 BTreeSet::new(),
             ),
@@ -211,8 +211,13 @@ mod generators {
     ) -> BatchSyncResponse {
         BatchSyncResponse {
             id: sedimentree_id_from_seed(seed),
-            req_id: request_id_from_seed(seed.wrapping_add(1), seed),
-            diff: sync_diff_from_seed(seed.wrapping_add(2), num_commits, num_fragments, blob_size),
+            req_id: request_id_from_seed(seed, seed),
+            result: SyncResult::Ok(sync_diff_from_seed(
+                seed,
+                num_commits,
+                num_fragments,
+                blob_size,
+            )),
         }
     }
 }
@@ -501,7 +506,9 @@ mod sync {
 
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
-    use subduction_core::connection::message::{BatchSyncRequest, BatchSyncResponse, Message};
+    use subduction_core::connection::message::{
+        BatchSyncRequest, BatchSyncResponse, Message, SyncResult,
+    };
 
     use super::generators::{
         batch_sync_request_from_seed, batch_sync_response_from_seed, request_id_from_seed,
@@ -620,7 +627,7 @@ mod sync {
                         |(id, req_id, diff)| BatchSyncResponse {
                             id: black_box(id),
                             req_id: black_box(req_id),
-                            diff: black_box(diff),
+                            result: SyncResult::Ok(black_box(diff)),
                         },
                         BatchSize::SmallInput,
                     );

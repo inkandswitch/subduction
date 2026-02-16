@@ -80,8 +80,8 @@ use crate::{
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
-            BatchSyncRequest, BatchSyncResponse, Message, RemoveSubscriptions, RequestId,
-            RequestedData, SyncDiff,
+            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, Message, RemoveSubscriptions,
+            RequestId, RequestedData, SyncDiff, SyncResult,
         },
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
@@ -90,7 +90,7 @@ use crate::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
-    storage::{powerbox::StoragePowerbox, putter::Putter},
+    storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
@@ -104,7 +104,7 @@ use core::{
 };
 use error::{
     AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
-    WriteError,
+    SendRequestedDataError, Unauthorized, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -131,8 +131,6 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
-
-use crate::storage::traits::Storage;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -599,11 +597,23 @@ impl<
                         .await?; // try responing again
                 }
             }
-            Message::BatchSyncResponse(BatchSyncResponse { id, diff, .. }) => {
+            Message::BatchSyncResponse(BatchSyncResponse { id, result, .. }) => {
                 #[cfg(feature = "metrics")]
                 crate::metrics::batch_sync_response();
 
-                self.recv_batch_sync_response(&from, id, diff).await?;
+                match result {
+                    SyncResult::Ok(diff) => {
+                        self.recv_batch_sync_response(&from, id, diff).await?;
+                    }
+                    SyncResult::NotFound => {
+                        tracing::info!("peer {from} reports sedimentree {id:?} not found");
+                    }
+                    SyncResult::Unauthorized => {
+                        tracing::info!(
+                            "peer {from} reports we are unauthorized to access sedimentree {id:?}"
+                        );
+                    }
+                }
             }
             Message::BlobsRequest { id, digests } => {
                 match self.recv_blob_request(conn, id, &digests).await {
@@ -657,6 +667,9 @@ impl<
             Message::RemoveSubscriptions(RemoveSubscriptions { ids }) => {
                 self.remove_subscriptions(from, &ids).await;
                 tracing::debug!("removed subscriptions for peer {from}: {ids:?}");
+            }
+            Message::DataRequestRejected(DataRequestRejected { id }) => {
+                tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
             }
         }
 
@@ -1074,7 +1087,7 @@ impl<
                     let req_id = conn.next_request_id().await;
                     let BatchSyncResponse {
                         id,
-                        diff,
+                        result,
                         req_id: resp_batch_id,
                     } = conn
                         .call(
@@ -1091,12 +1104,36 @@ impl<
 
                     debug_assert_eq!(req_id, resp_batch_id);
 
+                    let diff = match result {
+                        SyncResult::Ok(diff) => diff,
+                        SyncResult::NotFound => {
+                            tracing::debug!(
+                                "peer {:?} reports sedimentree {id:?} not found",
+                                conn.peer_id()
+                            );
+                            continue;
+                        }
+                        SyncResult::Unauthorized => {
+                            tracing::debug!(
+                                "peer {:?} reports we are unauthorized for sedimentree {id:?}",
+                                conn.peer_id()
+                            );
+                            continue;
+                        }
+                    };
+
                     // Send back data the responder requested (bidirectional sync)
                     if !diff.requesting.is_empty()
                         && let Err(e) = self
                             .send_requested_data(&conn, id, &seed, &diff.requesting)
                             .await
                     {
+                        if matches!(e, SendRequestedDataError::Unauthorized(_)) {
+                            let msg: Message = DataRequestRejected { id }.into();
+                            if let Err(send_err) = conn.send(&msg).await {
+                                tracing::error!("failed to send DataRequestRejected: {send_err}");
+                            }
+                        }
                         tracing::warn!(
                             "failed to send requested data to peer {:?}: {e}",
                             conn.peer_id()
@@ -1556,7 +1593,7 @@ impl<
     ///
     /// # Errors
     ///
-    /// * [`IoError`] if a storage or network error occurs.
+    /// * [`ListenError::IoError`] if a storage or network error occurs.
     #[allow(clippy::too_many_lines)]
     pub async fn recv_batch_sync_request(
         &self,
@@ -1568,13 +1605,27 @@ impl<
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
 
         let peer_id = conn.peer_id();
-        let Ok(fetcher) = self.storage.get_fetcher::<F>(peer_id, id).await else {
-            tracing::warn!(
-                "peer {} not authorized to fetch sedimentree {:?}, ignoring request",
-                peer_id,
-                id
-            );
-            return Ok(());
+        let fetcher = match self.storage.get_fetcher::<F>(peer_id, id).await {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::debug!(
+                    %peer_id,
+                    ?id,
+                    error = %e,
+                    "policy rejected fetch request"
+                );
+                // Send unauthorized response and return Ok - this is not a connection error
+                let msg: Message = BatchSyncResponse {
+                    id,
+                    req_id,
+                    result: SyncResult::Unauthorized,
+                }
+                .into();
+                if let Err(e) = conn.send(&msg).await {
+                    tracing::error!("failed to send unauthorized response: {e}");
+                }
+                return Ok(());
+            }
         };
 
         let mut their_missing_commits = Vec::new();
@@ -1704,7 +1755,7 @@ impl<
         let msg: Message = BatchSyncResponse {
             id,
             req_id,
-            diff: sync_diff,
+            result: SyncResult::Ok(sync_diff),
         }
         .into();
         if let Err(e) = conn.send(&msg).await {
@@ -1873,15 +1924,25 @@ impl<
 
             match result {
                 Err(e) => conn_errs.push((conn, e)),
-                Ok(BatchSyncResponse {
-                    diff:
-                        SyncDiff {
-                            missing_commits,
-                            missing_fragments,
-                            requesting,
-                        },
-                    ..
-                }) => {
+                Ok(BatchSyncResponse { result, .. }) => {
+                    let SyncDiff {
+                        missing_commits,
+                        missing_fragments,
+                        requesting,
+                    } = match result {
+                        SyncResult::Ok(diff) => diff,
+                        SyncResult::NotFound => {
+                            tracing::debug!("peer {to_ask:?} reports sedimentree {id:?} not found");
+                            continue;
+                        }
+                        SyncResult::Unauthorized => {
+                            tracing::debug!(
+                                "peer {to_ask:?} reports we are unauthorized for sedimentree {id:?}"
+                            );
+                            continue;
+                        }
+                    };
+
                     let putter = match self.storage.get_putter::<F>(*to_ask, *to_ask, id).await {
                         Ok(p) => p,
                         Err(e) => {
@@ -1951,6 +2012,18 @@ impl<
                                 );
                                 stats.commits_sent += sent.commits;
                                 stats.fragments_sent += sent.fragments;
+                            }
+                            Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
+                                let msg: Message = DataRequestRejected { id }.into();
+                                if let Err(send_err) = conn.send(&msg).await {
+                                    tracing::error!(
+                                        "failed to send DataRequestRejected: {send_err}"
+                                    );
+                                }
+                                tracing::warn!(
+                                    "failed to send requested data to peer {:?}: {e}",
+                                    to_ask
+                                );
                             }
                             Err(e) => {
                                 tracing::warn!(
@@ -2084,15 +2157,25 @@ impl<
 
             match result {
                 Err(e) => conn_errs.push((conn, e)),
-                Ok(BatchSyncResponse {
-                    diff:
-                        SyncDiff {
-                            missing_commits,
-                            missing_fragments,
-                            requesting,
-                        },
-                    ..
-                }) => {
+                Ok(BatchSyncResponse { result, .. }) => {
+                    let SyncDiff {
+                        missing_commits,
+                        missing_fragments,
+                        requesting,
+                    } = match result {
+                        SyncResult::Ok(diff) => diff,
+                        SyncResult::NotFound => {
+                            tracing::debug!("peer {to_ask:?} reports sedimentree {id:?} not found");
+                            continue;
+                        }
+                        SyncResult::Unauthorized => {
+                            tracing::debug!(
+                                "peer {to_ask:?} reports we are unauthorized for sedimentree {id:?}"
+                            );
+                            continue;
+                        }
+                    };
+
                     let putter = match self.storage.get_putter::<F>(*to_ask, *to_ask, id).await {
                         Ok(p) => p,
                         Err(e) => {
@@ -2240,15 +2323,25 @@ impl<
 
         match result {
             Err(e) => Ok((false, stats, None, Some(e))),
-            Ok(BatchSyncResponse {
-                diff:
-                    SyncDiff {
-                        missing_commits,
-                        missing_fragments,
-                        requesting,
-                    },
-                ..
-            }) => {
+            Ok(BatchSyncResponse { result, .. }) => {
+                let SyncDiff {
+                    missing_commits,
+                    missing_fragments,
+                    requesting,
+                } = match result {
+                    SyncResult::Ok(diff) => diff,
+                    SyncResult::NotFound => {
+                        tracing::debug!("peer {peer_id:?} reports sedimentree {id:?} not found");
+                        return Ok((false, stats, None, None));
+                    }
+                    SyncResult::Unauthorized => {
+                        tracing::debug!(
+                            "peer {peer_id:?} reports we are unauthorized for sedimentree {id:?}"
+                        );
+                        return Ok((false, stats, None, None));
+                    }
+                };
+
                 let putter = match self.storage.get_putter::<F>(peer_id, peer_id, id).await {
                     Ok(p) => p,
                     Err(e) => {
@@ -2400,15 +2493,27 @@ impl<
 
                         match result {
                             Err(e) => conn_errs.push((conn.clone(), e)),
-                            Ok(BatchSyncResponse {
-                                diff:
-                                    SyncDiff {
-                                        missing_commits,
-                                        missing_fragments,
-                                        requesting,
-                                    },
-                                ..
-                            }) => {
+                            Ok(BatchSyncResponse { result, .. }) => {
+                                let SyncDiff {
+                                    missing_commits,
+                                    missing_fragments,
+                                    requesting,
+                                } = match result {
+                                    SyncResult::Ok(diff) => diff,
+                                    SyncResult::NotFound => {
+                                        tracing::debug!(
+                                            "peer {peer_id:?} reports sedimentree {id:?} not found"
+                                        );
+                                        continue;
+                                    }
+                                    SyncResult::Unauthorized => {
+                                        tracing::debug!(
+                                            "peer {peer_id:?} reports we are unauthorized for sedimentree {id:?}"
+                                        );
+                                        continue;
+                                    }
+                                };
+
                                 let putter =
                                     match self.storage.get_putter::<F>(*peer_id, *peer_id, id).await
                                     {
@@ -2476,6 +2581,16 @@ impl<
                                         Ok(sent) => {
                                             stats.commits_sent += sent.commits;
                                             stats.fragments_sent += sent.fragments;
+                                        }
+                                        Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
+                                            let msg: Message = DataRequestRejected { id }.into();
+                                            if let Err(send_err) = conn.send(&msg).await {
+                                                tracing::error!("failed to send DataRequestRejected: {send_err}");
+                                            }
+                                            tracing::warn!(
+                                                "failed to send requested data to peer {:?}: {e}",
+                                                peer_id
+                                            );
                                         }
                                         Err(e) => {
                                             tracing::warn!(
@@ -2680,7 +2795,8 @@ impl<
     ///
     /// # Errors
     ///
-    /// Returns [`IoError`] if storage operations fail.
+    /// * [`SendRequestedDataError::Unauthorized`] if the peer is not authorized to fetch.
+    /// * [`SendRequestedDataError::Io`] if storage operations fail.
     #[allow(clippy::too_many_lines)]
     pub async fn send_requested_data(
         &self,
@@ -2688,7 +2804,7 @@ impl<
         id: SedimentreeId,
         seed: &FingerprintSeed,
         requesting: &RequestedData,
-    ) -> Result<SendCount, IoError<F, S, C>> {
+    ) -> Result<SendCount, SendRequestedDataError<F, S, C>> {
         if requesting.is_empty() {
             return Ok(SendCount::default());
         }
@@ -2701,13 +2817,20 @@ impl<
             peer_id
         );
 
-        let Ok(fetcher) = self.storage.get_fetcher::<F>(peer_id, id).await else {
-            tracing::warn!(
-                "peer {} not authorized to fetch sedimentree {:?}, skipping requested data",
-                peer_id,
-                id
-            );
-            return Ok(SendCount::default());
+        let fetcher = match self.storage.get_fetcher::<F>(peer_id, id).await {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::debug!(
+                    %peer_id,
+                    ?id,
+                    error = %e,
+                    "policy rejected data request"
+                );
+                return Err(SendRequestedDataError::Unauthorized(Unauthorized {
+                    peer: peer_id,
+                    sedimentree_id: id,
+                }));
+            }
         };
 
         // Resolve requested fingerprints → digests via reverse-lookup tables

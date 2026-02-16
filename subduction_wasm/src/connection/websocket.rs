@@ -94,9 +94,8 @@ impl WasmWebSocket {
                             match msg {
                                 Message::BatchSyncResponse(resp) => {
                                     tracing::debug!(
-                                        "BatchSyncResponse received: {} commits, {} fragments",
-                                        resp.diff.missing_commits.len(),
-                                        resp.diff.missing_fragments.len()
+                                        "BatchSyncResponse received: {:?}",
+                                        resp.result
                                     );
                                     let req_id = resp.req_id;
                                     let removed = { inner_pending.lock().await.remove(&req_id) };
@@ -129,7 +128,8 @@ impl WasmWebSocket {
                                 | Message::BlobsRequest { .. }
                                 | Message::BlobsResponse { .. }
                                 | Message::BatchSyncRequest(_)
-                                | Message::RemoveSubscriptions(_)) => {
+                                | Message::RemoveSubscriptions(_)
+                                | Message::DataRequestRejected(_)) => {
                                     tracing::debug!("other message type received");
                                     if let Err(e) = inner_inbound_writer.clone().send(other).await {
                                         tracing::error!("failed to send inbound message: {e}");
