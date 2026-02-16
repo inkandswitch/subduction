@@ -104,7 +104,7 @@ use core::{
 };
 use error::{
     AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
-    WriteError,
+    SendRequestedDataError, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -2687,8 +2687,8 @@ impl<
     ///
     /// # Errors
     ///
-    /// * [`SendDataError::Unauthorized`] if the peer is not authorized to fetch.
-    /// * [`SendDataError::Io`] if storage operations fail.
+    /// * [`SendRequestedDataError::Unauthorized`] if the peer is not authorized to fetch.
+    /// * [`SendRequestedDataError::Io`] if storage operations fail.
     #[allow(clippy::too_many_lines)]
     pub async fn send_requested_data(
         &self,
@@ -2696,7 +2696,7 @@ impl<
         id: SedimentreeId,
         seed: &FingerprintSeed,
         requesting: &RequestedData,
-    ) -> Result<SendCount, error::SendDataError<F, S, C>> {
+    ) -> Result<SendCount, SendRequestedDataError<F, S, C>> {
         if requesting.is_empty() {
             return Ok(SendCount::default());
         }

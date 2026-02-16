@@ -129,7 +129,7 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, Put
 
 /// An error that can occur when sending requested data to a peer.
 #[derive(Debug, Error)]
-pub enum SendDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum SendRequestedDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] IoError<F, S, C>),
