@@ -1128,6 +1128,12 @@ impl<
                             .send_requested_data(&conn, id, &seed, &diff.requesting)
                             .await
                     {
+                        if matches!(e, SendRequestedDataError::Unauthorized(_)) {
+                            let msg: Message = DataRequestRejected { id }.into();
+                            if let Err(send_err) = conn.send(&msg).await {
+                                tracing::error!("failed to send DataRequestRejected: {send_err}");
+                            }
+                        }
                         tracing::warn!(
                             "failed to send requested data to peer {:?}: {e}",
                             conn.peer_id()
@@ -2007,6 +2013,18 @@ impl<
                                 stats.commits_sent += sent.commits;
                                 stats.fragments_sent += sent.fragments;
                             }
+                            Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
+                                let msg: Message = DataRequestRejected { id }.into();
+                                if let Err(send_err) = conn.send(&msg).await {
+                                    tracing::error!(
+                                        "failed to send DataRequestRejected: {send_err}"
+                                    );
+                                }
+                                tracing::warn!(
+                                    "failed to send requested data to peer {:?}: {e}",
+                                    to_ask
+                                );
+                            }
                             Err(e) => {
                                 tracing::warn!(
                                     "failed to send requested data to peer {:?}: {e}",
@@ -2564,6 +2582,16 @@ impl<
                                             stats.commits_sent += sent.commits;
                                             stats.fragments_sent += sent.fragments;
                                         }
+                                        Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
+                                            let msg: Message = DataRequestRejected { id }.into();
+                                            if let Err(send_err) = conn.send(&msg).await {
+                                                tracing::error!("failed to send DataRequestRejected: {send_err}");
+                                            }
+                                            tracing::warn!(
+                                                "failed to send requested data to peer {:?}: {e}",
+                                                peer_id
+                                            );
+                                        }
                                         Err(e) => {
                                             tracing::warn!(
                                                 "failed to send requested data to peer {:?}: {e}",
@@ -2796,13 +2824,8 @@ impl<
                     %peer_id,
                     ?id,
                     error = %e,
-                    "policy rejected data request, sending DataRequestRejected"
+                    "policy rejected data request"
                 );
-                // Send rejection message so peer knows their request was denied
-                let msg: Message = DataRequestRejected { id }.into();
-                if let Err(send_err) = conn.send(&msg).await {
-                    tracing::error!("failed to send DataRequestRejected: {send_err}");
-                }
                 return Err(SendRequestedDataError::Unauthorized(Unauthorized {
                     peer: peer_id,
                     sedimentree_id: id,
