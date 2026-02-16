@@ -90,7 +90,7 @@ use crate::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
-    storage::{powerbox::StoragePowerbox, putter::Putter},
+    storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
@@ -131,8 +131,6 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
-
-use crate::storage::traits::Storage;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -1556,7 +1554,8 @@ impl<
     ///
     /// # Errors
     ///
-    /// * [`IoError`] if a storage or network error occurs.
+    /// * [`ListenError::Unauthorized`] if the peer is not authorized to fetch.
+    /// * [`ListenError::IoError`] if a storage or network error occurs.
     #[allow(clippy::too_many_lines)]
     pub async fn recv_batch_sync_request(
         &self,
@@ -1568,14 +1567,22 @@ impl<
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
 
         let peer_id = conn.peer_id();
-        let Ok(fetcher) = self.storage.get_fetcher::<F>(peer_id, id).await else {
-            tracing::warn!(
-                "peer {} not authorized to fetch sedimentree {:?}, ignoring request",
-                peer_id,
-                id
-            );
-            return Ok(());
-        };
+        let fetcher = self
+            .storage
+            .get_fetcher::<F>(peer_id, id)
+            .await
+            .map_err(|e| {
+                tracing::debug!(
+                    %peer_id,
+                    ?id,
+                    error = %e,
+                    "policy rejected fetch request"
+                );
+                error::Unauthorized {
+                    peer: peer_id,
+                    sedimentree_id: id,
+                }
+            })?;
 
         let mut their_missing_commits = Vec::new();
         let mut their_missing_fragments = Vec::new();
@@ -2680,7 +2687,8 @@ impl<
     ///
     /// # Errors
     ///
-    /// Returns [`IoError`] if storage operations fail.
+    /// * [`SendDataError::Unauthorized`] if the peer is not authorized to fetch.
+    /// * [`SendDataError::Io`] if storage operations fail.
     #[allow(clippy::too_many_lines)]
     pub async fn send_requested_data(
         &self,
@@ -2688,7 +2696,7 @@ impl<
         id: SedimentreeId,
         seed: &FingerprintSeed,
         requesting: &RequestedData,
-    ) -> Result<SendCount, IoError<F, S, C>> {
+    ) -> Result<SendCount, error::SendDataError<F, S, C>> {
         if requesting.is_empty() {
             return Ok(SendCount::default());
         }
@@ -2701,14 +2709,22 @@ impl<
             peer_id
         );
 
-        let Ok(fetcher) = self.storage.get_fetcher::<F>(peer_id, id).await else {
-            tracing::warn!(
-                "peer {} not authorized to fetch sedimentree {:?}, skipping requested data",
-                peer_id,
-                id
-            );
-            return Ok(SendCount::default());
-        };
+        let fetcher = self
+            .storage
+            .get_fetcher::<F>(peer_id, id)
+            .await
+            .map_err(|e| {
+                tracing::debug!(
+                    %peer_id,
+                    ?id,
+                    error = %e,
+                    "policy rejected fetch request"
+                );
+                error::Unauthorized {
+                    peer: peer_id,
+                    sedimentree_id: id,
+                }
+            })?;
 
         // Resolve requested fingerprints → digests via reverse-lookup tables
         let (requested_commit_digests, requested_fragment_digests) = {

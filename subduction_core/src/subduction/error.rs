@@ -3,10 +3,21 @@
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Blob, crypto::digest::Digest};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
-use crate::{connection::Connection, storage::traits::Storage};
+use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
+
+/// The peer is not authorized to perform the requested operation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+#[error("peer {peer} not authorized to access sedimentree {sedimentree_id}")]
+pub struct Unauthorized {
+    /// The peer that attempted the operation.
+    pub peer: PeerId,
+
+    /// The sedimentree they attempted to access.
+    pub sedimentree_id: SedimentreeId,
+}
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
 #[derive(Debug, Clone, Copy, Error)]
@@ -65,6 +76,10 @@ pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
 
+    /// The peer is not authorized to access the requested sedimentree.
+    #[error(transparent)]
+    Unauthorized(#[from] Unauthorized),
+
     /// Missing blobs associated with local fragments or commits.
     #[error("Missing blobs associated to local fragments & commits: {0:?}")]
     MissingBlobs(Vec<Digest<Blob>>),
@@ -110,6 +125,18 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, Put
     /// The storage policy rejected the write.
     #[error("put disallowed: {0}")]
     PutDisallowed(PutErr),
+}
+
+/// An error that can occur when sending requested data to a peer.
+#[derive(Debug, Error)]
+pub enum SendDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+    /// An I/O error occurred.
+    #[error(transparent)]
+    Io(#[from] IoError<F, S, C>),
+
+    /// The peer is not authorized to access the requested sedimentree.
+    #[error(transparent)]
+    Unauthorized(#[from] Unauthorized),
 }
 
 #[cfg(test)]
