@@ -116,7 +116,8 @@ impl WasmMessage {
             | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 
@@ -135,7 +136,8 @@ impl WasmMessage {
             | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 
@@ -151,7 +153,8 @@ impl WasmMessage {
             | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 
@@ -168,7 +171,8 @@ impl WasmMessage {
             | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 
@@ -188,7 +192,8 @@ impl WasmMessage {
             | Message::BlobsRequest { .. }
             | Message::BatchSyncRequest(_)
             | Message::BatchSyncResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 
@@ -203,7 +208,8 @@ impl WasmMessage {
             | Message::BlobsRequest { .. }
             | Message::BlobsResponse { .. }
             | Message::BatchSyncResponse(_)
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 
@@ -218,7 +224,8 @@ impl WasmMessage {
             | Message::BlobsRequest { .. }
             | Message::BlobsResponse { .. }
             | Message::BatchSyncRequest(_)
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 }

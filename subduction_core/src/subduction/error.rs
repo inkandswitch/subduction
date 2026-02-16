@@ -76,10 +76,6 @@ pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
 
-    /// The peer is not authorized to access the requested sedimentree.
-    #[error(transparent)]
-    Unauthorized(#[from] Unauthorized),
-
     /// Missing blobs associated with local fragments or commits.
     #[error("Missing blobs associated to local fragments & commits: {0:?}")]
     MissingBlobs(Vec<Digest<Blob>>),
@@ -137,6 +133,18 @@ pub enum SendRequestedDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connec
     /// The peer is not authorized to access the requested sedimentree.
     #[error(transparent)]
     Unauthorized(#[from] Unauthorized),
+}
+
+/// Error when a sync request is rejected by the remote peer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
+pub enum SyncRejected {
+    /// The sedimentree was not found on the remote peer.
+    #[error("sedimentree {0} not found on remote peer")]
+    NotFound(SedimentreeId),
+
+    /// Not authorized to access the sedimentree.
+    #[error("not authorized to access sedimentree {0}")]
+    Unauthorized(SedimentreeId),
 }
 
 #[cfg(test)]

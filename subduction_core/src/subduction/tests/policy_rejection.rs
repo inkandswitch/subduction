@@ -3,7 +3,7 @@
 use super::common::{TestSpawn, TokioSpawn, test_signer};
 use crate::{
     connection::{
-        message::Message,
+        message::{BatchSyncResponse, Message, SyncResult},
         nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, MockConnection},
     },
@@ -20,9 +20,9 @@ use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
+    crypto::{digest::Digest, fingerprint::FingerprintSeed},
     id::SedimentreeId,
-    sedimentree::Sedimentree,
+    sedimentree::{FingerprintSummary, Sedimentree},
 };
 use testresult::TestResult;
 
@@ -386,12 +386,10 @@ async fn multiple_rejections_all_fail_cleanly() {
     assert!(ids.is_empty(), "No sedimentree IDs should be stored");
 }
 
-/// When fetch policy rejects, `recv_batch_sync_request` should silently
-/// skip the request — no response sent, no error propagated.
+/// When fetch policy rejects, `recv_batch_sync_request` should respond
+/// with `SyncResult::Unauthorized` so the peer knows they're not authorized.
 #[tokio::test]
-async fn unauthorized_fetch_is_silently_skipped() -> TestResult {
-    use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
-
+async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -415,7 +413,7 @@ async fn unauthorized_fetch_is_silently_skipped() -> TestResult {
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let seed = FingerprintSeed::new(1, 2);
 
-    // Send a BatchSyncRequest — the fetch policy should reject it silently
+    // Send a BatchSyncRequest — the fetch policy should reject it
     handle
         .inbound_tx
         .send(Message::BatchSyncRequest(
@@ -438,13 +436,22 @@ async fn unauthorized_fetch_is_silently_skipped() -> TestResult {
     // Wait for the dispatch to process
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // No BatchSyncResponse should be sent back — the request was silently skipped.
-    // Try to receive with a short timeout; should time out (nothing to receive).
-    let response =
-        tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv()).await;
+    // Should receive a BatchSyncResponse with SyncResult::Unauthorized
+    let response = tokio::time::timeout(Duration::from_millis(100), handle.outbound_rx.recv())
+        .await?
+        .map_err(|e| format!("channel closed: {e}"))?;
+
+    let Message::BatchSyncResponse(BatchSyncResponse { result, id, .. }) = response else {
+        return Err(format!("expected BatchSyncResponse, got {response:?}").into());
+    };
+
+    assert_eq!(
+        id, sedimentree_id,
+        "response should be for the requested sedimentree"
+    );
     assert!(
-        response.is_err(),
-        "no response should be sent when fetch is rejected by policy"
+        matches!(result, SyncResult::Unauthorized),
+        "expected SyncResult::Unauthorized, got {result:?}"
     );
 
     actor_task.abort();

@@ -395,7 +395,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                         | Message::BlobsRequest { .. }
                         | Message::BlobsResponse { .. }
                         | Message::BatchSyncRequest(_)
-                        | Message::RemoveSubscriptions(_)) => {
+                        | Message::RemoveSubscriptions(_)
+                        | Message::DataRequestRejected(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {
                                 tracing::error!(
                                     "failed to send inbound message to channel {}: {}",

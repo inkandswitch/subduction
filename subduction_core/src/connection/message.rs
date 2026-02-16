@@ -84,6 +84,10 @@ pub enum Message {
     /// A request to remove subscriptions from specific sedimentrees.
     #[n(6)]
     RemoveSubscriptions(#[n(0)] RemoveSubscriptions),
+
+    /// Notification that a data request was rejected due to authorization failure.
+    #[n(7)]
+    DataRequestRejected(#[n(0)] DataRequestRejected),
 }
 
 impl Message {
@@ -97,7 +101,8 @@ impl Message {
             | Message::Fragment { .. }
             | Message::BlobsRequest { .. }
             | Message::BlobsResponse { .. }
-            | Message::RemoveSubscriptions(_) => None,
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_) => None,
         }
     }
 
@@ -112,6 +117,7 @@ impl Message {
             Message::BatchSyncRequest(_) => "BatchSyncRequest",
             Message::BatchSyncResponse(_) => "BatchSyncResponse",
             Message::RemoveSubscriptions(_) => "RemoveSubscriptions",
+            Message::DataRequestRejected(_) => "DataRequestRejected",
         }
     }
 
@@ -124,7 +130,8 @@ impl Message {
             | Message::BlobsRequest { id, .. }
             | Message::BlobsResponse { id, .. }
             | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
-            | Message::BatchSyncResponse(BatchSyncResponse { id, .. }) => Some(*id),
+            | Message::BatchSyncResponse(BatchSyncResponse { id, .. })
+            | Message::DataRequestRejected(DataRequestRejected { id }) => Some(*id),
             Message::RemoveSubscriptions(_) => None,
         }
     }
@@ -176,9 +183,28 @@ pub struct BatchSyncResponse {
     #[n(1)]
     pub id: SedimentreeId,
 
-    /// The diff for the remote peer.
+    /// The result of the sync request.
     #[n(2)]
-    pub diff: SyncDiff,
+    pub result: SyncResult,
+}
+
+/// The result of a batch sync request.
+#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(not(feature = "std"), derive(Hash))]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub enum SyncResult {
+    /// Sync succeeded.
+    #[n(0)]
+    Ok(#[n(0)] SyncDiff),
+
+    /// Sedimentree not found (peer is authorized but tree doesn't exist).
+    #[n(1)]
+    NotFound,
+
+    /// Peer is not authorized to access this sedimentree.
+    #[n(2)]
+    Unauthorized,
 }
 
 impl From<BatchSyncResponse> for Message {
@@ -201,6 +227,25 @@ pub struct RemoveSubscriptions {
 impl From<RemoveSubscriptions> for Message {
     fn from(unsub: RemoveSubscriptions) -> Self {
         Message::RemoveSubscriptions(unsub)
+    }
+}
+
+/// Sent when a peer's data request cannot be fulfilled due to authorization failure.
+///
+/// This is informational — the receiver's original sync completed, but their
+/// opportunistic `requesting` field could not be fulfilled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct DataRequestRejected {
+    /// The sedimentree ID that was rejected.
+    #[n(0)]
+    pub id: SedimentreeId,
+}
+
+impl From<DataRequestRejected> for Message {
+    fn from(rejection: DataRequestRejected) -> Self {
+        Message::DataRequestRejected(rejection)
     }
 }
 
@@ -379,11 +424,11 @@ mod tests {
             let msg = Message::BatchSyncResponse(BatchSyncResponse {
                 id: SedimentreeId::new([2u8; 32]),
                 req_id,
-                diff: SyncDiff {
+                result: SyncResult::Ok(SyncDiff {
                     missing_commits: Vec::new(),
                     missing_fragments: Vec::new(),
                     requesting: RequestedData::default(),
-                },
+                }),
             });
             assert_eq!(msg.request_id(), Some(req_id));
         }
