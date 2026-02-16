@@ -191,14 +191,6 @@ fn heap_profile_all() {
     let (blocks, bytes, _) = measure_allocs(|| tree.diff(&tree));
     println!("  Allocations: {blocks} blocks, {bytes} bytes\n");
 
-    // diff_remote() scenarios
-
-    println!("--- diff_remote() on 50% overlapping (100 fragments, 100 commits) ---");
-    let (local, remote) = overlapping_sedimentrees(50, 50, 50, 50, 42);
-    let remote_summary = remote.summarize();
-    let (blocks, bytes, _) = measure_allocs(|| local.diff_remote(&remote_summary));
-    println!("  Allocations: {blocks} blocks, {bytes} bytes\n");
-
     // Scaling analysis
 
     println!("--- diff() allocation scaling (disjoint trees) ---");
@@ -209,17 +201,6 @@ fn heap_profile_all() {
         let t1 = synthetic_sedimentree(size, size, 1);
         let t2 = synthetic_sedimentree(size, size, 1_000_000);
         let (blocks, bytes, _) = measure_allocs(|| t1.diff(&t2));
-        println!("  {size:>6}  {blocks:>8}  {bytes:>10}");
-    }
-
-    println!("\n--- diff_remote() allocation scaling (50% overlap) ---");
-    println!("  {:>6}  {:>8}  {:>10}", "Size", "Blocks", "Bytes");
-    println!("  {:->6}  {:->8}  {:->10}", "", "", "");
-
-    for size in [10, 50, 100, 500, 1000] {
-        let (local, remote) = overlapping_sedimentrees(size / 2, size / 2, size / 2, size / 2, 42);
-        let summary = remote.summarize();
-        let (blocks, bytes, _) = measure_allocs(|| local.diff_remote(&summary));
         println!("  {size:>6}  {blocks:>8}  {bytes:>10}");
     }
 

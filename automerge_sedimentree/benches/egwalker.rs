@@ -19,8 +19,8 @@
 use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use rand::{Rng, SeedableRng, rngs::SmallRng};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use rand::{rngs::SmallRng, Rng, SeedableRng};
 use sedimentree_core::{
     blob::BlobMeta,
     commit::{CountLeadingZeroBytes, CountTrailingZerosInBase},
@@ -103,7 +103,11 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
         let rand_byte: u8 = rng.gen_range(0..=255);
         let depth = if rand_byte == 0 {
             let rand_byte2: u8 = rng.gen_range(0..=255);
-            if rand_byte2 == 0 { 2 } else { 1 }
+            if rand_byte2 == 0 {
+                2
+            } else {
+                1
+            }
         } else {
             0
         };
@@ -194,7 +198,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..=255);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..=255);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }
@@ -204,7 +212,11 @@ fn generate_fragments_for_metric(
                 let r: u8 = rng.gen_range(0..10);
                 if r == 0 {
                     let r2: u8 = rng.gen_range(0..10);
-                    if r2 == 0 { 2 } else { 1 }
+                    if r2 == 0 {
+                        2
+                    } else {
+                        1
+                    }
                 } else {
                     0
                 }
@@ -328,9 +340,12 @@ fn bench_minimize(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark summarizing sedimentrees.
-fn bench_summarize(c: &mut Criterion) {
-    let mut group = c.benchmark_group("summarize");
+/// Benchmark creating fingerprint summaries of sedimentrees.
+fn bench_fingerprint_summarize(c: &mut Criterion) {
+    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
+
+    let mut group = c.benchmark_group("fingerprint_summarize");
+    let seed = FingerprintSeed::new(42, 43);
 
     for tv in TEST_VECTORS {
         let doc = load_automerge(tv.bytes);
@@ -340,8 +355,47 @@ fn bench_summarize(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(fragment_count));
         group.bench_with_input(BenchmarkId::from_parameter(tv.name), &tree, |b, tree| {
-            b.iter(|| tree.summarize());
+            b.iter(|| tree.fingerprint_summarize(black_box(&seed)));
         });
+    }
+
+    group.finish();
+}
+
+/// Benchmark `diff_remote_fingerprints` (comparing against a fingerprint summary).
+fn bench_diff_remote_fingerprints(c: &mut Criterion) {
+    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
+
+    let mut group = c.benchmark_group("diff_remote_fingerprints");
+    let seed = FingerprintSeed::new(42, 43);
+
+    for tv in TEST_VECTORS {
+        let doc = load_automerge(tv.bytes);
+        let change_count = doc.get_changes(&[]).len();
+        let tree = generate_sedimentree_for_doc(change_count, 42);
+        let summary = tree.fingerprint_summarize(&seed);
+        let fragment_count = tree.fragments().count() as u64;
+
+        // Diff against empty summary
+        let empty_summary = Sedimentree::default().fingerprint_summarize(&seed);
+
+        group.throughput(Throughput::Elements(fragment_count));
+        group.bench_with_input(
+            BenchmarkId::new("vs_empty", tv.name),
+            &(tree.clone(), empty_summary),
+            |b, (tree, summary)| {
+                b.iter(|| tree.diff_remote_fingerprints(black_box(summary)));
+            },
+        );
+
+        // Diff against self summary
+        group.bench_with_input(
+            BenchmarkId::new("vs_self", tv.name),
+            &(tree, summary),
+            |b, (tree, summary)| {
+                b.iter(|| tree.diff_remote_fingerprints(black_box(summary)));
+            },
+        );
     }
 
     group.finish();
@@ -401,42 +455,6 @@ fn bench_diff(c: &mut Criterion) {
             &(tree.clone(), partial_tree),
             |b, (full, partial)| {
                 b.iter(|| full.diff(black_box(partial)));
-            },
-        );
-    }
-
-    group.finish();
-}
-
-/// Benchmark `diff_remote` (comparing against a summary).
-fn bench_diff_remote(c: &mut Criterion) {
-    let mut group = c.benchmark_group("diff_remote");
-
-    for tv in TEST_VECTORS {
-        let doc = load_automerge(tv.bytes);
-        let change_count = doc.get_changes(&[]).len();
-        let tree = generate_sedimentree_for_doc(change_count, 42);
-        let summary = tree.summarize();
-        let fragment_count = tree.fragments().count() as u64;
-
-        // Diff against empty summary
-        let empty_summary = Sedimentree::default().summarize();
-
-        group.throughput(Throughput::Elements(fragment_count));
-        group.bench_with_input(
-            BenchmarkId::new("vs_empty", tv.name),
-            &(tree.clone(), empty_summary),
-            |b, (tree, summary)| {
-                b.iter(|| tree.diff_remote(black_box(summary)));
-            },
-        );
-
-        // Diff against self summary
-        group.bench_with_input(
-            BenchmarkId::new("vs_self", tv.name),
-            &(tree, summary),
-            |b, (tree, summary)| {
-                b.iter(|| tree.diff_remote(black_box(summary)));
             },
         );
     }
@@ -710,11 +728,11 @@ criterion_group!(
     bench_load_document,
     bench_minimize,
     bench_minimize_by_metric,
-    bench_summarize,
+    bench_fingerprint_summarize,
+    bench_diff_remote_fingerprints,
     bench_heads,
     bench_heads_by_metric,
     bench_diff,
-    bench_diff_remote,
     bench_minimal_hash,
     bench_minimal_hash_by_metric,
     bench_merge,

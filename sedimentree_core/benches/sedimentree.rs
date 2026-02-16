@@ -18,7 +18,7 @@ use criterion::{criterion_group, criterion_main};
 mod generators {
     use std::collections::BTreeSet;
 
-    use rand::{Rng, SeedableRng, rngs::SmallRng};
+    use rand::{rngs::SmallRng, Rng, SeedableRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         crypto::digest::Digest,
@@ -184,31 +184,6 @@ mod generators {
         Sedimentree::new(fragments, commits)
     }
 
-    /// Generate a Sedimentree with variable fragment complexity.
-    pub(super) fn synthetic_sedimentree_varied(
-        fragment_count: usize,
-        commit_count: usize,
-        boundaries_per_fragment: usize,
-        checkpoints_per_fragment: usize,
-        base_seed: u64,
-    ) -> Sedimentree {
-        let fragments: Vec<Fragment> = (0..fragment_count)
-            .map(|i| {
-                let leading_zeros = (i % 3).min(2);
-                synthetic_fragment(
-                    base_seed + i as u64 * 1000,
-                    boundaries_per_fragment,
-                    checkpoints_per_fragment,
-                    leading_zeros,
-                )
-            })
-            .collect();
-
-        let commits = linear_commit_chain(commit_count, base_seed + 500_000);
-
-        Sedimentree::new(fragments, commits)
-    }
-
     /// Generate two Sedimentrees with some overlap for diff benchmarks.
     pub(super) fn overlapping_sedimentrees(
         shared_fragments: usize,
@@ -328,7 +303,7 @@ mod sedimentree {
 
     use super::generators::{
         linear_commit_chain, overlapping_sedimentrees, synthetic_commit, synthetic_fragment,
-        synthetic_sedimentree, synthetic_sedimentree_varied,
+        synthetic_sedimentree,
     };
 
     /// Benchmark Sedimentree construction from fragments and commits.
@@ -498,52 +473,6 @@ mod sedimentree {
         group.finish();
     }
 
-    /// Benchmark computing diff against a remote summary (metadata-only diff).
-    ///
-    /// **Intent**: Measure the cost of the primary sync operation - determining what
-    /// we have that a remote peer lacks, using only their summary (no full tree).
-    ///
-    /// **Expected complexity**: O(n) where n is local tree size, since we scan local
-    /// data against the summary.
-    pub fn bench_diff_remote(c: &mut Criterion) {
-        let mut group = c.benchmark_group("sedimentree_diff_remote");
-
-        for size in [10, 100, 500, 2000, 5000] {
-            group.throughput(Throughput::Elements(size as u64));
-
-            let (local, remote) =
-                overlapping_sedimentrees(size / 2, size / 2, size / 2, size / 2, 42);
-            let remote_summary = remote.summarize();
-
-            group.bench_with_input(
-                BenchmarkId::new("overlapping_50pct", size),
-                &(local, remote_summary),
-                |b, (local, summary)| {
-                    b.iter(|| local.diff_remote(black_box(summary)));
-                },
-            );
-        }
-
-        // Completely missing remote (empty summary)
-        for size in [100, 1000] {
-            group.throughput(Throughput::Elements(size as u64));
-
-            let local = synthetic_sedimentree(size, size, 1);
-            let empty_remote = Sedimentree::new(vec![], vec![]);
-            let empty_summary = empty_remote.summarize();
-
-            group.bench_with_input(
-                BenchmarkId::new("vs_empty_remote", size),
-                &(local, empty_summary),
-                |b, (local, summary)| {
-                    b.iter(|| local.diff_remote(black_box(summary)));
-                },
-            );
-        }
-
-        group.finish();
-    }
-
     /// Benchmark minimizing a Sedimentree (removing redundant data).
     ///
     /// **Intent**: Measure the cost of compacting a tree by removing fragments/commits
@@ -640,14 +569,18 @@ mod sedimentree {
         group.finish();
     }
 
-    /// Benchmark creating a summary of a Sedimentree for remote sync.
+    /// Benchmark creating a fingerprint summary of a Sedimentree for remote sync.
     ///
-    /// **Intent**: Measure the cost of producing a compact representation of tree
-    /// contents that can be sent to peers for diff calculation.
+    /// **Intent**: Measure the cost of producing a compact fingerprint representation
+    /// of tree contents for wire transmission and diff calculation.
     ///
-    /// **Expected complexity**: O(n) - should scan all fragments and commits once.
-    pub fn bench_summarize(c: &mut Criterion) {
-        let mut group = c.benchmark_group("sedimentree_summarize");
+    /// **Expected complexity**: O(n) - scans all fragments and commits once,
+    /// computing SipHash-2-4 fingerprints for each.
+    pub fn bench_fingerprint_summarize(c: &mut Criterion) {
+        use sedimentree_core::crypto::fingerprint::FingerprintSeed;
+
+        let mut group = c.benchmark_group("sedimentree_fingerprint_summarize");
+        let seed = FingerprintSeed::new(42, 43);
 
         for size in [10, 100, 1000, 5000] {
             group.throughput(Throughput::Elements(size as u64 * 2)); // fragments + commits
@@ -655,18 +588,56 @@ mod sedimentree {
             let tree = synthetic_sedimentree(size, size, 1);
 
             group.bench_with_input(BenchmarkId::from_parameter(size), &tree, |b, t| {
-                b.iter(|| t.summarize());
+                b.iter(|| t.fingerprint_summarize(black_box(&seed)));
             });
         }
 
-        // Tree with many checkpoints per fragment (stress metadata size)
-        for size in [100, 500] {
-            let tree = synthetic_sedimentree_varied(size, size, 5, 50, 1);
-            group.throughput(Throughput::Elements(size as u64 * 2));
+        group.finish();
+    }
 
-            group.bench_with_input(BenchmarkId::new("many_checkpoints", size), &tree, |b, t| {
-                b.iter(|| t.summarize());
-            });
+    /// Benchmark diffing a Sedimentree against a remote fingerprint summary.
+    ///
+    /// **Intent**: Measure the cost of the primary sync operation - determining what
+    /// we have that a remote peer lacks, using fingerprint-based comparison.
+    ///
+    /// **Expected complexity**: O(n) where n is local tree size, since we scan local
+    /// data and compute fingerprints to compare against the summary.
+    pub fn bench_diff_remote_fingerprints(c: &mut Criterion) {
+        use sedimentree_core::crypto::fingerprint::FingerprintSeed;
+
+        let mut group = c.benchmark_group("sedimentree_diff_remote_fingerprints");
+        let seed = FingerprintSeed::new(42, 43);
+
+        for size in [10, 100, 500, 2000, 5000] {
+            group.throughput(Throughput::Elements(size as u64));
+
+            let (local, remote) =
+                overlapping_sedimentrees(size / 2, size / 2, size / 2, size / 2, 42);
+            let remote_summary = remote.fingerprint_summarize(&seed);
+
+            group.bench_with_input(
+                BenchmarkId::new("overlapping_50pct", size),
+                &(local, remote_summary),
+                |b, (local, summary)| {
+                    b.iter(|| local.diff_remote_fingerprints(black_box(summary)));
+                },
+            );
+        }
+
+        // Completely missing remote (empty summary)
+        for size in [100, 1000] {
+            group.throughput(Throughput::Elements(size as u64));
+
+            let local = synthetic_sedimentree(size, size, 1);
+            let empty_summary = Sedimentree::default().fingerprint_summarize(&seed);
+
+            group.bench_with_input(
+                BenchmarkId::new("vs_empty_remote", size),
+                &(local, empty_summary),
+                |b, (local, summary)| {
+                    b.iter(|| local.diff_remote_fingerprints(black_box(summary)));
+                },
+            );
         }
 
         group.finish();
@@ -954,10 +925,6 @@ mod topology {
             group.bench_with_input(BenchmarkId::new("heads", size), &tree, |b, t| {
                 b.iter(|| t.heads(black_box(&metric)));
             });
-
-            group.bench_with_input(BenchmarkId::new("summarize", size), &tree, |b, t| {
-                b.iter(|| t.summarize());
-            });
         }
 
         // Diff between two deep chains (one subset of other)
@@ -990,10 +957,10 @@ criterion_group!(
     sedimentree::bench_construction,
     sedimentree::bench_merge,
     sedimentree::bench_diff,
-    sedimentree::bench_diff_remote,
+    sedimentree::bench_fingerprint_summarize,
+    sedimentree::bench_diff_remote_fingerprints,
     sedimentree::bench_minimize,
     sedimentree::bench_heads,
-    sedimentree::bench_summarize,
     sedimentree::bench_add_operations,
     sedimentree::bench_minimal_hash,
     fragment::bench_supports,
