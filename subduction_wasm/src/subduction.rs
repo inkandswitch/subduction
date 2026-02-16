@@ -26,7 +26,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::Subduction,
+    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
 };
 use wasm_bindgen::prelude::*;
 
@@ -133,6 +133,7 @@ impl WasmSubduction {
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -191,6 +192,7 @@ impl WasmSubduction {
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         )
         .await?;
 

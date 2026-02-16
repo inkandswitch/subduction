@@ -25,7 +25,7 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::traits::Storage,
-    subduction::{Subduction, error::RegistrationError},
+    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction, error::RegistrationError},
     timestamp::TimestampSeconds,
 };
 
@@ -272,6 +272,7 @@ where
             depth_metric,
             sedimentrees,
             TokioSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
         let server = Self::new(

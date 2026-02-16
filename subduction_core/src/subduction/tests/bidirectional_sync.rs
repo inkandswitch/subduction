@@ -25,7 +25,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
 };
 use alloc::collections::BTreeSet;
 use core::time::Duration;
@@ -84,6 +84,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -182,6 +183,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -279,6 +281,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
     let (alice_conn, alice_handle) = ChannelMockConnection::new_with_handle(bob_peer_id);
@@ -318,6 +321,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
     let (bob_conn, bob_handle) = ChannelMockConnection::new_with_handle(alice_peer_id);
@@ -441,6 +445,7 @@ async fn test_responder_requests_fragments() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -515,6 +520,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
+            DEFAULT_PENDING_BLOB_REQUEST_TTL,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);

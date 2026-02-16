@@ -6,7 +6,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
 };
 use alloc::sync::Arc;
 use future_form::Sendable;
@@ -82,5 +82,6 @@ pub(super) fn new_test_subduction() -> (
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TestSpawn,
+        DEFAULT_PENDING_BLOB_REQUEST_TTL,
     )
 }
