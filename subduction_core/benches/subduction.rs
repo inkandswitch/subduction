@@ -29,7 +29,7 @@ mod generators {
     use futures::executor::block_on;
     use std::collections::BTreeSet;
 
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         crypto::{digest::Digest, fingerprint::FingerprintSeed},
@@ -192,9 +192,9 @@ mod generators {
     pub(super) fn batch_sync_request_from_seed(seed: u64) -> BatchSyncRequest {
         BatchSyncRequest {
             id: sedimentree_id_from_seed(seed),
-            req_id: request_id_from_seed(seed.wrapping_add(1), seed),
+            req_id: request_id_from_seed(seed, seed),
             fingerprint_summary: FingerprintSummary::new(
-                FingerprintSeed::new(seed, seed.wrapping_add(1)),
+                FingerprintSeed::new(seed, seed),
                 BTreeSet::new(),
                 BTreeSet::new(),
             ),
@@ -211,9 +211,9 @@ mod generators {
     ) -> BatchSyncResponse {
         BatchSyncResponse {
             id: sedimentree_id_from_seed(seed),
-            req_id: request_id_from_seed(seed.wrapping_add(1), seed),
+            req_id: request_id_from_seed(seed, seed),
             result: SyncResult::Ok(sync_diff_from_seed(
-                seed.wrapping_add(2),
+                seed,
                 num_commits,
                 num_fragments,
                 blob_size,
@@ -223,7 +223,7 @@ mod generators {
 }
 
 mod id {
-    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::{id::ConnectionId, message::RequestId},
@@ -359,7 +359,7 @@ mod id {
 }
 
 mod message {
-    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
     use subduction_core::connection::message::Message;
 
     use super::generators::{
@@ -504,7 +504,7 @@ mod message {
 mod sync {
     use std::collections::BTreeSet;
 
-    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{
         BatchSyncRequest, BatchSyncResponse, Message, SyncResult,
@@ -657,7 +657,7 @@ mod sync {
 mod collections {
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{connection::id::ConnectionId, peer::id::PeerId};
 
@@ -842,7 +842,7 @@ mod collections {
 }
 
 mod cloning {
-    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
     use subduction_core::connection::{id::ConnectionId, message::Message};
 
     use super::generators::{
@@ -946,7 +946,7 @@ mod cloning {
 }
 
 mod display {
-    use criterion::{Criterion, black_box};
+    use criterion::{black_box, Criterion};
     use subduction_core::storage::id::StorageId;
 
     use super::generators::{digest_from_seed, peer_id_from_seed, sedimentree_id_from_seed};
