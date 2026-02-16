@@ -39,6 +39,7 @@ pub mod cbor;
 pub mod connection;
 pub mod crypto;
 pub mod peer;
+pub mod pending_blob_requests;
 pub mod policy;
 pub mod sharded_map;
 pub mod storage;

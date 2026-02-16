@@ -3,10 +3,11 @@
 use crate::{
     connection::{manager::Spawn, nonce_cache::NonceCache, test_utils::MockConnection},
     crypto::signer::MemorySigner,
+    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
+    subduction::Subduction,
 };
 use alloc::sync::Arc;
 use future_form::Sendable;
@@ -82,6 +83,6 @@ pub(super) fn new_test_subduction() -> (
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TestSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     )
 }

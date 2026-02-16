@@ -6,10 +6,11 @@ use super::common::{TestSpawn, new_test_subduction, test_signer};
 use crate::{
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     peer::id::PeerId,
+    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
+    subduction::Subduction,
 };
 use alloc::vec::Vec;
 use core::fmt;
@@ -96,7 +97,7 @@ async fn rejected_connection_is_not_registered() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TestSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let peer_id = PeerId::new([1u8; 32]);
@@ -146,7 +147,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TestSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let rejected_peer = PeerId::new([2u8; 32]);

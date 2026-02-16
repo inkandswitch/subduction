@@ -16,10 +16,11 @@ use subduction_core::{
         Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
     },
     crypto::signer::MemorySigner,
+    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
+    subduction::Subduction,
 };
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
@@ -82,7 +83,7 @@ async fn client_reconnect() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -166,7 +167,7 @@ async fn server_graceful_shutdown() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -256,7 +257,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -309,7 +310,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
         tokio::spawn(actor_fut);
@@ -429,7 +430,7 @@ async fn request_with_delayed_response() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -473,7 +474,7 @@ async fn request_with_delayed_response() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(actor_fut);
@@ -565,7 +566,7 @@ async fn large_message_handling() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -605,7 +606,7 @@ async fn large_message_handling() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(actor_fut);
@@ -691,7 +692,7 @@ async fn message_ordering() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -731,7 +732,7 @@ async fn message_ordering() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(actor_fut);

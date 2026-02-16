@@ -22,10 +22,11 @@ use subduction_core::{
     },
     crypto::signer::Signer,
     peer::id::PeerId,
+    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::traits::Storage,
-    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction, error::RegistrationError},
+    subduction::{Subduction, error::RegistrationError},
     timestamp::TimestampSeconds,
 };
 
@@ -272,7 +273,7 @@ where
             depth_metric,
             sedimentrees,
             TokioSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
         let server = Self::new(

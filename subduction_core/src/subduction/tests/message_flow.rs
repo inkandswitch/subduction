@@ -14,10 +14,11 @@ use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,
     peer::id::PeerId,
+    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
+    subduction::Subduction,
 };
 use core::time::Duration;
 use future_form::{Local, Sendable};
@@ -52,7 +53,7 @@ async fn test_sendable_single_commit() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -107,7 +108,7 @@ async fn test_sendable_multiple_sequential() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -161,7 +162,7 @@ async fn test_sendable_same_sedimentree() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -220,7 +221,7 @@ async fn test_local_single_commit() -> TestResult {
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
                     TokioSpawn,
-                    DEFAULT_PENDING_BLOB_REQUEST_TTL,
+                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -280,7 +281,7 @@ async fn test_local_multiple_sequential() -> TestResult {
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
                     TokioSpawn,
-                    DEFAULT_PENDING_BLOB_REQUEST_TTL,
+                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -340,7 +341,7 @@ async fn test_local_same_sedimentree() -> TestResult {
                     CountLeadingZeroBytes,
                     ShardedMap::with_key(0, 0),
                     TokioSpawn,
-                    DEFAULT_PENDING_BLOB_REQUEST_TTL,
+                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));

@@ -7,9 +7,9 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -24,9 +24,10 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
     peer::id::PeerId,
+    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{Subduction, DEFAULT_PENDING_BLOB_REQUEST_TTL},
+    subduction::Subduction,
 };
 use wasm_bindgen::prelude::*;
 
@@ -110,7 +111,7 @@ impl WasmSubduction {
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
-    /// * `pending_blob_request_ttl_secs` - Optional TTL in seconds for pending blob requests (default: 300)
+    /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(
@@ -118,7 +119,7 @@ impl WasmSubduction {
         storage: JsSedimentreeStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
-        pending_blob_request_ttl_secs: Option<u64>,
+        max_pending_blob_requests: Option<usize>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -126,8 +127,7 @@ impl WasmSubduction {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let pending_blob_request_ttl = pending_blob_request_ttl_secs
-            .map_or(DEFAULT_PENDING_BLOB_REQUEST_TTL, Duration::from_secs);
+        let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
         let (core, listener_fut, manager_fut) = Subduction::new(
             discovery_id,
             signer,
@@ -137,7 +137,7 @@ impl WasmSubduction {
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,
-            pending_blob_request_ttl,
+            max_pending,
         );
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -170,7 +170,7 @@ impl WasmSubduction {
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
-    /// * `pending_blob_request_ttl_secs` - Optional TTL in seconds for pending blob requests (default: 300)
+    /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
     ///
     /// # Errors
     ///
@@ -181,7 +181,7 @@ impl WasmSubduction {
         storage: JsSedimentreeStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
-        pending_blob_request_ttl_secs: Option<u64>,
+        max_pending_blob_requests: Option<usize>,
     ) -> Result<Self, WasmHydrationError> {
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -189,8 +189,7 @@ impl WasmSubduction {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
-        let pending_blob_request_ttl = pending_blob_request_ttl_secs
-            .map_or(DEFAULT_PENDING_BLOB_REQUEST_TTL, Duration::from_secs);
+        let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
         let (core, listener_fut, manager_fut) = Subduction::hydrate(
             discovery_id,
             signer,
@@ -200,7 +199,7 @@ impl WasmSubduction {
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,
-            pending_blob_request_ttl,
+            max_pending,
         )
         .await?;
 

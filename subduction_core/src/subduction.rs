@@ -132,15 +132,7 @@ use sedimentree_core::{
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 
-use crate::timestamp::TimestampSeconds;
-
-/// Default TTL for pending blob requests (5 minutes).
-///
-/// Requests are broadcast to all connected peers, so if a peer disconnects and
-/// quickly reconnects, the pending request may still be fulfilled. This TTL
-/// allows time for reconnection while preventing unbounded memory growth from
-/// permanently unresponsive peers.
-pub const DEFAULT_PENDING_BLOB_REQUEST_TTL: Duration = Duration::from_secs(5 * 60);
+use crate::pending_blob_requests::PendingBlobRequests;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
@@ -173,16 +165,13 @@ pub struct Subduction<
     /// Used to restore subscriptions after reconnection.
     outgoing_subscriptions: Arc<Mutex<Map<PeerId, Set<SedimentreeId>>>>,
 
-    /// TTL for pending blob requests before lazy eviction.
-    pending_blob_request_ttl: Duration,
-
     /// Blob digests we have requested and are expecting to receive.
     ///
     /// Used to reject unsolicited [`BlobsResponse`] messages — only blobs
-    /// whose `(SedimentreeId, Digest)` pairs appear in this map are saved.
-    /// Each entry stores the timestamp when the request was made for TTL-based eviction.
-    #[allow(clippy::type_complexity)]
-    pending_blob_requests: Arc<Mutex<Map<(SedimentreeId, Digest<Blob>), TimestampSeconds>>>,
+    /// whose `(SedimentreeId, Digest)` pairs appear in this set are saved.
+    /// Uses LRU eviction when capacity is exceeded (safety valve).
+    /// Primary cleanup happens on sync completion.
+    pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
 
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(C, Message)>,
@@ -222,7 +211,7 @@ impl<
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
-        pending_blob_request_ttl: Duration,
+        max_pending_blob_requests: usize,
     ) -> (
         Arc<Self>,
         ListenerFuture<'a, F, S, C, P, Sig, M, N>,
@@ -254,8 +243,9 @@ impl<
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
-            pending_blob_request_ttl,
-            pending_blob_requests: Arc::new(Mutex::new(Map::new())),
+            pending_blob_requests: Arc::new(Mutex::new(PendingBlobRequests::new(
+                max_pending_blob_requests,
+            ))),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -293,7 +283,7 @@ impl<
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
-        pending_blob_request_ttl: Duration,
+        max_pending_blob_requests: usize,
     ) -> Result<
         (
             Arc<Self>,
@@ -315,7 +305,7 @@ impl<
             depth_metric,
             sedimentrees,
             spawner,
-            pending_blob_request_ttl,
+            max_pending_blob_requests,
         );
         for id in ids {
             let signed_loose_commits = subduction
@@ -529,6 +519,7 @@ impl<
                         // Spawn dispatch as concurrent task
                         let this = self.clone();
                         let conn_clone = conn.clone();
+
                         in_flight.push(async move {
                             let result = this.dispatch(&conn_clone, msg).await;
                             (conn_clone, result)
@@ -655,7 +646,7 @@ impl<
                     let mut rejected_count = 0usize;
                     for blob in blobs {
                         let digest = Digest::hash_bytes(blob.as_slice());
-                        if pending.remove(&(id, digest)).is_some() {
+                        if pending.remove(id, digest) {
                             accepted.push(blob);
                         } else {
                             tracing::warn!(
@@ -1849,17 +1840,10 @@ impl<
 
     /// Find blobs from connected peers for a specific sedimentree.
     pub async fn request_blobs(&self, id: SedimentreeId, digests: Vec<Digest<Blob>>) {
-        let now = TimestampSeconds::now();
-
         {
             let mut pending = self.pending_blob_requests.lock().await;
-
-            // Lazy eviction: remove stale entries older than TTL
-            pending.retain(|_, ts| now.abs_diff(*ts) < self.pending_blob_request_ttl);
-
-            // Insert new requests with current timestamp
             for digest in &digests {
-                pending.insert((id, *digest), now);
+                pending.insert(id, *digest);
             }
         }
 
@@ -2070,6 +2054,13 @@ impl<
                     }
 
                     had_success = true;
+
+                    // Cleanup pending blob requests for this tree since sync completed
+                    self.pending_blob_requests
+                        .lock()
+                        .await
+                        .remove_for_sedimentree(id);
+
                     break;
                 }
             }
@@ -2271,6 +2262,13 @@ impl<
                     }
 
                     had_success = true;
+
+                    // Cleanup pending blob requests for this tree since sync completed
+                    self.pending_blob_requests
+                        .lock()
+                        .await
+                        .remove_for_sedimentree(id);
+
                     break;
                 }
             }
@@ -2436,6 +2434,12 @@ impl<
                         "mutual subscription: added peer {peer_id} to our subscriptions for {id:?}"
                     );
                 }
+
+                // Cleanup pending blob requests for this tree since sync completed
+                self.pending_blob_requests
+                    .lock()
+                    .await
+                    .remove_for_sedimentree(id);
 
                 Ok((true, stats, pending_send, None))
             }

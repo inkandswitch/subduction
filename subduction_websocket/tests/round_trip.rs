@@ -16,10 +16,11 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
     crypto::signer::MemorySigner,
+    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
+    subduction::Subduction,
 };
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
@@ -58,7 +59,7 @@ async fn rend_receive() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -186,7 +187,7 @@ async fn batch_sync() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
     tokio::spawn(async move {
         listener_fut.await?;
@@ -239,7 +240,7 @@ async fn batch_sync() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_PENDING_BLOB_REQUEST_TTL,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(client_manager_fut);
