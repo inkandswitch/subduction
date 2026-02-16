@@ -83,57 +83,75 @@ impl WasmWebSocket {
             tracing::debug!("WS message event received");
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
-                if let Ok(msg) = minicbor::decode::<Message>(&bytes) {
-                    tracing::info!("WS message received that's {} bytes long", bytes.len());
-                    let inner_pending = closure_pending.clone();
-                    let inner_inbound_writer = inbound_writer.clone();
+                tracing::debug!("WS received {} bytes", bytes.len());
+                match minicbor::decode::<Message>(&bytes) {
+                    Ok(msg) => {
+                        tracing::info!("WS message decoded: {} bytes", bytes.len());
+                        let inner_pending = closure_pending.clone();
+                        let inner_inbound_writer = inbound_writer.clone();
 
-                    wasm_bindgen_futures::spawn_local(async move {
-                        match msg {
-                            Message::BatchSyncResponse(resp) => {
-                                let req_id = resp.req_id;
-                                let removed = { inner_pending.lock().await.remove(&req_id) };
-                                if let Some(waiting) = removed {
-                                    tracing::info!("dispatching to waiter {:?}", req_id);
-                                    let result = waiting.send(resp);
-                                    debug_assert!(result.is_ok());
-                                    if result.is_err() {
-                                        tracing::error!(
-                                            "oneshot channel closed before sending response for req_id {:?}",
-                                            req_id
-                                        );
-                                    }
-                                } else {
-                                    tracing::info!(
-                                        "dispatching to inbound channel {:?}",
-                                        resp.req_id
+                        wasm_bindgen_futures::spawn_local(async move {
+                            match msg {
+                                Message::BatchSyncResponse(resp) => {
+                                    tracing::debug!(
+                                        "BatchSyncResponse received: {} commits, {} fragments",
+                                        resp.diff.missing_commits.len(),
+                                        resp.diff.missing_fragments.len()
                                     );
-                                    if let Err(e) = inner_inbound_writer
-                                        .clone()
-                                        .send(Message::BatchSyncResponse(resp))
-                                        .await
-                                    {
+                                    let req_id = resp.req_id;
+                                    let removed = { inner_pending.lock().await.remove(&req_id) };
+                                    if let Some(waiting) = removed {
+                                        tracing::info!("dispatching to waiter {:?}", req_id);
+                                        let result = waiting.send(resp);
+                                        debug_assert!(result.is_ok());
+                                        if result.is_err() {
+                                            tracing::error!(
+                                                "oneshot channel closed before sending response for req_id {:?}",
+                                                req_id
+                                            );
+                                        }
+                                    } else {
+                                        tracing::info!(
+                                            "dispatching to inbound channel {:?}",
+                                            resp.req_id
+                                        );
+                                        if let Err(e) = inner_inbound_writer
+                                            .clone()
+                                            .send(Message::BatchSyncResponse(resp))
+                                            .await
+                                        {
+                                            tracing::error!("failed to send inbound message: {e}");
+                                        }
+                                    }
+                                }
+                                other @ (Message::LooseCommit { .. }
+                                | Message::Fragment { .. }
+                                | Message::BlobsRequest { .. }
+                                | Message::BlobsResponse { .. }
+                                | Message::BatchSyncRequest(_)
+                                | Message::RemoveSubscriptions(_)) => {
+                                    tracing::debug!("other message type received");
+                                    if let Err(e) = inner_inbound_writer.clone().send(other).await {
                                         tracing::error!("failed to send inbound message: {e}");
                                     }
                                 }
                             }
-                            other @ (Message::LooseCommit { .. }
-                            | Message::Fragment { .. }
-                            | Message::BlobsRequest { .. }
-                            | Message::BlobsResponse { .. }
-                            | Message::BatchSyncRequest(_)
-                            | Message::RemoveSubscriptions(_)) => {
-                                if let Err(e) = inner_inbound_writer.clone().send(other).await {
-                                    tracing::error!("failed to send inbound message: {e}");
-                                }
-                            }
-                        }
-                    });
-                } else {
-                    tracing::error!("failed to decode message: {:?}", event.data());
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "CBOR decode failed for {} byte message: {:?}. First 64 bytes: {:?}",
+                            bytes.len(),
+                            e,
+                            bytes.get(..64).unwrap_or(&bytes)
+                        );
+                    }
                 }
             } else {
-                tracing::error!("unexpected message event: {:?}", event.data());
+                tracing::error!(
+                    "unexpected message event (not ArrayBuffer): {:?}",
+                    event.data()
+                );
             }
         });
 

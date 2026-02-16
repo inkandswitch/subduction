@@ -1,8 +1,11 @@
 //! Fragment types for Sedimentree data partitioning.
 
+pub mod checkpoint;
 pub mod id;
 
-use alloc::{collections::BTreeSet, vec::Vec};
+use alloc::collections::BTreeSet;
+
+use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
@@ -23,135 +26,35 @@ use crate::{
 /// read the content in a particular fragment (e.g. because it's in
 /// an arbitrary format or is encrypted), it maintains some basic
 /// metadata about the the content to aid in deduplication and synchronization.
-///
-/// The [`FragmentId`] is precomputed at construction and cached. It is
-/// _not_ serialized — on deserialization it is recomputed from `head`
-/// and `boundary`.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
+)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fragment {
+    #[n(0)]
     summary: FragmentSummary,
-    checkpoints: Vec<Digest<LooseCommit>>,
+    #[n(1)]
+    checkpoints: BTreeSet<Checkpoint>,
+    #[n(2)]
     digest: Digest<Fragment>,
-
-    /// Precomputed causal identity. Not serialized — recomputed on decode.
-    causal_id: FragmentId,
-}
-
-impl<Ctx> minicbor::Encode<Ctx> for Fragment {
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        ctx: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.map(3)?;
-        e.u32(0)?;
-        self.summary.encode(e, ctx)?;
-        e.u32(1)?;
-        self.checkpoints.encode(e, ctx)?;
-        e.u32(2)?;
-        self.digest.encode(e, ctx)?;
-        Ok(())
-    }
-}
-
-impl<'b, Ctx> minicbor::Decode<'b, Ctx> for Fragment {
-    fn decode(
-        d: &mut minicbor::Decoder<'b>,
-        ctx: &mut Ctx,
-    ) -> Result<Self, minicbor::decode::Error> {
-        let len = d.map()?;
-        let mut summary = None;
-        let mut checkpoints = None;
-        let mut digest = None;
-
-        let count = len.unwrap_or(0);
-        for _ in 0..count {
-            match d.u32()? {
-                0 => summary = Some(FragmentSummary::decode(d, ctx)?),
-                1 => checkpoints = Some(Vec::<Digest<LooseCommit>>::decode(d, ctx)?),
-                2 => digest = Some(Digest::<Fragment>::decode(d, ctx)?),
-                _ => {
-                    d.skip()?;
-                }
-            }
-        }
-
-        let summary =
-            summary.ok_or_else(|| minicbor::decode::Error::message("missing field: summary"))?;
-        let checkpoints = checkpoints
-            .ok_or_else(|| minicbor::decode::Error::message("missing field: checkpoints"))?;
-        let digest =
-            digest.ok_or_else(|| minicbor::decode::Error::message("missing field: digest"))?;
-
-        let causal_id = FragmentId::new(summary.head(), &summary.boundary);
-
-        Ok(Self {
-            summary,
-            checkpoints,
-            digest,
-            causal_id,
-        })
-    }
-}
-
-#[cfg(feature = "arbitrary")]
-impl<'a> arbitrary::Arbitrary<'a> for Fragment {
-    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
-        let summary = FragmentSummary::arbitrary(u)?;
-        let checkpoints = Vec::<Digest<LooseCommit>>::arbitrary(u)?;
-        let digest = Digest::<Fragment>::arbitrary(u)?;
-        let causal_id = FragmentId::new(summary.head(), &summary.boundary);
-        Ok(Self {
-            summary,
-            checkpoints,
-            digest,
-            causal_id,
-        })
-    }
-}
-
-#[cfg(feature = "serde")]
-impl serde::Serialize for Fragment {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        use serde::ser::SerializeStruct;
-        let mut s = serializer.serialize_struct("Fragment", 3)?;
-        s.serialize_field("summary", &self.summary)?;
-        s.serialize_field("checkpoints", &self.checkpoints)?;
-        s.serialize_field("digest", &self.digest)?;
-        s.end()
-    }
-}
-
-#[cfg(feature = "serde")]
-impl<'de> serde::Deserialize<'de> for Fragment {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        #[derive(serde::Deserialize)]
-        struct FragmentFields {
-            summary: FragmentSummary,
-            checkpoints: Vec<Digest<LooseCommit>>,
-            digest: Digest<Fragment>,
-        }
-
-        let fields = FragmentFields::deserialize(deserializer)?;
-        let causal_id = FragmentId::new(fields.summary.head(), &fields.summary.boundary);
-        Ok(Self {
-            summary: fields.summary,
-            checkpoints: fields.checkpoints,
-            digest: fields.digest,
-            causal_id,
-        })
-    }
 }
 
 impl Fragment {
     /// Constructor for a [`Fragment`].
+    ///
+    /// The `checkpoints` are raw commit digests that fall within the fragment's
+    /// range. They are truncated to 16 bytes internally for compact storage.
     #[must_use]
     pub fn new(
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
-        checkpoints: Vec<Digest<LooseCommit>>,
+        checkpoints: &[Digest<LooseCommit>],
         blob_meta: BlobMeta,
     ) -> Self {
+        let truncated_checkpoints: BTreeSet<Checkpoint> =
+            checkpoints.iter().map(|d| Checkpoint::new(*d)).collect();
+
         let digest = {
             let mut hasher = blake3::Hasher::new();
             hasher.update(head.as_bytes());
@@ -161,14 +64,12 @@ impl Fragment {
             }
             hasher.update(blob_meta.digest().as_bytes());
 
-            for checkpoint in &checkpoints {
+            for checkpoint in &truncated_checkpoints {
                 hasher.update(checkpoint.as_bytes());
             }
 
             Digest::from_bytes(*hasher.finalize().as_bytes())
         };
-
-        let causal_id = FragmentId::new(head, &boundary);
 
         Self {
             summary: FragmentSummary {
@@ -176,54 +77,54 @@ impl Fragment {
                 boundary,
                 blob_meta,
             },
-            checkpoints,
+            checkpoints: truncated_checkpoints,
             digest,
-            causal_id,
         }
     }
 
     /// Returns true if this fragment supports the given fragment summary.
+    ///
+    /// A fragment supports another if:
+    /// 1. They are identical, OR
+    /// 2. This fragment is deeper (or equal depth) AND the other's entire
+    ///    range falls within this fragment's range.
+    ///
+    /// Range containment is checked by verifying the other's head and boundary
+    /// are all within this fragment (via `supports_block`), or the other's
+    /// boundary is a subset of this fragment's boundary.
     #[must_use]
     pub fn supports<M: DepthMetric>(&self, other: &FragmentSummary, hash_metric: &M) -> bool {
+        // Identical fragments
         if &self.summary == other {
             return true;
         }
 
+        // Shallower can never support deeper
         if self.depth(hash_metric) < other.depth(hash_metric) {
             return false;
         }
 
-        if self.summary.head == other.head
-            && other
-                .boundary
-                .iter()
-                .all(|end| self.checkpoints.contains(end))
-        {
-            return true;
+        // Other's head must be within our range
+        if !self.supports_block(other.head) {
+            return false;
         }
 
-        if self.checkpoints.contains(&other.head)
-            && other
-                .boundary
-                .iter()
-                .all(|end| self.checkpoints.contains(end))
-        {
-            return true;
-        }
-
-        if self.checkpoints.contains(&other.head)
-            && self.summary.boundary.is_superset(&other.boundary)
-        {
-            return true;
-        }
-
-        false
+        // Other's boundary must be within our range OR a subset of our boundary
+        other.boundary.iter().all(|b| self.supports_block(*b))
+            || self.summary.boundary.is_superset(&other.boundary)
     }
 
-    /// Returns true if this [`Fragment`] covers the given [`Digest`].
+    /// Returns true if this [`Fragment`] supports the given commit digest.
+    ///
+    /// A commit is supported if it falls within the fragment's range:
+    /// - The head (top of range)
+    /// - Any checkpoint (interior, truncated comparison)
+    /// - Any boundary commit (bottom of range)
     #[must_use]
-    pub fn supports_block(&self, fragment_end: Digest<LooseCommit>) -> bool {
-        self.checkpoints.contains(&fragment_end) || self.summary.boundary.contains(&fragment_end)
+    pub fn supports_block(&self, digest: Digest<LooseCommit>) -> bool {
+        self.summary.head == digest
+            || self.checkpoints.contains(&Checkpoint::new(digest))
+            || self.summary.boundary.contains(&digest)
     }
 
     /// Convert to a [`FragmentSummary`].
@@ -250,9 +151,9 @@ impl Fragment {
         &self.summary.boundary
     }
 
-    /// The inner checkpoints of the fragment.
+    /// The checkpoint set for compact covering checks.
     #[must_use]
-    pub const fn checkpoints(&self) -> &Vec<Digest<LooseCommit>> {
+    pub const fn checkpoints(&self) -> &BTreeSet<Checkpoint> {
         &self.checkpoints
     }
 
@@ -261,11 +162,10 @@ impl Fragment {
     pub const fn digest(&self) -> Digest<Fragment> {
         self.digest
     }
-
-    /// The precomputed causal identity of this fragment.
+    /// The causal identity of this fragment (its head digest).
     #[must_use]
     pub const fn fragment_id(&self) -> FragmentId {
-        self.causal_id
+        FragmentId::new(self.summary.head)
     }
 }
 
@@ -381,5 +281,327 @@ impl FragmentSpec {
     #[must_use]
     pub const fn checkpoints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
         &self.checkpoints
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use alloc::collections::BTreeSet;
+
+    use testresult::TestResult;
+
+    use crate::{
+        blob::BlobMeta,
+        commit::CountLeadingZeroBytes,
+        crypto::digest::Digest,
+        fragment::{Fragment, FragmentSummary},
+        loose_commit::LooseCommit,
+        test_utils::digest_with_depth,
+    };
+
+    fn make_fragment(
+        head: Digest<LooseCommit>,
+        boundary: BTreeSet<Digest<LooseCommit>>,
+        checkpoints: &[Digest<LooseCommit>],
+    ) -> Fragment {
+        let blob_meta = BlobMeta::new(&[1]);
+        Fragment::new(head, boundary, checkpoints, blob_meta)
+    }
+
+    // ============================================================
+    // supports_block() tests
+    // ============================================================
+
+    #[test]
+    fn supports_block_head() {
+        let head = digest_with_depth(2, 1);
+        let boundary = digest_with_depth(1, 100);
+        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
+
+        // Head should be supported
+        assert!(fragment.supports_block(head));
+    }
+
+    #[test]
+    fn supports_block_boundary() {
+        let head = digest_with_depth(2, 1);
+        let boundary = digest_with_depth(1, 100);
+        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
+
+        // Boundary should be supported
+        assert!(fragment.supports_block(boundary));
+    }
+
+    #[test]
+    fn supports_block_checkpoint() {
+        let head = digest_with_depth(2, 1);
+        let boundary = digest_with_depth(1, 100);
+        let checkpoint = digest_with_depth(1, 50);
+        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[checkpoint]);
+
+        // Checkpoint should be supported (via truncated match)
+        assert!(fragment.supports_block(checkpoint));
+    }
+
+    #[test]
+    fn supports_block_unknown_digest() {
+        let head = digest_with_depth(2, 1);
+        let boundary = digest_with_depth(1, 100);
+        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
+
+        let unknown = digest_with_depth(1, 200);
+        assert!(!fragment.supports_block(unknown));
+    }
+
+    // ============================================================
+    // supports() tests
+    // ============================================================
+
+    #[test]
+    fn supports_self() {
+        let head = digest_with_depth(2, 1);
+        let boundary = digest_with_depth(1, 100);
+        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
+
+        // Fragment should support its own summary
+        assert!(fragment.supports(fragment.summary(), &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn deeper_supports_shallower_with_matching_range() {
+        // Deep fragment (depth 3)
+        let deep_head = digest_with_depth(3, 1);
+        let deep_boundary = digest_with_depth(1, 100);
+        let shallow_head = digest_with_depth(2, 1);
+        let shallow_boundary = digest_with_depth(1, 101);
+
+        // Deep fragment has shallow's head and boundary in checkpoints
+        let deep = make_fragment(
+            deep_head,
+            BTreeSet::from([deep_boundary]),
+            &[shallow_head, shallow_boundary],
+        );
+
+        // Shallow fragment (depth 2)
+        let shallow_summary = FragmentSummary::new(
+            shallow_head,
+            BTreeSet::from([shallow_boundary]),
+            BlobMeta::new(&[2]),
+        );
+
+        assert!(deep.supports(&shallow_summary, &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn shallower_never_supports_deeper() {
+        // Shallow fragment (depth 2)
+        let shallow_head = digest_with_depth(2, 1);
+        let shallow_boundary = digest_with_depth(1, 100);
+        let shallow = make_fragment(shallow_head, BTreeSet::from([shallow_boundary]), &[]);
+
+        // Deep fragment summary (depth 3)
+        let deep_head = digest_with_depth(3, 1);
+        let deep_boundary = digest_with_depth(1, 101);
+        let deep_summary = FragmentSummary::new(
+            deep_head,
+            BTreeSet::from([deep_boundary]),
+            BlobMeta::new(&[2]),
+        );
+
+        // Shallow should never support deeper, regardless of range
+        assert!(!shallow.supports(&deep_summary, &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn same_depth_partial_overlap_no_support() {
+        // Two fragments at depth 2 with different heads
+        let head1 = digest_with_depth(2, 1);
+        let boundary1 = digest_with_depth(1, 100);
+        let fragment1 = make_fragment(head1, BTreeSet::from([boundary1]), &[]);
+
+        let head2 = digest_with_depth(2, 2);
+        let boundary2 = digest_with_depth(1, 101);
+        let summary2 =
+            FragmentSummary::new(head2, BTreeSet::from([boundary2]), BlobMeta::new(&[2]));
+
+        // Neither should support the other
+        assert!(!fragment1.supports(&summary2, &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn supports_boundary_subset() {
+        // Fragment with boundary {A, B}
+        let head = digest_with_depth(2, 1);
+        let boundary_a = digest_with_depth(1, 100);
+        let boundary_b = digest_with_depth(1, 101);
+        let fragment = make_fragment(head, BTreeSet::from([boundary_a, boundary_b]), &[]);
+
+        // Summary with same head but boundary subset {A}
+        let summary = FragmentSummary::new(head, BTreeSet::from([boundary_a]), BlobMeta::new(&[2]));
+
+        // Should support (boundary is subset)
+        assert!(fragment.supports(&summary, &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn supports_head_in_checkpoints_boundary_in_checkpoints() {
+        // Deep fragment
+        let deep_head = digest_with_depth(3, 1);
+        let deep_boundary = digest_with_depth(1, 100);
+        let checkpoint1 = digest_with_depth(2, 50);
+        let checkpoint2 = digest_with_depth(1, 51);
+
+        let deep = make_fragment(
+            deep_head,
+            BTreeSet::from([deep_boundary]),
+            &[checkpoint1, checkpoint2],
+        );
+
+        // Shallow summary where head and boundary are both in deep's checkpoints
+        let shallow_summary = FragmentSummary::new(
+            checkpoint1,
+            BTreeSet::from([checkpoint2]),
+            BlobMeta::new(&[2]),
+        );
+
+        assert!(deep.supports(&shallow_summary, &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn no_support_when_head_not_in_range() {
+        let deep_head = digest_with_depth(3, 1);
+        let deep_boundary = digest_with_depth(1, 100);
+        let deep = make_fragment(deep_head, BTreeSet::from([deep_boundary]), &[]);
+
+        // Shallow with head not in deep's range
+        let other_head = digest_with_depth(2, 99);
+        let shallow_summary = FragmentSummary::new(
+            other_head,
+            BTreeSet::from([deep_boundary]), // boundary matches, but head doesn't
+            BlobMeta::new(&[2]),
+        );
+
+        assert!(!deep.supports(&shallow_summary, &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn no_support_when_boundary_not_in_range() {
+        let deep_head = digest_with_depth(3, 1);
+        let deep_boundary = digest_with_depth(1, 100);
+        let shallow_head = digest_with_depth(2, 50);
+
+        // Deep has shallow's head in checkpoints
+        let deep = make_fragment(deep_head, BTreeSet::from([deep_boundary]), &[shallow_head]);
+
+        // Shallow boundary is NOT in deep's range
+        let other_boundary = digest_with_depth(1, 200);
+        let shallow_summary = FragmentSummary::new(
+            shallow_head,
+            BTreeSet::from([other_boundary]),
+            BlobMeta::new(&[2]),
+        );
+
+        assert!(!deep.supports(&shallow_summary, &CountLeadingZeroBytes));
+    }
+
+    #[test]
+    fn cbor_round_trip() -> TestResult {
+        let head = digest_with_depth(2, 1);
+        let boundary = digest_with_depth(1, 100);
+        let checkpoint = digest_with_depth(1, 50);
+        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[checkpoint]);
+
+        let encoded = minicbor::to_vec(&fragment)?;
+        let decoded: Fragment = minicbor::decode(&encoded)?;
+
+        assert_eq!(fragment, decoded);
+        Ok(())
+    }
+
+    #[cfg(feature = "bolero")]
+    mod proptests {
+        use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
+
+        #[test]
+        #[allow(clippy::expect_used)]
+        fn cbor_round_trip() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    let encoded = minicbor::to_vec(fragment).expect("encoding should succeed");
+                    let decoded: Fragment =
+                        minicbor::decode(&encoded).expect("decoding should succeed");
+                    assert_eq!(fragment, &decoded, "CBOR round-trip should preserve data");
+                });
+        }
+
+        #[test]
+        fn supports_self() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    assert!(
+                        fragment.supports(fragment.summary(), &CountLeadingZeroBytes),
+                        "every fragment should support its own summary"
+                    );
+                });
+        }
+
+        #[test]
+        fn shallower_never_supports_deeper() {
+            #[derive(Debug)]
+            struct DepthPair {
+                shallow: Fragment,
+                deep: Fragment,
+            }
+
+            impl<'a> arbitrary::Arbitrary<'a> for DepthPair {
+                fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                    let shallow: Fragment = u.arbitrary()?;
+                    let deep: Fragment = u.arbitrary()?;
+                    Ok(Self { shallow, deep })
+                }
+            }
+
+            bolero::check!()
+                .with_arbitrary::<DepthPair>()
+                .for_each(|pair| {
+                    let shallow_depth = pair.shallow.depth(&CountLeadingZeroBytes);
+                    let deep_depth = pair.deep.depth(&CountLeadingZeroBytes);
+
+                    if shallow_depth < deep_depth {
+                        assert!(
+                            !pair.shallow.supports(pair.deep.summary(), &CountLeadingZeroBytes),
+                            "shallower fragment (depth {shallow_depth:?}) should never support deeper (depth {deep_depth:?})"
+                        );
+                    }
+                });
+        }
+
+        #[test]
+        fn supports_block_includes_head() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    assert!(
+                        fragment.supports_block(fragment.head()),
+                        "supports_block should always include the fragment's head"
+                    );
+                });
+        }
+
+        #[test]
+        fn supports_block_includes_boundary() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    for boundary_commit in fragment.summary().boundary() {
+                        assert!(
+                            fragment.supports_block(*boundary_commit),
+                            "supports_block should include all boundary commits"
+                        );
+                    }
+                });
+        }
     }
 }

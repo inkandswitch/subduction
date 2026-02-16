@@ -131,7 +131,7 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
         });
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        fragments.push(Fragment::new(head, boundary, checkpoints, blob_meta));
+        fragments.push(Fragment::new(head, boundary, &checkpoints, blob_meta));
 
         // Verify depth is as expected
         debug_assert_eq!(metric.to_depth(head).0, depth);
@@ -232,7 +232,7 @@ fn generate_fragments_for_metric(
         });
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        fragments.push(Fragment::new(head, boundary, checkpoints, blob_meta));
+        fragments.push(Fragment::new(head, boundary, &checkpoints, blob_meta));
     }
 
     fragments

@@ -334,10 +334,11 @@ impl<T> FragmentState<T> {
     /// Converts into a [`Fragment`] with the given [`BlobMeta`].
     #[must_use]
     pub fn to_fragment(self, blob_meta: BlobMeta) -> Fragment {
+        let checkpoints: Vec<_> = self.checkpoints.iter().copied().collect();
         Fragment::new(
             self.head_digest,
             self.boundary.keys().copied().collect(),
-            self.checkpoints.iter().copied().collect(),
+            &checkpoints,
             blob_meta,
         )
     }

@@ -32,7 +32,7 @@ pub fn set_panic_hook() {
 
     #[cfg(feature = "wasm-tracing")]
     {
-        let mut config = WasmLayerConfig::new().with_max_level(tracing::Level::WARN);
+        let mut config = WasmLayerConfig::new().with_max_level(tracing::Level::DEBUG);
         config.use_console_methods = true;
 
         #[allow(clippy::expect_used)]

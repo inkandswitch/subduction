@@ -60,10 +60,10 @@ export interface SedimentreeStorage {
     deleteFragment(sedimentreeId: SedimentreeId, digest: Digest): Promise<void>;
     deleteAllFragments(sedimentreeId: SedimentreeId): Promise<void>;
 
-    // Blobs (already CAS)
-    saveBlob(data: Uint8Array): Promise<Digest>;
-    loadBlob(digest: Digest): Promise<Uint8Array | null>;
-    deleteBlob(digest: Digest): Promise<void>;
+    // Blobs (keyed by sedimentree + digest)
+    saveBlob(sedimentreeId: SedimentreeId, data: Uint8Array): Promise<Digest>;
+    loadBlob(sedimentreeId: SedimentreeId, digest: Digest): Promise<Uint8Array | null>;
+    deleteBlob(sedimentreeId: SedimentreeId, digest: Digest): Promise<void>;
 }
 "#;
 

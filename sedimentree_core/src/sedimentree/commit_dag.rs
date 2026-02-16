@@ -13,7 +13,7 @@ use crate::{
     collections::{Map, Set},
     crypto::digest::Digest,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::Fragment,
+    fragment::{Fragment, checkpoint::Checkpoint},
     loose_commit::LooseCommit,
 };
 
@@ -352,20 +352,33 @@ impl CommitDag {
 
     /// All the commit hashes in this dag plus the stratum in the order in which they should
     /// be bundled into strata
-    pub(crate) fn canonical_sequence<
-        'a,
-        I: Iterator<Item = &'a Fragment> + Clone + 'a,
-        M: DepthMetric,
-    >(
-        &'a self,
-        fragments: I,
-        hash_metric: &'a M,
-    ) -> impl Iterator<Item = Digest<LooseCommit>> + 'a {
-        // First find the tips of the DAG, which is the heads of the commit DAG,
-        // plus the end hashes of any fragments which are not contained in the
-        // commit DAG
+    pub(crate) fn canonical_sequence<M: DepthMetric>(
+        &self,
+        fragments: &[&Fragment],
+        hash_metric: &M,
+    ) -> Vec<Digest<LooseCommit>> {
+        // Pre-index: map boundary commits → fragments (deepest first)
+        let mut fragments_by_boundary: Map<Digest<LooseCommit>, Vec<&&Fragment>> = Map::new();
+        for fragment in fragments {
+            for end in fragment.boundary() {
+                fragments_by_boundary
+                    .entry(*end)
+                    .or_default()
+                    .push(fragment);
+            }
+        }
+
+        // Pre-index: reverse map for checkpoint resolution
+        let checkpoint_to_digest: Map<Checkpoint, Digest<LooseCommit>> = self
+            .nodes
+            .iter()
+            .map(|node| (Checkpoint::new(node.hash), node.hash))
+            .collect();
+
+        // Find the tips: heads of the commit DAG + fragment boundary commits
+        // not contained in the commit DAG
         let mut boundary = Vec::new();
-        for fragment in fragments.clone() {
+        for fragment in fragments {
             for end in fragment.boundary() {
                 if !self.contains_commit(end) {
                     boundary.push(*end);
@@ -375,47 +388,44 @@ impl CommitDag {
         let mut heads = self.heads().chain(boundary).collect::<Vec<_>>();
         heads.sort();
 
-        // Then for each tip, do a reverse depth first traversal. When we reach
-        // a commit which has a parent which is in a stratum, we just extend the
-        // traversal with the commits and checkpoints from the given stratum
-        heads.into_iter().flat_map(move |head| {
+        // Collect all commits via DFS from each head. When we reach a commit
+        // that's in a fragment, resolve its checkpoints via the reverse map.
+        let mut result = Vec::new();
+        let mut visited = Set::new();
+
+        for head in heads {
             let mut stack = vec![head];
-            let mut visited = Set::new();
-            let fragments = fragments.clone();
-            core::iter::from_fn(move || {
-                while let Some(commit) = stack.pop() {
-                    if visited.contains(&commit) {
-                        continue;
-                    }
-                    visited.insert(commit);
-                    if let Some(idx) = self.node_map.get(&commit) {
-                        let mut parents = self
-                            .parents(*idx)
-                            .map(|i| {
-                                #[allow(clippy::expect_used)]
-                                self.nodes.get(i.0).expect("node is not in self.nodes").hash
-                            })
-                            .collect::<Vec<_>>();
-                        parents.sort();
-                        stack.extend(parents);
-                    } else {
-                        let mut supporting_fragments = fragments
-                            .clone()
-                            .filter(|s| s.boundary().contains(&commit))
-                            .collect::<Vec<_>>();
-                        supporting_fragments.sort_by_key(|s| s.depth(hash_metric));
-                        if let Some(fragment) = supporting_fragments.pop() {
-                            for commit in fragment.checkpoints() {
-                                stack.push(*commit);
-                            }
-                            stack.push(fragment.head());
+            while let Some(commit) = stack.pop() {
+                if visited.contains(&commit) {
+                    continue;
+                }
+                visited.insert(commit);
+                result.push(commit);
+
+                if let Some(idx) = self.node_map.get(&commit) {
+                    let mut parents = self
+                        .parents(*idx)
+                        .map(|i| {
+                            #[allow(clippy::expect_used)]
+                            self.nodes.get(i.0).expect("node is not in self.nodes").hash
+                        })
+                        .collect::<Vec<_>>();
+                    parents.sort();
+                    stack.extend(parents);
+                } else if let Some(supporting) = fragments_by_boundary.get(&commit)
+                    && let Some(fragment) = supporting.iter().max_by_key(|s| s.depth(hash_metric))
+                {
+                    for checkpoint in fragment.checkpoints() {
+                        if let Some(full_digest) = checkpoint_to_digest.get(checkpoint) {
+                            stack.push(*full_digest);
                         }
                     }
-                    return Some(commit);
+                    stack.push(fragment.head());
                 }
-                None
-            })
-        })
+            }
+        }
+
+        result
     }
 
     #[cfg(test)]
@@ -492,287 +502,88 @@ impl Iterator for Parents<'_> {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{
-        collections::BTreeSet,
-        string::{String, ToString},
-        vec::Vec,
-    };
+    use alloc::collections::BTreeSet;
 
     use rand::{SeedableRng, rngs::SmallRng};
 
     use super::CommitDag;
     use crate::{
-        blob::BlobMeta,
-        collections::{Map, Set},
+        collections::Set,
         commit::CountLeadingZeroBytes,
-        crypto::digest::Digest,
         loose_commit::LooseCommit,
+        test_utils::{digest_with_depth, random_blob_meta},
     };
 
-    fn hash_with_leading_zeros<R: rand::Rng>(rng: &mut R, zeros_count: u32) -> Digest<LooseCommit> {
-        let mut byte_arr: [u8; 32] = rng.r#gen::<[u8; 32]>();
-        for slot in byte_arr.iter_mut().take(zeros_count as usize) {
-            *slot = 0;
-        }
-        Digest::from_bytes(byte_arr)
-    }
-
-    #[derive(Debug)]
-    struct TestGraph {
-        nodes: Map<String, Digest<LooseCommit>>,
-        parents: Map<Digest<LooseCommit>, Vec<Digest<LooseCommit>>>,
-        commits: Map<Digest<LooseCommit>, BlobMeta>,
-    }
-
-    impl TestGraph {
-        fn new<R: rand::Rng>(
-            rng: &mut R,
-            node_info: Vec<(&'static str, usize)>,
-            edges: Vec<(&'static str, &'static str)>,
-        ) -> Self {
-            let commit_hashes = make_commit_hashes(rng, node_info);
-            let mut nodes = Map::new();
-            let mut commits = Map::new();
-            for (commit_name, commit_hash) in commit_hashes {
-                commits.insert(commit_hash, random_blob(rng));
-                nodes.insert(commit_name, commit_hash);
-            }
-            let mut parents = Map::new();
-            #[allow(clippy::panic)]
-            for (parent, child) in edges {
-                let Some(child_hash) = nodes.get(child) else {
-                    panic!("Child node not found: {child}");
-                };
-                let Some(parent_hash) = nodes.get(parent) else {
-                    panic!("Parent node not found: {parent}");
-                };
-                parents
-                    .entry(*child_hash)
-                    .or_insert_with(Vec::new)
-                    .push(*parent_hash);
-            }
-            Self {
-                nodes,
-                parents,
-                commits,
-            }
-        }
-
-        fn commits(&self) -> Vec<LooseCommit> {
-            let mut commits = Vec::new();
-            for hash in self.nodes.values() {
-                #[allow(clippy::unwrap_used)]
-                let parents: BTreeSet<_> = self
-                    .parents
-                    .get(hash)
-                    .map(|p| p.iter().copied().collect())
-                    .unwrap_or_default();
-                #[allow(clippy::unwrap_used)]
-                let blob_meta = *self.commits.get(hash).unwrap();
-                commits.push(LooseCommit::new(*hash, parents, blob_meta));
-            }
-            commits
-        }
-
-        fn node_hash(&self, node: &str) -> Digest<LooseCommit> {
-            #[allow(clippy::unwrap_used)]
-            *self.nodes.get(node).unwrap()
-        }
-
-        fn as_dag(&self) -> CommitDag {
-            CommitDag::from_commits(self.commits().iter())
-        }
-    }
-
-    /// Given a set of (name, level) pairs, create a map from name to commit hash
-    ///
-    /// This function will ensure that the generated hashes are ascending
-    fn make_commit_hashes<R: rand::Rng>(
-        rng: &mut R,
-        names: Vec<(&'static str, usize)>,
-    ) -> Map<String, Digest<LooseCommit>> {
-        let mut commits = Map::new();
-        let mut last_commit = None;
-        for (name, level) in names {
-            loop {
-                #[allow(clippy::cast_possible_truncation)]
-                let hash = hash_with_leading_zeros(rng, level as u32);
-                if let Some(last_commit_hash) = last_commit {
-                    if hash > last_commit_hash {
-                        last_commit = Some(hash);
-                        commits.insert(name.to_string(), hash);
-                        break;
-                    }
-                } else {
-                    last_commit = Some(hash);
-                    commits.insert(name.to_string(), hash);
-                    break;
-                }
-            }
-        }
-        commits
-    }
-
-    fn random_commit_hash<R: rand::Rng>(rng: &mut R) -> Digest<LooseCommit> {
-        let mut hash = [0; 32];
-        rng.fill_bytes(&mut hash);
-        Digest::from_bytes(hash)
-    }
-
-    fn random_blob<R: rand::Rng>(rng: &mut R) -> BlobMeta {
-        let mut contents: [u8; 20] = [0; 20];
-        rng.fill_bytes(&mut contents);
-        BlobMeta::new(&contents)
-    }
-
-    macro_rules! simplify_test {
-        (
-            rng => $rng: expr,
-            nodes => |node|level| $(|$node:ident | $level:literal| )*,
-            graph => {$($from:ident  --> $to:ident)*},
-            fragments => [$({start: $fragment_start: ident, end: $fragment_end: ident, checkpoints: [$($checkpoint: ident),*]})*],
-            simplified => [$($remaining: ident),*]
-        ) => {
-            #[allow(unused_imports)]
-            use alloc::collections::BTreeSet;
-            let node_info = vec![$((stringify!($node), $level)),*];
-            let graph = TestGraph::new($rng, node_info, vec![$((stringify!($from), stringify!($to)),)*]);
-            let fragments = vec![$(Fragment::new(
-                graph.node_hash(stringify!($fragment_start)),
-                BTreeSet::from([graph.node_hash(stringify!($fragment_end))]),
-                vec![$(graph.node_hash(stringify!($checkpoint)),)*],
-                random_blob($rng),
-            ),)*];
-            let dag = graph.as_dag();
-            let mut commit_name_map = Map::<Digest<LooseCommit>, _>::from_iter(vec![$((graph.node_hash(stringify!($from)), stringify!($from))),*]);
-            $(
-                commit_name_map.insert(graph.node_hash(stringify!($to)), stringify!($to));
-            )*
-            let expected_commits = Set::from_iter(vec![$(graph.node_hash(stringify!($remaining)),)*]);
-            let actual_commits = dag.simplify(&fragments, &CountLeadingZeroBytes).commit_hashes().collect::<Set<_>>();
-            let expected_message = pretty_hashes(&commit_name_map, &expected_commits);
-            let actual_message = pretty_hashes(&commit_name_map, &actual_commits);
-            assert_eq!(expected_commits, actual_commits, "\nexpected: {:?}, \nactual: {:?}", expected_message, actual_message);
-        };
-    }
-
-    fn pretty_hashes(
-        name_map: &Map<Digest<LooseCommit>, &'_ str>,
-        hashes: &Set<Digest<LooseCommit>>,
-    ) -> Set<String> {
-        hashes
-            .iter()
-            .map(|h| {
-                name_map
-                    .get(h)
-                    .map_or_else(|| h.to_string(), ToString::to_string)
-            })
-            .collect()
-    }
-
-    // #[test]
-    // fn simplify_basic() {
-    //     simplify_test!(
-    //         rng => &mut rand::thread_rng(),
-    //         nodes => | node | level |
-    //                  |   a  |   2   |
-    //                  |   b  |   0   |
-    //                  |   c  |   0   |
-    //                  |   d  |   2   |
-    //                  |   e  |   0   |,
-    //         graph => {
-    //             a --> b
-    //             a --> c
-    //             b --> d
-    //             d --> e
-    //         },
-    //         fragments => [
-    //             {start: a, end: d, checkpoints: []}
-    //         ],
-    //         simplified => [a, c, e]
-    //     );
-    // }
-
-    // #[test]
-    // fn simplify_multiple_heads() {
-    //     simplify_test!(
-    //         rng => &mut rand::thread_rng(),
-    //         nodes => | node | level |
-    //                  |   a  |   0   |
-    //                  |   b  |   0   |
-    //                  |   c  |   2   |
-    //                  |   d  |   2   |,
-    //         graph => {
-    //             a --> b
-    //             c --> b
-    //             b --> d
-    //         },
-    //         fragments => [
-    //             {start: c, end: d, checkpoints: []}
-    //         ],
-    //         simplified => [a, c]
-    //     );
-    // }
-
+    /// No fragments: all commits with depth >= threshold remain as block boundaries.
     #[test]
     fn simplify_block_boundaries_without_fragments() {
-        simplify_test!(
-            rng => &mut SmallRng::seed_from_u64(42),
-            nodes => | node | level |
-                     |   a  |   2   |
-                     |   b  |   0   |,
-            graph => {
-                a --> b
-            },
-            fragments => [],
-            simplified => [a, b]
-        );
+        let mut rng = SmallRng::seed_from_u64(42);
+
+        // Depths: a=2, b=0
+        let a_hash = digest_with_depth(2, 0x01);
+        let b_hash = digest_with_depth(0, 0x02);
+
+        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
+        let a = LooseCommit::new(a_hash, BTreeSet::from([b_hash]), random_blob_meta(&mut rng));
+
+        let dag = CommitDag::from_commits([&a, &b].into_iter());
+
+        let simplified = dag
+            .simplify(&[], &CountLeadingZeroBytes)
+            .commit_hashes()
+            .collect::<Set<_>>();
+
+        // With no fragments, simplify keeps block boundaries + heads
+        // Both a and b should remain (a is head, b would be pruned but there's no fragment)
+        assert_eq!(simplified, Set::from([a_hash, b_hash]));
     }
 
+    /// Two consecutive block boundary commits (both depth >= threshold).
     #[test]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
-        simplify_test!(
-            rng => &mut SmallRng::seed_from_u64(43),
-            nodes => | node | level |
-                     |   a  |   2   |
-                     |   b  |   2   |,
-            graph => {
-                a --> b
-            },
-            fragments => [],
-            simplified => [a, b]
-        );
+        let mut rng = SmallRng::seed_from_u64(43);
+
+        // Depths: a=2, b=2
+        let a_hash = digest_with_depth(2, 0x01);
+        let b_hash = digest_with_depth(2, 0x02);
+
+        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
+        let a = LooseCommit::new(a_hash, BTreeSet::from([b_hash]), random_blob_meta(&mut rng));
+
+        let dag = CommitDag::from_commits([&a, &b].into_iter());
+
+        let simplified = dag
+            .simplify(&[], &CountLeadingZeroBytes)
+            .commit_hashes()
+            .collect::<Set<_>>();
+
+        // Both are block boundaries, both remain
+        assert_eq!(simplified, Set::from([a_hash, b_hash]));
     }
 
     #[test]
     fn test_parents() {
         let mut rng = SmallRng::seed_from_u64(44);
-        let a = LooseCommit::new(
-            random_commit_hash(&mut rng),
-            BTreeSet::new(),
-            random_blob(&mut rng),
-        );
-        let b = LooseCommit::new(
-            random_commit_hash(&mut rng),
-            BTreeSet::new(),
-            random_blob(&mut rng),
-        );
+
+        let a_hash = digest_with_depth(0, 0x01);
+        let b_hash = digest_with_depth(0, 0x02);
+        let c_hash = digest_with_depth(0, 0x03);
+        let d_hash = digest_with_depth(0, 0x04);
+
+        let a = LooseCommit::new(a_hash, BTreeSet::new(), random_blob_meta(&mut rng));
+        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
         let c = LooseCommit::new(
-            random_commit_hash(&mut rng),
-            BTreeSet::from([a.digest(), b.digest()]),
-            random_blob(&mut rng),
+            c_hash,
+            BTreeSet::from([a_hash, b_hash]),
+            random_blob_meta(&mut rng),
         );
-        let d = LooseCommit::new(
-            random_commit_hash(&mut rng),
-            BTreeSet::from([c.digest()]),
-            random_blob(&mut rng),
-        );
-        let graph = CommitDag::from_commits(vec![&a, &b, &c, &d].into_iter());
+        let d = LooseCommit::new(d_hash, BTreeSet::from([c_hash]), random_blob_meta(&mut rng));
+
+        let dag = CommitDag::from_commits([&a, &b, &c, &d].into_iter());
+
         assert_eq!(
-            graph.parents_of_hash(c.digest()).collect::<Set<_>>(),
-            BTreeSet::from([a.digest(), b.digest()])
-                .into_iter()
-                .collect::<Set<_>>()
+            dag.parents_of_hash(c_hash).collect::<Set<_>>(),
+            Set::from([a_hash, b_hash])
         );
     }
 }

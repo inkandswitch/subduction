@@ -323,7 +323,7 @@ mod tests {
             let fragment = Fragment::new(
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
-                Vec::new(),
+                &[],
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
@@ -431,7 +431,7 @@ mod tests {
             let fragment = Fragment::new(
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
-                Vec::new(),
+                &[],
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([3u8; 16]));

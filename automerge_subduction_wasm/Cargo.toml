@@ -31,7 +31,7 @@ wasm_refgen = { workspace = true }
 getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] }
 
 [features]
-default = ["console_error_panic_hook", "std"]
+default = ["console_error_panic_hook", "std", "wasm-tracing"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 std = [
   "automerge_sedimentree_wasm/std",
