@@ -7,9 +7,9 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -26,7 +26,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{DEFAULT_PENDING_BLOB_REQUEST_TTL, Subduction},
+    subduction::{Subduction, DEFAULT_PENDING_BLOB_REQUEST_TTL},
 };
 use wasm_bindgen::prelude::*;
 
@@ -110,6 +110,7 @@ impl WasmSubduction {
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
+    /// * `pending_blob_request_ttl_secs` - Optional TTL in seconds for pending blob requests (default: 300)
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(
@@ -117,6 +118,7 @@ impl WasmSubduction {
         storage: JsSedimentreeStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
+        pending_blob_request_ttl_secs: Option<u64>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -124,6 +126,8 @@ impl WasmSubduction {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
+        let pending_blob_request_ttl = pending_blob_request_ttl_secs
+            .map_or(DEFAULT_PENDING_BLOB_REQUEST_TTL, Duration::from_secs);
         let (core, listener_fut, manager_fut) = Subduction::new(
             discovery_id,
             signer,
@@ -133,7 +137,7 @@ impl WasmSubduction {
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            pending_blob_request_ttl,
         );
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -166,6 +170,7 @@ impl WasmSubduction {
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
+    /// * `pending_blob_request_ttl_secs` - Optional TTL in seconds for pending blob requests (default: 300)
     ///
     /// # Errors
     ///
@@ -176,6 +181,7 @@ impl WasmSubduction {
         storage: JsSedimentreeStorage,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
+        pending_blob_request_ttl_secs: Option<u64>,
     ) -> Result<Self, WasmHydrationError> {
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsSedimentreeStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -183,6 +189,8 @@ impl WasmSubduction {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
+        let pending_blob_request_ttl = pending_blob_request_ttl_secs
+            .map_or(DEFAULT_PENDING_BLOB_REQUEST_TTL, Duration::from_secs);
         let (core, listener_fut, manager_fut) = Subduction::hydrate(
             discovery_id,
             signer,
@@ -192,7 +200,7 @@ impl WasmSubduction {
             WasmHashMetric(raw_fn),
             sedimentrees,
             WasmSpawn,
-            DEFAULT_PENDING_BLOB_REQUEST_TTL,
+            pending_blob_request_ttl,
         )
         .await?;
 
