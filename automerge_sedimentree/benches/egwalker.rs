@@ -328,9 +328,12 @@ fn bench_minimize(c: &mut Criterion) {
     group.finish();
 }
 
-/// Benchmark summarizing sedimentrees.
-fn bench_summarize(c: &mut Criterion) {
-    let mut group = c.benchmark_group("summarize");
+/// Benchmark creating fingerprint summaries of sedimentrees.
+fn bench_fingerprint_summarize(c: &mut Criterion) {
+    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
+
+    let mut group = c.benchmark_group("fingerprint_summarize");
+    let seed = FingerprintSeed::new(42, 43);
 
     for tv in TEST_VECTORS {
         let doc = load_automerge(tv.bytes);
@@ -340,8 +343,47 @@ fn bench_summarize(c: &mut Criterion) {
 
         group.throughput(Throughput::Elements(fragment_count));
         group.bench_with_input(BenchmarkId::from_parameter(tv.name), &tree, |b, tree| {
-            b.iter(|| tree.summarize());
+            b.iter(|| tree.fingerprint_summarize(black_box(&seed)));
         });
+    }
+
+    group.finish();
+}
+
+/// Benchmark `diff_remote_fingerprints` (comparing against a fingerprint summary).
+fn bench_diff_remote_fingerprints(c: &mut Criterion) {
+    use sedimentree_core::crypto::fingerprint::FingerprintSeed;
+
+    let mut group = c.benchmark_group("diff_remote_fingerprints");
+    let seed = FingerprintSeed::new(42, 43);
+
+    for tv in TEST_VECTORS {
+        let doc = load_automerge(tv.bytes);
+        let change_count = doc.get_changes(&[]).len();
+        let tree = generate_sedimentree_for_doc(change_count, 42);
+        let summary = tree.fingerprint_summarize(&seed);
+        let fragment_count = tree.fragments().count() as u64;
+
+        // Diff against empty summary
+        let empty_summary = Sedimentree::default().fingerprint_summarize(&seed);
+
+        group.throughput(Throughput::Elements(fragment_count));
+        group.bench_with_input(
+            BenchmarkId::new("vs_empty", tv.name),
+            &(tree.clone(), empty_summary),
+            |b, (tree, summary)| {
+                b.iter(|| tree.diff_remote_fingerprints(black_box(summary)));
+            },
+        );
+
+        // Diff against self summary
+        group.bench_with_input(
+            BenchmarkId::new("vs_self", tv.name),
+            &(tree, summary),
+            |b, (tree, summary)| {
+                b.iter(|| tree.diff_remote_fingerprints(black_box(summary)));
+            },
+        );
     }
 
     group.finish();
@@ -401,42 +443,6 @@ fn bench_diff(c: &mut Criterion) {
             &(tree.clone(), partial_tree),
             |b, (full, partial)| {
                 b.iter(|| full.diff(black_box(partial)));
-            },
-        );
-    }
-
-    group.finish();
-}
-
-/// Benchmark `diff_remote` (comparing against a summary).
-fn bench_diff_remote(c: &mut Criterion) {
-    let mut group = c.benchmark_group("diff_remote");
-
-    for tv in TEST_VECTORS {
-        let doc = load_automerge(tv.bytes);
-        let change_count = doc.get_changes(&[]).len();
-        let tree = generate_sedimentree_for_doc(change_count, 42);
-        let summary = tree.summarize();
-        let fragment_count = tree.fragments().count() as u64;
-
-        // Diff against empty summary
-        let empty_summary = Sedimentree::default().summarize();
-
-        group.throughput(Throughput::Elements(fragment_count));
-        group.bench_with_input(
-            BenchmarkId::new("vs_empty", tv.name),
-            &(tree.clone(), empty_summary),
-            |b, (tree, summary)| {
-                b.iter(|| tree.diff_remote(black_box(summary)));
-            },
-        );
-
-        // Diff against self summary
-        group.bench_with_input(
-            BenchmarkId::new("vs_self", tv.name),
-            &(tree, summary),
-            |b, (tree, summary)| {
-                b.iter(|| tree.diff_remote(black_box(summary)));
             },
         );
     }
@@ -710,11 +716,11 @@ criterion_group!(
     bench_load_document,
     bench_minimize,
     bench_minimize_by_metric,
-    bench_summarize,
+    bench_fingerprint_summarize,
+    bench_diff_remote_fingerprints,
     bench_heads,
     bench_heads_by_metric,
     bench_diff,
-    bench_diff_remote,
     bench_minimal_hash,
     bench_minimal_hash_by_metric,
     bench_merge,

@@ -90,7 +90,6 @@ SIMD
 SPKI
 Scalable
 Sedimentree
-SedimentreeSummary
 Sedimentrees
 Sharded
 ShareSecretKeys

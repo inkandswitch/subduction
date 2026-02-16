@@ -11,61 +11,10 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, FragmentSpec, FragmentSummary, checkpoint::Checkpoint, id::FragmentId},
+    fragment::{Fragment, FragmentSpec, checkpoint::Checkpoint, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
 };
-
-/// A less detailed representation of a Sedimentree that omits strata checkpoints.
-#[derive(Clone, Debug, PartialEq, Eq, Default, minicbor::Encode, minicbor::Decode)]
-#[cfg_attr(not(feature = "std"), derive(Hash))]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct SedimentreeSummary {
-    #[n(0)]
-    #[cbor(with = "crate::cbor::set")]
-    fragment_summaries: Set<FragmentSummary>,
-    #[n(1)]
-    #[cbor(with = "crate::cbor::set")]
-    commits: Set<LooseCommit>,
-}
-
-impl SedimentreeSummary {
-    /// Constructor for a [`SedimentreeSummary`].
-    #[must_use]
-    pub const fn new(
-        fragment_summaries: Set<FragmentSummary>,
-        commits: Set<LooseCommit>,
-    ) -> SedimentreeSummary {
-        SedimentreeSummary {
-            fragment_summaries,
-            commits,
-        }
-    }
-
-    /// The set of fragment summaries in this [`SedimentreeSummary`].
-    #[must_use]
-    pub const fn fragment_summaries(&self) -> &Set<FragmentSummary> {
-        &self.fragment_summaries
-    }
-
-    /// The set of loose commits in this [`SedimentreeSummary`].
-    #[must_use]
-    pub const fn loose_commits(&self) -> &Set<LooseCommit> {
-        &self.commits
-    }
-
-    /// Create a [`RemoteDiff`] with empty local fragments and commits.
-    #[must_use]
-    pub fn as_remote_diff(&self) -> RemoteDiff<'_> {
-        RemoteDiff {
-            remote_fragment_summaries: self.fragment_summaries.iter().collect(),
-            remote_commits: self.commits.iter().collect(),
-            local_fragments: Vec::new(),
-            local_commits: Vec::new(),
-        }
-    }
-}
 
 /// A compact summary of a [`Sedimentree`] for wire transmission.
 ///
@@ -162,22 +111,6 @@ pub struct Diff<'a> {
     pub right_missing_commits: Vec<&'a LooseCommit>,
 }
 
-/// The difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemoteDiff<'a> {
-    /// Fragments present in the remote tree but not the local.
-    pub remote_fragment_summaries: Vec<&'a FragmentSummary>,
-
-    /// Commits present in the remote tree but not the local.
-    pub remote_commits: Vec<&'a LooseCommit>,
-
-    /// Fragments present in the local tree but not the remote.
-    pub local_fragments: Vec<&'a Fragment>,
-
-    /// Commits present in the local tree but not the remote.
-    pub local_commits: Vec<&'a LooseCommit>,
-}
-
 /// All of the Sedimentree metadata about all the fragments for a series of payload.
 #[derive(Default, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
@@ -257,36 +190,6 @@ impl Sedimentree {
             // Items in left but not right = what right is missing
             right_missing_fragments: self.fragments.difference(&other.fragments).collect(),
             right_missing_commits: self.commits.difference(&other.commits).collect(),
-        }
-    }
-
-    /// Compute the difference between a local [`Sedimentree`] and a remote [`SedimentreeSummary`].
-    #[must_use]
-    pub fn diff_remote<'a>(&'a self, remote: &'a SedimentreeSummary) -> RemoteDiff<'a> {
-        let fragment_by_summary: Map<&FragmentSummary, &Fragment> =
-            self.fragments.iter().map(|f| (f.summary(), f)).collect();
-
-        let our_fragments_meta: Set<&FragmentSummary> =
-            fragment_by_summary.keys().copied().collect();
-        let their_fragments: Set<&FragmentSummary> = remote.fragment_summaries.iter().collect();
-
-        let local_fragments: Vec<&Fragment> = our_fragments_meta
-            .difference(&their_fragments)
-            .filter_map(|summary| fragment_by_summary.get(summary).copied())
-            .collect();
-
-        let remote_fragments = their_fragments.difference(&our_fragments_meta);
-
-        let our_commits = self.commits.iter().collect::<Set<&LooseCommit>>();
-        let their_commits = remote.commits.iter().collect();
-        let local_commits = our_commits.difference(&their_commits);
-        let remote_commits = their_commits.difference(&our_commits);
-
-        RemoteDiff {
-            remote_fragment_summaries: remote_fragments.into_iter().copied().collect(),
-            remote_commits: remote_commits.into_iter().copied().collect(),
-            local_fragments,
-            local_commits: local_commits.into_iter().copied().collect(),
         }
     }
 
@@ -478,22 +381,6 @@ impl Sedimentree {
         }
     }
 
-    /// Create a [`SedimentreeSummary`] from this [`Sedimentree`].
-    ///
-    /// This omits the checkpoints from each fragment.
-    /// It is useful for sending over the wire.
-    #[must_use]
-    pub fn summarize(&self) -> SedimentreeSummary {
-        SedimentreeSummary {
-            fragment_summaries: self
-                .fragments
-                .iter()
-                .map(|fragment| fragment.summary().clone())
-                .collect(),
-            commits: self.commits.clone(),
-        }
-    }
-
     /// The heads of a Sedimentree are the end hashes of all strata which are
     /// not the start of any other strata or supported by any lower stratum
     /// and which do not appear in the [`LooseCommit`] graph, plus the heads of
@@ -574,17 +461,6 @@ impl Sedimentree {
             }
         }
         all_bundles
-    }
-
-    /// Create a [`RemoteDiff`] with empty remote fragments and commits.
-    #[must_use]
-    pub fn as_local_diff(&self) -> RemoteDiff<'_> {
-        RemoteDiff {
-            remote_fragment_summaries: Vec::new(),
-            remote_commits: Vec::new(),
-            local_fragments: self.fragments.iter().collect(),
-            local_commits: self.commits.iter().collect(),
-        }
     }
 }
 
@@ -698,27 +574,6 @@ mod tests {
             diff.right_missing_fragments.is_empty(),
             "identical trees have no right missing fragments"
         );
-
-        // Also test diff_remote
-        let b_summary = b.summarize();
-        let remote_diff = a.diff_remote(&b_summary);
-
-        assert!(
-            remote_diff.local_commits.is_empty(),
-            "identical trees have no local-only commits"
-        );
-        assert!(
-            remote_diff.remote_commits.is_empty(),
-            "identical trees have no remote-only commits"
-        );
-        assert!(
-            remote_diff.local_fragments.is_empty(),
-            "identical trees have no local-only fragments"
-        );
-        assert!(
-            remote_diff.remote_fragment_summaries.is_empty(),
-            "identical trees have no remote-only fragments"
-        );
     }
 
     #[test]
@@ -790,46 +645,6 @@ mod tests {
         assert_eq!(diff.right_missing_fragments.len(), 1); // a_only_fragments
     }
 
-    #[test]
-    fn diff_remote_superset() {
-        // Scenario: remote is a superset of local
-        let shared = vec![make_commit(1), make_commit(2)];
-        let remote_extra = vec![make_commit(3)];
-
-        let local = Sedimentree::new(vec![], shared.clone());
-        let remote = Sedimentree::new(vec![], [shared, remote_extra].concat());
-        let remote_summary = remote.summarize();
-
-        let diff = local.diff_remote(&remote_summary);
-
-        // Local has nothing unique
-        assert!(diff.local_commits.is_empty());
-        assert!(diff.local_fragments.is_empty());
-
-        // Remote has 1 commit local doesn't have
-        assert_eq!(diff.remote_commits.len(), 1);
-        assert!(diff.remote_fragment_summaries.is_empty());
-    }
-
-    #[test]
-    fn diff_remote_diverged_with_overlap() {
-        // Scenario: local and remote share history but diverged
-        let shared = vec![make_commit(1)];
-        let local_only = vec![make_commit(10)];
-        let remote_only = vec![make_commit(20), make_commit(21)];
-
-        let local = Sedimentree::new(vec![], [shared.clone(), local_only].concat());
-        let remote = Sedimentree::new(vec![], [shared, remote_only].concat());
-        let remote_summary = remote.summarize();
-
-        let diff = local.diff_remote(&remote_summary);
-
-        // Local has 1 unique commit
-        assert_eq!(diff.local_commits.len(), 1);
-        // Remote has 2 unique commits
-        assert_eq!(diff.remote_commits.len(), 2);
-    }
-
     #[cfg(all(test, feature = "bolero"))]
     #[allow(clippy::similar_names)]
     mod proptests {
@@ -838,7 +653,7 @@ mod tests {
 
         use rand::{Rng, SeedableRng, rngs::SmallRng};
 
-        use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes};
+        use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes, fragment::FragmentSummary};
 
         use super::super::*;
 
@@ -1023,45 +838,6 @@ mod tests {
                         ab.right_missing_commits.len(),
                         ba.left_missing_commits.len(),
                         "right_missing commits in a.diff(b) should equal left_missing in b.diff(a)"
-                    );
-                });
-        }
-
-        #[test]
-        fn diff_remote_matches_diff_for_local_items() {
-            bolero::check!()
-                .with_arbitrary::<(Sedimentree, Sedimentree)>()
-                .for_each(|(local, remote)| {
-                    let remote_summary = remote.summarize();
-                    let remote_diff = local.diff_remote(&remote_summary);
-                    let local_diff = local.diff(remote);
-
-                    // local_fragments in diff_remote should match right_missing_fragments in diff
-                    // (what we have that they don't)
-                    assert_eq!(
-                        remote_diff.local_fragments.len(),
-                        local_diff.right_missing_fragments.len(),
-                        "diff_remote local_fragments should match diff right_missing_fragments"
-                    );
-
-                    // local_commits should match right_missing_commits
-                    assert_eq!(
-                        remote_diff.local_commits.len(),
-                        local_diff.right_missing_commits.len(),
-                        "diff_remote local_commits should match diff right_missing_commits"
-                    );
-
-                    // remote items should match left_missing (what they have that we don't)
-                    // Note: remote_fragment_summaries vs left_missing_fragments - summaries don't have checkpoints
-                    assert_eq!(
-                        remote_diff.remote_fragment_summaries.len(),
-                        local_diff.left_missing_fragments.len(),
-                        "diff_remote remote_fragment_summaries count should match diff left_missing_fragments"
-                    );
-                    assert_eq!(
-                        remote_diff.remote_commits.len(),
-                        local_diff.left_missing_commits.len(),
-                        "diff_remote remote_commits should match diff left_missing_commits"
                     );
                 });
         }

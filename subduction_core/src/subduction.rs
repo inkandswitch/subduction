@@ -2668,56 +2668,6 @@ impl<
         Ok(())
     }
 
-    // /// Remove a sedimentree locally.
-    // pub async fn remove_sedimentree_locally(&self, id: SedimentreeId) -> Result<bool, IoError<F, S, C>> {
-    //     tracing::debug!("removing sedimentree with id {:?}", id);
-
-    //     let maybe_removed = {
-    //         let mut locked = self.sedimentrees.lock().await;
-    //         locked.remove(&id)
-    //     };
-
-    //     if let Some(removed) = maybe_removed {
-    //         tracing::debug!(
-    //             "removed sedimentree with id {:?}, which had {} commits and {} fragments",
-    //             id,
-    //             removed.loose_commits().count(),
-    //             removed.fragments().count()
-    //         );
-
-    //         for commit in removed.loose_commits() {
-    //             tracing::debug!("removed commit {:?}", commit.digest());
-    //             self.storage
-    //                 .delete_blob(commit.blob_meta().digest())
-    //                 .await
-    //                 .map_err(IoError::Storage)?;
-    //         }
-    //         for fragment in removed.fragments() {
-    //             tracing::debug!("removed fragment {:?}", fragment.digest());
-    //         }
-    //     } else {
-    //         tracing::debug!("no sedimentree with id {:?} found to remove", id);
-    //         return Ok(false);
-    //     }
-
-    //     self.storage
-    //         .delete_sedimentree_id(id)
-    //         .await
-    //         .map_err(IoError::Storage)?;
-
-    //     self.storage
-    //         .delete_loose_commits(id)
-    //         .await
-    //         .map_err(IoError::Storage)?;
-
-    //     self.storage
-    //         .delete_fragments(id)
-    //         .await
-    //         .map_err(IoError::Storage)?;
-
-    //     Ok(())
-    // }
-
     /// Send requested data back to a peer (fire-and-forget for bidirectional sync).
     ///
     /// Loads the requested commits and fragments from storage and sends them
