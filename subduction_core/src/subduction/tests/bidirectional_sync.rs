@@ -145,10 +145,10 @@ async fn test_responder_requests_missing_commits() -> TestResult {
         .expect("should receive response");
 
     let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
-        return Err("Expected BatchSyncResponse".into());
+        panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
-        return Err(format!("Expected SyncResult::Ok, got {result:?}").into());
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert_eq!(
@@ -228,10 +228,10 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
         .expect("should receive response");
 
     let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
-        return Err("Expected BatchSyncResponse".into());
+        panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
-        return Err(format!("Expected SyncResult::Ok, got {result:?}").into());
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert!(
@@ -376,10 +376,10 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             .expect("should receive response from Alice");
 
     let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
-        return Err("Expected BatchSyncResponse".into());
+        panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
-        return Err(format!("Expected SyncResult::Ok, got {result:?}").into());
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert_eq!(
@@ -484,10 +484,10 @@ async fn test_responder_requests_fragments() -> TestResult {
         .expect("should receive response");
 
     let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
-        return Err("Expected BatchSyncResponse".into());
+        panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
-        return Err(format!("Expected SyncResult::Ok, got {result:?}").into());
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert!(
@@ -570,10 +570,10 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
         .expect("should receive response");
 
     let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
-        return Err("Expected BatchSyncResponse".into());
+        panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
-        return Err(format!("Expected SyncResult::Ok, got {result:?}").into());
+        panic!("Expected SyncResult::Ok, got {result:?}");
     };
 
     assert!(

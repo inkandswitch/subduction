@@ -1,5 +1,7 @@
 //! Tests for policy rejection behavior.
 
+#![allow(clippy::panic)]
+
 use super::common::{TestSpawn, TokioSpawn, test_signer};
 use crate::{
     connection::{
@@ -442,7 +444,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
         .map_err(|e| format!("channel closed: {e}"))?;
 
     let Message::BatchSyncResponse(BatchSyncResponse { result, id, .. }) = response else {
-        return Err(format!("expected BatchSyncResponse, got {response:?}").into());
+        panic!("expected BatchSyncResponse, got {response:?}");
     };
 
     assert_eq!(
