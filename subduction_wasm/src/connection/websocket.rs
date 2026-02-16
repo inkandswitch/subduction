@@ -143,7 +143,7 @@ impl WasmWebSocket {
                             "CBOR decode failed for {} byte message: {:?}. First 64 bytes: {:?}",
                             bytes.len(),
                             e,
-                            &bytes[..bytes.len().min(64)]
+                            bytes.get(..64).unwrap_or(&bytes)
                         );
                     }
                 }
