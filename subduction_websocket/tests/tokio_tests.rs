@@ -552,6 +552,7 @@ async fn connection_to_invalid_address() -> TestResult {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn large_message_handling() -> TestResult {
     init_tracing();
 

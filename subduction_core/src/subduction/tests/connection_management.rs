@@ -30,7 +30,7 @@ async fn test_register_same_connection_twice_returns_false() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
     let conn = MockConnection::new().authenticated();
-    let fresh1 = subduction.register(conn).await?;
+    let fresh1 = subduction.register(conn.clone()).await?;
     let fresh2 = subduction.register(conn).await?;
 
     assert!(fresh1);
@@ -45,7 +45,7 @@ async fn test_unregister_removes_connection() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
     let conn = MockConnection::new().authenticated();
-    let _fresh = subduction.register(conn).await?;
+    let _fresh = subduction.register(conn.clone()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
     let removed = subduction.unregister(&conn).await;
@@ -84,7 +84,7 @@ async fn test_disconnect_removes_connection() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
     let conn = MockConnection::new().authenticated();
-    let _fresh = subduction.register(conn).await?;
+    let _fresh = subduction.register(conn.clone()).await?;
 
     let removed = subduction.disconnect(&conn).await?;
     assert!(removed);
