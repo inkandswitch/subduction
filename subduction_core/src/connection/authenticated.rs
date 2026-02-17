@@ -8,8 +8,8 @@ use core::{marker::PhantomData, time::Duration};
 use future_form::FutureForm;
 
 use super::{
-    Connection, Reconnect,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    Connection, Reconnect,
 };
 use crate::peer::id::PeerId;
 
@@ -53,20 +53,12 @@ use crate::peer::id::PeerId;
 /// // Now register() accepts the authenticated connection
 /// subduction.register(authenticated).await?;
 /// ```
-pub struct Authenticated<C, K>
-where
-    K: FutureForm,
-    C: Connection<K>,
-{
+pub struct Authenticated<C: Connection<K>, K: FutureForm> {
     inner: C,
     _marker: PhantomData<fn() -> K>,
 }
 
-impl<C, K> Clone for Authenticated<C, K>
-where
-    K: FutureForm,
-    C: Connection<K>,
-{
+impl<C: Connection<K>, K: FutureForm> Clone for Authenticated<C, K> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -75,21 +67,13 @@ where
     }
 }
 
-impl<C, K> PartialEq for Authenticated<C, K>
-where
-    K: FutureForm,
-    C: Connection<K>,
-{
+impl<C: Connection<K>, K: FutureForm> PartialEq for Authenticated<C, K> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
 }
 
-impl<C, K> core::fmt::Debug for Authenticated<C, K>
-where
-    K: FutureForm,
-    C: Connection<K> + core::fmt::Debug,
-{
+impl<C: Connection<K> + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Authenticated<C, K> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Authenticated")
             .field("inner", &self.inner)
@@ -97,11 +81,7 @@ where
     }
 }
 
-impl<C, K> Authenticated<C, K>
-where
-    K: FutureForm,
-    C: Connection<K>,
-{
+impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
     /// Construct from a successful handshake.
     ///
     /// This is only accessible within the `connection` module.
@@ -144,11 +124,7 @@ where
     }
 }
 
-impl<C, K> Connection<K> for Authenticated<C, K>
-where
-    K: FutureForm,
-    C: Connection<K>,
-{
+impl<C: Connection<K>, K: FutureForm> Connection<K> for Authenticated<C, K> {
     type DisconnectionError = C::DisconnectionError;
     type SendError = C::SendError;
     type RecvError = C::RecvError;
@@ -183,11 +159,7 @@ where
     }
 }
 
-impl<C, K> Reconnect<K> for Authenticated<C, K>
-where
-    K: FutureForm,
-    C: Reconnect<K>,
-{
+impl<C: Reconnect<K>, K: FutureForm> Reconnect<K> for Authenticated<C, K> {
     type ReconnectionError = C::ReconnectionError;
 
     fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ReconnectionError>> {
