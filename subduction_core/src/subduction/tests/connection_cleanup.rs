@@ -63,7 +63,7 @@ async fn make_signed_test_fragment() -> (Signed<Fragment>, Blob) {
 async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -78,7 +78,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     // Register a failing connection
@@ -107,7 +107,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
 async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -122,7 +122,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     // Register a failing connection
@@ -151,7 +151,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
 async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -166,7 +166,7 @@ async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     // Register a failing connection with a different peer ID than the sender
@@ -201,7 +201,7 @@ async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult
 async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -216,7 +216,7 @@ async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResu
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     // Register a failing connection with a different peer ID than the sender
@@ -251,7 +251,7 @@ async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResu
 async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -266,7 +266,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     // Register a failing connection
@@ -295,7 +295,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
 async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
@@ -310,7 +310,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     // Register two connections that will succeed

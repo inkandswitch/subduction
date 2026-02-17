@@ -462,10 +462,9 @@ impl<
             cbor_serialize(&signed).map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
 
         let signed_message = if include_contact_card {
-            KeyhiveSignedMessage::with_contact_card(
-                signed_bytes,
-                self.keyhive_contact_card_bytes.clone(),
-            )
+            let contact_card_bytes = cbor_serialize(&self.keyhive_contact_card)
+                .map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
+            KeyhiveSignedMessage::with_contact_card(signed_bytes, contact_card_bytes)
         } else {
             KeyhiveSignedMessage::new(signed_bytes)
         };

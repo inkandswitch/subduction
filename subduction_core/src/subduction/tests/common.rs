@@ -12,7 +12,7 @@ use alloc::{sync::Arc, vec::Vec};
 use future_form::Sendable;
 use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
 use keyhive_core::{
-    keyhive::Keyhive, listener::no_listener::NoListener,
+    contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use rand::rngs::OsRng;
@@ -72,13 +72,18 @@ pub(super) type TestKeyhive = Keyhive<
     OsRng,
 >;
 
-/// Create a test keyhive instance.
-pub(super) async fn test_keyhive() -> TestKeyhive {
+/// Create a test keyhive instance with its contact card.
+pub(super) async fn test_keyhive() -> (TestKeyhive, ContactCard) {
     let csprng = OsRng;
     let sk = test_signer();
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
+    let keyhive = Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
         .await
-        .expect("failed to create keyhive")
+        .expect("failed to create keyhive");
+    let contact_card = keyhive
+        .contact_card()
+        .await
+        .expect("failed to get contact card");
+    (keyhive, contact_card)
 }
 
 /// Create a new Subduction instance for testing with default settings.
@@ -98,7 +103,7 @@ pub(super) async fn new_test_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
     Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
         None,
         test_signer(),
@@ -111,6 +116,6 @@ pub(super) async fn new_test_subduction() -> (
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(), // Empty contact card bytes for tests
+        contact_card,
     )
 }

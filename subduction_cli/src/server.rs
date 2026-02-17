@@ -166,8 +166,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .contact_card()
         .await
         .expect("failed to get contact card");
-    let contact_card_bytes =
-        minicbor_serde::to_vec(&contact_card).expect("failed to serialize contact card");
 
     let server: TokioWebSocketServer<
         MetricsStorage<FsStorage>,
@@ -189,7 +187,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         CountLeadingZeroBytes,
         keyhive,
         keyhive_storage,
-        contact_card_bytes,
+        contact_card,
     )
     .await?;
 

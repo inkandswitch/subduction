@@ -55,11 +55,6 @@ async fn make_keyhive_with_signer(signer: MemorySigner) -> TestKeyhive {
         .expect("failed to create keyhive")
 }
 
-/// Serialize a contact card to CBOR bytes.
-fn serialize_contact_card(cc: &keyhive_core::contact_card::ContactCard) -> Vec<u8> {
-    minicbor_serde::to_vec(cc).expect("failed to serialize contact card")
-}
-
 /// Get the keyhive peer ID from a keyhive instance.
 fn keyhive_peer_id(keyhive: &TestKeyhive) -> KeyhivePeerId {
     let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
@@ -130,9 +125,6 @@ impl TwoPeerSubductionHarness {
         let alice_keyhive_id = keyhive_peer_id(&alice_keyhive);
         let bob_keyhive_id = keyhive_peer_id(&bob_keyhive);
 
-        let alice_cc_bytes = serialize_contact_card(&alice_cc);
-        let bob_cc_bytes = serialize_contact_card(&bob_cc);
-
         // Create Subduction instances - keyhives are moved into Subduction
         let (alice, alice_listener, alice_actor) =
             Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
@@ -147,7 +139,7 @@ impl TwoPeerSubductionHarness {
                 DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 alice_keyhive,
                 MemoryKeyhiveStorage::default(),
-                alice_cc_bytes,
+                alice_cc,
             );
 
         let (bob, bob_listener, bob_actor) =
@@ -163,7 +155,7 @@ impl TwoPeerSubductionHarness {
                 DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 bob_keyhive,
                 MemoryKeyhiveStorage::default(),
-                bob_cc_bytes,
+                bob_cc,
             );
 
         // Create channel connections

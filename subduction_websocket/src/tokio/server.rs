@@ -12,7 +12,9 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use keyhive_core::{crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive};
+use keyhive_core::{
+    contact_card::ContactCard, crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive,
+};
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
 };
@@ -282,7 +284,7 @@ where
             OsRng,
         >,
         keyhive_storage: KStore,
-        keyhive_contact_card_bytes: Vec<u8>,
+        keyhive_contact_card: ContactCard,
     ) -> Result<Self, tungstenite::Error> {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
@@ -298,7 +300,7 @@ where
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             keyhive_storage,
-            keyhive_contact_card_bytes,
+            keyhive_contact_card,
         );
 
         let server = Self::new(

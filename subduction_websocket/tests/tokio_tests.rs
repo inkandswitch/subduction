@@ -3,7 +3,7 @@
 use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use keyhive_core::{
-    keyhive::Keyhive, listener::no_listener::NoListener,
+    contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use rand::{RngCore, rngs::OsRng};
@@ -50,17 +50,25 @@ fn test_signer(seed: u8) -> MemorySigner {
 
 async fn test_keyhive(
     signer: MemorySigner,
-) -> Keyhive<
-    MemorySigner,
-    [u8; 32],
-    Vec<u8>,
-    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-    NoListener,
-    OsRng,
-> {
-    Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
+) -> (
+    Keyhive<
+        MemorySigner,
+        [u8; 32],
+        Vec<u8>,
+        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+        NoListener,
+        OsRng,
+    >,
+    ContactCard,
+) {
+    let keyhive = Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
         .await
-        .expect("failed to create keyhive")
+        .expect("failed to create keyhive");
+    let contact_card = keyhive
+        .contact_card()
+        .await
+        .expect("failed to get contact card");
+    (keyhive, contact_card)
 }
 
 fn random_blob() -> Blob {
@@ -94,7 +102,7 @@ async fn client_reconnect() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
-    let server_keyhive = test_keyhive(server_signer.clone()).await;
+    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -107,7 +115,7 @@ async fn client_reconnect() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server_contact_card,
     );
 
     tokio::spawn(async move {
@@ -182,7 +190,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
-    let server_keyhive = test_keyhive(server_signer.clone()).await;
+    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -195,7 +203,7 @@ async fn server_graceful_shutdown() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server_contact_card,
     );
 
     tokio::spawn(async move {
@@ -276,7 +284,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let server_keyhive = test_keyhive(server_signer.clone()).await;
+    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -289,7 +297,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server_contact_card,
     );
 
     tokio::spawn(async move {
@@ -327,7 +335,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     for i in 0..num_clients {
         let client_signer = test_signer(u8::try_from(i)? + 10);
         let client_storage = MemoryStorage::default();
-        let client_keyhive = test_keyhive(client_signer.clone()).await;
+        let (client_keyhive, client_contact_card) = test_keyhive(client_signer.clone()).await;
         let (client, listener_fut, actor_fut) = Subduction::<
             Sendable,
             MemoryStorage,
@@ -346,7 +354,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             client_keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            client_contact_card,
         );
 
         tokio::spawn(actor_fut);
@@ -459,7 +467,7 @@ async fn request_with_delayed_response() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let server_keyhive = test_keyhive(server_signer.clone()).await;
+    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -472,7 +480,7 @@ async fn request_with_delayed_response() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server_contact_card,
     );
 
     tokio::spawn(async move {
@@ -501,7 +509,7 @@ async fn request_with_delayed_response() -> TestResult {
     let bound = server.address();
 
     let client_storage = MemoryStorage::default();
-    let client_keyhive = test_keyhive(client_signer.clone()).await;
+    let (client_keyhive, client_contact_card) = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -520,7 +528,7 @@ async fn request_with_delayed_response() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         client_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        client_contact_card,
     );
 
     tokio::spawn(actor_fut);
@@ -606,7 +614,7 @@ async fn large_message_handling() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let server_keyhive = test_keyhive(server_signer.clone()).await;
+    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -619,7 +627,7 @@ async fn large_message_handling() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server_contact_card,
     );
 
     tokio::spawn(async move {
@@ -644,7 +652,7 @@ async fn large_message_handling() -> TestResult {
     let bound = server.address();
 
     let client_storage = MemoryStorage::default();
-    let client_keyhive = test_keyhive(client_signer.clone()).await;
+    let (client_keyhive, client_contact_card) = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -663,7 +671,7 @@ async fn large_message_handling() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         client_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        client_contact_card,
     );
 
     tokio::spawn(actor_fut);
@@ -673,7 +681,7 @@ async fn large_message_handling() -> TestResult {
     let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
         uri,
         TimeoutTokio,
-        Duration::from_secs(10),
+        Duration::from_secs(5),
         client_signer,
         Audience::known(server_peer_id),
     )
@@ -742,7 +750,7 @@ async fn message_ordering() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let server_keyhive = test_keyhive(server_signer.clone()).await;
+    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -755,7 +763,7 @@ async fn message_ordering() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server_contact_card,
     );
 
     tokio::spawn(async move {
@@ -780,7 +788,7 @@ async fn message_ordering() -> TestResult {
     let bound = server.address();
 
     let client_storage = MemoryStorage::default();
-    let client_keyhive = test_keyhive(client_signer.clone()).await;
+    let (client_keyhive, client_contact_card) = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -799,7 +807,7 @@ async fn message_ordering() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         client_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        client_contact_card,
     );
 
     tokio::spawn(actor_fut);
@@ -873,7 +881,7 @@ async fn server_try_connect_known_peer() -> TestResult {
     let server2_peer_id = server2_signer.peer_id();
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
-    let server1_keyhive = test_keyhive(server1_signer.clone()).await;
+    let (server1_keyhive, server1_contact_card) = test_keyhive(server1_signer.clone()).await;
     let server1 = TokioWebSocketServer::setup(
         addr1,
         TimeoutTokio,
@@ -887,12 +895,12 @@ async fn server_try_connect_known_peer() -> TestResult {
         CountLeadingZeroBytes,
         server1_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server1_contact_card,
     )
     .await?;
 
     let addr2: SocketAddr = "127.0.0.1:0".parse()?;
-    let server2_keyhive = test_keyhive(server2_signer.clone()).await;
+    let (server2_keyhive, server2_contact_card) = test_keyhive(server2_signer.clone()).await;
     let server2 = TokioWebSocketServer::setup(
         addr2,
         TimeoutTokio,
@@ -906,7 +914,7 @@ async fn server_try_connect_known_peer() -> TestResult {
         CountLeadingZeroBytes,
         server2_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server2_contact_card,
     )
     .await?;
 
@@ -936,7 +944,7 @@ async fn server_try_connect_discover() -> TestResult {
     let service_name = "test.subduction.local";
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
-    let server1_keyhive = test_keyhive(server1_signer.clone()).await;
+    let (server1_keyhive, server1_contact_card) = test_keyhive(server1_signer.clone()).await;
     let server1 = TokioWebSocketServer::setup(
         addr1,
         TimeoutTokio,
@@ -950,12 +958,12 @@ async fn server_try_connect_discover() -> TestResult {
         CountLeadingZeroBytes,
         server1_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server1_contact_card,
     )
     .await?;
 
     let addr2: SocketAddr = "127.0.0.1:0".parse()?;
-    let server2_keyhive = test_keyhive(server2_signer.clone()).await;
+    let (server2_keyhive, server2_contact_card) = test_keyhive(server2_signer.clone()).await;
     let server2 = TokioWebSocketServer::setup(
         addr2,
         TimeoutTokio,
@@ -969,7 +977,7 @@ async fn server_try_connect_discover() -> TestResult {
         CountLeadingZeroBytes,
         server2_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server2_contact_card,
     )
     .await?;
 
@@ -996,7 +1004,7 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
     let server2_signer = test_signer(1);
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
-    let server1_keyhive = test_keyhive(server1_signer.clone()).await;
+    let (server1_keyhive, server1_contact_card) = test_keyhive(server1_signer.clone()).await;
     let server1 = TokioWebSocketServer::setup(
         addr1,
         TimeoutTokio,
@@ -1010,12 +1018,12 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
         CountLeadingZeroBytes,
         server1_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server1_contact_card,
     )
     .await?;
 
     let addr2: SocketAddr = "127.0.0.1:0".parse()?;
-    let server2_keyhive = test_keyhive(server2_signer.clone()).await;
+    let (server2_keyhive, server2_contact_card) = test_keyhive(server2_signer.clone()).await;
     let server2 = TokioWebSocketServer::setup(
         addr2,
         TimeoutTokio,
@@ -1029,7 +1037,7 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
         CountLeadingZeroBytes,
         server2_keyhive,
         MemoryKeyhiveStorage::default(),
-        Vec::new(),
+        server2_contact_card,
     )
     .await?;
 

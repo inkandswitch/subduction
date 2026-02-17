@@ -75,7 +75,7 @@ async fn make_test_fragment(data: &[u8]) -> (Signed<Fragment>, Blob, FragmentSum
 async fn test_responder_requests_missing_commits() -> TestResult {
     // Set up responder (Alice) - has commit A
     let alice_storage = MemoryStorage::new();
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -89,7 +89,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -178,7 +178,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
 async fn test_responder_requests_commits_from_requestor() -> TestResult {
     // Set up responder (Alice) - starts empty
     let alice_storage = MemoryStorage::new();
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -192,7 +192,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -280,7 +280,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 
     // Set up Alice with commit A
     let alice_storage = MemoryStorage::new();
-    let alice_keyhive = test_keyhive().await;
+    let (alice_keyhive, alice_contact_card) = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -294,7 +294,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             alice_keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            alice_contact_card,
         );
 
     let (alice_conn, alice_handle) = ChannelMockConnection::new_with_handle(bob_peer_id);
@@ -324,7 +324,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 
     // Set up Bob with commit B
     let bob_storage = MemoryStorage::new();
-    let bob_keyhive = test_keyhive().await;
+    let (bob_keyhive, bob_contact_card) = test_keyhive().await;
     let (bob, bob_listener, bob_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -338,7 +338,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             bob_keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            bob_contact_card,
         );
 
     let (bob_conn, bob_handle) = ChannelMockConnection::new_with_handle(alice_peer_id);
@@ -452,7 +452,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 #[tokio::test]
 async fn test_responder_requests_fragments() -> TestResult {
     let alice_storage = MemoryStorage::new();
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -466,7 +466,7 @@ async fn test_responder_requests_fragments() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -531,7 +531,7 @@ async fn test_responder_requests_fragments() -> TestResult {
 #[tokio::test]
 async fn test_no_requesting_when_in_sync() -> TestResult {
     let alice_storage = MemoryStorage::new();
-    let keyhive = test_keyhive().await;
+    let (keyhive, contact_card) = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -545,7 +545,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(),
+            contact_card,
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);

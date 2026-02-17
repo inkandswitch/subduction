@@ -116,6 +116,7 @@ use futures::{
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
 };
 use keyhive_core::{
+    contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::signer::async_signer::AsyncSigner,
     keyhive::Keyhive,
@@ -225,7 +226,7 @@ pub struct Subduction<
     keyhive: Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>>,
     keyhive_storage: KStore,
     keyhive_peer_id: KeyhivePeerId,
-    keyhive_contact_card_bytes: Vec<u8>,
+    keyhive_contact_card: ContactCard,
 
     _phantom: core::marker::PhantomData<&'a F>,
 }
@@ -297,7 +298,7 @@ impl<
         max_pending_blob_requests: usize,
         keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
-        keyhive_contact_card_bytes: Vec<u8>,
+        keyhive_contact_card: ContactCard,
     ) -> (
         Arc<Self>,
         ListenerFuture<
@@ -359,7 +360,7 @@ impl<
             keyhive: Arc::new(Mutex::new(keyhive)),
             keyhive_storage,
             keyhive_peer_id,
-            keyhive_contact_card_bytes,
+            keyhive_contact_card,
             _phantom: PhantomData,
         });
 
@@ -395,7 +396,7 @@ impl<
         max_pending_blob_requests: usize,
         keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
-        keyhive_contact_card_bytes: Vec<u8>,
+        keyhive_contact_card: ContactCard,
     ) -> Result<
         (
             Arc<Self>,
@@ -435,7 +436,7 @@ impl<
             max_pending_blob_requests,
             keyhive,
             keyhive_storage,
-            keyhive_contact_card_bytes,
+            keyhive_contact_card,
         );
         for id in ids {
             let signed_loose_commits = subduction

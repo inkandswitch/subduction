@@ -148,6 +148,11 @@ impl WasmSubduction {
         .await
         .expect("failed to create keyhive");
 
+        let contact_card = keyhive
+            .contact_card()
+            .await
+            .expect("failed to get contact card");
+
         let (core, listener_fut, manager_fut) = Subduction::new(
             discovery_id,
             signer,
@@ -160,7 +165,7 @@ impl WasmSubduction {
             max_pending,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(), // Empty contact card bytes
+            contact_card,
         );
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -225,6 +230,11 @@ impl WasmSubduction {
         .await
         .expect("failed to create keyhive");
 
+        let contact_card = keyhive
+            .contact_card()
+            .await
+            .expect("failed to get contact card");
+
         let (core, listener_fut, manager_fut) = Subduction::hydrate(
             discovery_id,
             signer,
@@ -237,7 +247,7 @@ impl WasmSubduction {
             max_pending,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(), // Empty contact card bytes
+            contact_card,
         )
         .await?;
 
