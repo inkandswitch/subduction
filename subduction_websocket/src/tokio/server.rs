@@ -17,6 +17,8 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
+        Connection,
+        authenticated::Authenticated,
         handshake::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
     },
@@ -219,8 +221,9 @@ where
                                             }
                                         });
 
-                                        // Step 5: Register connection with Subduction
-                                        if let Err(e) = task_subduction.register(ws_conn).await {
+                                        // Step 5: Wrap in Authenticated and register with Subduction
+                                        let authenticated = Authenticated::from_handshake(ws_conn, client_id);
+                                        if let Err(e) = task_subduction.register(authenticated).await {
                                             tracing::error!("Failed to register connection: {e}");
                                         }
                                     }
@@ -336,7 +339,9 @@ where
         &self,
         ws: UnifiedWebSocket<O>,
     ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
-        self.subduction.register(ws).await
+        let peer_id = ws.peer_id();
+        let authenticated = Authenticated::from_handshake(ws, peer_id);
+        self.subduction.register(authenticated).await
     }
 
     /// Connect to a peer and register the connection for bidirectional sync.
@@ -438,8 +443,9 @@ where
             }
         });
 
+        let authenticated = Authenticated::from_handshake(ws_conn, server_id);
         self.subduction
-            .register(ws_conn)
+            .register(authenticated)
             .await
             .map_err(TryConnectError::Registration)?;
 
@@ -534,8 +540,9 @@ where
             }
         });
 
+        let authenticated = Authenticated::from_handshake(ws_conn, server_id);
         self.subduction
-            .register(ws_conn)
+            .register(authenticated)
             .await
             .map_err(TryConnectError::Registration)?;
 

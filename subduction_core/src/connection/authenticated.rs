@@ -8,8 +8,8 @@ use core::time::Duration;
 use future_form::FutureForm;
 
 use super::{
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     Connection, Reconnect,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use crate::peer::id::PeerId;
 
@@ -47,17 +47,17 @@ impl<C> Authenticated<C> {
     ///
     /// The `peer_id` must be the verified identity from signature
     /// verification, not self-reported by the peer.
-    pub fn from_handshake(inner: C, peer_id: PeerId) -> Self {
+    pub const fn from_handshake(inner: C, peer_id: PeerId) -> Self {
         Self { inner, peer_id }
     }
 
     /// The verified peer identity.
-    pub fn peer_id(&self) -> PeerId {
+    pub const fn peer_id(&self) -> PeerId {
         self.peer_id
     }
 
     /// Access the inner connection.
-    pub fn inner(&self) -> &C {
+    pub const fn inner(&self) -> &C {
         &self.inner
     }
 

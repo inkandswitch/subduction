@@ -79,7 +79,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
     // Register a failing connection
     let peer_id = PeerId::new([1u8; 32]);
     let conn = FailingSendMockConnection::with_peer_id(peer_id);
-    let _fresh = subduction.register(conn).await?;
+    let _fresh = subduction.register(conn.authenticated()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
     // Add a commit - the send will fail
@@ -119,7 +119,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
     // Register a failing connection
     let peer_id = PeerId::new([1u8; 32]);
     let conn = FailingSendMockConnection::with_peer_id(peer_id);
-    let _fresh = subduction.register(conn).await?;
+    let _fresh = subduction.register(conn.authenticated()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
     // Add a fragment - the send will fail
@@ -160,7 +160,7 @@ async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult
     let sender_peer_id = PeerId::new([1u8; 32]);
     let other_peer_id = PeerId::new([2u8; 32]);
     let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-    let _fresh = subduction.register(conn).await?;
+    let _fresh = subduction.register(conn.authenticated()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
     // Subscribe other_peer to the sedimentree so forwarding will be attempted
@@ -206,7 +206,7 @@ async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResu
     let sender_peer_id = PeerId::new([1u8; 32]);
     let other_peer_id = PeerId::new([2u8; 32]);
     let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-    let _fresh = subduction.register(conn).await?;
+    let _fresh = subduction.register(conn.authenticated()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
     // Subscribe other_peer to the sedimentree so forwarding will be attempted
@@ -251,7 +251,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
     // Register a failing connection
     let peer_id = PeerId::new([1u8; 32]);
     let conn = FailingSendMockConnection::with_peer_id(peer_id);
-    let _fresh = subduction.register(conn).await?;
+    let _fresh = subduction.register(conn.authenticated()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
     // Request blobs - the send will fail
@@ -294,8 +294,8 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     let conn1 = MockConnection::with_peer_id(peer_id1);
     let conn2 = MockConnection::with_peer_id(peer_id2);
 
-    subduction.register(conn1).await?;
-    subduction.register(conn2).await?;
+    subduction.register(conn1.authenticated()).await?;
+    subduction.register(conn2.authenticated()).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 2);
 
     // Add a commit - sends will succeed

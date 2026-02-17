@@ -501,6 +501,7 @@ impl<
             futures::select_biased! {
                 // First priority: handle completed dispatch tasks
                 result = in_flight.select_next_some() => {
+                    #[allow(clippy::type_complexity)]
                     let (conn, dispatch_result): (Authenticated<C>, Result<(), ListenError<F, S, C>>) = result;
                     if let Err(e) = dispatch_result {
                         tracing::error!(
@@ -2473,7 +2474,14 @@ impl<
         subscribe: bool,
         timeout: Option<Duration>,
     ) -> Result<
-        Map<PeerId, (bool, SyncStats, Vec<(Authenticated<C>, <C as Connection<F>>::CallError)>)>,
+        Map<
+            PeerId,
+            (
+                bool,
+                SyncStats,
+                Vec<(Authenticated<C>, <C as Connection<F>>::CallError)>,
+            ),
+        >,
         IoError<F, S, C>,
     > {
         tracing::info!(

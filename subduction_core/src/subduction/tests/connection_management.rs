@@ -16,7 +16,7 @@ async fn test_peer_ids_returns_empty_initially() {
 async fn test_register_adds_connection() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let conn = MockConnection::new();
+    let conn = MockConnection::new().authenticated();
     let fresh = subduction.register(conn).await?;
 
     assert!(fresh);
@@ -29,7 +29,7 @@ async fn test_register_adds_connection() -> TestResult {
 async fn test_register_same_connection_twice_returns_false() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let conn = MockConnection::new();
+    let conn = MockConnection::new().authenticated();
     let fresh1 = subduction.register(conn).await?;
     let fresh2 = subduction.register(conn).await?;
 
@@ -44,7 +44,7 @@ async fn test_register_same_connection_twice_returns_false() -> TestResult {
 async fn test_unregister_removes_connection() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let conn = MockConnection::new();
+    let conn = MockConnection::new().authenticated();
     let _fresh = subduction.register(conn).await?;
     assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
@@ -60,7 +60,7 @@ async fn test_unregister_nonexistent_returns_false() {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
     // Unregister a connection that was never registered
-    let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32]));
+    let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32])).authenticated();
     let removed = subduction.unregister(&conn).await;
     assert_eq!(removed, None);
 }
@@ -69,8 +69,8 @@ async fn test_unregister_nonexistent_returns_false() {
 async fn test_register_different_peers_increases_count() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
-    let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
+    let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32])).authenticated();
+    let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32])).authenticated();
 
     subduction.register(conn1).await?;
     subduction.register(conn2).await?;
@@ -83,7 +83,7 @@ async fn test_register_different_peers_increases_count() -> TestResult {
 async fn test_disconnect_removes_connection() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let conn = MockConnection::new();
+    let conn = MockConnection::new().authenticated();
     let _fresh = subduction.register(conn).await?;
 
     let removed = subduction.disconnect(&conn).await?;
@@ -97,7 +97,7 @@ async fn test_disconnect_removes_connection() -> TestResult {
 async fn test_disconnect_nonexistent_returns_false() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32]));
+    let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32])).authenticated();
     let removed = subduction.disconnect(&conn).await?;
     assert!(!removed);
 
@@ -108,8 +108,8 @@ async fn test_disconnect_nonexistent_returns_false() -> TestResult {
 async fn test_disconnect_all_removes_all_connections() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32]));
-    let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32]));
+    let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32])).authenticated();
+    let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32])).authenticated();
 
     subduction.register(conn1).await?;
     subduction.register(conn2).await?;
@@ -127,8 +127,8 @@ async fn test_disconnect_from_peer_removes_specific_peer() -> TestResult {
 
     let peer_id1 = PeerId::new([1u8; 32]);
     let peer_id2 = PeerId::new([2u8; 32]);
-    let conn1 = MockConnection::with_peer_id(peer_id1);
-    let conn2 = MockConnection::with_peer_id(peer_id2);
+    let conn1 = MockConnection::with_peer_id(peer_id1).authenticated();
+    let conn2 = MockConnection::with_peer_id(peer_id2).authenticated();
 
     subduction.register(conn1).await?;
     subduction.register(conn2).await?;

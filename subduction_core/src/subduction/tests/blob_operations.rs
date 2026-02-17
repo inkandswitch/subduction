@@ -79,7 +79,7 @@ async fn requested_blobs_are_saved_and_removed_from_pending() -> TestResult {
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -145,7 +145,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
 
     let peer_id = PeerId::new([2u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -184,7 +184,7 @@ async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
 
     let peer_id = PeerId::new([3u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -251,7 +251,7 @@ async fn blobs_from_different_sedimentrees_are_isolated() -> TestResult {
 
     let peer_id = PeerId::new([4u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -309,7 +309,7 @@ async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
 
     let peer_id = PeerId::new([5u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);

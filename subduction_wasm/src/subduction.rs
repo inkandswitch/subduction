@@ -22,7 +22,10 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
+    connection::{
+        authenticated::Authenticated, handshake::DiscoveryId, manager::Spawn,
+        nonce_cache::NonceCache,
+    },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -267,12 +270,24 @@ impl WasmSubduction {
     ///
     /// Returns a `WasmAttachError` if attaching the connection fails.
     pub async fn attach(&self, conn: JsConnection) -> Result<bool, WasmAttachError> {
-        self.core.attach(conn).await.map_err(WasmAttachError::from)
+        use subduction_core::connection::Connection;
+        let peer_id = conn.peer_id();
+        let authenticated = Authenticated::from_handshake(conn, peer_id);
+        self.core
+            .attach(authenticated)
+            .await
+            .map_err(WasmAttachError::from)
     }
 
     /// Disconnect a connection.
+    ///
+    /// Note: This wraps the connection in `Authenticated` using its reported peer ID.
+    /// The connection should have been previously registered via `attach` or `register`.
     pub async fn disconnect(&self, conn: &JsConnection) -> bool {
-        self.core.disconnect(conn).await.is_ok()
+        use subduction_core::connection::Connection;
+        let peer_id = conn.peer_id();
+        let authenticated = Authenticated::from_handshake(conn.clone(), peer_id);
+        self.core.disconnect(&authenticated).await.is_ok()
     }
 
     /// Disconnect from all peers.
@@ -309,7 +324,10 @@ impl WasmSubduction {
     ///
     /// Returns [`WasmRegistrationError`] if the connection is not allowed.
     pub async fn register(&self, conn: JsConnection) -> Result<bool, WasmRegistrationError> {
-        self.core.register(conn).await.map_err(Into::into)
+        use subduction_core::connection::Connection;
+        let peer_id = conn.peer_id();
+        let authenticated = Authenticated::from_handshake(conn, peer_id);
+        self.core.register(authenticated).await.map_err(Into::into)
     }
 
     /// Unregister a connection.
@@ -319,7 +337,10 @@ impl WasmSubduction {
     /// or `None` if the connection was not found.
     #[must_use]
     pub async fn unregister(&self, conn: &JsConnection) -> Option<bool> {
-        self.core.unregister(conn).await
+        use subduction_core::connection::Connection;
+        let peer_id = conn.peer_id();
+        let authenticated = Authenticated::from_handshake(conn.clone(), peer_id);
+        self.core.unregister(&authenticated).await
     }
 
     /// Get a local blob by its digest.
@@ -479,7 +500,7 @@ impl WasmSubduction {
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn,
+                    conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -522,7 +543,7 @@ impl WasmSubduction {
                             stats.into(),
                             conn_errs
                                 .into_iter()
-                                .map(|(conn, err)| (conn, WasmCallError::from(err)))
+                                .map(|(conn, err)| (conn.into_inner(), WasmCallError::from(err)))
                                 .collect::<Vec<_>>(),
                         ),
                     )
@@ -547,7 +568,7 @@ impl WasmSubduction {
             conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn,
+                    conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),

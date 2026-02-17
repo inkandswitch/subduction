@@ -13,7 +13,8 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
+        Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
@@ -335,7 +336,10 @@ async fn multiple_concurrent_clients() -> TestResult {
             Ok::<(), anyhow::Error>(())
         });
 
-        client.register(client_ws).await?;
+        let peer_id = client_ws.peer_id();
+        client
+            .register(Authenticated::from_handshake(client_ws, peer_id))
+            .await?;
 
         clients.push(client);
 
@@ -499,7 +503,10 @@ async fn request_with_delayed_response() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    client.register(client_ws).await?;
+    let peer_id = client_ws.peer_id();
+    client
+        .register(Authenticated::from_handshake(client_ws, peer_id))
+        .await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -631,7 +638,10 @@ async fn large_message_handling() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    client.register(client_ws).await?;
+    let peer_id = client_ws.peer_id();
+    client
+        .register(Authenticated::from_handshake(client_ws, peer_id))
+        .await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -757,7 +767,10 @@ async fn message_ordering() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    client.register(client_ws).await?;
+    let peer_id = client_ws.peer_id();
+    client
+        .register(Authenticated::from_handshake(client_ws, peer_id))
+        .await?;
 
     tokio::spawn({
         let inner_client = client.clone();
