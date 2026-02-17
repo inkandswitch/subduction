@@ -2,7 +2,11 @@
 
 use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
-use rand::RngCore;
+use keyhive_core::{
+    keyhive::Keyhive, listener::no_listener::NoListener,
+    store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::{rngs::OsRng, RngCore};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
@@ -13,17 +17,18 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
+        authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache, Connection, Reconnect,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
+use subduction_keyhive::MemoryKeyhiveStorage;
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -41,6 +46,21 @@ const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 
 fn test_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
+}
+
+async fn test_keyhive(
+    signer: MemorySigner,
+) -> Keyhive<
+    MemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    NoListener,
+    OsRng,
+> {
+    Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
+        .await
+        .expect("failed to create keyhive")
 }
 
 fn random_blob() -> Blob {
@@ -74,6 +94,7 @@ async fn client_reconnect() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -84,6 +105,9 @@ async fn client_reconnect() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(async move {
@@ -158,6 +182,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -168,6 +193,9 @@ async fn server_graceful_shutdown() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(async move {
@@ -248,6 +276,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -258,6 +287,9 @@ async fn multiple_concurrent_clients() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(async move {
@@ -295,6 +327,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     for i in 0..num_clients {
         let client_signer = test_signer(u8::try_from(i)? + 10);
         let client_storage = MemoryStorage::default();
+        let client_keyhive = test_keyhive(client_signer.clone()).await;
         let (client, listener_fut, actor_fut) = Subduction::<
             Sendable,
             MemoryStorage,
@@ -311,6 +344,9 @@ async fn multiple_concurrent_clients() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            client_keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(),
         );
 
         tokio::spawn(actor_fut);
@@ -423,6 +459,7 @@ async fn request_with_delayed_response() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -433,6 +470,9 @@ async fn request_with_delayed_response() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(async move {
@@ -461,6 +501,7 @@ async fn request_with_delayed_response() -> TestResult {
     let bound = server.address();
 
     let client_storage = MemoryStorage::default();
+    let client_keyhive = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -477,6 +518,9 @@ async fn request_with_delayed_response() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        client_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(actor_fut);
@@ -562,6 +606,7 @@ async fn large_message_handling() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -572,6 +617,9 @@ async fn large_message_handling() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(async move {
@@ -596,6 +644,7 @@ async fn large_message_handling() -> TestResult {
     let bound = server.address();
 
     let client_storage = MemoryStorage::default();
+    let client_keyhive = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -612,6 +661,9 @@ async fn large_message_handling() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        client_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(actor_fut);
@@ -690,6 +742,7 @@ async fn message_ordering() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -700,6 +753,9 @@ async fn message_ordering() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(async move {
@@ -724,6 +780,7 @@ async fn message_ordering() -> TestResult {
     let bound = server.address();
 
     let client_storage = MemoryStorage::default();
+    let client_keyhive = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, actor_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -740,6 +797,9 @@ async fn message_ordering() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        client_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(actor_fut);

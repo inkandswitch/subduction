@@ -12,12 +12,7 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use keyhive_core::crypto::signer::async_signer::AsyncSigner;
-use keyhive_core::{
-    content::reference::ContentRef, crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive,
-    listener::membership::MembershipListener, store::ciphertext::CiphertextStore,
-};
-use rand::{CryptoRng, RngCore};
+use keyhive_core::{crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive};
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
 };
@@ -38,7 +33,6 @@ use subduction_core::{
     },
     timestamp::TimestampSeconds,
 };
-use subduction_keyhive::KeyhiveStorage;
 
 use crate::tokio::TokioSpawn;
 use tokio::{
@@ -273,6 +267,16 @@ where
         policy: P,
         nonce_cache: NonceCache,
         depth_metric: M,
+        keyhive: Keyhive<
+            Sig,
+            [u8; 32],
+            Vec<u8>,
+            MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+            NoListener,
+            OsRng,
+        >,
+        keyhive_storage: MemoryKeyhiveStorage,
+        keyhive_contact_card_bytes: Vec<u8>,
     ) -> Result<Self, tungstenite::Error> {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
@@ -286,6 +290,9 @@ where
             sedimentrees,
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            keyhive,
+            keyhive_storage,
+            keyhive_contact_card_bytes,
         );
 
         let server = Self::new(
@@ -573,8 +580,31 @@ where
     }
 }
 
-type TokioWebSocketSubduction<S, P, Sig, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, P, Sig, M>>;
+use alloc::vec::Vec;
+use keyhive_core::{
+    listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::rngs::OsRng;
+use subduction_keyhive::MemoryKeyhiveStorage;
+
+type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        S,
+        UnifiedWebSocket<O>,
+        P,
+        Sig,
+        M,
+        256,
+        [u8; 32],
+        Vec<u8>,
+        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+        NoListener,
+        OsRng,
+        MemoryKeyhiveStorage,
+    >,
+>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]

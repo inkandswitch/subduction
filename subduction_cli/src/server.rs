@@ -2,6 +2,11 @@
 
 use crate::metrics;
 use anyhow::Result;
+use keyhive_core::{
+    keyhive::Keyhive, listener::no_listener::NoListener,
+    store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::rngs::OsRng;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
@@ -11,6 +16,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
 };
+use subduction_keyhive::MemoryKeyhiveStorage;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
@@ -127,6 +133,16 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .clone()
         .unwrap_or_else(|| args.socket.clone());
 
+    // Initialize keyhive for access control
+    let keyhive = Keyhive::generate(
+        signer.clone(),
+        MemoryCiphertextStore::new(),
+        NoListener,
+        OsRng,
+    )
+    .await
+    .expect("failed to create keyhive");
+
     let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, MemorySigner> =
         TokioWebSocketServer::setup(
             addr,
@@ -139,6 +155,9 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             OpenPolicy,
             NonceCache::default(),
             CountLeadingZeroBytes,
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(), // contact card bytes - empty for server
         )
         .await?;
 

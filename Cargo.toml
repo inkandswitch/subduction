@@ -32,6 +32,7 @@ sedimentree_core = { version = "0.3.0", path = "sedimentree_core", default-featu
 sedimentree_fs_storage = { version = "0.3.1", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.3.1", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.3.1", path = "subduction_core", default-features = false }
+subduction_keyhive = { version = "0.1.0", path = "subduction_keyhive", default-features = false }
 subduction_wasm = { version = "0.3.1", path = "subduction_wasm", default-features = false }
 subduction_websocket = { version = "0.3.1", path = "subduction_websocket", default-features = false }
 

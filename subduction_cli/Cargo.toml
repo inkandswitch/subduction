@@ -26,6 +26,7 @@ futures = { workspace = true }
 future_form = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
+keyhive_core = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 minicbor = { workspace = true }
@@ -33,6 +34,7 @@ rand = { workspace = true, features = ["std", "std_rng"] }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
+subduction_keyhive = { workspace = true }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
