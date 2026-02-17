@@ -5,7 +5,11 @@ use testresult::TestResult;
 
 use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
-use rand::RngCore;
+use keyhive_core::{
+    keyhive::Keyhive, listener::no_listener::NoListener,
+    store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::{rngs::OsRng, RngCore};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
@@ -15,17 +19,18 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        Connection, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
+        authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache, Connection,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
+use subduction_keyhive::MemoryKeyhiveStorage;
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -42,6 +47,21 @@ fn test_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
 }
 
+async fn test_keyhive(
+    signer: MemorySigner,
+) -> Keyhive<
+    MemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    NoListener,
+    OsRng,
+> {
+    Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
+        .await
+        .expect("failed to create keyhive")
+}
+
 #[tokio::test]
 async fn rend_receive() -> TestResult {
     init_tracing();
@@ -52,6 +72,7 @@ async fn rend_receive() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (suduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -62,6 +83,9 @@ async fn rend_receive() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(async move {
@@ -180,6 +204,7 @@ async fn batch_sync() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -190,6 +215,9 @@ async fn batch_sync() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        server_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
     tokio::spawn(async move {
         listener_fut.await?;
@@ -227,6 +255,7 @@ async fn batch_sync() -> TestResult {
     ///////////////////
 
     let client_storage = MemoryStorage::default();
+    let client_keyhive = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, client_manager_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -243,6 +272,9 @@ async fn batch_sync() -> TestResult {
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        client_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     );
 
     tokio::spawn(client_manager_fut);

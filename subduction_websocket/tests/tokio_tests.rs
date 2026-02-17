@@ -873,6 +873,7 @@ async fn server_try_connect_known_peer() -> TestResult {
     let server2_peer_id = server2_signer.peer_id();
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
+    let server1_keyhive = test_keyhive(server1_signer.clone()).await;
     let server1 = TokioWebSocketServer::setup(
         addr1,
         TimeoutTokio,
@@ -884,10 +885,14 @@ async fn server_try_connect_known_peer() -> TestResult {
         OpenPolicy,
         NonceCache::default(),
         CountLeadingZeroBytes,
+        server1_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     )
     .await?;
 
     let addr2: SocketAddr = "127.0.0.1:0".parse()?;
+    let server2_keyhive = test_keyhive(server2_signer.clone()).await;
     let server2 = TokioWebSocketServer::setup(
         addr2,
         TimeoutTokio,
@@ -899,6 +904,9 @@ async fn server_try_connect_known_peer() -> TestResult {
         OpenPolicy,
         NonceCache::default(),
         CountLeadingZeroBytes,
+        server2_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     )
     .await?;
 
@@ -928,6 +936,7 @@ async fn server_try_connect_discover() -> TestResult {
     let service_name = "test.subduction.local";
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
+    let server1_keyhive = test_keyhive(server1_signer.clone()).await;
     let server1 = TokioWebSocketServer::setup(
         addr1,
         TimeoutTokio,
@@ -939,10 +948,14 @@ async fn server_try_connect_discover() -> TestResult {
         OpenPolicy,
         NonceCache::default(),
         CountLeadingZeroBytes,
+        server1_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     )
     .await?;
 
     let addr2: SocketAddr = "127.0.0.1:0".parse()?;
+    let server2_keyhive = test_keyhive(server2_signer.clone()).await;
     let server2 = TokioWebSocketServer::setup(
         addr2,
         TimeoutTokio,
@@ -954,6 +967,9 @@ async fn server_try_connect_discover() -> TestResult {
         OpenPolicy,
         NonceCache::default(),
         CountLeadingZeroBytes,
+        server2_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     )
     .await?;
 
@@ -980,6 +996,7 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
     let server2_signer = test_signer(1);
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
+    let server1_keyhive = test_keyhive(server1_signer.clone()).await;
     let server1 = TokioWebSocketServer::setup(
         addr1,
         TimeoutTokio,
@@ -991,10 +1008,14 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
         OpenPolicy,
         NonceCache::default(),
         CountLeadingZeroBytes,
+        server1_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     )
     .await?;
 
     let addr2: SocketAddr = "127.0.0.1:0".parse()?;
+    let server2_keyhive = test_keyhive(server2_signer.clone()).await;
     let server2 = TokioWebSocketServer::setup(
         addr2,
         TimeoutTokio,
@@ -1006,6 +1027,9 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
         OpenPolicy,
         NonceCache::default(),
         CountLeadingZeroBytes,
+        server2_keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     )
     .await?;
 
