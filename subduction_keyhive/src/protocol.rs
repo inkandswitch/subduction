@@ -21,7 +21,7 @@ use keyhive_core::{
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{Event, static_event::StaticEvent},
+    event::{static_event::StaticEvent, Event},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -223,7 +223,8 @@ where
             self.ingest_contact_card(cc_bytes).await?;
         }
 
-        let message: Message = cbor_deserialize(&verified.payload)
+        // Decode message with minicbor
+        let message: Message = decode_message(&verified.payload)
             .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
 
         match &message {
@@ -445,8 +446,9 @@ where
         message: Message,
         include_contact_card: bool,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
+        // Encode message with minicbor
         let msg_bytes =
-            cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
+            encode_message(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
 
         let signed: Signed<Vec<u8>> = {
             let keyhive = self.keyhive.lock().await;
@@ -713,7 +715,7 @@ where
         .collect()
 }
 
-/// Serialize a value to CBOR bytes.
+/// Serialize a value to CBOR bytes using ciborium (for keyhive_core types).
 fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
     let mut buf = Vec::new();
     ciborium::into_writer(value, &mut buf)
@@ -721,9 +723,19 @@ fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageErro
     Ok(buf)
 }
 
-/// Deserialize a value from CBOR bytes.
+/// Deserialize a value from CBOR bytes using ciborium (for keyhive_core types).
 fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
     ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+}
+
+/// Encode a keyhive protocol [`Message`] to bytes using minicbor.
+fn encode_message(msg: &Message) -> Result<Vec<u8>, StorageError> {
+    minicbor::to_vec(msg).map_err(|e| StorageError::Serialization(e.to_string()))
+}
+
+/// Decode a keyhive protocol [`Message`] from bytes using minicbor.
+fn decode_message(bytes: &[u8]) -> Result<Message, StorageError> {
+    minicbor::decode(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
 /// Convert a `Digest` to a 32-byte array.
@@ -738,10 +750,10 @@ mod tests {
     use crate::{
         storage::MemoryKeyhiveStorage,
         test_utils::{
-            TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
-            exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
-            make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
-            serialize_contact_card,
+            create_channel_pair, create_group_with_read_members, exchange_all_contact_cards,
+            exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
+            make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
+            TestProtocol, TwoPeerHarness,
         },
     };
     use futures_kind::Local;

@@ -20,6 +20,7 @@ ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
 futures_kind = { workspace = true }
 keyhive_core = { workspace = true }
+minicbor = { workspace = true }
 rand = "0.8.5"
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }

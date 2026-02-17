@@ -32,19 +32,21 @@ impl std::error::Error for CborError {}
 /// This wrapper combines:
 /// * An optional contact card (to introduce the sender to the recipient)
 /// * The signed message payload (message data + signature)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SignedMessage {
     /// Optional serialized contact card.
     ///
     /// Included when the sender wants to introduce themselves to the recipient,
     /// either in the first message or when requested.
+    #[n(0)]
     contact_card: Option<Vec<u8>>,
 
     /// The signed message payload.
     ///
     /// This contains the actual message data and the cryptographic signature.
     /// The recipient should verify the signature before processing the message.
+    #[n(1)]
     signed: Vec<u8>,
 }
 
