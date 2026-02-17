@@ -29,25 +29,26 @@
 //!
 //! Use [`initiate`] for the side that sends first (traditional "client"),
 //! and [`respond`] for the side that receives first (traditional "server").
-//! These functions return an [`Authenticated`] connection on success.
+//! These functions consume the transport and return an [`Authenticated`]
+//! connection on success.
 //!
 //! ```ignore
 //! use subduction_core::connection::handshake;
 //!
-//! // Initiator side
+//! // Initiator side - transport is consumed, returned to build_connection
 //! let authenticated = handshake::initiate(
-//!     &mut transport,
-//!     |peer_id| MyConnection::new(transport, peer_id),
+//!     transport,  // consumed
+//!     |transport, peer_id| MyConnection::new(transport, peer_id),
 //!     &signer,
 //!     audience,
 //!     now,
 //!     nonce,
 //! ).await?;
 //!
-//! // Responder side
+//! // Responder side - transport is consumed, returned to build_connection
 //! let authenticated = handshake::respond(
-//!     &mut transport,
-//!     |peer_id| MyConnection::new(transport, peer_id),
+//!     transport,  // consumed
+//!     |transport, peer_id| MyConnection::new(transport, peer_id),
 //!     &signer,
 //!     &nonce_cache,
 //!     our_peer_id,
@@ -561,10 +562,16 @@ where
     let signed_challenge = Signed::seal(signer, challenge).await.into_signed();
     let msg = HandshakeMessage::SignedChallenge(signed_challenge);
     let bytes = minicbor::to_vec(&msg).expect("challenge encoding should not fail");
-    handshake.send(bytes).await.map_err(AuthenticateError::Transport)?;
+    handshake
+        .send(bytes)
+        .await
+        .map_err(AuthenticateError::Transport)?;
 
     // Receive response
-    let response_bytes = handshake.recv().await.map_err(AuthenticateError::Transport)?;
+    let response_bytes = handshake
+        .recv()
+        .await
+        .map_err(AuthenticateError::Transport)?;
     if response_bytes.is_empty() {
         return Err(AuthenticateError::ConnectionClosed);
     }
@@ -586,23 +593,6 @@ where
     }
 }
 
-    let response_msg: HandshakeMessage = minicbor::decode(&response_bytes)?;
-
-    match response_msg {
-        HandshakeMessage::SignedResponse(signed_response) => {
-            let verified = verify_response(&signed_response, &challenge)?;
-            let peer_id = verified.server_id;
-            let conn = build_connection(peer_id);
-            Ok(Authenticated::from_handshake(conn, peer_id))
-        }
-        HandshakeMessage::Rejection(rejection) => Err(AuthenticateError::Rejected {
-            reason: rejection.reason,
-            responder_timestamp: rejection.server_timestamp,
-        }),
-        HandshakeMessage::SignedChallenge(_) => Err(AuthenticateError::UnexpectedMessage),
-    }
-}
-
 /// Perform the responder side of the handshake (receives first).
 ///
 /// Receives a signed challenge, verifies it, and sends a signed response.
@@ -611,8 +601,8 @@ where
 ///
 /// # Arguments
 ///
-/// * `handshake` - The transport implementing [`Handshake`]
-/// * `build_connection` - Factory to create the connection from the verified peer ID
+/// * `handshake` - The transport implementing [`Handshake`] (consumed)
+/// * `build_connection` - Factory to create the connection from the transport and verified peer ID
 /// * `signer` - The responder's signer for creating the response
 /// * `nonce_cache` - Cache for replay protection
 /// * `our_peer_id` - Our peer ID (always accepted as `Audience::Known`)
@@ -630,8 +620,8 @@ where
 /// - The nonce has already been used (replay attack)
 #[allow(clippy::expect_used)]
 pub async fn respond<K, H, C, S>(
-    handshake: &mut H,
-    build_connection: impl FnOnce(PeerId) -> C,
+    mut handshake: H,
+    build_connection: impl FnOnce(H, PeerId) -> C,
     signer: &S,
     nonce_cache: &NonceCache,
     our_peer_id: PeerId,
@@ -675,13 +665,13 @@ where
             ) {
                 Ok(v) => v,
                 Err(e) => {
-                    send_rejection(handshake, &e, now).await?;
+                    send_rejection(&mut handshake, &e, now).await?;
                     return Err(e.into());
                 }
             }
         }
         Err(e) => {
-            send_rejection(handshake, &e, now).await?;
+            send_rejection(&mut handshake, &e, now).await?;
             return Err(e.into());
         }
     };
@@ -716,7 +706,7 @@ where
         .map_err(AuthenticateError::Transport)?;
 
     let peer_id = verified.client_id;
-    let conn = build_connection(peer_id);
+    let conn = build_connection(handshake, peer_id);
     Ok(Authenticated::from_handshake(conn, peer_id))
 }
 

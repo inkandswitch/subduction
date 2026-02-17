@@ -399,3 +399,80 @@ let response = verified.payload();
 response.validate(&original_challenge)?;
 let responder_id = PeerId::from(verified.issuer());
 ```
+
+## Transport Abstraction
+
+The handshake protocol is transport-agnostic. The `Handshake` trait abstracts over the underlying transport layer:
+
+```rust
+pub trait Handshake<K: FutureForm> {
+    type Error;
+    fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>>;
+    fn recv(&mut self) -> K::Future<'_, Result<Vec<u8>, Self::Error>>;
+}
+```
+
+Implementations exist for:
+- `WebSocketHandshake<T>` — wraps `async_tungstenite::WebSocketStream<T>`
+- Browser `WebSocket` — via `subduction_wasm`
+
+## High-Level API
+
+The `initiate` and `respond` functions perform the complete handshake protocol and return an `Authenticated<C>` connection:
+
+### Initiator Side
+
+```rust
+use subduction_core::connection::handshake;
+
+let authenticated = handshake::initiate(
+    transport,  // impl Handshake, consumed
+    |transport, peer_id| MyConnection::new(transport, peer_id),
+    &signer,
+    Audience::known(expected_peer_id),
+    TimestampSeconds::now(),
+    Nonce::random(),
+).await?;
+
+// authenticated: Authenticated<MyConnection>
+```
+
+### Responder Side
+
+```rust
+use subduction_core::connection::handshake;
+
+let authenticated = handshake::respond(
+    transport,  // impl Handshake, consumed
+    |transport, peer_id| MyConnection::new(transport, peer_id),
+    &signer,
+    &nonce_cache,
+    our_peer_id,
+    Some(Audience::discover(b"my-service")),  // optional discovery
+    TimestampSeconds::now(),
+    Duration::from_secs(60),  // max clock drift
+).await?;
+
+// authenticated: Authenticated<MyConnection>
+```
+
+### `Authenticated<C>` Witness Type
+
+The `Authenticated<C>` wrapper is a _witness type_ proving the connection completed handshake verification:
+
+```rust
+pub struct Authenticated<C> {
+    inner: C,
+    peer_id: PeerId,  // verified via signature
+}
+```
+
+Key properties:
+
+| Property | Guarantee |
+|----------|-----------|
+| **Construction** | Only via `handshake::initiate` or `handshake::respond` |
+| **`peer_id`** | Cryptographically verified, not self-reported |
+| **`inner`** | The wrapped connection delegates all `Connection` methods |
+
+This ensures that any code receiving an `Authenticated<C>` can trust that the peer identity was verified through the handshake protocol — there's no way to construct it with an arbitrary `PeerId`.
