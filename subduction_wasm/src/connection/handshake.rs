@@ -5,7 +5,7 @@
 
 use alloc::{format, string::String, vec::Vec};
 
-use future_form::Local;
+use future_form::{FutureForm, Local};
 use futures::{channel::oneshot, future::LocalBoxFuture};
 use subduction_core::connection::handshake::Handshake;
 use wasm_bindgen::{closure::Closure, JsCast};
@@ -35,7 +35,7 @@ impl Handshake<Local> for WasmWebSocketHandshake {
     type Error = WasmHandshakeError;
 
     fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        Box::pin(async move {
+        Local::from_future(async move {
             self.ws
                 .send_with_u8_array(&bytes)
                 .map_err(|e| WasmHandshakeError::WebSocket(format!("{e:?}")))?;
@@ -44,7 +44,7 @@ impl Handshake<Local> for WasmWebSocketHandshake {
     }
 
     fn recv(&mut self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::Error>> {
-        Box::pin(async move {
+        Local::from_future(async move {
             // Set up oneshot channel to receive the response
             let (tx, rx) = oneshot::channel::<Result<Vec<u8>, String>>();
             let tx_cell = core::cell::RefCell::new(Some(tx));
