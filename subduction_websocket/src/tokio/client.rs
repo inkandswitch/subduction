@@ -101,13 +101,8 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        // We need to capture socket and sender_fut from the closure
-        // Since initiate returns Authenticated<C, K>, we need to structure this differently
-        let mut socket_holder: Option<WebSocket<ConnectStream, Sendable, O>> = None;
-        let mut sender_fut_holder: Option<BoxFuture<'a, Result<(), RunError>>> = None;
-
         let timeout_clone = timeout.clone();
-        let authenticated = handshake::initiate::<Sendable, _, _, _>(
+        let (authenticated, sender_fut) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             |ws_handshake, peer_id| {
                 let (socket, sender_fut) = WebSocket::<_, _, O>::new(
@@ -116,10 +111,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
                     default_time_limit,
                     peer_id,
                 );
-                // Store for later use - this is safe because we're in sync context
-                socket_holder = Some(socket.clone());
-                sender_fut_holder = Some(Sendable::from_future(sender_fut));
-                socket
+                (socket, Sendable::from_future(sender_fut))
             },
             &signer,
             audience,
@@ -131,10 +123,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let server_id = authenticated.peer_id();
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let socket = socket_holder.expect("socket should be set after successful handshake");
-        let sender_fut =
-            sender_fut_holder.expect("sender_fut should be set after successful handshake");
-
+        let socket = authenticated.inner().clone();
         let listener_socket = socket.clone();
         let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
         let sender = SenderTask::new(sender_fut);

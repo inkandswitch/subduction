@@ -521,12 +521,12 @@ pub struct RespondResult {
 ///
 /// Sends a signed challenge and waits for a signed response.
 /// On success, returns an [`Authenticated`] connection wrapping the result
-/// of `build_connection`.
+/// of `build_connection`, along with any extra data returned by the factory.
 ///
 /// # Arguments
 ///
 /// * `handshake` - The transport implementing [`Handshake`] (consumed)
-/// * `build_connection` - Factory to create the connection from the transport and verified peer ID
+/// * `build_connection` - Factory to create the connection (and optional extra data) from the transport and verified peer ID
 /// * `signer` - The initiator's signer for creating the challenge
 /// * `audience` - The intended recipient (known peer ID or discovery hash)
 /// * `now` - The current timestamp
@@ -545,14 +545,14 @@ pub struct RespondResult {
 /// Panics if CBOR encoding of the challenge message fails (should never happen
 /// with well-formed types).
 #[allow(clippy::expect_used)]
-pub async fn initiate<K, H, C, S>(
+pub async fn initiate<K, H, C, E, S>(
     mut handshake: H,
-    build_connection: impl FnOnce(H, PeerId) -> C,
+    build_connection: impl FnOnce(H, PeerId) -> (C, E),
     signer: &S,
     audience: Audience,
     now: TimestampSeconds,
     nonce: Nonce,
-) -> Result<Authenticated<C, K>, AuthenticateError<H::Error>>
+) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>>
 where
     K: FutureForm,
     H: Handshake<K>,
@@ -584,8 +584,8 @@ where
         HandshakeMessage::SignedResponse(signed_response) => {
             let verified = verify_response(&signed_response, &challenge)?;
             let peer_id = verified.server_id;
-            let conn = build_connection(handshake, peer_id);
-            Ok(Authenticated::from_handshake(conn))
+            let (conn, extra) = build_connection(handshake, peer_id);
+            Ok((Authenticated::from_handshake(conn), extra))
         }
         HandshakeMessage::Rejection(rejection) => Err(AuthenticateError::Rejected {
             reason: rejection.reason,
@@ -599,12 +599,12 @@ where
 ///
 /// Receives a signed challenge, verifies it, and sends a signed response.
 /// On success, returns an [`Authenticated`] connection wrapping the result
-/// of `build_connection`.
+/// of `build_connection`, along with any extra data returned by the factory.
 ///
 /// # Arguments
 ///
 /// * `handshake` - The transport implementing [`Handshake`] (consumed)
-/// * `build_connection` - Factory to create the connection from the transport and verified peer ID
+/// * `build_connection` - Factory to create the connection (and optional extra data) from the transport and verified peer ID
 /// * `signer` - The responder's signer for creating the response
 /// * `nonce_cache` - Cache for replay protection
 /// * `our_peer_id` - Our peer ID (always accepted as `Audience::Known`)
@@ -626,16 +626,16 @@ where
 /// Panics if CBOR encoding of the response or rejection message fails (should
 /// never happen with well-formed types).
 #[allow(clippy::expect_used, clippy::too_many_arguments)]
-pub async fn respond<K, H, C, S>(
+pub async fn respond<K, H, C, E, S>(
     mut handshake: H,
-    build_connection: impl FnOnce(H, PeerId) -> C,
+    build_connection: impl FnOnce(H, PeerId) -> (C, E),
     signer: &S,
     nonce_cache: &NonceCache,
     our_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     now: TimestampSeconds,
     max_drift: Duration,
-) -> Result<Authenticated<C, K>, AuthenticateError<H::Error>>
+) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>>
 where
     K: FutureForm,
     H: Handshake<K>,
@@ -714,8 +714,8 @@ where
         .map_err(AuthenticateError::Transport)?;
 
     let peer_id = verified.client_id;
-    let conn = build_connection(handshake, peer_id);
-    Ok(Authenticated::from_handshake(conn))
+    let (conn, extra) = build_connection(handshake, peer_id);
+    Ok((Authenticated::from_handshake(conn), extra))
 }
 
 /// Helper to send a rejection message.

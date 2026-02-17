@@ -173,7 +173,7 @@ where
                                         // Step 2: Subduction handshake and connection setup
                                         // Accepts either Audience::Known(peer_id) or discovery audience
                                         let now = TimestampSeconds::now();
-                                        let authenticated = handshake::respond::<Sendable, _, _, _>(
+                                        let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
                                             |ws_handshake, peer_id| {
                                                 // Create WebSocket wrapper with verified PeerId
@@ -198,7 +198,7 @@ where
                                                     }
                                                 });
 
-                                                UnifiedWebSocket::Accepted(ws)
+                                                (UnifiedWebSocket::Accepted(ws), ())
                                             },
                                             task_subduction.signer(),
                                             task_subduction.nonce_cache(),
@@ -208,8 +208,8 @@ where
                                             handshake_max_drift,
                                         ).await;
 
-                                        let authenticated = match authenticated {
-                                            Ok(auth) => {
+                                        let authenticated = match result {
+                                            Ok((auth, ())) => {
                                                 tracing::info!(
                                                     "Handshake complete: client {} from {addr}",
                                                     auth.peer_id()
@@ -389,7 +389,7 @@ where
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
-        let authenticated = handshake::initiate::<Sendable, _, _, _>(
+        let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
                 let (ws, sender_fut) =
@@ -425,7 +425,7 @@ where
                     }
                 });
 
-                ws_conn
+                (ws_conn, ())
             },
             self.subduction.signer(),
             audience,
@@ -502,7 +502,7 @@ where
         let listen_uri_str = uri_str.clone();
         let sender_uri_str = uri_str.clone();
 
-        let authenticated = handshake::initiate::<Sendable, _, _, _>(
+        let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
             move |ws_handshake, peer_id| {
                 let (ws, sender_fut) =
@@ -538,7 +538,7 @@ where
                     }
                 });
 
-                ws_conn
+                (ws_conn, ())
             },
             self.subduction.signer(),
             audience,

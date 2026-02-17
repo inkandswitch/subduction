@@ -422,10 +422,13 @@ impl WasmWebSocket {
         let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
         let nonce = Nonce::random();
 
-        let authenticated = handshake::initiate::<Local, _, _, _>(
+        let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
-                Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds)
+                (
+                    Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds),
+                    (),
+                )
             },
             signer,
             audience,
@@ -470,10 +473,13 @@ impl WasmWebSocket {
         let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
         let nonce = Nonce::random();
 
-        let authenticated = handshake::initiate::<Local, _, _, _>(
+        let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
-                Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds)
+                (
+                    Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds),
+                    (),
+                )
             },
             signer,
             audience,
