@@ -20,12 +20,15 @@ ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures = { workspace = true }
 future_form = { workspace = true }
 getrandom = { workspace = true }
+keyhive_core = { workspace = true }
 metrics = { workspace = true, optional = true }
 minicbor = { workspace = true }
 nonempty = { workspace = true }
+rand = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }
 serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
+subduction_keyhive = { path = "../subduction_keyhive", features = ["serde", "std"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
