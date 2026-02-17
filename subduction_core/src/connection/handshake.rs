@@ -545,20 +545,14 @@ pub struct RespondResult {
 /// Panics if CBOR encoding of the challenge message fails (should never happen
 /// with well-formed types).
 #[allow(clippy::expect_used)]
-pub async fn initiate<K, H, C, E, S>(
+pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> (C, E),
     signer: &S,
     audience: Audience,
     now: TimestampSeconds,
     nonce: Nonce,
-) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>>
-where
-    K: FutureForm,
-    H: Handshake<K>,
-    C: Connection<K>,
-    S: Signer<K>,
-{
+) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
     let signed_challenge = Signed::seal(signer, challenge).await.into_signed();
@@ -626,7 +620,7 @@ where
 /// Panics if CBOR encoding of the response or rejection message fails (should
 /// never happen with well-formed types).
 #[allow(clippy::expect_used, clippy::too_many_arguments)]
-pub async fn respond<K, H, C, E, S>(
+pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> (C, E),
     signer: &S,
@@ -635,13 +629,7 @@ pub async fn respond<K, H, C, E, S>(
     discovery_audience: Option<Audience>,
     now: TimestampSeconds,
     max_drift: Duration,
-) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>>
-where
-    K: FutureForm,
-    H: Handshake<K>,
-    C: Connection<K>,
-    S: Signer<K>,
-{
+) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
     // Receive challenge
     let challenge_bytes = handshake
         .recv()
