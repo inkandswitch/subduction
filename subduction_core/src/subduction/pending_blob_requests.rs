@@ -4,7 +4,7 @@
 //! starvation of legitimate requests through sync-completion cleanup.
 
 use alloc::vec::Vec;
-use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
+use sedimentree_core::{blob::Blob, collections::Set, crypto::digest::Digest, id::SedimentreeId};
 
 /// Default maximum number of pending blob requests.
 pub const DEFAULT_MAX_PENDING_BLOB_REQUESTS: usize = 10_000;
@@ -16,6 +16,15 @@ type Entry = (SedimentreeId, Digest<Blob>);
 /// Tracks `(SedimentreeId, Digest<Blob>)` pairs that we've requested and are
 /// expecting to receive. Uses insertion-order for LRU eviction when capacity
 /// is exceeded.
+///
+/// # Complexity
+///
+/// Uses a `Vec` for LRU ordering and a `Set` for fast membership checks:
+/// - `contains`: O(1) with `std`, O(log n) without
+/// - `insert` (new entry): O(1) with `std`, O(log n) without
+/// - `insert` (move to back): O(n) — requires finding position in Vec
+/// - `remove`: O(n) — requires finding position in Vec
+/// - `remove_for_sedimentree`: O(n)
 ///
 /// # Cleanup Strategies
 ///
@@ -31,7 +40,12 @@ pub struct PendingBlobRequests {
     /// Older entries are at the front, newer at the back.
     entries: Vec<Entry>,
 
-    /// Maximum capacity before LRU eviction kicks in
+    /// Index for fast membership checks.
+    ///
+    /// Uses `HashSet` with `std`, `BTreeSet` without.
+    index: Set<Entry>,
+
+    /// Maximum capacity before LRU eviction kicks in.
     max_capacity: usize,
 }
 
@@ -47,6 +61,7 @@ impl PendingBlobRequests {
     pub fn new(max_capacity: usize) -> Self {
         Self {
             entries: Vec::with_capacity(max_capacity.min(1024)),
+            index: Set::default(),
             max_capacity,
         }
     }
@@ -60,14 +75,17 @@ impl PendingBlobRequests {
         let entry = (id, digest);
 
         // If already present, move to back (most recent)
-        if let Some(pos) = self.entries.iter().position(|e| *e == entry) {
-            self.entries.remove(pos);
+        if self.index.contains(&entry) {
+            if let Some(pos) = self.entries.iter().position(|e| *e == entry) {
+                self.entries.remove(pos);
+            }
             self.entries.push(entry);
             return;
         }
 
         // Insert new entry
         self.entries.push(entry);
+        self.index.insert(entry);
 
         // LRU eviction if over capacity
         if self.entries.len() > self.max_capacity {
@@ -77,16 +95,20 @@ impl PendingBlobRequests {
                 capacity = self.max_capacity,
                 "pending_blob_requests at capacity, evicting oldest entries"
             );
-            // Remove oldest entries from the front
-            self.entries.drain(0..evicted);
+            // Remove oldest entries from the front and update index
+            for entry in self.entries.drain(0..evicted) {
+                self.index.remove(&entry);
+            }
         }
     }
 
     /// Remove a pending blob request, returning true if it was present.
     pub fn remove(&mut self, id: SedimentreeId, digest: Digest<Blob>) -> bool {
         let entry = (id, digest);
-        if let Some(pos) = self.entries.iter().position(|e| *e == entry) {
-            self.entries.remove(pos);
+        if self.index.remove(&entry) {
+            if let Some(pos) = self.entries.iter().position(|e| *e == entry) {
+                self.entries.remove(pos);
+            }
             true
         } else {
             false
@@ -99,23 +121,24 @@ impl PendingBlobRequests {
     /// no longer relevant.
     pub fn remove_for_sedimentree(&mut self, id: SedimentreeId) {
         self.entries.retain(|(sid, _)| *sid != id);
+        self.index.retain(|(sid, _)| *sid != id);
     }
 
     /// Check if a pending blob request exists.
     #[must_use]
     pub fn contains(&self, id: SedimentreeId, digest: Digest<Blob>) -> bool {
-        self.entries.contains(&(id, digest))
+        self.index.contains(&(id, digest))
     }
 
     /// Get the number of pending requests.
     #[must_use]
-    pub const fn len(&self) -> usize {
+    pub fn len(&self) -> usize {
         self.entries.len()
     }
 
     /// Check if there are no pending requests.
     #[must_use]
-    pub const fn is_empty(&self) -> bool {
+    pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
 }
