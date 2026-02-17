@@ -22,11 +22,13 @@ use subduction_core::{
     },
     crypto::signer::Signer,
     peer::id::PeerId,
-    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::traits::Storage,
-    subduction::{Subduction, error::RegistrationError},
+    subduction::{
+        Subduction, error::RegistrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    },
     timestamp::TimestampSeconds,
 };
 

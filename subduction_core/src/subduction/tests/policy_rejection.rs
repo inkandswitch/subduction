@@ -10,11 +10,10 @@ use crate::{
         test_utils::{ChannelMockConnection, MockConnection},
     },
     peer::id::PeerId,
-    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::{collections::BTreeSet, vec::Vec};
 use core::{fmt, time::Duration};

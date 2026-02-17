@@ -70,6 +70,7 @@
 //! [`remove_sedimentree`]: Subduction::remove_sedimentree
 
 pub mod error;
+pub mod pending_blob_requests;
 pub mod request;
 
 use crate::{
@@ -132,7 +133,7 @@ use sedimentree_core::{
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 
-use crate::pending_blob_requests::PendingBlobRequests;
+use pending_blob_requests::PendingBlobRequests;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]

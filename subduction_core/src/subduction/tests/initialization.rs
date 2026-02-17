@@ -3,11 +3,10 @@
 use super::common::{TestSpawn, new_test_subduction, test_signer};
 use crate::{
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
-    pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use future_form::Sendable;
 use sedimentree_core::commit::CountLeadingZeroBytes;
