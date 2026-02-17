@@ -2,7 +2,7 @@
 
 use crate::{
     MAX_MESSAGE_SIZE,
-    handshake::{WebSocketHandshakeError, server_handshake},
+    handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
@@ -17,10 +17,11 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        handshake::{Audience, DiscoveryId},
+        authenticated::Authenticated,
+        handshake::{self, Audience, AuthenticateError, DiscoveryId},
         nonce_cache::NonceCache,
     },
-    crypto::signer::Signer,
+    crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -159,7 +160,7 @@ where
                                         ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
 
                                         // Step 1: WebSocket protocol upgrade
-                                        let mut ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
+                                        let ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
                                             Ok(ws) => ws,
                                             Err(e) => {
                                                 tracing::error!("WebSocket upgrade error from {addr}: {e}");
@@ -169,26 +170,51 @@ where
 
                                         tracing::debug!("WebSocket upgrade complete for {addr}");
 
-                                        // Step 2: Subduction handshake
+                                        // Step 2: Subduction handshake and connection setup
                                         // Accepts either Audience::Known(peer_id) or discovery audience
                                         let now = TimestampSeconds::now();
-                                        let handshake_result = server_handshake(
-                                            &mut ws_stream,
+                                        let result = handshake::respond::<Sendable, _, _, _, _>(
+                                            WebSocketHandshake::new(ws_stream),
+                                            |ws_handshake, peer_id| {
+                                                // Create WebSocket wrapper with verified PeerId
+                                                let (ws, sender_fut) = WebSocket::new(
+                                                    ws_handshake.into_inner(),
+                                                    tout.clone(),
+                                                    default_time_limit,
+                                                    peer_id,
+                                                );
+
+                                                // Start listener and sender tasks
+                                                let listen_ws = ws.clone();
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = listen_ws.listen().await {
+                                                        tracing::error!("WebSocket listen error: {e}");
+                                                    }
+                                                });
+
+                                                tokio::spawn(async move {
+                                                    if let Err(e) = sender_fut.await {
+                                                        tracing::error!("WebSocket sender error: {e}");
+                                                    }
+                                                });
+
+                                                (UnifiedWebSocket::Accepted(ws), ())
+                                            },
                                             task_subduction.signer(),
+                                            task_subduction.nonce_cache(),
                                             server_peer_id,
                                             task_discovery_audience,
-                                            task_subduction.nonce_cache(),
                                             now,
                                             handshake_max_drift,
                                         ).await;
 
-                                        let client_id = match handshake_result {
-                                            Ok(result) => {
+                                        let authenticated = match result {
+                                            Ok((auth, ())) => {
                                                 tracing::info!(
                                                     "Handshake complete: client {} from {addr}",
-                                                    result.client_id
+                                                    auth.peer_id()
                                                 );
-                                                result.client_id
+                                                auth
                                             }
                                             Err(e) => {
                                                 tracing::warn!("Handshake failed from {addr}: {e}");
@@ -196,31 +222,8 @@ where
                                             }
                                         };
 
-                                        // Step 3: Create WebSocket wrapper with verified PeerId
-                                        let (ws, sender_fut) = WebSocket::new(
-                                            ws_stream,
-                                            tout,
-                                            default_time_limit,
-                                            client_id,
-                                        );
-                                        let ws_conn = UnifiedWebSocket::Accepted(ws.clone());
-
-                                        // Step 4: Start listener and sender tasks
-                                        let listen_ws = ws.clone();
-                                        tokio::spawn(async move {
-                                            if let Err(e) = listen_ws.listen().await {
-                                                tracing::error!("WebSocket listen error: {e}");
-                                            }
-                                        });
-
-                                        tokio::spawn(async move {
-                                            if let Err(e) = sender_fut.await {
-                                                tracing::error!("WebSocket sender error: {e}");
-                                            }
-                                        });
-
-                                        // Step 5: Register connection with Subduction
-                                        if let Err(e) = task_subduction.register(ws_conn).await {
+                                        // Step 3: Register with Subduction
+                                        if let Err(e) = task_subduction.register(authenticated).await {
                                             tracing::error!("Failed to register connection: {e}");
                                         }
                                     }
@@ -325,18 +328,24 @@ where
         &self.subduction
     }
 
-    /// Register a new WebSocket connection with the server.
+    /// Register an authenticated WebSocket connection with the server.
+    ///
+    /// The connection must already have completed handshake verification via
+    /// [`handshake::initiate`] or [`handshake::respond`].
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
     ///
     /// # Errors
     ///
     /// Returns an error if the registration message send fails over the internal channel.
+    ///
+    /// [`handshake::initiate`]: subduction_core::connection::handshake::initiate
+    /// [`handshake::respond`]: subduction_core::connection::handshake::respond
     pub async fn register(
         &self,
-        ws: UnifiedWebSocket<O>,
+        authenticated: Authenticated<UnifiedWebSocket<O>, Sendable>,
     ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
-        self.subduction.register(ws).await
+        self.subduction.register(authenticated).await
     }
 
     /// Connect to a peer and register the connection for bidirectional sync.
@@ -362,15 +371,12 @@ where
         default_time_limit: Duration,
         expected_peer_id: PeerId,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
-        use crate::handshake::client_handshake;
-        use subduction_core::crypto::nonce::Nonce;
-
         let uri_str = uri.to_string();
         tracing::info!("Connecting to peer at {uri_str}");
 
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
-        let (mut ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
+        let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;
 
@@ -379,8 +385,48 @@ where
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let handshake_result = client_handshake(
-            &mut ws_stream,
+        let cancel_token = self.cancellation_token.clone();
+        let listen_uri_str = uri_str.clone();
+        let sender_uri_str = uri_str.clone();
+
+        let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
+            WebSocketHandshake::new(ws_stream),
+            move |ws_handshake, peer_id| {
+                let (ws, sender_fut) =
+                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
+                let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
+
+                let listen_ws = ws.clone();
+                let listener_cancel = cancel_token.clone();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        () = listener_cancel.cancelled() => {
+                            tracing::debug!("Shutting down listener for peer {listen_uri_str}");
+                        }
+                        result = listen_ws.listen() => {
+                            if let Err(e) = result {
+                                tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                            }
+                        }
+                    }
+                });
+
+                let sender_cancel = cancel_token;
+                tokio::spawn(async move {
+                    tokio::select! {
+                        () = sender_cancel.cancelled() => {
+                            tracing::debug!("Shutting down sender for peer {sender_uri_str}");
+                        }
+                        result = sender_fut => {
+                            if let Err(e) = result {
+                                tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
+                            }
+                        }
+                    }
+                });
+
+                (ws_conn, ())
+            },
             self.subduction.signer(),
             audience,
             now,
@@ -388,12 +434,14 @@ where
         )
         .await?;
 
+        let server_id = authenticated.peer_id();
+
         // Verify we connected to the expected peer
-        if handshake_result.server_id != expected_peer_id {
+        if server_id != expected_peer_id {
             tracing::warn!(
                 "Server identity mismatch: expected {}, got {}",
                 expected_peer_id,
-                handshake_result.server_id
+                server_id
             );
             // Continue anyway - the caller specified the expected peer,
             // but the server proved a different identity. This could be
@@ -401,45 +449,10 @@ where
             // Policy can reject if needed.
         }
 
-        let server_id = handshake_result.server_id;
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let (ws, sender_fut) = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
-        let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
-
-        let listen_ws = ws.clone();
-        let listen_uri_str = uri_str.clone();
-        let cancel_token = self.cancellation_token.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                () = cancel_token.cancelled() => {
-                    tracing::debug!("Shutting down listener for peer {listen_uri_str}");
-                }
-                result = listen_ws.listen() => {
-                    if let Err(e) = result {
-                        tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
-                    }
-                }
-            }
-        });
-
-        let sender_uri_str = uri_str.clone();
-        let sender_cancel_token = self.cancellation_token.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                () = sender_cancel_token.cancelled() => {
-                    tracing::debug!("Shutting down sender for peer {sender_uri_str}");
-                }
-                result = sender_fut => {
-                    if let Err(e) = result {
-                        tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
-                    }
-                }
-            }
-        });
-
         self.subduction
-            .register(ws_conn)
+            .register(authenticated)
             .await
             .map_err(TryConnectError::Registration)?;
 
@@ -471,15 +484,12 @@ where
         default_time_limit: Duration,
         service_name: &str,
     ) -> Result<PeerId, TryConnectError<P::ConnectionDisallowed>> {
-        use crate::handshake::client_handshake;
-        use subduction_core::crypto::nonce::Nonce;
-
         let uri_str = uri.to_string();
         tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
 
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
-        let (mut ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
+        let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;
 
@@ -488,8 +498,48 @@ where
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let handshake_result = client_handshake(
-            &mut ws_stream,
+        let cancel_token = self.cancellation_token.clone();
+        let listen_uri_str = uri_str.clone();
+        let sender_uri_str = uri_str.clone();
+
+        let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
+            WebSocketHandshake::new(ws_stream),
+            move |ws_handshake, peer_id| {
+                let (ws, sender_fut) =
+                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
+                let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
+
+                let listen_ws = ws.clone();
+                let listener_cancel = cancel_token.clone();
+                tokio::spawn(async move {
+                    tokio::select! {
+                        () = listener_cancel.cancelled() => {
+                            tracing::debug!("Shutting down listener for peer {listen_uri_str}");
+                        }
+                        result = listen_ws.listen() => {
+                            if let Err(e) = result {
+                                tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                            }
+                        }
+                    }
+                });
+
+                let sender_cancel = cancel_token;
+                tokio::spawn(async move {
+                    tokio::select! {
+                        () = sender_cancel.cancelled() => {
+                            tracing::debug!("Shutting down sender for peer {sender_uri_str}");
+                        }
+                        result = sender_fut => {
+                            if let Err(e) = result {
+                                tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
+                            }
+                        }
+                    }
+                });
+
+                (ws_conn, ())
+            },
             self.subduction.signer(),
             audience,
             now,
@@ -497,45 +547,11 @@ where
         )
         .await?;
 
-        let server_id = handshake_result.server_id;
+        let server_id = authenticated.peer_id();
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let (ws, sender_fut) = WebSocket::new(ws_stream, timeout, default_time_limit, server_id);
-        let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
-
-        let listen_ws = ws.clone();
-        let listen_uri_str = uri_str.clone();
-        let cancel_token = self.cancellation_token.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                () = cancel_token.cancelled() => {
-                    tracing::debug!("Shutting down listener for peer {listen_uri_str}");
-                }
-                result = listen_ws.listen() => {
-                    if let Err(e) = result {
-                        tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
-                    }
-                }
-            }
-        });
-
-        let sender_uri_str = uri_str.clone();
-        let sender_cancel_token = self.cancellation_token.clone();
-        tokio::spawn(async move {
-            tokio::select! {
-                () = sender_cancel_token.cancelled() => {
-                    tracing::debug!("Shutting down sender for peer {sender_uri_str}");
-                }
-                result = sender_fut => {
-                    if let Err(e) = result {
-                        tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
-                    }
-                }
-            }
-        });
-
         self.subduction
-            .register(ws_conn)
+            .register(authenticated)
             .await
             .map_err(TryConnectError::Registration)?;
 
@@ -562,7 +578,7 @@ pub enum TryConnectError<E: core::error::Error> {
 
     /// Handshake failed.
     #[error("handshake error: {0}")]
-    Handshake(#[from] WebSocketHandshakeError),
+    Handshake(#[from] AuthenticateError<WebSocketHandshakeError>),
 
     /// Registration error.
     #[error("Registration error: {0}")]

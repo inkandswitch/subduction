@@ -12,7 +12,9 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use crate::connection::{JsConnection, websocket::CallError};
+use crate::connection::websocket::{
+    CallError, WasmWebSocket, WebSocketAuthenticatedConnectionError,
+};
 use sedimentree_wasm::storage::JsSedimentreeStorage;
 
 /// A Wasm wrapper around the [`HydrationError`] type.
@@ -34,7 +36,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsSedimentreeStorage, JsConnection>);
+pub struct WasmIoError(#[from] IoError<Local, JsSedimentreeStorage, WasmWebSocket>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -51,7 +53,7 @@ impl From<WasmIoError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmWriteError(
-    #[from] WriteError<Local, JsSedimentreeStorage, JsConnection, Infallible>,
+    #[from] WriteError<Local, JsSedimentreeStorage, WasmWebSocket, Infallible>,
 );
 
 impl From<WasmWriteError> for JsValue {
@@ -66,13 +68,33 @@ impl From<WasmWriteError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmAttachError(
-    #[from] AttachError<Local, JsSedimentreeStorage, JsConnection, Infallible>,
+    #[from] AttachError<Local, JsSedimentreeStorage, WasmWebSocket, Infallible>,
 );
 
 impl From<WasmAttachError> for JsValue {
     fn from(err: WasmAttachError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("AttachError");
+        js_err.into()
+    }
+}
+
+/// Error connecting to a peer (handshake + registration).
+#[derive(Debug, Error)]
+pub enum WasmConnectError {
+    /// WebSocket connection or handshake failed.
+    #[error("connection failed: {0}")]
+    Connection(#[from] WebSocketAuthenticatedConnectionError),
+
+    /// Registration failed after successful handshake.
+    #[error("registration failed: {0}")]
+    Registration(#[from] RegistrationError<Infallible>),
+}
+
+impl From<WasmConnectError> for JsValue {
+    fn from(err: WasmConnectError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("ConnectError");
         js_err.into()
     }
 }
@@ -94,7 +116,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsSedimentreeStorage, JsConnection>);
+pub struct WasmListenError(#[from] ListenError<Local, JsSedimentreeStorage, WasmWebSocket>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
@@ -193,7 +215,7 @@ impl From<WasmRegistrationError> for JsValue {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmDisconnectionError(#[from] <JsConnection as Connection<Local>>::DisconnectionError);
+pub struct WasmDisconnectionError(#[from] <WasmWebSocket as Connection<Local>>::DisconnectionError);
 
 impl From<WasmDisconnectionError> for JsValue {
     fn from(err: WasmDisconnectionError) -> Self {

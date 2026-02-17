@@ -7,31 +7,67 @@
 //! # Protocol Flow
 //!
 //! ```text
-//!     Client                                          Server
+//!     Initiator                                       Responder
 //!       │                                               │
 //!       │  1. Signed<Challenge>                         │
 //!       │  ─────────────────────────────────────────►   │
 //!       │     { audience, timestamp, nonce }            │
-//!       │     Client identity: challenge.issuer()       │
+//!       │     Initiator identity: challenge.issuer()    │
 //!       │                                               │
 //!       │                                               │
 //!       │                      2. Signed<Response>      │
 //!       │  ◄─────────────────────────────────────────   │
 //!       │     { challenge_digest, server_timestamp }    │
-//!       │     Server identity: response.issuer()        │
+//!       │     Responder identity: response.issuer()     │
 //!       │     Binding: challenge_digest includes nonce  │
 //!       │                                               │
 //!       ▼                                               ▼
-//!    Knows server_id                              Knows client_id
+//!    Knows responder_id                           Knows initiator_id
+//! ```
+//!
+//! # Usage
+//!
+//! Use [`initiate`] for the side that sends first (traditional "client"),
+//! and [`respond`] for the side that receives first (traditional "server").
+//! These functions consume the transport and return an [`Authenticated`]
+//! connection on success.
+//!
+//! ```ignore
+//! use subduction_core::connection::handshake;
+//!
+//! // Initiator side - transport is consumed, returned to build_connection
+//! let authenticated = handshake::initiate(
+//!     transport,  // consumed
+//!     |transport, peer_id| MyConnection::new(transport, peer_id),
+//!     &signer,
+//!     audience,
+//!     now,
+//!     nonce,
+//! ).await?;
+//!
+//! // Responder side - transport is consumed, returned to build_connection
+//! let authenticated = handshake::respond(
+//!     transport,  // consumed
+//!     |transport, peer_id| MyConnection::new(transport, peer_id),
+//!     &signer,
+//!     &nonce_cache,
+//!     our_peer_id,
+//!     discovery_audience,
+//!     now,
+//!     max_drift,
+//! ).await?;
 //! ```
 
+use alloc::vec::Vec;
 use core::time::Duration;
 
 use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
+use super::{Connection, authenticated::Authenticated};
 use crate::{
+    connection::nonce_cache::NonceCache,
     crypto::{nonce::Nonce, signed::Signed, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
@@ -393,6 +429,303 @@ impl DriftCorrection {
     pub const fn offset_secs(&self) -> i32 {
         self.offset_secs
     }
+}
+
+/// A transport capable of exchanging handshake messages.
+///
+/// Implementors provide raw byte send/recv over their transport layer.
+/// The handshake protocol handles CBOR encoding/decoding of [`HandshakeMessage`].
+pub trait Handshake<K: FutureForm> {
+    /// Transport-level error type.
+    type Error;
+
+    /// Send raw bytes over the transport.
+    fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>>;
+
+    /// Receive raw bytes from the transport.
+    fn recv(&mut self) -> K::Future<'_, Result<Vec<u8>, Self::Error>>;
+}
+
+/// Wire format for handshake messages.
+///
+/// This enum wraps the three possible message types exchanged during handshake:
+/// - Initiator sends [`SignedChallenge`]
+/// - Responder sends [`SignedResponse`] on success, or [`Rejection`] on failure
+#[derive(Debug, minicbor::Encode, minicbor::Decode)]
+pub enum HandshakeMessage {
+    /// A signed challenge from the initiator.
+    #[n(0)]
+    SignedChallenge(#[n(0)] Signed<Challenge>),
+
+    /// A signed response from the responder.
+    #[n(1)]
+    SignedResponse(#[n(0)] Signed<Response>),
+
+    /// An unsigned rejection from the responder.
+    #[n(2)]
+    Rejection(#[n(0)] Rejection),
+}
+
+/// Errors that can occur during authentication.
+#[derive(Debug, Error)]
+pub enum AuthenticateError<E> {
+    /// Transport-level error.
+    #[error("transport error: {0}")]
+    Transport(E),
+
+    /// CBOR decoding error.
+    #[error("CBOR decode error: {0}")]
+    Decode(#[from] minicbor::decode::Error),
+
+    /// Handshake protocol error (signature or validation failure).
+    #[error("handshake error: {0}")]
+    Handshake(#[from] HandshakeError),
+
+    /// The responder rejected the handshake.
+    #[error("handshake rejected: {reason:?}")]
+    Rejected {
+        /// The rejection reason.
+        reason: RejectionReason,
+        /// The responder's timestamp (for drift correction).
+        responder_timestamp: TimestampSeconds,
+    },
+
+    /// Received an unexpected message type.
+    #[error("unexpected message type")]
+    UnexpectedMessage,
+
+    /// Connection closed before handshake completed.
+    #[error("connection closed during handshake")]
+    ConnectionClosed,
+}
+
+/// Result of a successful initiator-side handshake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InitiateResult {
+    /// The verified responder's peer ID.
+    pub responder_id: PeerId,
+    /// The responder's timestamp (for drift correction).
+    pub responder_timestamp: TimestampSeconds,
+}
+
+/// Result of a successful responder-side handshake.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RespondResult {
+    /// The verified initiator's peer ID.
+    pub initiator_id: PeerId,
+    /// The verified challenge (for logging/debugging).
+    pub challenge: Challenge,
+}
+
+/// Perform the initiator side of the handshake (sends first).
+///
+/// Sends a signed challenge and waits for a signed response.
+/// On success, returns an [`Authenticated`] connection wrapping the result
+/// of `build_connection`, along with any extra data returned by the factory.
+///
+/// # Arguments
+///
+/// * `handshake` - The transport implementing [`Handshake`] (consumed)
+/// * `build_connection` - Factory to create the connection (and optional extra data) from the transport and verified peer ID
+/// * `signer` - The initiator's signer for creating the challenge
+/// * `audience` - The intended recipient (known peer ID or discovery hash)
+/// * `now` - The current timestamp
+/// * `nonce` - A random nonce for replay protection
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The transport fails to send/receive
+/// - The responder rejects the handshake
+/// - The response signature is invalid
+/// - The response doesn't match the challenge
+///
+/// # Panics
+///
+/// Panics if CBOR encoding of the challenge message fails (should never happen
+/// with well-formed types).
+#[allow(clippy::expect_used)]
+pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
+    mut handshake: H,
+    build_connection: impl FnOnce(H, PeerId) -> (C, E),
+    signer: &S,
+    audience: Audience,
+    now: TimestampSeconds,
+    nonce: Nonce,
+) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
+    // Create and send challenge
+    let challenge = Challenge::new(audience, now, nonce);
+    let signed_challenge = Signed::seal(signer, challenge).await.into_signed();
+    let msg = HandshakeMessage::SignedChallenge(signed_challenge);
+    let bytes = minicbor::to_vec(&msg).expect("challenge encoding should not fail");
+    handshake
+        .send(bytes)
+        .await
+        .map_err(AuthenticateError::Transport)?;
+
+    // Receive response
+    let response_bytes = handshake
+        .recv()
+        .await
+        .map_err(AuthenticateError::Transport)?;
+    if response_bytes.is_empty() {
+        return Err(AuthenticateError::ConnectionClosed);
+    }
+
+    let response_msg: HandshakeMessage = minicbor::decode(&response_bytes)?;
+
+    match response_msg {
+        HandshakeMessage::SignedResponse(signed_response) => {
+            let verified = verify_response(&signed_response, &challenge)?;
+            let peer_id = verified.server_id;
+            let (conn, extra) = build_connection(handshake, peer_id);
+            Ok((Authenticated::from_handshake(conn), extra))
+        }
+        HandshakeMessage::Rejection(rejection) => Err(AuthenticateError::Rejected {
+            reason: rejection.reason,
+            responder_timestamp: rejection.server_timestamp,
+        }),
+        HandshakeMessage::SignedChallenge(_) => Err(AuthenticateError::UnexpectedMessage),
+    }
+}
+
+/// Perform the responder side of the handshake (receives first).
+///
+/// Receives a signed challenge, verifies it, and sends a signed response.
+/// On success, returns an [`Authenticated`] connection wrapping the result
+/// of `build_connection`, along with any extra data returned by the factory.
+///
+/// # Arguments
+///
+/// * `handshake` - The transport implementing [`Handshake`] (consumed)
+/// * `build_connection` - Factory to create the connection (and optional extra data) from the transport and verified peer ID
+/// * `signer` - The responder's signer for creating the response
+/// * `nonce_cache` - Cache for replay protection
+/// * `our_peer_id` - Our peer ID (always accepted as `Audience::Known`)
+/// * `discovery_audience` - Optional discovery audience (also accepted if provided)
+/// * `now` - The current timestamp
+/// * `max_drift` - Maximum acceptable clock drift
+///
+/// # Errors
+///
+/// Returns an error if:
+/// - The transport fails to send/receive
+/// - The challenge signature is invalid
+/// - The audience doesn't match
+/// - The timestamp is outside the acceptable drift window
+/// - The nonce has already been used (replay attack)
+///
+/// # Panics
+///
+/// Panics if CBOR encoding of the response or rejection message fails (should
+/// never happen with well-formed types).
+#[allow(clippy::expect_used, clippy::too_many_arguments)]
+pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
+    mut handshake: H,
+    build_connection: impl FnOnce(H, PeerId) -> (C, E),
+    signer: &S,
+    nonce_cache: &NonceCache,
+    our_peer_id: PeerId,
+    discovery_audience: Option<Audience>,
+    now: TimestampSeconds,
+    max_drift: Duration,
+) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
+    // Receive challenge
+    let challenge_bytes = handshake
+        .recv()
+        .await
+        .map_err(AuthenticateError::Transport)?;
+    if challenge_bytes.is_empty() {
+        return Err(AuthenticateError::ConnectionClosed);
+    }
+
+    let challenge_msg: HandshakeMessage = minicbor::decode(&challenge_bytes)?;
+
+    let HandshakeMessage::SignedChallenge(signed_challenge) = challenge_msg else {
+        return Err(AuthenticateError::UnexpectedMessage);
+    };
+
+    // Verify the challenge - try Known(our_peer_id) first, then discovery audience
+    let known_audience = Audience::known(our_peer_id);
+    let verified = match verify_challenge(&signed_challenge, &known_audience, now, max_drift) {
+        Ok(v) => v,
+        Err(HandshakeError::ChallengeValidation(ChallengeValidationError::InvalidAudience))
+            if discovery_audience.is_some() =>
+        {
+            // Try discovery audience as fallback
+            match verify_challenge(
+                &signed_challenge,
+                discovery_audience.as_ref().expect("checked is_some"),
+                now,
+                max_drift,
+            ) {
+                Ok(v) => v,
+                Err(e) => {
+                    send_rejection(&mut handshake, &e, now).await?;
+                    return Err(e.into());
+                }
+            }
+        }
+        Err(e) => {
+            send_rejection(&mut handshake, &e, now).await?;
+            return Err(e.into());
+        }
+    };
+
+    // Claim the nonce for replay protection
+    // Only do this after signature verification succeeds (to prevent DoS via cache filling)
+    if nonce_cache
+        .try_claim(verified.client_id, verified.challenge.nonce, now)
+        .await
+        .is_err()
+    {
+        let rejection = Rejection::new(RejectionReason::ReplayedNonce, now);
+        let msg = HandshakeMessage::Rejection(rejection);
+        let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
+        handshake
+            .send(bytes)
+            .await
+            .map_err(AuthenticateError::Transport)?;
+        return Err(AuthenticateError::Handshake(
+            HandshakeError::ChallengeValidation(ChallengeValidationError::ReplayedNonce),
+        ));
+    }
+
+    // Create and send response
+    let signed_response = create_response(signer, &verified.challenge, now).await;
+    let response_msg = HandshakeMessage::SignedResponse(signed_response);
+    let response_bytes =
+        minicbor::to_vec(&response_msg).expect("response encoding should not fail");
+    handshake
+        .send(response_bytes)
+        .await
+        .map_err(AuthenticateError::Transport)?;
+
+    let peer_id = verified.client_id;
+    let (conn, extra) = build_connection(handshake, peer_id);
+    Ok((Authenticated::from_handshake(conn), extra))
+}
+
+/// Helper to send a rejection message.
+#[allow(clippy::expect_used)]
+async fn send_rejection<K: FutureForm, H: Handshake<K>>(
+    handshake: &mut H,
+    error: &HandshakeError,
+    now: TimestampSeconds,
+) -> Result<(), AuthenticateError<H::Error>> {
+    let reason = match error {
+        HandshakeError::InvalidSignature | HandshakeError::ResponseValidation(_) => {
+            RejectionReason::InvalidSignature
+        }
+        HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
+    };
+    let rejection = Rejection::new(reason, now);
+    let msg = HandshakeMessage::Rejection(rejection);
+    let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
+    handshake
+        .send(bytes)
+        .await
+        .map_err(AuthenticateError::Transport)
 }
 
 /// Create a signed challenge for initiating a handshake.

@@ -5,10 +5,10 @@
 use core::time::Duration;
 
 use future_form::{FutureForm, Local, Sendable};
-use futures::FutureExt;
 
 use super::{
     Connection,
+    authenticated::Authenticated,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use crate::peer::id::PeerId;
@@ -41,6 +41,14 @@ impl MockConnection {
     pub const fn with_peer_id(peer_id: PeerId) -> Self {
         Self { peer_id }
     }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    ///
+    /// Uses the connection's peer ID as the authenticated identity.
+    #[must_use]
+    pub fn authenticated(self) -> Authenticated<Self, Sendable> {
+        Authenticated::new_for_test(self)
+    }
 }
 
 impl Default for MockConnection {
@@ -62,23 +70,23 @@ impl Connection<Sendable> for MockConnection {
     fn disconnect(
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
-        Box::pin(async { Ok(()) })
+        Sendable::from_future(async { Ok(()) })
     }
 
     fn send(
         &self,
         _message: &Message,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
-        Box::pin(async { Ok(()) })
+        Sendable::from_future(async { Ok(()) })
     }
 
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
-        Box::pin(async { Err(core::fmt::Error) })
+        Sendable::from_future(async { Err(core::fmt::Error) })
     }
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
-        Box::pin(async move {
+        Sendable::from_future(async move {
             RequestId {
                 requestor: peer_id,
                 nonce: 0,
@@ -91,7 +99,7 @@ impl Connection<Sendable> for MockConnection {
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        Box::pin(async { Err(core::fmt::Error) })
+        Sendable::from_future(async { Err(core::fmt::Error) })
     }
 }
 
@@ -117,6 +125,14 @@ impl FailingSendMockConnection {
     pub const fn with_peer_id(peer_id: PeerId) -> Self {
         Self { peer_id }
     }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    ///
+    /// Uses the connection's peer ID as the authenticated identity.
+    #[must_use]
+    pub fn authenticated(self) -> Authenticated<Self, Sendable> {
+        Authenticated::new_for_test(self)
+    }
 }
 
 impl Default for FailingSendMockConnection {
@@ -138,23 +154,23 @@ impl Connection<Sendable> for FailingSendMockConnection {
     fn disconnect(
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
-        Box::pin(async { Ok(()) })
+        Sendable::from_future(async { Ok(()) })
     }
 
     fn send(
         &self,
         _message: &Message,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
-        Box::pin(async { Err(core::fmt::Error) })
+        Sendable::from_future(async { Err(core::fmt::Error) })
     }
 
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
-        Box::pin(async { Err(core::fmt::Error) })
+        Sendable::from_future(async { Err(core::fmt::Error) })
     }
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
-        Box::pin(async move {
+        Sendable::from_future(async move {
             RequestId {
                 requestor: peer_id,
                 nonce: 0,
@@ -167,7 +183,7 @@ impl Connection<Sendable> for FailingSendMockConnection {
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        Box::pin(async { Err(core::fmt::Error) })
+        Sendable::from_future(async { Err(core::fmt::Error) })
     }
 }
 
@@ -241,6 +257,17 @@ impl ChannelMockConnection {
     pub fn new_default_with_handle() -> (Self, ChannelMockConnectionHandle) {
         Self::new_with_handle(PeerId::new([0u8; 32]))
     }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    ///
+    /// Uses the connection's peer ID as the authenticated identity.
+    #[must_use]
+    pub fn authenticated<K: FutureForm>(self) -> Authenticated<Self, K>
+    where
+        Self: Connection<K>,
+    {
+        Authenticated::new_for_test(self)
+    }
 }
 
 impl Connection<Sendable> for ChannelMockConnection {
@@ -256,7 +283,7 @@ impl Connection<Sendable> for ChannelMockConnection {
     fn disconnect(
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
-        Box::pin(async { Ok(()) })
+        Sendable::from_future(async { Ok(()) })
     }
 
     fn send(
@@ -265,12 +292,12 @@ impl Connection<Sendable> for ChannelMockConnection {
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         let message = message.clone();
-        Box::pin(async move { tx.send(message).await })
+        Sendable::from_future(async move { tx.send(message).await })
     }
 
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
-        Box::pin(async move { rx.recv().await })
+        Sendable::from_future(async move { rx.recv().await })
     }
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
@@ -278,7 +305,7 @@ impl Connection<Sendable> for ChannelMockConnection {
         let counter = self
             .request_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        Box::pin(async move {
+        Sendable::from_future(async move {
             RequestId {
                 requestor: peer_id,
                 nonce: counter,
@@ -292,7 +319,7 @@ impl Connection<Sendable> for ChannelMockConnection {
         _timeout: Option<Duration>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         // For now, call always fails. Tests can implement response handling if needed.
-        async { Err(core::fmt::Error) }.boxed()
+        Sendable::from_future(async { Err(core::fmt::Error) })
     }
 }
 
@@ -309,7 +336,7 @@ impl Connection<Local> for ChannelMockConnection {
     fn disconnect(
         &self,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
-        async { Ok(()) }.boxed_local()
+        Local::from_future(async { Ok(()) })
     }
 
     fn send(
@@ -318,12 +345,12 @@ impl Connection<Local> for ChannelMockConnection {
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         let message = message.clone();
-        async move { tx.send(message).await }.boxed_local()
+        Local::from_future(async move { tx.send(message).await })
     }
 
     fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
-        async move { rx.recv().await }.boxed_local()
+        Local::from_future(async move { rx.recv().await })
     }
 
     fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
@@ -331,13 +358,12 @@ impl Connection<Local> for ChannelMockConnection {
         let counter = self
             .request_counter
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-        async move {
+        Local::from_future(async move {
             RequestId {
                 requestor: peer_id,
                 nonce: counter,
             }
-        }
-        .boxed_local()
+        })
     }
 
     fn call(
@@ -345,7 +371,7 @@ impl Connection<Local> for ChannelMockConnection {
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
     ) -> <Local as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        async { Err(core::fmt::Error) }.boxed_local()
+        Local::from_future(async { Err(core::fmt::Error) })
     }
 }
 

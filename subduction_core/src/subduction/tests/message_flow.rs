@@ -56,7 +56,7 @@ async fn test_sendable_single_commit() -> TestResult {
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -111,7 +111,7 @@ async fn test_sendable_multiple_sequential() -> TestResult {
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -165,7 +165,7 @@ async fn test_sendable_same_sedimentree() -> TestResult {
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -224,7 +224,7 @@ async fn test_local_single_commit() -> TestResult {
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
-            subduction.register(conn).await?;
+            subduction.register(conn.authenticated()).await?;
 
             let actor_task = tokio::task::spawn_local(actor_fut);
             let listener_task = tokio::task::spawn_local(listener_fut);
@@ -284,7 +284,7 @@ async fn test_local_multiple_sequential() -> TestResult {
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
-            subduction.register(conn).await?;
+            subduction.register(conn.authenticated()).await?;
 
             let actor_task = tokio::task::spawn_local(actor_fut);
             let listener_task = tokio::task::spawn_local(listener_fut);
@@ -344,7 +344,7 @@ async fn test_local_same_sedimentree() -> TestResult {
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
-            subduction.register(conn).await?;
+            subduction.register(conn.authenticated()).await?;
 
             let actor_task = tokio::task::spawn_local(actor_fut);
             let listener_task = tokio::task::spawn_local(listener_fut);

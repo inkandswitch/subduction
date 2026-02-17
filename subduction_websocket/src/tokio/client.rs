@@ -3,7 +3,7 @@
 use crate::{
     MAX_MESSAGE_SIZE,
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    handshake::{WebSocketHandshakeError, client_handshake},
+    handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::Timeout,
     websocket::{ListenerTask, SenderTask, WebSocket},
 };
@@ -14,7 +14,7 @@ use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
         Connection, Reconnect,
-        handshake::Audience,
+        handshake::{self, Audience, AuthenticateError},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     crypto::{nonce::Nonce, signer::Signer},
@@ -32,7 +32,7 @@ pub enum ClientConnectError {
 
     /// Handshake failed.
     #[error("handshake error: {0}")]
-    Handshake(#[from] WebSocketHandshakeError),
+    Handshake(#[from] AuthenticateError<WebSocketHandshakeError>),
 }
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
@@ -75,6 +75,11 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if internal state is inconsistent after a successful handshake (should never happen).
+    #[allow(clippy::expect_used)]
     pub async fn new<'a>(
         address: Uri,
         timeout: O,
@@ -89,26 +94,39 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         tracing::info!("Connecting to WebSocket server at {address}");
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
-        let (mut ws_stream, _resp) =
+        let (ws_stream, _resp) =
             connect_async_with_config(address.clone(), Some(ws_config)).await?;
 
         // Perform handshake
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let handshake_result =
-            client_handshake(&mut ws_stream, &signer, audience, now, nonce).await?;
+        let timeout_clone = timeout.clone();
+        let (authenticated, sender_fut) = handshake::initiate::<Sendable, _, _, _, _>(
+            WebSocketHandshake::new(ws_stream),
+            |ws_handshake, peer_id| {
+                let (socket, sender_fut) = WebSocket::<_, _, O>::new(
+                    ws_handshake.into_inner(),
+                    timeout_clone,
+                    default_time_limit,
+                    peer_id,
+                );
+                (socket, Sendable::from_future(sender_fut))
+            },
+            &signer,
+            audience,
+            now,
+            nonce,
+        )
+        .await?;
 
-        let server_id = handshake_result.server_id;
+        let server_id = authenticated.peer_id();
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let (socket, sender_fut) =
-            WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, server_id);
-
+        let socket = authenticated.inner().clone();
         let listener_socket = socket.clone();
-
         let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
-        let sender = SenderTask::new(Sendable::from_future(sender_fut));
+        let sender = SenderTask::new(sender_fut);
 
         let client = TokioWebSocketClient {
             address,
@@ -219,16 +237,22 @@ impl<
             ClientConnectError::WebSocket(_) => true,
 
             // Handshake errors depend on the specific type
-            ClientConnectError::Handshake(handshake_err) => match handshake_err {
-                // Network/transport errors - retry
-                WebSocketHandshakeError::WebSocket(_)
-                | WebSocketHandshakeError::ConnectionClosed => true,
+            ClientConnectError::Handshake(auth_err) => match auth_err {
+                // Transport errors - check the underlying WebSocket error
+                AuthenticateError::Transport(ws_err) => match ws_err {
+                    WebSocketHandshakeError::WebSocket(_)
+                    | WebSocketHandshakeError::ConnectionClosed => true,
+                    WebSocketHandshakeError::UnexpectedMessageType(_) => false,
+                },
+
+                // Connection closed during handshake - retry
+                AuthenticateError::ConnectionClosed => true,
 
                 // Protocol violations or explicit rejection - don't retry
-                WebSocketHandshakeError::UnexpectedMessageType(_)
-                | WebSocketHandshakeError::DecodeError(_)
-                | WebSocketHandshakeError::Handshake(_)
-                | WebSocketHandshakeError::Rejected { .. } => false,
+                AuthenticateError::Decode(_)
+                | AuthenticateError::Handshake(_)
+                | AuthenticateError::Rejected { .. }
+                | AuthenticateError::UnexpectedMessage => false,
             },
         }
     }

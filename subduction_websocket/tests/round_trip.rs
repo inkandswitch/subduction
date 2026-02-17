@@ -14,7 +14,10 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
+    connection::{
+        Connection, authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache,
+    },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -266,7 +269,9 @@ async fn batch_sync() -> TestResult {
     });
 
     assert_eq!(client.connected_peer_ids().await.len(), 0);
-    client.register(client_ws).await?;
+    client
+        .register(Authenticated::new_for_test(client_ws))
+        .await?;
     assert_eq!(client.connected_peer_ids().await.len(), 1);
 
     client.add_commit(sed_id, &commit2, blob2).await?;

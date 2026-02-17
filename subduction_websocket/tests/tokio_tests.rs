@@ -13,7 +13,8 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
+        Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
@@ -335,7 +336,9 @@ async fn multiple_concurrent_clients() -> TestResult {
             Ok::<(), anyhow::Error>(())
         });
 
-        client.register(client_ws).await?;
+        client
+            .register(Authenticated::new_for_test(client_ws))
+            .await?;
 
         clients.push(client);
 
@@ -499,7 +502,9 @@ async fn request_with_delayed_response() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    client.register(client_ws).await?;
+    client
+        .register(Authenticated::new_for_test(client_ws))
+        .await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -545,6 +550,7 @@ async fn connection_to_invalid_address() -> TestResult {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn large_message_handling() -> TestResult {
     init_tracing();
 
@@ -631,7 +637,9 @@ async fn large_message_handling() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    client.register(client_ws).await?;
+    client
+        .register(Authenticated::new_for_test(client_ws))
+        .await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -757,7 +765,9 @@ async fn message_ordering() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    client.register(client_ws).await?;
+    client
+        .register(Authenticated::new_for_test(client_ws))
+        .await?;
 
     tokio::spawn({
         let inner_client = client.clone();

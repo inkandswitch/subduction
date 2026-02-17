@@ -92,7 +92,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
 
     // Register a connection for the peer
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    alice.register(conn).await?;
+    alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
     let alice_listener_task = tokio::spawn(alice_listener);
@@ -190,7 +190,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
     let peer_id = PeerId::new([1u8; 32]);
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    alice.register(conn).await?;
+    alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
     let alice_listener_task = tokio::spawn(alice_listener);
@@ -285,7 +285,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
         );
 
     let (alice_conn, alice_handle) = ChannelMockConnection::new_with_handle(bob_peer_id);
-    alice.register(alice_conn).await?;
+    alice.register(alice_conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
     let alice_listener_task = tokio::spawn(alice_listener);
@@ -325,7 +325,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
         );
 
     let (bob_conn, bob_handle) = ChannelMockConnection::new_with_handle(alice_peer_id);
-    bob.register(bob_conn).await?;
+    bob.register(bob_conn.authenticated()).await?;
 
     let bob_actor_task = tokio::spawn(bob_actor);
     let bob_listener_task = tokio::spawn(bob_listener);
@@ -452,7 +452,7 @@ async fn test_responder_requests_fragments() -> TestResult {
     let peer_id = PeerId::new([1u8; 32]);
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    alice.register(conn).await?;
+    alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
     let alice_listener_task = tokio::spawn(alice_listener);
@@ -527,7 +527,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
     let peer_id = PeerId::new([1u8; 32]);
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    alice.register(conn).await?;
+    alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
     let alice_listener_task = tokio::spawn(alice_listener);

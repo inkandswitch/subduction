@@ -412,7 +412,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn).await?;
+    subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);

@@ -100,7 +100,7 @@ async fn rejected_connection_is_not_registered() -> TestResult {
         );
 
     let peer_id = PeerId::new([1u8; 32]);
-    let conn = MockConnection::with_peer_id(peer_id);
+    let conn = MockConnection::with_peer_id(peer_id).authenticated();
 
     let result = subduction.register(conn).await;
     assert!(result.is_err(), "register should fail when policy rejects");
@@ -128,7 +128,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
 
     // Register an allowed connection first (OpenPolicy allows everything)
     let allowed_peer = PeerId::new([1u8; 32]);
-    let allowed_conn = MockConnection::with_peer_id(allowed_peer);
+    let allowed_conn = MockConnection::with_peer_id(allowed_peer).authenticated();
     subduction.register(allowed_conn).await?;
 
     let connected = subduction.connected_peer_ids().await;
@@ -150,7 +150,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
         );
 
     let rejected_peer = PeerId::new([2u8; 32]);
-    let rejected_conn = MockConnection::with_peer_id(rejected_peer);
+    let rejected_conn = MockConnection::with_peer_id(rejected_peer).authenticated();
     let result = reject_subduction.register(rejected_conn).await;
     assert!(result.is_err());
 

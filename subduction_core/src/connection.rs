@@ -1,5 +1,6 @@
 //! Manage connections to peers in the network.
 
+pub mod authenticated;
 pub mod backoff;
 pub mod handshake;
 pub mod id;
