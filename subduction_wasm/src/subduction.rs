@@ -285,7 +285,7 @@ impl WasmSubduction {
     ) -> Result<WasmPeerId, WasmConnectError> {
         use crate::connection::websocket::WasmWebSocket;
 
-        // Perform handshake and get Authenticated<WasmWebSocket>
+        // Perform handshake and get Authenticated<WasmWebSocket, Local>
         let authenticated = WasmWebSocket::connect_authenticated(
             address,
             signer,
@@ -329,7 +329,7 @@ impl WasmSubduction {
     ) -> Result<WasmPeerId, WasmConnectError> {
         use crate::connection::websocket::WasmWebSocket;
 
-        // Perform discovery handshake and get Authenticated<WasmWebSocket>
+        // Perform discovery handshake and get Authenticated<WasmWebSocket, Local>
         let authenticated = WasmWebSocket::connect_discover_authenticated(
             address,
             signer,

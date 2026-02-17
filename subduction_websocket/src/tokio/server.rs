@@ -343,7 +343,7 @@ where
     /// [`handshake::respond`]: subduction_core::connection::handshake::respond
     pub async fn register(
         &self,
-        authenticated: Authenticated<UnifiedWebSocket<O>>,
+        authenticated: Authenticated<UnifiedWebSocket<O>, Sendable>,
     ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
         self.subduction.register(authenticated).await
     }

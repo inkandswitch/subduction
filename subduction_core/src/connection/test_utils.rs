@@ -46,8 +46,8 @@ impl MockConnection {
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
-    pub const fn authenticated(self) -> Authenticated<Self> {
-        Authenticated::new_for_test(self, self.peer_id)
+    pub fn authenticated(self) -> Authenticated<Self, Sendable> {
+        Authenticated::new_for_test(self)
     }
 }
 
@@ -130,8 +130,8 @@ impl FailingSendMockConnection {
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
-    pub const fn authenticated(self) -> Authenticated<Self> {
-        Authenticated::new_for_test(self, self.peer_id)
+    pub fn authenticated(self) -> Authenticated<Self, Sendable> {
+        Authenticated::new_for_test(self)
     }
 }
 
@@ -262,9 +262,11 @@ impl ChannelMockConnection {
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
-    pub const fn authenticated(self) -> Authenticated<Self> {
-        let peer_id = self.peer_id;
-        Authenticated::new_for_test(self, peer_id)
+    pub fn authenticated<K: FutureForm>(self) -> Authenticated<Self, K>
+    where
+        Self: Connection<K>,
+    {
+        Authenticated::new_for_test(self)
     }
 }
 

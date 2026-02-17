@@ -398,7 +398,7 @@ impl WasmWebSocket {
             .map(Authenticated::into_inner)
     }
 
-    /// Connect and return an `Authenticated<WasmWebSocket>`.
+    /// Connect and return an `Authenticated<WasmWebSocket, Local>`.
     ///
     /// This is used internally by `WasmSubduction::connect` to keep the
     /// `Authenticated` wrapper without exposing it through wasm-bindgen.
@@ -407,7 +407,7 @@ impl WasmWebSocket {
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<Authenticated<WasmWebSocket>, WebSocketAuthenticatedConnectionError> {
+    ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
         use subduction_core::{crypto::nonce::Nonce, timestamp::TimestampSeconds};
 
         let ws = WebSocket::new(&address.href())
@@ -443,7 +443,7 @@ impl WasmWebSocket {
         Ok(authenticated)
     }
 
-    /// Connect using discovery and return an `Authenticated<WasmWebSocket>`.
+    /// Connect using discovery and return an `Authenticated<WasmWebSocket, Local>`.
     ///
     /// This is used internally by `WasmSubduction::connect_discover` to keep the
     /// `Authenticated` wrapper without exposing it through wasm-bindgen.
@@ -452,7 +452,7 @@ impl WasmWebSocket {
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<Authenticated<WasmWebSocket>, WebSocketAuthenticatedConnectionError> {
+    ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
         use subduction_core::{crypto::nonce::Nonce, timestamp::TimestampSeconds};
 
         let timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);

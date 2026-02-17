@@ -138,6 +138,7 @@ use pending_blob_requests::PendingBlobRequests;
 
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
+#[allow(clippy::type_complexity)]
 pub struct Subduction<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
@@ -155,7 +156,7 @@ pub struct Subduction<
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
     storage: StoragePowerbox<S, P>,
 
-    connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C>>>>>,
+    connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
 
@@ -175,9 +176,9 @@ pub struct Subduction<
     /// Primary cleanup happens on sync completion.
     pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
 
-    manager_channel: Sender<Command<Authenticated<C>>>,
-    msg_queue: async_channel::Receiver<(Authenticated<C>, Message)>,
-    connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<C>)>,
+    manager_channel: Sender<Command<Authenticated<C, F>>>,
+    msg_queue: async_channel::Receiver<(Authenticated<C, F>, Message)>,
+    connection_closed: async_channel::Receiver<(ConnectionId, Authenticated<C, F>)>,
 
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
@@ -187,7 +188,7 @@ pub struct Subduction<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -224,7 +225,7 @@ impl<
         let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(256);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
-        let manager = ConnectionManager::<F, Authenticated<C>, Sp>::new(
+        let manager = ConnectionManager::<F, Authenticated<C, F>, Sp>::new(
             spawner,
             manager_receiver,
             queue_sender,
@@ -376,7 +377,7 @@ impl<
     /// Returns the first available connection to the peer. Use this to get a
     /// connection once and reuse it for multiple operations, avoiding repeated
     /// lock acquisition on the connections map.
-    pub async fn get_connection(&self, peer_id: &PeerId) -> Option<Authenticated<C>> {
+    pub async fn get_connection(&self, peer_id: &PeerId) -> Option<Authenticated<C, F>> {
         self.connections
             .lock()
             .await
@@ -419,7 +420,7 @@ impl<
     pub async fn on_reconnect_success(
         &self,
         conn_id: ConnectionId,
-        conn: Authenticated<C>,
+        conn: Authenticated<C, F>,
     ) -> Result<(), ()> {
         tracing::info!(
             %conn_id,
@@ -502,7 +503,7 @@ impl<
                 // First priority: handle completed dispatch tasks
                 result = in_flight.select_next_some() => {
                     #[allow(clippy::type_complexity)]
-                    let (conn, dispatch_result): (Authenticated<C>, Result<(), ListenError<F, S, C>>) = result;
+                    let (conn, dispatch_result): (Authenticated<C, F>, Result<(), ListenError<F, S, C>>) = result;
                     if let Err(e) = dispatch_result {
                         tracing::error!(
                             peer = %conn.peer_id(),
@@ -563,7 +564,7 @@ impl<
     #[allow(clippy::too_many_lines)]
     async fn dispatch(
         &self,
-        conn: &Authenticated<C>,
+        conn: &Authenticated<C, F>,
         message: Message,
     ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
@@ -708,7 +709,7 @@ impl<
     /// * Returns `AttachError::Io` if a storage or network error occurs.
     pub async fn attach(
         &self,
-        conn: Authenticated<C>,
+        conn: Authenticated<C, F>,
     ) -> Result<bool, AttachError<F, S, C, P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
         tracing::info!("Attaching connection to peer {}", peer_id);
@@ -729,7 +730,10 @@ impl<
     /// # Errors
     ///
     /// * Returns `C::DisconnectionError` if disconnect fails or it occurs ungracefully.
-    pub async fn disconnect(&self, conn: &Authenticated<C>) -> Result<bool, C::DisconnectionError> {
+    pub async fn disconnect(
+        &self,
+        conn: &Authenticated<C, F>,
+    ) -> Result<bool, C::DisconnectionError> {
         let peer_id = conn.peer_id();
         tracing::info!("Disconnecting connection from peer {}", peer_id);
 
@@ -762,7 +766,7 @@ impl<
     ///
     /// * Returns [`C::DisconnectionError`] if disconnect fails or it occurs ungracefully.
     pub async fn disconnect_all(&self) -> Result<(), C::DisconnectionError> {
-        let all_conns: Vec<Authenticated<C>> = {
+        let all_conns: Vec<Authenticated<C, F>> = {
             let mut guard = self.connections.lock().await;
             core::mem::take(&mut *guard)
                 .into_values()
@@ -827,7 +831,7 @@ impl<
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
     pub async fn register(
         &self,
-        conn: Authenticated<C>,
+        conn: Authenticated<C, F>,
     ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
         tracing::info!("registering connection from peer {}", peer_id);
@@ -882,7 +886,7 @@ impl<
     /// Returns `Some(true)` if this was the last connection for the peer,
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
-    pub async fn unregister(&self, conn: &Authenticated<C>) -> Option<bool> {
+    pub async fn unregister(&self, conn: &Authenticated<C, F>) -> Option<bool> {
         let peer_id = conn.peer_id();
         let mut connections = self.connections.lock().await;
 
@@ -921,7 +925,7 @@ impl<
     /// Get all connections as a flat list.
     ///
     /// This is useful for iterating over all connections to send messages.
-    async fn all_connections(&self) -> Vec<Authenticated<C>> {
+    async fn all_connections(&self) -> Vec<Authenticated<C, F>> {
         self.connections
             .lock()
             .await
@@ -970,7 +974,7 @@ impl<
         &self,
         sedimentree_id: SedimentreeId,
         exclude_peer: &PeerId,
-    ) -> Vec<Authenticated<C>> {
+    ) -> Vec<Authenticated<C, F>> {
         // Get the subscribers for this sedimentree
         let subscriber_ids: Vec<PeerId> = {
             let subscriptions = self.subscriptions.lock().await;
@@ -1187,7 +1191,7 @@ impl<
     ///   or if blobs we expect to be stored are missing (possibly waiting for them from a peer).
     pub async fn recv_blob_request(
         &self,
-        conn: &Authenticated<C>,
+        conn: &Authenticated<C, F>,
         id: SedimentreeId,
         digests: &[Digest<Blob>],
     ) -> Result<(), BlobRequestErr<F, S, C>> {
@@ -1620,7 +1624,7 @@ impl<
         id: SedimentreeId,
         their_fingerprints: &FingerprintSummary,
         req_id: RequestId,
-        conn: &Authenticated<C>,
+        conn: &Authenticated<C, F>,
     ) -> Result<(), ListenError<F, S, C>> {
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
 
@@ -1892,7 +1896,7 @@ impl<
         id: SedimentreeId,
         subscribe: bool,
         timeout: Option<Duration>,
-    ) -> Result<(bool, SyncStats, Vec<(Authenticated<C>, C::CallError)>), IoError<F, S, C>> {
+    ) -> Result<(bool, SyncStats, Vec<(Authenticated<C, F>, C::CallError)>), IoError<F, S, C>> {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from peer {:?}",
             id,
@@ -1902,7 +1906,7 @@ impl<
         let mut stats = SyncStats::new();
         let mut had_success = false;
 
-        let peer_conns: Vec<Authenticated<C>> = {
+        let peer_conns: Vec<Authenticated<C, F>> = {
             self.connections
                 .lock()
                 .await
@@ -2094,8 +2098,8 @@ impl<
     /// A tuple of:
     /// - `bool`: Whether at least one sync was successful
     /// - `SyncStats`: Statistics about the sync (note: `commits_sent`/`fragments_sent` will be 0)
-    /// - `Option<(Authenticated<C>, FingerprintSeed, RequestedData)>`: If the peer requested data, the connection, seed, and data to send
-    /// - `Vec<(Authenticated<C>, C::CallError)>`: Any connection errors encountered
+    /// - `Option<(Authenticated<C, F>, FingerprintSeed, RequestedData)>`: If the peer requested data, the connection, seed, and data to send
+    /// - `Vec<(Authenticated<C, F>, C::CallError)>`: Any connection errors encountered
     ///
     /// # Errors
     ///
@@ -2127,8 +2131,8 @@ impl<
         (
             bool,
             SyncStats,
-            Option<(Authenticated<C>, FingerprintSeed, RequestedData)>,
-            Vec<(Authenticated<C>, C::CallError)>,
+            Option<(Authenticated<C, F>, FingerprintSeed, RequestedData)>,
+            Vec<(Authenticated<C, F>, C::CallError)>,
         ),
         IoError<F, S, C>,
     > {
@@ -2140,9 +2144,9 @@ impl<
 
         let mut stats = SyncStats::new();
         let mut had_success = false;
-        let mut pending_send: Option<(Authenticated<C>, FingerprintSeed, RequestedData)> = None;
+        let mut pending_send: Option<(Authenticated<C, F>, FingerprintSeed, RequestedData)> = None;
 
-        let peer_conns: Vec<Authenticated<C>> = {
+        let peer_conns: Vec<Authenticated<C, F>> = {
             self.connections
                 .lock()
                 .await
@@ -2306,7 +2310,7 @@ impl<
     #[allow(clippy::too_many_lines, clippy::type_complexity)]
     pub async fn sync_sedimentree_with_conn(
         &self,
-        conn: &Authenticated<C>,
+        conn: &Authenticated<C, F>,
         id: SedimentreeId,
         subscribe: bool,
         timeout: Option<Duration>,
@@ -2479,7 +2483,7 @@ impl<
             (
                 bool,
                 SyncStats,
-                Vec<(Authenticated<C>, <C as Connection<F>>::CallError)>,
+                Vec<(Authenticated<C, F>, <C as Connection<F>>::CallError)>,
             ),
         >,
         IoError<F, S, C>,
@@ -2488,7 +2492,7 @@ impl<
             "Requesting batch sync for sedimentree {:?} from all peers",
             id
         );
-        let peers: Map<PeerId, Vec<Authenticated<C>>> = {
+        let peers: Map<PeerId, Vec<Authenticated<C, F>>> = {
             self.connections
                 .lock()
                 .await
@@ -2664,7 +2668,7 @@ impl<
                         }
                     }
 
-                    Ok::<(PeerId, bool, SyncStats, Vec<(Authenticated<C>, _)>), IoError<F, S, C>>((
+                    Ok::<(PeerId, bool, SyncStats, Vec<(Authenticated<C, F>, _)>), IoError<F, S, C>>((
                         *peer_id,
                         had_success,
                         stats,
@@ -2702,7 +2706,7 @@ impl<
     /// A tuple of:
     /// - `bool` — `true` if at least one sync exchanged data successfully
     /// - [`SyncStats`] — aggregate counts of commits/fragments sent and received
-    /// - `Vec<(Authenticated<C>, C::CallError)>` — per-peer call errors encountered during sync
+    /// - `Vec<(Authenticated<C, F>, C::CallError)>` — per-peer call errors encountered during sync
     /// - `Vec<(SedimentreeId, IoError)>` — per-sedimentree I/O errors
     pub async fn full_sync(
         &self,
@@ -2710,7 +2714,7 @@ impl<
     ) -> (
         bool,
         SyncStats,
-        Vec<(Authenticated<C>, <C as Connection<F>>::CallError)>,
+        Vec<(Authenticated<C, F>, <C as Connection<F>>::CallError)>,
         Vec<(SedimentreeId, IoError<F, S, C>)>,
     ) {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
@@ -2847,7 +2851,7 @@ impl<
     #[allow(clippy::too_many_lines)]
     pub async fn send_requested_data(
         &self,
-        conn: &Authenticated<C>,
+        conn: &Authenticated<C, F>,
         id: SedimentreeId,
         seed: &FingerprintSeed,
         requesting: &RequestedData,
@@ -3224,7 +3228,7 @@ pub trait StartListener<
     Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
->: FutureForm + RunManager<Authenticated<C>> + Sized
+>: FutureForm + RunManager<Authenticated<C, Self>> + Sized
 {
     /// Start the listener task for Subduction.
     fn start_listener(

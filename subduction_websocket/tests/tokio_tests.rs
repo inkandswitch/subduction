@@ -336,9 +336,8 @@ async fn multiple_concurrent_clients() -> TestResult {
             Ok::<(), anyhow::Error>(())
         });
 
-        let peer_id = client_ws.peer_id();
         client
-            .register(Authenticated::new_for_test(client_ws, peer_id))
+            .register(Authenticated::new_for_test(client_ws))
             .await?;
 
         clients.push(client);
@@ -503,9 +502,8 @@ async fn request_with_delayed_response() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    let peer_id = client_ws.peer_id();
     client
-        .register(Authenticated::new_for_test(client_ws, peer_id))
+        .register(Authenticated::new_for_test(client_ws))
         .await?;
 
     tokio::spawn({
@@ -639,9 +637,8 @@ async fn large_message_handling() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    let peer_id = client_ws.peer_id();
     client
-        .register(Authenticated::new_for_test(client_ws, peer_id))
+        .register(Authenticated::new_for_test(client_ws))
         .await?;
 
     tokio::spawn({
@@ -768,9 +765,8 @@ async fn message_ordering() -> TestResult {
         Ok::<(), anyhow::Error>(())
     });
 
-    let peer_id = client_ws.peer_id();
     client
-        .register(Authenticated::new_for_test(client_ws, peer_id))
+        .register(Authenticated::new_for_test(client_ws))
         .await?;
 
     tokio::spawn({

@@ -269,9 +269,8 @@ async fn batch_sync() -> TestResult {
     });
 
     assert_eq!(client.connected_peer_ids().await.len(), 0);
-    let peer_id = client_ws.peer_id();
     client
-        .register(Authenticated::new_for_test(client_ws, peer_id))
+        .register(Authenticated::new_for_test(client_ws))
         .await?;
     assert_eq!(client.connected_peer_ids().await.len(), 1);
 

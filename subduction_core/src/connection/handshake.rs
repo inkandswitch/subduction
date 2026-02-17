@@ -65,7 +65,7 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::authenticated::Authenticated;
+use super::{Connection, authenticated::Authenticated};
 use crate::{
     connection::nonce_cache::NonceCache,
     crypto::{nonce::Nonce, signed::Signed, signer::Signer},
@@ -556,10 +556,11 @@ pub async fn initiate<K, H, C, S>(
     audience: Audience,
     now: TimestampSeconds,
     nonce: Nonce,
-) -> Result<Authenticated<C>, AuthenticateError<H::Error>>
+) -> Result<Authenticated<C, K>, AuthenticateError<H::Error>>
 where
     K: FutureForm,
     H: Handshake<K>,
+    C: Connection<K>,
     S: Signer<K>,
 {
     // Create and send challenge
@@ -588,7 +589,7 @@ where
             let verified = verify_response(&signed_response, &challenge)?;
             let peer_id = verified.server_id;
             let conn = build_connection(handshake, peer_id);
-            Ok(Authenticated::from_handshake(conn, peer_id))
+            Ok(Authenticated::from_handshake(conn))
         }
         HandshakeMessage::Rejection(rejection) => Err(AuthenticateError::Rejected {
             reason: rejection.reason,
@@ -638,10 +639,11 @@ pub async fn respond<K, H, C, S>(
     discovery_audience: Option<Audience>,
     now: TimestampSeconds,
     max_drift: Duration,
-) -> Result<Authenticated<C>, AuthenticateError<H::Error>>
+) -> Result<Authenticated<C, K>, AuthenticateError<H::Error>>
 where
     K: FutureForm,
     H: Handshake<K>,
+    C: Connection<K>,
     S: Signer<K>,
 {
     // Receive challenge
@@ -717,7 +719,7 @@ where
 
     let peer_id = verified.client_id;
     let conn = build_connection(handshake, peer_id);
-    Ok(Authenticated::from_handshake(conn, peer_id))
+    Ok(Authenticated::from_handshake(conn))
 }
 
 /// Helper to send a rejection message.

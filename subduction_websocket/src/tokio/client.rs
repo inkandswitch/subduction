@@ -102,7 +102,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let nonce = Nonce::random();
 
         // We need to capture socket and sender_fut from the closure
-        // Since initiate returns Authenticated<C>, we need to structure this differently
+        // Since initiate returns Authenticated<C, K>, we need to structure this differently
         let mut socket_holder: Option<WebSocket<ConnectStream, Sendable, O>> = None;
         let mut sender_fut_holder: Option<BoxFuture<'a, Result<(), RunError>>> = None;
 
