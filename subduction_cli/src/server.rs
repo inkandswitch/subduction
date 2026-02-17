@@ -143,6 +143,13 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     .await
     .expect("failed to create keyhive");
 
+    let contact_card = keyhive
+        .contact_card()
+        .await
+        .expect("failed to get contact card");
+    let contact_card_bytes =
+        minicbor_serde::to_vec(&contact_card).expect("failed to serialize contact card");
+
     let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, MemorySigner> =
         TokioWebSocketServer::setup(
             addr,
@@ -157,7 +164,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             CountLeadingZeroBytes,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            Vec::new(), // contact card bytes - empty for server
+            contact_card_bytes,
         )
         .await?;
 

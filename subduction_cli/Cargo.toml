@@ -30,6 +30,7 @@ keyhive_core = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 minicbor = { workspace = true }
+minicbor-serde = { workspace = true }
 rand = { workspace = true, features = ["std", "std_rng"] }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }

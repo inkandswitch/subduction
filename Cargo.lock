@@ -3099,6 +3099,7 @@ dependencies = [
  "metrics",
  "metrics-exporter-prometheus",
  "minicbor",
+ "minicbor-serde",
  "rand 0.8.5",
  "sedimentree_core",
  "sedimentree_fs_storage",
