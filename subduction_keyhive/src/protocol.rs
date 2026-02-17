@@ -802,7 +802,7 @@ mod tests {
 
         // Verify and decode
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded_msg: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded_msg: Message = decode_message(&verified.payload).unwrap();
 
         // The decoded message should match
         assert!(matches!(decoded_msg, Message::RequestContactCard { .. }));
@@ -919,7 +919,7 @@ mod tests {
         // Verify we got a RequestContactCard
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded: Message = decode_message(&verified.payload).unwrap();
 
         assert!(matches!(decoded, Message::RequestContactCard { .. }));
         // Should include our contact card so the peer can learn about us
@@ -949,7 +949,7 @@ mod tests {
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
 
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1: Message = decode_message(&verified1.payload).unwrap();
         assert!(
             matches!(decoded1, Message::RequestContactCard { .. }),
             "alice should request bob's contact card"
@@ -965,7 +965,7 @@ mod tests {
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
 
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2: Message = decode_message(&verified2.payload).unwrap();
         assert!(
             matches!(decoded2, Message::MissingContactCard { .. }),
             "bob should respond with MissingContactCard"
@@ -987,7 +987,7 @@ mod tests {
         // to Bob (depending on whether she successfully ingested Bob's CC)
         let signed_msg3 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified3 = signed_msg3.verify(&alice_id).unwrap();
-        let decoded3: Message = cbor_deserialize(&verified3.payload).unwrap();
+        let decoded3: Message = decode_message(&verified3.payload).unwrap();
 
         // After ingesting Bob's contact card, Alice should send a SyncRequest
         assert!(
@@ -1024,7 +1024,7 @@ mod tests {
         // Read Alice's SyncRequest from the channel
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1: Message = decode_message(&verified1.payload).unwrap();
 
         assert!(
             matches!(decoded1, Message::SyncRequest { .. }),
@@ -1040,7 +1040,7 @@ mod tests {
         // Bob should respond with SyncResponse
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2: Message = decode_message(&verified2.payload).unwrap();
 
         assert!(
             matches!(decoded2, Message::SyncResponse { .. }),

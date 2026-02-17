@@ -3164,6 +3164,7 @@ dependencies = [
  "futures 0.3.31",
  "futures_kind",
  "keyhive_core",
+ "minicbor",
  "nonempty 0.10.0",
  "rand 0.8.5",
  "serde",
