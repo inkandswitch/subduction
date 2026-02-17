@@ -38,8 +38,8 @@ use web_sys::{
 };
 
 use super::{
-    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId,
-    handshake::WasmWebSocketHandshake, message::WasmMessage,
+    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, handshake::WasmWebSocketHandshake,
+    message::WasmMessage,
 };
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 use subduction_core::connection::{

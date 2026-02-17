@@ -8,8 +8,8 @@ use alloc::{format, string::String, vec::Vec};
 use future_form::{FutureForm, Local};
 use futures::{channel::oneshot, future::LocalBoxFuture};
 use subduction_core::connection::handshake::Handshake;
-use wasm_bindgen::{closure::Closure, JsCast};
-use web_sys::{js_sys, MessageEvent, WebSocket};
+use wasm_bindgen::{JsCast, closure::Closure};
+use web_sys::{MessageEvent, WebSocket, js_sys};
 
 use crate::error::WasmHandshakeError;
 

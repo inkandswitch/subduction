@@ -7,9 +7,9 @@ use core::time::Duration;
 use future_form::{FutureForm, Local, Sendable};
 
 use super::{
+    Connection,
     authenticated::Authenticated,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    Connection,
 };
 use crate::peer::id::PeerId;
 
