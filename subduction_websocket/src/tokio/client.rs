@@ -1,21 +1,21 @@
 //! # Subduction [`WebSocket`] client for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    handshake::{WebSocketHandshakeError, client_handshake},
+    handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::Timeout,
     websocket::{ListenerTask, SenderTask, WebSocket},
+    MAX_MESSAGE_SIZE,
 };
-use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
+use async_tungstenite::tokio::{connect_async_with_config, ConnectStream};
 use core::time::Duration;
 use future_form::{FutureForm, Sendable};
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use subduction_core::{
     connection::{
-        Connection, Reconnect,
-        handshake::Audience,
+        handshake::{self, Audience, AuthenticateError},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Reconnect,
     },
     crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
@@ -32,7 +32,7 @@ pub enum ClientConnectError {
 
     /// Handshake failed.
     #[error("handshake error: {0}")]
-    Handshake(#[from] WebSocketHandshakeError),
+    Handshake(#[from] AuthenticateError<WebSocketHandshakeError>),
 }
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
@@ -89,26 +89,50 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         tracing::info!("Connecting to WebSocket server at {address}");
         let mut ws_config = WebSocketConfig::default();
         ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
-        let (mut ws_stream, _resp) =
+        let (ws_stream, _resp) =
             connect_async_with_config(address.clone(), Some(ws_config)).await?;
 
         // Perform handshake
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let handshake_result =
-            client_handshake(&mut ws_stream, &signer, audience, now, nonce).await?;
+        // We need to capture socket and sender_fut from the closure
+        // Since initiate returns Authenticated<C>, we need to structure this differently
+        let mut socket_holder: Option<WebSocket<ConnectStream, Sendable, O>> = None;
+        let mut sender_fut_holder: Option<BoxFuture<'a, Result<(), RunError>>> = None;
 
-        let server_id = handshake_result.server_id;
+        let timeout_clone = timeout.clone();
+        let authenticated = handshake::initiate::<Sendable, _, _, _>(
+            WebSocketHandshake::new(ws_stream),
+            |ws_handshake, peer_id| {
+                let (socket, sender_fut) = WebSocket::<_, _, O>::new(
+                    ws_handshake.into_inner(),
+                    timeout_clone,
+                    default_time_limit,
+                    peer_id,
+                );
+                // Store for later use - this is safe because we're in sync context
+                socket_holder = Some(socket.clone());
+                sender_fut_holder = Some(Sendable::from_future(sender_fut));
+                socket
+            },
+            &signer,
+            audience,
+            now,
+            nonce,
+        )
+        .await?;
+
+        let server_id = authenticated.peer_id();
         tracing::info!("Handshake complete: connected to {server_id}");
 
-        let (socket, sender_fut) =
-            WebSocket::<_, _, O>::new(ws_stream, timeout, default_time_limit, server_id);
+        let socket = socket_holder.expect("socket should be set after successful handshake");
+        let sender_fut =
+            sender_fut_holder.expect("sender_fut should be set after successful handshake");
 
         let listener_socket = socket.clone();
-
         let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
-        let sender = SenderTask::new(Sendable::from_future(sender_fut));
+        let sender = SenderTask::new(sender_fut);
 
         let client = TokioWebSocketClient {
             address,
@@ -179,9 +203,9 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
 }
 
 impl<
-    R: 'static + Signer<Sendable> + Clone + Send + Sync,
-    O: 'static + Timeout<Sendable> + Clone + Send + Sync,
-> Reconnect<Sendable> for TokioWebSocketClient<R, O>
+        R: 'static + Signer<Sendable> + Clone + Send + Sync,
+        O: 'static + Timeout<Sendable> + Clone + Send + Sync,
+    > Reconnect<Sendable> for TokioWebSocketClient<R, O>
 {
     type ReconnectionError = ClientConnectError;
 
@@ -219,16 +243,22 @@ impl<
             ClientConnectError::WebSocket(_) => true,
 
             // Handshake errors depend on the specific type
-            ClientConnectError::Handshake(handshake_err) => match handshake_err {
-                // Network/transport errors - retry
-                WebSocketHandshakeError::WebSocket(_)
-                | WebSocketHandshakeError::ConnectionClosed => true,
+            ClientConnectError::Handshake(auth_err) => match auth_err {
+                // Transport errors - check the underlying WebSocket error
+                AuthenticateError::Transport(ws_err) => match ws_err {
+                    WebSocketHandshakeError::WebSocket(_)
+                    | WebSocketHandshakeError::ConnectionClosed => true,
+                    WebSocketHandshakeError::UnexpectedMessageType(_) => false,
+                },
+
+                // Connection closed during handshake - retry
+                AuthenticateError::ConnectionClosed => true,
 
                 // Protocol violations or explicit rejection - don't retry
-                WebSocketHandshakeError::UnexpectedMessageType(_)
-                | WebSocketHandshakeError::DecodeError(_)
-                | WebSocketHandshakeError::Handshake(_)
-                | WebSocketHandshakeError::Rejected { .. } => false,
+                AuthenticateError::Decode(_)
+                | AuthenticateError::Handshake(_)
+                | AuthenticateError::Rejected { .. }
+                | AuthenticateError::UnexpectedMessage => false,
             },
         }
     }

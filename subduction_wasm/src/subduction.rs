@@ -7,9 +7,9 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -22,22 +22,18 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{
-        authenticated::Authenticated, handshake::DiscoveryId, manager::Spawn,
-        nonce_cache::NonceCache,
-    },
+    connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use wasm_bindgen::prelude::*;
 
 use crate::{
-    connection::{JsConnection, JsConnectionError},
+    connection::websocket::WasmWebSocket,
     error::{
-        WasmAttachError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
-        WasmRegistrationError, WasmWriteError,
+        WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -84,7 +80,7 @@ pub struct WasmSubduction {
             'static,
             Local,
             JsSedimentreeStorage,
-            JsConnection,
+            WasmWebSocket,
             OpenPolicy,
             JsSigner,
             WasmHashMetric,
@@ -262,32 +258,92 @@ impl WasmSubduction {
         Ok(())
     }
 
-    /// Attach a connection.
+    /// Connect to a peer and register the connection.
     ///
-    /// Returns `true` if this is a new peer, `false` if already connected.
+    /// This performs the cryptographic handshake, verifies the server's identity,
+    /// and registers the authenticated connection for syncing.
+    ///
+    /// Returns the verified peer ID on success.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The WebSocket URL to connect to
+    /// * `signer` - The client's signer for authentication  
+    /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
+    /// * `timeout_milliseconds` - Request timeout in milliseconds
     ///
     /// # Errors
     ///
-    /// Returns a `WasmAttachError` if attaching the connection fails.
-    pub async fn attach(&self, conn: JsConnection) -> Result<bool, WasmAttachError> {
-        use subduction_core::connection::Connection;
-        let peer_id = conn.peer_id();
-        let authenticated = Authenticated::from_handshake(conn, peer_id);
-        self.core
-            .attach(authenticated)
-            .await
-            .map_err(WasmAttachError::from)
+    /// Returns an error if connection, handshake, or registration fails.
+    #[wasm_bindgen(js_name = connect)]
+    pub async fn connect(
+        &self,
+        address: &web_sys::Url,
+        signer: &JsSigner,
+        expected_peer_id: &WasmPeerId,
+        timeout_milliseconds: u32,
+    ) -> Result<WasmPeerId, WasmConnectError> {
+        use crate::connection::websocket::WasmWebSocket;
+
+        // Perform handshake and get Authenticated<WasmWebSocket>
+        let authenticated = WasmWebSocket::connect_authenticated(
+            address,
+            signer,
+            expected_peer_id,
+            timeout_milliseconds,
+        )
+        .await?;
+
+        let peer_id = authenticated.peer_id();
+
+        // Register the authenticated connection
+        self.core.register(authenticated).await?;
+
+        Ok(peer_id.into())
     }
 
-    /// Disconnect a connection.
+    /// Connect to a peer using discovery mode and register the connection.
     ///
-    /// Note: This wraps the connection in `Authenticated` using its reported peer ID.
-    /// The connection should have been previously registered via `attach` or `register`.
-    pub async fn disconnect(&self, conn: &JsConnection) -> bool {
-        use subduction_core::connection::Connection;
-        let peer_id = conn.peer_id();
-        let authenticated = Authenticated::from_handshake(conn.clone(), peer_id);
-        self.core.disconnect(&authenticated).await.is_ok()
+    /// This performs the cryptographic handshake using a service name instead of
+    /// a known peer ID, then registers the authenticated connection for syncing.
+    ///
+    /// Returns the discovered and verified peer ID on success.
+    ///
+    /// # Arguments
+    ///
+    /// * `address` - The WebSocket URL to connect to
+    /// * `signer` - The client's signer for authentication
+    /// * `timeout_milliseconds` - Request timeout in milliseconds (defaults to 30000)
+    /// * `service_name` - The service name for discovery (defaults to URL host)
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if connection, handshake, or registration fails.
+    #[wasm_bindgen(js_name = connectDiscover)]
+    pub async fn connect_discover(
+        &self,
+        address: &web_sys::Url,
+        signer: &JsSigner,
+        timeout_milliseconds: Option<u32>,
+        service_name: Option<String>,
+    ) -> Result<WasmPeerId, WasmConnectError> {
+        use crate::connection::websocket::WasmWebSocket;
+
+        // Perform discovery handshake and get Authenticated<WasmWebSocket>
+        let authenticated = WasmWebSocket::connect_discover_authenticated(
+            address,
+            signer,
+            timeout_milliseconds,
+            service_name,
+        )
+        .await?;
+
+        let peer_id = authenticated.peer_id();
+
+        // Register the authenticated connection
+        self.core.register(authenticated).await?;
+
+        Ok(peer_id.into())
     }
 
     /// Disconnect from all peers.
@@ -314,33 +370,6 @@ impl WasmSubduction {
             .core
             .disconnect_from_peer(&peer_id.clone().into())
             .await?)
-    }
-
-    /// Register a new connection.
-    ///
-    /// Returns `true` if this is a new peer, `false` if already connected.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WasmRegistrationError`] if the connection is not allowed.
-    pub async fn register(&self, conn: JsConnection) -> Result<bool, WasmRegistrationError> {
-        use subduction_core::connection::Connection;
-        let peer_id = conn.peer_id();
-        let authenticated = Authenticated::from_handshake(conn, peer_id);
-        self.core.register(authenticated).await.map_err(Into::into)
-    }
-
-    /// Unregister a connection.
-    ///
-    /// Returns `Some(true)` if this was the last connection for the peer,
-    /// `Some(false)` if the peer still has other connections,
-    /// or `None` if the connection was not found.
-    #[must_use]
-    pub async fn unregister(&self, conn: &JsConnection) -> Option<bool> {
-        use subduction_core::connection::Connection;
-        let peer_id = conn.peer_id();
-        let authenticated = Authenticated::from_handshake(conn.clone(), peer_id);
-        self.core.unregister(&authenticated).await
     }
 
     /// Get a local blob by its digest.
@@ -663,7 +692,7 @@ impl PeerBatchSyncResult {
 #[wasm_bindgen(js_name = ConnErrorPair)]
 #[derive(Debug, Clone)]
 pub struct ConnErrPair {
-    conn: JsConnection,
+    conn: WasmWebSocket,
     err: WasmCallError,
 }
 
@@ -672,7 +701,7 @@ impl ConnErrPair {
     /// The connection that encountered the error.
     #[must_use]
     #[wasm_bindgen(getter)]
-    pub fn conn(&self) -> JsConnection {
+    pub fn conn(&self) -> WasmWebSocket {
         self.conn.clone()
     }
 
@@ -689,7 +718,7 @@ impl ConnErrPair {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    Map<PeerId, (bool, WasmSyncStats, Vec<(JsConnection, WasmCallError)>)>,
+    Map<PeerId, (bool, WasmSyncStats, Vec<(WasmWebSocket, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]
@@ -775,10 +804,10 @@ impl DepthMetric for WasmHashMetric {
 /// Wasm wrapper for call errors from the connection.
 #[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone)]
-pub struct WasmCallError(JsConnectionError);
+pub struct WasmCallError(crate::connection::websocket::CallError);
 
-impl From<JsConnectionError> for WasmCallError {
-    fn from(err: JsConnectionError) -> Self {
+impl From<crate::connection::websocket::CallError> for WasmCallError {
+    fn from(err: crate::connection::websocket::CallError) -> Self {
         Self(err)
     }
 }

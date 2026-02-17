@@ -137,7 +137,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use future_form::Sendable;
     use subduction_core::{
         connection::handshake::{

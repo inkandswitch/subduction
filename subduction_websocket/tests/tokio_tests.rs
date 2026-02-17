@@ -13,17 +13,17 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
+        authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache, Connection, Reconnect,
     },
     crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -338,7 +338,7 @@ async fn multiple_concurrent_clients() -> TestResult {
 
         let peer_id = client_ws.peer_id();
         client
-            .register(Authenticated::from_handshake(client_ws, peer_id))
+            .register(Authenticated::new_for_test(client_ws, peer_id))
             .await?;
 
         clients.push(client);
@@ -505,7 +505,7 @@ async fn request_with_delayed_response() -> TestResult {
 
     let peer_id = client_ws.peer_id();
     client
-        .register(Authenticated::from_handshake(client_ws, peer_id))
+        .register(Authenticated::new_for_test(client_ws, peer_id))
         .await?;
 
     tokio::spawn({
@@ -641,7 +641,7 @@ async fn large_message_handling() -> TestResult {
 
     let peer_id = client_ws.peer_id();
     client
-        .register(Authenticated::from_handshake(client_ws, peer_id))
+        .register(Authenticated::new_for_test(client_ws, peer_id))
         .await?;
 
     tokio::spawn({
@@ -770,7 +770,7 @@ async fn message_ordering() -> TestResult {
 
     let peer_id = client_ws.peer_id();
     client
-        .register(Authenticated::from_handshake(client_ws, peer_id))
+        .register(Authenticated::new_for_test(client_ws, peer_id))
         .await?;
 
     tokio::spawn({
