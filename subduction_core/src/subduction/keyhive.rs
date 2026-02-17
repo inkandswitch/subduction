@@ -132,7 +132,10 @@ impl<
     ///
     /// Returns [`KeyhiveSyncError`] if peer ID conversion, message signing, or
     /// sending fails.
-    pub async fn sync_keyhive(&self, target: Option<&PeerId>) -> Result<(), KeyhiveSyncError> {
+    pub async fn sync_keyhive(
+        &self,
+        target: Option<&PeerId>,
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let peer_ids: Vec<PeerId> = match target {
             Some(t) => vec![*t],
             None => self.connected_peer_ids().await.into_iter().collect(),
@@ -205,7 +208,7 @@ impl<
         &self,
         from: &PeerId,
         signed_msg: KeyhiveSignedMessage,
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let from_keyhive_id = to_keyhive_peer_id(from);
         let verified = signed_msg
             .verify(&from_keyhive_id)
@@ -236,7 +239,7 @@ impl<
         &self,
         from: &PeerId,
         message: KeyhiveMessage,
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let KeyhiveMessage::SyncRequest {
             sender_id,
             found: peer_found,
@@ -315,7 +318,7 @@ impl<
         &self,
         from: &PeerId,
         message: KeyhiveMessage,
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let KeyhiveMessage::SyncResponse {
             sender_id,
             requested: requested_hashes,
@@ -365,7 +368,7 @@ impl<
     }
 
     /// Handle `SyncOps`: ingest received operations.
-    async fn handle_sync_ops(&self, message: KeyhiveMessage) -> Result<(), KeyhiveSyncError> {
+    async fn handle_sync_ops(&self, message: KeyhiveMessage) -> Result<(), KeyhiveSyncError<F, C>> {
         let KeyhiveMessage::SyncOps { sender_id, ops, .. } = message else {
             return Err(KeyhiveSyncError::UnexpectedMessageType {
                 expected: "SyncOps",
@@ -391,7 +394,7 @@ impl<
         &self,
         from: &PeerId,
         message: KeyhiveMessage,
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let KeyhiveMessage::RequestContactCard { sender_id, .. } = message else {
             return Err(KeyhiveSyncError::UnexpectedMessageType {
                 expected: "RequestContactCard",
@@ -418,7 +421,7 @@ impl<
         &self,
         from: &PeerId,
         message: KeyhiveMessage,
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let KeyhiveMessage::MissingContactCard { sender_id, .. } = message else {
             return Err(KeyhiveSyncError::UnexpectedMessageType {
                 expected: "MissingContactCard",
@@ -440,7 +443,7 @@ impl<
         target_peer_id: &PeerId,
         message: KeyhiveMessage,
         include_contact_card: bool,
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let msg_bytes =
             encode_message(&message).map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
 
@@ -471,7 +474,7 @@ impl<
 
         conn.send(&Message::Keyhive(signed_message))
             .await
-            .map_err(|e| KeyhiveSyncError::Send(e.to_string()))
+            .map_err(KeyhiveSyncError::Send)
     }
 
     /// Get the intersection of event hashes accessible to both us and a peer.
@@ -482,7 +485,7 @@ impl<
         peer_id: &KeyhivePeerId,
     ) -> Result<
         Option<Map<Digest<StaticEvent<KContentRef>>, StaticEvent<KContentRef>>>,
-        KeyhiveSyncError,
+        KeyhiveSyncError<F, C>,
     > {
         let our_id = self
             .keyhive_peer_id
@@ -515,7 +518,7 @@ impl<
     }
 
     /// Get pending event hashes as `Vec<EventHash>`.
-    async fn get_pending_hashes(&self) -> Result<Vec<EventHash>, KeyhiveSyncError> {
+    async fn get_pending_hashes(&self) -> Result<Vec<EventHash>, KeyhiveSyncError<F, C>> {
         let keyhive = self.keyhive.lock().await;
         let digests = keyhive.pending_event_hashes().await;
         Ok(digests.into_iter().map(|d| digest_to_bytes(&d)).collect())
@@ -525,7 +528,7 @@ impl<
     async fn get_event_bytes_for_hashes(
         &self,
         hashes: &[EventHash],
-    ) -> Result<Vec<EventBytes>, KeyhiveSyncError> {
+    ) -> Result<Vec<EventBytes>, KeyhiveSyncError<F, C>> {
         let requested_set: Set<EventHash> = hashes.iter().copied().collect();
 
         let peer_id = self
@@ -555,7 +558,10 @@ impl<
     }
 
     /// Ingest received event bytes into keyhive and persist them to storage.
-    async fn ingest_events(&self, event_bytes_list: &[EventBytes]) -> Result<(), KeyhiveSyncError> {
+    async fn ingest_events(
+        &self,
+        event_bytes_list: &[EventBytes],
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let events: Vec<StaticEvent<KContentRef>> = event_bytes_list
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
@@ -596,7 +602,7 @@ impl<
     async fn try_storage_recovery(
         &self,
         event_bytes_list: &[EventBytes],
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         {
             let keyhive = self.keyhive.lock().await;
             storage_ops::ingest_from_storage(&keyhive, &self.keyhive_storage)
@@ -626,7 +632,7 @@ impl<
     }
 
     /// Deserialize and ingest a contact card into keyhive.
-    async fn ingest_contact_card(&self, cc_bytes: &[u8]) -> Result<(), KeyhiveSyncError> {
+    async fn ingest_contact_card(&self, cc_bytes: &[u8]) -> Result<(), KeyhiveSyncError<F, C>> {
         let contact_card = cbor_deserialize(cc_bytes)
             .map_err(|e| KeyhiveSyncError::Deserialization(e.to_string()))?;
 
@@ -651,7 +657,7 @@ impl<
     pub async fn compact_keyhive(
         &self,
         storage_id: subduction_keyhive::storage::StorageHash,
-    ) -> Result<(), KeyhiveSyncError> {
+    ) -> Result<(), KeyhiveSyncError<F, C>> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::compact(&keyhive, &self.keyhive_storage, storage_id)
             .await
@@ -663,7 +669,7 @@ impl<
     /// # Errors
     ///
     /// Returns [`KeyhiveSyncError`] if loading or ingestion fails.
-    pub async fn ingest_keyhive_from_storage(&self) -> Result<(), KeyhiveSyncError> {
+    pub async fn ingest_keyhive_from_storage(&self) -> Result<(), KeyhiveSyncError<F, C>> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::ingest_from_storage(&keyhive, &self.keyhive_storage)
             .await

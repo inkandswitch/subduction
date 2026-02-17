@@ -154,10 +154,10 @@ pub enum SyncRejected {
 
 /// Errors that can occur during keyhive sync operations.
 #[derive(Debug, Error)]
-pub enum KeyhiveSyncError {
+pub enum KeyhiveSyncError<F: FutureForm + ?Sized, C: Connection<F>> {
     /// Failed to send a keyhive message over the connection.
-    #[error("failed to send keyhive message: {0}")]
-    Send(String),
+    #[error("failed to send keyhive message")]
+    Send(#[source] C::SendError),
 
     /// Keyhive storage operation failed.
     #[error("keyhive storage error")]
