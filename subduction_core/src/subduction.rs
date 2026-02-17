@@ -105,8 +105,8 @@ use core::{
     time::Duration,
 };
 use error::{
-    AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
-    SendRequestedDataError, Unauthorized, WriteError,
+    AttachError, BlobMismatch, BlobRequestErr, HydrationError, InsertError, IoError, ListenError,
+    RegistrationError, SendRequestedDataError, Unauthorized, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -1333,7 +1333,7 @@ impl<
 
         self.insert_commit_locally(&putter, verified, blob.clone())
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e: InsertError<_>| WriteError::Io(e.into()))?;
 
         let msg = Message::LooseCommit {
             id,
@@ -1413,7 +1413,7 @@ impl<
 
         self.insert_fragment_locally(&putter, verified, blob.clone())
             .await
-            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+            .map_err(|e: InsertError<_>| WriteError::Io(e.into()))?;
 
         let msg = Message::Fragment {
             id,
@@ -1507,8 +1507,7 @@ impl<
 
         let was_new = self
             .insert_commit_locally(&putter, verified, blob.clone())
-            .await
-            .map_err(IoError::Storage)?;
+            .await?;
 
         if was_new {
             let msg = Message::LooseCommit {
@@ -1585,8 +1584,7 @@ impl<
 
         let was_new = self
             .insert_fragment_locally(&putter, verified, blob.clone())
-            .await
-            .map_err(IoError::Storage)?;
+            .await?;
 
         if was_new {
             let msg = Message::Fragment {
@@ -1832,9 +1830,7 @@ impl<
                     continue;
                 }
             };
-            self.insert_commit_locally(&putter, verified, blob)
-                .await
-                .map_err(IoError::Storage)?;
+            self.insert_commit_locally(&putter, verified, blob).await?;
         }
 
         for (signed_fragment, blob) in diff.missing_fragments {
@@ -1846,8 +1842,7 @@ impl<
                 }
             };
             self.insert_fragment_locally(&putter, verified, blob)
-                .await
-                .map_err(IoError::Storage)?;
+                .await?;
         }
 
         Ok(())
@@ -1991,9 +1986,7 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_commit_locally(&putter, verified, blob)
-                            .await
-                            .map_err(IoError::Storage)?;
+                        self.insert_commit_locally(&putter, verified, blob).await?;
                     }
 
                     for (signed_fragment, blob) in missing_fragments {
@@ -2005,8 +1998,7 @@ impl<
                             }
                         };
                         self.insert_fragment_locally(&putter, verified, blob)
-                            .await
-                            .map_err(IoError::Storage)?;
+                            .await?;
                     }
 
                     // Update received stats (count what was offered, not verified)
@@ -2231,9 +2223,7 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_commit_locally(&putter, verified, blob)
-                            .await
-                            .map_err(IoError::Storage)?;
+                        self.insert_commit_locally(&putter, verified, blob).await?;
                     }
 
                     for (signed_fragment, blob) in missing_fragments {
@@ -2245,8 +2235,7 @@ impl<
                             }
                         };
                         self.insert_fragment_locally(&putter, verified, blob)
-                            .await
-                            .map_err(IoError::Storage)?;
+                            .await?;
                     }
 
                     // Update received stats (count what was offered, not verified)
@@ -2404,9 +2393,7 @@ impl<
                             continue;
                         }
                     };
-                    self.insert_commit_locally(&putter, verified, blob)
-                        .await
-                        .map_err(IoError::Storage)?;
+                    self.insert_commit_locally(&putter, verified, blob).await?;
                 }
 
                 for (signed_fragment, blob) in missing_fragments {
@@ -2418,8 +2405,7 @@ impl<
                         }
                     };
                     self.insert_fragment_locally(&putter, verified, blob)
-                        .await
-                        .map_err(IoError::Storage)?;
+                        .await?;
                 }
 
                 // Update received stats
@@ -2604,7 +2590,7 @@ impl<
                                     };
                                     self.insert_commit_locally(&putter, verified, blob)
                                         .await
-                                        .map_err(IoError::<F, S, C>::Storage)?;
+                                        ?;
                                 }
 
                                 for (signed_fragment, blob) in missing_fragments {
@@ -2619,7 +2605,7 @@ impl<
                                     };
                                     self.insert_fragment_locally(&putter, verified, blob)
                                         .await
-                                        .map_err(IoError::<F, S, C>::Storage)?;
+                                        ?;
                                 }
 
                                 // Update received stats
@@ -3053,21 +3039,44 @@ impl<
     /// [`hydrate`](Self::hydrate) will rebuild correctly from storage.
     /// Content-addressed storage makes the writes idempotent, so
     /// duplicates are harmless (just a redundant I/O round-trip).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InsertError::BlobMismatch`] if the blob content doesn't match
+    /// the metadata claimed in the commit. This prevents poisoned metadata from
+    /// being stored.
     async fn insert_commit_locally(
         &self,
         putter: &Putter<F, S>,
         verified: Verified<LooseCommit>,
         blob: Blob,
-    ) -> Result<bool, S::Error> {
+    ) -> Result<bool, InsertError<S::Error>> {
         let id = putter.sedimentree_id();
         let commit = verified.payload().clone();
+
+        // Verify blob matches claimed metadata before storing anything
+        let actual_meta = blob.meta();
+        let claimed_meta = *commit.blob_meta();
+        if actual_meta != claimed_meta {
+            return Err(BlobMismatch {
+                claimed: claimed_meta,
+                actual: actual_meta,
+            }
+            .into());
+        }
 
         tracing::debug!("inserting commit {:?} locally", commit.digest());
 
         // Persist to storage first (cancel-safe: idempotent CAS writes)
-        putter.save_blob(blob).await?;
-        putter.save_sedimentree_id().await?;
-        putter.save_loose_commit(verified).await?;
+        putter.save_blob(blob).await.map_err(InsertError::Storage)?;
+        putter
+            .save_sedimentree_id()
+            .await
+            .map_err(InsertError::Storage)?;
+        putter
+            .save_loose_commit(verified)
+            .await
+            .map_err(InsertError::Storage)?;
 
         // Update in-memory tree last (returns false if already present)
         let was_added = self
@@ -3081,19 +3090,42 @@ impl<
     /// Insert a fragment locally, persisting to storage before updating in-memory state.
     ///
     /// See [`insert_commit_locally`](Self::insert_commit_locally) for cancel safety rationale.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`InsertError::BlobMismatch`] if the blob content doesn't match
+    /// the metadata claimed in the fragment. This prevents poisoned metadata from
+    /// being stored.
     async fn insert_fragment_locally(
         &self,
         putter: &Putter<F, S>,
         verified: Verified<Fragment>,
         blob: Blob,
-    ) -> Result<bool, S::Error> {
+    ) -> Result<bool, InsertError<S::Error>> {
         let id = putter.sedimentree_id();
         let fragment = verified.payload().clone();
 
+        // Verify blob matches claimed metadata before storing anything
+        let actual_meta = blob.meta();
+        let claimed_meta = fragment.summary().blob_meta();
+        if actual_meta != claimed_meta {
+            return Err(BlobMismatch {
+                claimed: claimed_meta,
+                actual: actual_meta,
+            }
+            .into());
+        }
+
         // Persist to storage first (cancel-safe: idempotent CAS writes)
-        putter.save_blob(blob).await?;
-        putter.save_sedimentree_id().await?;
-        putter.save_fragment(verified).await?;
+        putter.save_blob(blob).await.map_err(InsertError::Storage)?;
+        putter
+            .save_sedimentree_id()
+            .await
+            .map_err(InsertError::Storage)?;
+        putter
+            .save_fragment(verified)
+            .await
+            .map_err(InsertError::Storage)?;
 
         // Update in-memory tree last
         let was_added = self

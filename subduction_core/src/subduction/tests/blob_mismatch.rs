@@ -6,7 +6,7 @@
 
 use alloc::collections::BTreeSet;
 
-use super::common::{test_signer, TokioSpawn};
+use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,
@@ -14,7 +14,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use core::time::Duration;
 use future_form::Sendable;
