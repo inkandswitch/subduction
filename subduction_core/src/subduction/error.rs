@@ -154,18 +154,14 @@ pub enum SyncRejected {
 
 /// Errors that can occur during keyhive sync operations.
 #[derive(Debug, Error)]
-pub enum KeyhiveSyncError<SendErr, StoreErr>
-where
-    SendErr: core::error::Error + 'static,
-    StoreErr: core::error::Error + 'static,
-{
+pub enum KeyhiveSyncError {
     /// Failed to send a keyhive message over the connection.
-    #[error("failed to send keyhive message")]
-    Send(#[source] SendErr),
+    #[error("failed to send keyhive message: {0}")]
+    Send(String),
 
     /// Keyhive storage operation failed.
     #[error("keyhive storage error")]
-    Storage(#[source] StoreErr),
+    Storage(#[from] subduction_keyhive::StorageError),
 
     /// Message signing failed.
     #[error("signing failed")]

@@ -6,7 +6,7 @@ use testresult::TestResult;
 
 #[tokio::test]
 async fn test_sedimentree_ids_returns_empty_initially() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let ids = subduction.sedimentree_ids().await;
     assert_eq!(ids.len(), 0);
@@ -14,7 +14,7 @@ async fn test_sedimentree_ids_returns_empty_initially() {
 
 #[tokio::test]
 async fn test_add_sedimentree_increases_count() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -31,7 +31,7 @@ async fn test_add_sedimentree_increases_count() -> TestResult {
 
 #[tokio::test]
 async fn test_get_commits_returns_none_for_missing_tree() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let id = SedimentreeId::new([1u8; 32]);
     let commits = subduction.get_commits(id).await;
@@ -40,7 +40,7 @@ async fn test_get_commits_returns_none_for_missing_tree() {
 
 #[tokio::test]
 async fn test_get_commits_returns_empty_for_empty_tree() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -56,7 +56,7 @@ async fn test_get_commits_returns_empty_for_empty_tree() -> TestResult {
 
 #[tokio::test]
 async fn test_get_fragments_returns_none_for_missing_tree() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let id = SedimentreeId::new([1u8; 32]);
     let fragments = subduction.get_fragments(id).await;
@@ -65,7 +65,7 @@ async fn test_get_fragments_returns_none_for_missing_tree() {
 
 #[tokio::test]
 async fn test_get_fragments_returns_empty_for_empty_tree() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -81,7 +81,7 @@ async fn test_get_fragments_returns_empty_for_empty_tree() -> TestResult {
 
 #[tokio::test]
 async fn test_remove_sedimentree_removes_from_ids() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();

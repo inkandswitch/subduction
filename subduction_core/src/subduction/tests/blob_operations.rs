@@ -2,14 +2,14 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{TokioSpawn, new_test_subduction, test_signer};
+use super::common::{new_test_subduction, test_keyhive, test_signer, TokioSpawn};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use alloc::sync::Arc;
 use core::time::Duration;
@@ -17,13 +17,14 @@ use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
+use subduction_keyhive::MemoryKeyhiveStorage;
 use testresult::TestResult;
 
 const TEST_TREE: SedimentreeId = SedimentreeId::new([42u8; 32]);
 
 #[tokio::test]
 async fn test_get_blob_returns_none_for_missing() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let digest = Digest::<Blob>::from_bytes([1u8; 32]);
     let blob = subduction
@@ -35,7 +36,7 @@ async fn test_get_blob_returns_none_for_missing() {
 
 #[tokio::test]
 async fn test_get_blobs_returns_none_for_missing_tree() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let id = SedimentreeId::new([1u8; 32]);
     let blobs = subduction.get_blobs(id).await.expect("storage error");
@@ -45,7 +46,7 @@ async fn test_get_blobs_returns_none_for_missing_tree() {
 /// Set up a Subduction instance with a channel-based mock connection for
 /// tests that need to exercise the dispatch loop.
 #[allow(clippy::type_complexity)]
-fn new_dispatch_subduction() -> (
+async fn new_dispatch_subduction() -> (
     Arc<
         Subduction<
             'static,
@@ -60,6 +61,7 @@ fn new_dispatch_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
+    let keyhive = test_keyhive().await;
     Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
         None,
         test_signer(),
@@ -70,12 +72,15 @@ fn new_dispatch_subduction() -> (
         ShardedMap::with_key(0, 0),
         TokioSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(),
     )
 }
 
 #[tokio::test]
 async fn requested_blobs_are_saved_and_removed_from_pending() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction().await;
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -141,7 +146,7 @@ async fn requested_blobs_are_saved_and_removed_from_pending() -> TestResult {
 
 #[tokio::test]
 async fn unsolicited_blobs_are_rejected() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction().await;
 
     let peer_id = PeerId::new([2u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -180,7 +185,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
 
 #[tokio::test]
 async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction().await;
 
     let peer_id = PeerId::new([3u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -247,7 +252,7 @@ async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
 
 #[tokio::test]
 async fn blobs_from_different_sedimentrees_are_isolated() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction().await;
 
     let peer_id = PeerId::new([4u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -305,7 +310,7 @@ async fn blobs_from_different_sedimentrees_are_isolated() -> TestResult {
 
 #[tokio::test]
 async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
-    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
+    let (subduction, listener_fut, actor_fut) = new_dispatch_subduction().await;
 
     let peer_id = PeerId::new([5u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

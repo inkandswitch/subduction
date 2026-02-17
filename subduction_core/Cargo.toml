@@ -23,6 +23,7 @@ getrandom = { workspace = true }
 keyhive_core = { workspace = true }
 metrics = { workspace = true, optional = true }
 minicbor = { workspace = true }
+minicbor-serde = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }
@@ -47,7 +48,7 @@ harness = false
 
 [features]
 default = []
-arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
+arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary", "subduction_keyhive/arbitrary"]
 bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero"]
 metrics = ["dep:metrics", "std"]
 serde = ["ed25519-dalek/serde"]

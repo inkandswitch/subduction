@@ -12,7 +12,7 @@
 //!    operations the initiator is missing, along with hashes it wants.
 //! 3. **Sync Ops**: The initiator sends the requested operations.
 
-use alloc::{string::ToString, vec, vec::Vec};
+use alloc::{collections::BTreeSet, string::ToString, vec, vec::Vec};
 
 use keyhive_core::{
     content::reference::ContentRef,
@@ -24,61 +24,56 @@ use keyhive_core::{
     store::ciphertext::CiphertextStore,
 };
 use rand::{CryptoRng, RngCore};
+use sedimentree_core::{collections::Map, depth::DepthMetric};
 use subduction_keyhive::{
-    collections::{Map, Set},
     message::{EventBytes, EventHash, Message as KeyhiveMessage},
     storage_ops, KeyhivePeerId, KeyhiveStorage, SignedMessage as KeyhiveSignedMessage,
+    StorageError,
 };
 
+use super::{Subduction, SubductionFutureForm};
 use crate::{
-    connection::{message::Message, Authenticated, Connection},
+    connection::{message::Message, Connection},
     crypto::signer::Signer,
-    peer::PeerId,
-    policy::{ConnectionPolicy, StoragePolicy},
-    sedimentree::metric::DepthMetric,
-    storage::Storage,
-    subduction::{error::KeyhiveSyncError, Subduction, SubductionFutureForm},
+    peer::id::PeerId,
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+    storage::traits::Storage,
+    subduction::error::KeyhiveSyncError,
 };
+
+type Set<T> = BTreeSet<T>;
 
 /// Convert Subduction `PeerId` to Keyhive `KeyhivePeerId`.
 fn to_keyhive_peer_id(peer_id: &PeerId) -> KeyhivePeerId {
     KeyhivePeerId::from_bytes(*peer_id.as_bytes())
 }
 
-/// Convert Keyhive `KeyhivePeerId` to Subduction `PeerId`.
-fn to_subduction_peer_id(keyhive_peer_id: &KeyhivePeerId) -> PeerId {
-    PeerId::new(*keyhive_peer_id.verifying_key())
-}
-
 /// Convert a keyhive `Digest` to an `EventHash` (32-byte array).
-fn digest_to_bytes<T>(digest: &Digest<T>) -> EventHash {
-    let bytes = digest.as_ref();
+fn digest_to_bytes<T: serde::Serialize>(digest: &Digest<T>) -> EventHash {
+    let bytes = digest.as_slice();
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes[..32]);
     arr
 }
 
-/// Serialize a value to CBOR bytes using ciborium (for keyhive_core types).
-fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, KeyhiveSyncError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
-    Ok(buf)
+/// Serialize a value to CBOR bytes using minicbor-serde (for keyhive_core types).
+fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
+    minicbor_serde::to_vec(value).map_err(|e| StorageError::Serialization(e.to_string()))
 }
 
-/// Deserialize a value from CBOR bytes using ciborium (for keyhive_core types).
-fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, KeyhiveSyncError> {
-    ciborium::from_reader(bytes).map_err(|e| KeyhiveSyncError::Deserialization(e.to_string()))
+/// Deserialize a value from CBOR bytes using minicbor-serde (for keyhive_core types).
+fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
+    minicbor_serde::from_slice(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
 /// Encode a keyhive protocol [`KeyhiveMessage`] to bytes using minicbor.
-fn encode_message(msg: &KeyhiveMessage) -> Result<Vec<u8>, KeyhiveSyncError> {
-    minicbor::to_vec(msg).map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))
+fn encode_message(msg: &KeyhiveMessage) -> Result<Vec<u8>, StorageError> {
+    minicbor::to_vec(msg).map_err(|e| StorageError::Serialization(e.to_string()))
 }
 
 /// Decode a keyhive protocol [`KeyhiveMessage`] from bytes using minicbor.
-fn decode_message(bytes: &[u8]) -> Result<KeyhiveMessage, KeyhiveSyncError> {
-    minicbor::decode(bytes).map_err(|e| KeyhiveSyncError::Deserialization(e.to_string()))
+fn decode_message(bytes: &[u8]) -> Result<KeyhiveMessage, StorageError> {
+    minicbor::decode(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
 impl<
@@ -140,7 +135,7 @@ impl<
     pub async fn sync_keyhive(&self, target: Option<&PeerId>) -> Result<(), KeyhiveSyncError> {
         let peer_ids: Vec<PeerId> = match target {
             Some(t) => vec![*t],
-            None => self.connected_peer_ids().await,
+            None => self.connected_peer_ids().await.into_iter().collect(),
         };
 
         for peer_id in &peer_ids {
@@ -220,7 +215,8 @@ impl<
             self.ingest_contact_card(cc_bytes).await?;
         }
 
-        let message: KeyhiveMessage = decode_message(&verified.payload)?;
+        let message: KeyhiveMessage = decode_message(&verified.payload)
+            .map_err(|e| KeyhiveSyncError::Deserialization(e.to_string()))?;
 
         match &message {
             KeyhiveMessage::SyncRequest { .. } => self.handle_sync_request(from, message).await,
@@ -284,7 +280,8 @@ impl<
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes = cbor_serialize(event)?;
+                let bytes = cbor_serialize(event)
+                    .map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
                 found_ops.push(bytes);
             }
         }
@@ -444,7 +441,8 @@ impl<
         message: KeyhiveMessage,
         include_contact_card: bool,
     ) -> Result<(), KeyhiveSyncError> {
-        let msg_bytes = encode_message(&message)?;
+        let msg_bytes =
+            encode_message(&message).map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
 
         let signed: Signed<Vec<u8>> = {
             let keyhive = self.keyhive.lock().await;
@@ -454,7 +452,8 @@ impl<
                 .map_err(KeyhiveSyncError::Signing)?
         };
 
-        let signed_bytes = cbor_serialize(&signed)?;
+        let signed_bytes =
+            cbor_serialize(&signed).map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
 
         let signed_message = if include_contact_card {
             KeyhiveSignedMessage::with_contact_card(
@@ -546,7 +545,8 @@ impl<
         for (digest, event) in &events {
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
-                let bytes = cbor_serialize(event)?;
+                let bytes = cbor_serialize(event)
+                    .map_err(|e| KeyhiveSyncError::Serialization(e.to_string()))?;
                 result.push(bytes);
             }
         }
@@ -559,7 +559,8 @@ impl<
         let events: Vec<StaticEvent<KContentRef>> = event_bytes_list
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
-            .collect::<Result<_, _>>()?;
+            .collect::<Result<_, _>>()
+            .map_err(|e| KeyhiveSyncError::Deserialization(e.to_string()))?;
 
         let pending = {
             let keyhive = self.keyhive.lock().await;
@@ -626,7 +627,8 @@ impl<
 
     /// Deserialize and ingest a contact card into keyhive.
     async fn ingest_contact_card(&self, cc_bytes: &[u8]) -> Result<(), KeyhiveSyncError> {
-        let contact_card = cbor_deserialize(cc_bytes)?;
+        let contact_card = cbor_deserialize(cc_bytes)
+            .map_err(|e| KeyhiveSyncError::Deserialization(e.to_string()))?;
 
         let keyhive = self.keyhive.lock().await;
         keyhive
@@ -706,10 +708,4 @@ where
     ops.into_iter()
         .map(|(digest, event)| (digest.into(), event.into()))
         .collect()
-}
-
-#[allow(dead_code)]
-fn _to_subduction_peer_id_unused() {
-    // Reference to suppress unused warning until we need the reverse conversion
-    let _ = to_subduction_peer_id;
 }

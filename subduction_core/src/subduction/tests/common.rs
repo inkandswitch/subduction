@@ -6,12 +6,18 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
 use future_form::Sendable;
 use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
+use keyhive_core::{
+    keyhive::Keyhive, listener::no_listener::NoListener,
+    store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::rngs::OsRng;
 use sedimentree_core::commit::CountLeadingZeroBytes;
+use subduction_keyhive::MemoryKeyhiveStorage;
 
 /// Create a test signer with deterministic key bytes.
 pub(super) fn test_signer() -> MemorySigner {
@@ -56,9 +62,28 @@ impl Spawn<future_form::Local> for TokioSpawn {
     }
 }
 
+/// Type alias for keyhive used in tests.
+pub(super) type TestKeyhive = Keyhive<
+    MemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    NoListener,
+    OsRng,
+>;
+
+/// Create a test keyhive instance.
+pub(super) async fn test_keyhive() -> TestKeyhive {
+    let csprng = OsRng;
+    let sk = test_signer();
+    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
+        .await
+        .expect("failed to create keyhive")
+}
+
 /// Create a new Subduction instance for testing with default settings.
 #[allow(clippy::type_complexity)]
-pub(super) fn new_test_subduction() -> (
+pub(super) async fn new_test_subduction() -> (
     Arc<
         Subduction<
             'static,
@@ -73,6 +98,7 @@ pub(super) fn new_test_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
+    let keyhive = test_keyhive().await;
     Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
         None,
         test_signer(),
@@ -83,5 +109,8 @@ pub(super) fn new_test_subduction() -> (
         ShardedMap::with_key(0, 0),
         TestSpawn,
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        keyhive,
+        MemoryKeyhiveStorage::default(),
+        Vec::new(), // Empty contact card bytes for tests
     )
 }

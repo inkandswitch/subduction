@@ -13,7 +13,7 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{TokioSpawn, test_signer};
+use super::common::{test_keyhive, test_signer, TokioSpawn};
 use crate::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
@@ -25,11 +25,12 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use alloc::collections::BTreeSet;
 use core::time::Duration;
 use future_form::Sendable;
+use subduction_keyhive::MemoryKeyhiveStorage;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
@@ -38,9 +39,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, FragmentSummary, id::FragmentId},
+    fragment::{id::FragmentId, Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use testresult::TestResult;
@@ -74,6 +75,7 @@ async fn make_test_fragment(data: &[u8]) -> (Signed<Fragment>, Blob, FragmentSum
 async fn test_responder_requests_missing_commits() -> TestResult {
     // Set up responder (Alice) - has commit A
     let alice_storage = MemoryStorage::new();
+    let keyhive = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -85,6 +87,9 @@ async fn test_responder_requests_missing_commits() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(),
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -173,6 +178,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
 async fn test_responder_requests_commits_from_requestor() -> TestResult {
     // Set up responder (Alice) - starts empty
     let alice_storage = MemoryStorage::new();
+    let keyhive = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -184,6 +190,9 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(),
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -271,6 +280,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 
     // Set up Alice with commit A
     let alice_storage = MemoryStorage::new();
+    let alice_keyhive = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -282,6 +292,9 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            alice_keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(),
         );
 
     let (alice_conn, alice_handle) = ChannelMockConnection::new_with_handle(bob_peer_id);
@@ -311,6 +324,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 
     // Set up Bob with commit B
     let bob_storage = MemoryStorage::new();
+    let bob_keyhive = test_keyhive().await;
     let (bob, bob_listener, bob_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -322,6 +336,9 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            bob_keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(),
         );
 
     let (bob_conn, bob_handle) = ChannelMockConnection::new_with_handle(alice_peer_id);
@@ -435,6 +452,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 #[tokio::test]
 async fn test_responder_requests_fragments() -> TestResult {
     let alice_storage = MemoryStorage::new();
+    let keyhive = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -446,6 +464,9 @@ async fn test_responder_requests_fragments() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(),
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
@@ -510,6 +531,7 @@ async fn test_responder_requests_fragments() -> TestResult {
 #[tokio::test]
 async fn test_no_requesting_when_in_sync() -> TestResult {
     let alice_storage = MemoryStorage::new();
+    let keyhive = test_keyhive().await;
     let (alice, alice_listener, alice_actor) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -521,6 +543,9 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(),
         );
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);

@@ -219,7 +219,7 @@ impl<
     Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-    KContentRef: ContentRef,
+    KContentRef: ContentRef + serde::de::DeserializeOwned,
     KPayload: for<'de> serde::Deserialize<'de>,
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
@@ -740,11 +740,17 @@ impl<
                 tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
             }
             Message::Keyhive(signed_msg) => {
-                // TODO: Wire up keyhive message handling once keyhive.rs module is created
+                // NOTE: Keyhive message handling requires calling async methods on Keyhive
+                // which don't produce Send futures (keyhive_core targets Wasm).
+                // For now, we log the message. Users can call handle_keyhive_message()
+                // directly in single-threaded (Local) contexts, or use sync_keyhive()
+                // to initiate sync after connection establishment.
                 tracing::debug!(
-                    "received keyhive message from peer {from}, has_contact_card={}",
-                    signed_msg.has_contact_card()
+                    peer = %from,
+                    has_contact_card = signed_msg.has_contact_card(),
+                    "received keyhive message (auto-handling disabled, call handle_keyhive_message manually)"
                 );
+                drop(signed_msg);
             }
         }
 
@@ -3340,7 +3346,7 @@ impl<
     Sig: Signer<Sendable> + AsyncSigner + Clone + Send + Sync + 'a,
     M: DepthMetric + Send + Sync + 'a,
     const N: usize,
-    KContentRef: ContentRef + Send + Sync + 'static,
+    KContentRef: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     KPayload: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + Send + Sync + 'static,
     KListener: MembershipListener<Sig, KContentRef> + Send + Sync + 'static,
@@ -3380,7 +3386,7 @@ impl<
     Sig: Signer<Local> + AsyncSigner + Clone + 'a,
     M: DepthMetric + 'a,
     const N: usize,
-    KContentRef: ContentRef + 'static,
+    KContentRef: ContentRef + serde::de::DeserializeOwned + 'static,
     KPayload: for<'de> serde::Deserialize<'de> + 'static,
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + 'static,
     KListener: MembershipListener<Sig, KContentRef> + 'static,
