@@ -94,6 +94,15 @@ use crate::{
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
 };
+use keyhive_core::{
+    content::reference::ContentRef,
+    crypto::signer::async_signer::AsyncSigner,
+    keyhive::Keyhive,
+    listener::{membership::MembershipListener, no_listener::NoListener},
+    store::ciphertext::{CiphertextStore, memory::MemoryCiphertextStore},
+};
+use rand::{CryptoRng, RngCore, rngs::OsRng};
+use subduction_keyhive::{KeyhivePeerId, KeyhiveStorage, MemoryKeyhiveStorage};
 use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::Mutex;
@@ -145,9 +154,16 @@ pub struct Subduction<
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
+    // Keyhive generics
+    KContentRef: ContentRef = [u8; 32],
+    KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<KContentRef, KPayload>,
+    KListener: MembershipListener<Sig, KContentRef> = NoListener,
+    KRng: CryptoRng + RngCore = OsRng,
+    KStore: KeyhiveStorage<F> = MemoryKeyhiveStorage,
 > {
     signer: Sig,
     discovery_id: Option<DiscoveryId>,
@@ -182,6 +198,12 @@ pub struct Subduction<
 
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
+
+    // Keyhive state
+    keyhive: Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>>,
+    keyhive_storage: KStore,
+    keyhive_peer_id: KeyhivePeerId,
+    keyhive_contact_card_bytes: Vec<u8>,
 
     _phantom: core::marker::PhantomData<&'a F>,
 }
@@ -691,6 +713,13 @@ impl<
             }
             Message::DataRequestRejected(DataRequestRejected { id }) => {
                 tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
+            }
+            Message::Keyhive(signed_msg) => {
+                // TODO: Wire up keyhive message handling once keyhive.rs module is created
+                tracing::debug!(
+                    "received keyhive message from peer {from}, has_contact_card={}",
+                    signed_msg.has_contact_card()
+                );
             }
         }
 

@@ -26,7 +26,7 @@ minicbor = { workspace = true }
 nonempty = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }
-serde = { workspace = true, optional = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
 siphasher = { workspace = true }
 subduction_keyhive = { path = "../subduction_keyhive", features = ["serde", "std"] }
 thiserror = { workspace = true }
@@ -50,7 +50,7 @@ default = []
 arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
 bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero"]
 metrics = ["dep:metrics", "std"]
-serde = ["dep:serde", "ed25519-dalek/serde"]
+serde = ["ed25519-dalek/serde"]
 serde-std = ["serde/std"]
 std = [
   "async-channel/std",

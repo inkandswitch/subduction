@@ -1,9 +1,14 @@
 //! Error types for the top-level `Subduction`.
 
-use alloc::vec::Vec;
+use alloc::{string::String, vec::Vec};
 
 use future_form::FutureForm;
+use keyhive_core::{
+    crypto::signed::SigningError as KeyhiveSigningError,
+    principal::individual::ReceivePrekeyOpError,
+};
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
+use subduction_keyhive::{KeyhivePeerId, VerificationError as KeyhiveVerificationError};
 use thiserror::Error;
 
 use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
@@ -145,6 +150,63 @@ pub enum SyncRejected {
     /// Not authorized to access the sedimentree.
     #[error("not authorized to access sedimentree {0}")]
     Unauthorized(SedimentreeId),
+}
+
+/// Errors that can occur during keyhive sync operations.
+#[derive(Debug, Error)]
+pub enum KeyhiveSyncError<SendErr, StoreErr>
+where
+    SendErr: core::error::Error + 'static,
+    StoreErr: core::error::Error + 'static,
+{
+    /// Failed to send a keyhive message over the connection.
+    #[error("failed to send keyhive message")]
+    Send(#[source] SendErr),
+
+    /// Keyhive storage operation failed.
+    #[error("keyhive storage error")]
+    Storage(#[source] StoreErr),
+
+    /// Message signing failed.
+    #[error("signing failed")]
+    Signing(#[from] KeyhiveSigningError),
+
+    /// Message verification failed.
+    #[error("verification failed")]
+    Verification(#[from] KeyhiveVerificationError),
+
+    /// The peer is not connected.
+    #[error("peer not connected: {0:?}")]
+    PeerNotConnected(PeerId),
+
+    /// The peer is unknown (no contact card available).
+    #[error("unknown peer (no contact card): {0:?}")]
+    UnknownPeer(KeyhivePeerId),
+
+    /// Received an unexpected message type.
+    #[error("unexpected message type: expected {expected}, got {actual}")]
+    UnexpectedMessageType {
+        /// The expected message type.
+        expected: &'static str,
+        /// The actual message type.
+        actual: &'static str,
+    },
+
+    /// Failed to convert peer ID to keyhive identifier.
+    #[error("invalid peer identifier")]
+    InvalidIdentifier(#[source] ed25519_dalek::SignatureError),
+
+    /// Failed to ingest a contact card.
+    #[error("failed to receive contact card")]
+    ReceiveContactCard(#[from] ReceivePrekeyOpError),
+
+    /// CBOR serialization failed.
+    #[error("serialization error: {0}")]
+    Serialization(String),
+
+    /// CBOR deserialization failed.
+    #[error("deserialization error: {0}")]
+    Deserialization(String),
 }
 
 #[cfg(test)]
