@@ -7,10 +7,8 @@
 use alloc::{string::String, vec::Vec};
 use core::fmt;
 
-#[cfg(all(feature = "serde", feature = "std"))]
 use crate::error::VerificationError;
 use crate::peer_id::KeyhivePeerId;
-#[cfg(all(feature = "serde", feature = "std"))]
 use keyhive_core::crypto::signed::Signed;
 
 /// Error type for CBOR serialization/deserialization.
@@ -87,14 +85,13 @@ impl SignedMessage {
     ///
     /// Returns [`VerificationError`] if deserialization, signature verification,
     /// or sender identity check fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
     pub fn verify(
         self,
         expected_sender: &KeyhivePeerId,
     ) -> Result<VerifiedMessage, VerificationError> {
         use alloc::string::ToString;
 
-        let signed: Signed<Vec<u8>> = ciborium::de::from_reader(self.signed.as_slice())
+        let signed: Signed<Vec<u8>> = minicbor_serde::from_slice(self.signed.as_slice())
             .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
 
         signed
@@ -128,13 +125,10 @@ impl SignedMessage {
     /// # Errors
     ///
     /// Returns an error if CBOR serialization fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
     pub fn to_cbor(&self) -> Result<Vec<u8>, CborError> {
         use alloc::string::ToString;
 
-        let mut buf = Vec::new();
-        ciborium::ser::into_writer(self, &mut buf).map_err(|e| CborError(e.to_string()))?;
-        Ok(buf)
+        minicbor::to_vec(self).map_err(|e| CborError(e.to_string()))
     }
 
     /// Deserialize a message from CBOR bytes.
@@ -142,11 +136,10 @@ impl SignedMessage {
     /// # Errors
     ///
     /// Returns an error if CBOR deserialization fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
     pub fn from_cbor(bytes: &[u8]) -> Result<Self, CborError> {
         use alloc::string::ToString;
 
-        ciborium::de::from_reader(bytes).map_err(|e| CborError(e.to_string()))
+        minicbor::decode(bytes).map_err(|e| CborError(e.to_string()))
     }
 }
 

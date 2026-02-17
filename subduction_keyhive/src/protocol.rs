@@ -21,7 +21,7 @@ use keyhive_core::{
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{Event, static_event::StaticEvent},
+    event::{static_event::StaticEvent, Event},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -715,17 +715,14 @@ where
         .collect()
 }
 
-/// Serialize a value to CBOR bytes using ciborium (for keyhive_core types).
+/// Serialize a value to CBOR bytes using minicbor-serde (for keyhive_core types).
 fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(buf)
+    minicbor_serde::to_vec(value).map_err(|e| StorageError::Serialization(e.to_string()))
 }
 
-/// Deserialize a value from CBOR bytes using ciborium (for keyhive_core types).
+/// Deserialize a value from CBOR bytes using minicbor-serde (for keyhive_core types).
 fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+    minicbor_serde::from_slice(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
 /// Encode a keyhive protocol [`Message`] to bytes using minicbor.
@@ -750,10 +747,10 @@ mod tests {
     use crate::{
         storage::MemoryKeyhiveStorage,
         test_utils::{
-            TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
-            exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
-            make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
-            serialize_contact_card,
+            create_channel_pair, create_group_with_read_members, exchange_all_contact_cards,
+            exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
+            make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
+            TestProtocol, TwoPeerHarness,
         },
     };
     use future_form::Local;

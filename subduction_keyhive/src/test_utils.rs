@@ -5,7 +5,7 @@ use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
 use future_form::Local;
-use futures::{FutureExt, future::LocalBoxFuture};
+use futures::{future::LocalBoxFuture, FutureExt};
 use keyhive_core::{
     access::Access,
     crypto::signer::memory::MemorySigner,
@@ -134,9 +134,7 @@ pub(crate) fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
 pub(crate) fn serialize_contact_card(
     contact_card: &keyhive_core::contact_card::ContactCard,
 ) -> Vec<u8> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(contact_card, &mut buf).expect("failed to serialize contact card");
-    buf
+    minicbor_serde::to_vec(contact_card).expect("failed to serialize contact card")
 }
 
 /// Type alias for the test protocol type.

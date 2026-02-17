@@ -16,7 +16,7 @@ arbitrary = { workspace = true, optional = true }
 async-lock = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
-ciborium = { workspace = true }
+minicbor-serde = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
 future_form = { workspace = true }
 futures = { workspace = true }

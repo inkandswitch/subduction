@@ -17,15 +17,12 @@ use crate::{
 
 /// Serialize a value to CBOR bytes.
 fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(buf)
+    minicbor_serde::to_vec(value).map_err(|e| StorageError::Serialization(e.to_string()))
 }
 
 /// Deserialize a value from CBOR bytes.
 fn cbor_deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+    minicbor_serde::from_slice(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
 /// Hash event bytes using BLAKE3 to produce a storage key.

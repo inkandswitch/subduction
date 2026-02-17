@@ -4,11 +4,9 @@ use alloc::string::String;
 
 use thiserror::Error;
 
-#[cfg(feature = "std")]
 use crate::peer_id::KeyhivePeerId;
 
 /// Errors that can occur during message signing.
-#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum SigningError {
     /// Failed to serialize the message payload.
@@ -21,7 +19,6 @@ pub enum SigningError {
 }
 
 /// Errors that can occur during message verification.
-#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum VerificationError {
     /// Failed to deserialize the signed message.
@@ -43,7 +40,6 @@ pub enum VerificationError {
 }
 
 /// Errors that can occur during protocol operations.
-#[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum ProtocolError<SendErr>
 where
