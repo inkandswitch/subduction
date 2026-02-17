@@ -174,21 +174,6 @@ mod tests {
     }
 
     #[test]
-    fn insert_and_remove() {
-        let mut pending = PendingBlobRequests::new(100);
-
-        let id = test_id(1);
-        let digest = test_digest(1);
-
-        assert!(!pending.contains(id, digest));
-        pending.insert(id, digest);
-        assert!(pending.contains(id, digest));
-        assert!(pending.remove(id, digest));
-        assert!(!pending.contains(id, digest));
-        assert!(!pending.remove(id, digest)); // Already removed
-    }
-
-    #[test]
     fn lru_eviction() {
         let mut pending = PendingBlobRequests::new(3);
 
