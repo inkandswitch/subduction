@@ -1,28 +1,28 @@
 //! Wasm-specific handshake implementation for WebSocket connections.
 //!
-//! This module provides the [`BrowserWebSocketHandshake`] type which implements
-//! the [`Handshake`] trait for browser WebSocket connections.
+//! This module provides the [`WasmWebSocketHandshake`] type which implements
+//! the [`Handshake`] trait for Wasm WebSocket connections.
 
 use alloc::{format, string::String, vec::Vec};
 
 use future_form::Local;
 use futures::{channel::oneshot, future::LocalBoxFuture};
 use subduction_core::connection::handshake::Handshake;
-use wasm_bindgen::{JsCast, closure::Closure};
-use web_sys::{MessageEvent, WebSocket, js_sys};
+use wasm_bindgen::{closure::Closure, JsCast};
+use web_sys::{js_sys, MessageEvent, WebSocket};
 
 use crate::error::WasmHandshakeError;
 
 /// Wrapper around `web_sys::WebSocket` implementing the [`Handshake`] trait.
 ///
 /// This enables using [`handshake::initiate`] from `subduction_core` with
-/// browser WebSocket connections.
+/// Wasm WebSocket connections.
 #[derive(Debug)]
-pub(super) struct BrowserWebSocketHandshake {
+pub(super) struct WasmWebSocketHandshake {
     ws: WebSocket,
 }
 
-impl BrowserWebSocketHandshake {
+impl WasmWebSocketHandshake {
     /// Wrap a `web_sys::WebSocket` for handshake.
     ///
     /// The WebSocket must be in the OPEN state.
@@ -31,7 +31,7 @@ impl BrowserWebSocketHandshake {
     }
 }
 
-impl Handshake<Local> for BrowserWebSocketHandshake {
+impl Handshake<Local> for WasmWebSocketHandshake {
     type Error = WasmHandshakeError;
 
     fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {

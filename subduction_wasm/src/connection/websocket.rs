@@ -39,7 +39,7 @@ use web_sys::{
 
 use super::{
     WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId,
-    handshake::BrowserWebSocketHandshake, message::WasmMessage,
+    handshake::WasmWebSocketHandshake, message::WasmMessage,
 };
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 use subduction_core::connection::{
@@ -423,7 +423,7 @@ impl WasmWebSocket {
         let nonce = Nonce::random();
 
         let authenticated = handshake::initiate::<Local, _, _, _>(
-            BrowserWebSocketHandshake::new(ws),
+            WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
                 Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds)
             },
@@ -471,7 +471,7 @@ impl WasmWebSocket {
         let nonce = Nonce::random();
 
         let authenticated = handshake::initiate::<Local, _, _, _>(
-            BrowserWebSocketHandshake::new(ws),
+            WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
                 Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds)
             },
