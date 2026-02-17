@@ -11,11 +11,16 @@
 //!
 //! ```ignore
 //! use subduction_core::connection::handshake;
+//! use subduction_websocket::handshake::WebSocketHandshake;
 //!
 //! // After WebSocket upgrade, perform Subduction handshake
-//! let authenticated = handshake::initiate(
-//!     &mut ws_stream,
-//!     |peer_id| WebSocket::new(ws_stream, timeout, default_timeout, peer_id),
+//! // The transport is consumed and passed back to build_connection
+//! let (authenticated, ()) = handshake::initiate(
+//!     WebSocketHandshake::new(ws_stream),  // consumed
+//!     |ws_handshake, peer_id| {
+//!         let ws_stream = ws_handshake.into_inner();
+//!         (WebSocket::new(ws_stream, timeout, default_timeout, peer_id), ())
+//!     },
 //!     &signer,
 //!     audience,
 //!     now,

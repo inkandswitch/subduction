@@ -418,23 +418,24 @@ Implementations exist for:
 
 ## High-Level API
 
-The `initiate` and `respond` functions perform the complete handshake protocol and return an `Authenticated<C>` connection:
+The `initiate` and `respond` functions perform the complete handshake protocol and return an `Authenticated<C, K>` connection plus any extra data from the `build_connection` closure:
 
 ### Initiator Side
 
 ```rust
 use subduction_core::connection::handshake;
 
-let authenticated = handshake::initiate(
+// Closure returns (Connection, ExtraData) tuple
+let (authenticated, ()) = handshake::initiate(
     transport,  // impl Handshake, consumed
-    |transport, peer_id| MyConnection::new(transport, peer_id),
+    |transport, peer_id| (MyConnection::new(transport, peer_id), ()),
     &signer,
     Audience::known(expected_peer_id),
     TimestampSeconds::now(),
     Nonce::random(),
 ).await?;
 
-// authenticated: Authenticated<MyConnection>
+// authenticated: Authenticated<MyConnection, K>
 ```
 
 ### Responder Side
@@ -442,9 +443,10 @@ let authenticated = handshake::initiate(
 ```rust
 use subduction_core::connection::handshake;
 
-let authenticated = handshake::respond(
+// Closure returns (Connection, ExtraData) tuple
+let (authenticated, ()) = handshake::respond(
     transport,  // impl Handshake, consumed
-    |transport, peer_id| MyConnection::new(transport, peer_id),
+    |transport, peer_id| (MyConnection::new(transport, peer_id), ()),
     &signer,
     &nonce_cache,
     our_peer_id,
@@ -453,26 +455,28 @@ let authenticated = handshake::respond(
     Duration::from_secs(60),  // max clock drift
 ).await?;
 
-// authenticated: Authenticated<MyConnection>
+// authenticated: Authenticated<MyConnection, K>
 ```
 
 ### `Authenticated<C>` Witness Type
 
-The `Authenticated<C>` wrapper is a _witness type_ proving the connection completed handshake verification:
+The `Authenticated<C, K>` wrapper is a _witness type_ proving the connection completed handshake verification:
 
 ```rust
-pub struct Authenticated<C> {
+pub struct Authenticated<C: Connection<K>, K: FutureForm> {
     inner: C,
-    peer_id: PeerId,  // verified via signature
+    _marker: PhantomData<fn() -> K>,
 }
 ```
+
+The `peer_id()` method delegates to `self.inner.peer_id()` — the inner `Connection` stores the verified peer ID (set by `build_connection` during handshake). There's no redundant field because the connection already holds the authoritative identity.
 
 Key properties:
 
 | Property | Guarantee |
 |----------|-----------|
 | **Construction** | Only via `handshake::initiate` or `handshake::respond` |
-| **`peer_id`** | Cryptographically verified, not self-reported |
-| **`inner`** | The wrapped connection delegates all `Connection` methods |
+| **`peer_id()`** | Delegates to inner connection; ID was set from verified signature |
+| **`inner`** | The wrapped connection, accessible via `inner()` |
 
-This ensures that any code receiving an `Authenticated<C>` can trust that the peer identity was verified through the handshake protocol — there's no way to construct it with an arbitrary `PeerId`.
+This ensures that any code receiving an `Authenticated<C, K>` can trust that the peer identity was verified through the handshake protocol — there's no way to construct it with an arbitrary `PeerId`.

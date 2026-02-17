@@ -40,10 +40,10 @@ use crate::peer::id::PeerId;
 /// ```ignore
 /// use subduction_core::connection::handshake;
 ///
-/// // Initiator side - performs handshake and returns Authenticated<MyConnection, Sendable>
-/// let authenticated = handshake::initiate(
-///     &mut transport,
-///     |_, peer_id| MyConnection::new(stream, peer_id),
+/// // Initiator side - transport is consumed, returned to build_connection
+/// let (authenticated, ()) = handshake::initiate(
+///     transport,  // consumed
+///     |transport, peer_id| (MyConnection::new(transport, peer_id), ()),
 ///     &signer,
 ///     audience,
 ///     now,
