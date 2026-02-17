@@ -8,9 +8,9 @@ use future_form::{FutureForm, Local, Sendable};
 use futures::FutureExt;
 
 use super::{
+    Connection,
     authenticated::Authenticated,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    Connection,
 };
 use crate::peer::id::PeerId;
 

@@ -31,7 +31,7 @@ use core::ops::{Deref, DerefMut};
 
 use async_tungstenite::WebSocketStream;
 use future_form::Sendable;
-use futures_util::{future::BoxFuture, AsyncRead, AsyncWrite, SinkExt, StreamExt};
+use futures_util::{AsyncRead, AsyncWrite, SinkExt, StreamExt, future::BoxFuture};
 use subduction_core::connection::handshake::Handshake;
 use thiserror::Error;
 
