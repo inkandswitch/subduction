@@ -146,6 +146,7 @@ impl PendingBlobRequests {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::vec::Vec;
 
     fn test_id(n: u8) -> SedimentreeId {
         SedimentreeId::new([n; 32])
@@ -153,6 +154,23 @@ mod tests {
 
     fn test_digest(n: u8) -> Digest<Blob> {
         Digest::from_bytes([n; 32])
+    }
+
+    /// Verifies internal consistency: index and entries must have same length.
+    fn assert_consistent(pending: &PendingBlobRequests) {
+        assert_eq!(
+            pending.entries.len(),
+            pending.index.len(),
+            "entries and index length mismatch"
+        );
+
+        // Every entry in Vec should be in index
+        for entry in &pending.entries {
+            assert!(
+                pending.index.contains(entry),
+                "entry in Vec but not in index: {entry:?}"
+            );
+        }
     }
 
     #[test]
@@ -234,5 +252,150 @@ mod tests {
         assert!(!pending.contains(tree_a, test_digest(2)));
         assert!(pending.contains(tree_b, test_digest(3)));
         assert!(pending.contains(tree_b, test_digest(4)));
+    }
+
+    #[cfg(feature = "bolero")]
+    mod proptests {
+        use super::*;
+
+        /// Operation for property-based testing of cache behavior.
+        #[derive(Debug, Clone, arbitrary::Arbitrary)]
+        enum Op {
+            Insert(SedimentreeId, Digest<Blob>),
+            Remove(SedimentreeId, Digest<Blob>),
+            RemoveForSedimentree(SedimentreeId),
+        }
+
+        #[test]
+        fn prop_insert_then_contains() {
+            bolero::check!()
+                .with_arbitrary::<(SedimentreeId, Digest<Blob>)>()
+                .for_each(|(id, digest)| {
+                    let mut pending = PendingBlobRequests::new(100);
+                    pending.insert(*id, *digest);
+                    assert!(pending.contains(*id, *digest));
+                    assert_consistent(&pending);
+                });
+        }
+
+        #[test]
+        fn prop_remove_then_not_contains() {
+            bolero::check!()
+                .with_arbitrary::<(SedimentreeId, Digest<Blob>)>()
+                .for_each(|(id, digest)| {
+                    let mut pending = PendingBlobRequests::new(100);
+                    pending.insert(*id, *digest);
+                    assert!(pending.remove(*id, *digest));
+                    assert!(!pending.contains(*id, *digest));
+                    assert_consistent(&pending);
+                });
+        }
+
+        #[test]
+        fn prop_capacity_never_exceeded() {
+            bolero::check!()
+                .with_arbitrary::<(u8, Vec<(SedimentreeId, Digest<Blob>)>)>()
+                .for_each(|(cap, entries)| {
+                    // Use capacity between 1 and 255 to avoid edge cases
+                    let capacity = (*cap as usize).max(1);
+                    let mut pending = PendingBlobRequests::new(capacity);
+
+                    for (id, digest) in entries {
+                        pending.insert(*id, *digest);
+                        assert!(
+                            pending.len() <= capacity,
+                            "len {} exceeded capacity {}",
+                            pending.len(),
+                            capacity
+                        );
+                        assert_consistent(&pending);
+                    }
+                });
+        }
+
+        #[test]
+        fn prop_remove_for_sedimentree_removes_all() {
+            bolero::check!()
+                .with_arbitrary::<(SedimentreeId, Vec<Digest<Blob>>)>()
+                .for_each(|(id, digests)| {
+                    let mut pending = PendingBlobRequests::new(1000);
+
+                    for digest in digests {
+                        pending.insert(*id, *digest);
+                    }
+
+                    pending.remove_for_sedimentree(*id);
+
+                    for digest in digests {
+                        assert!(
+                            !pending.contains(*id, *digest),
+                            "entry should have been removed"
+                        );
+                    }
+                    assert_consistent(&pending);
+                });
+        }
+
+        #[test]
+        fn prop_remove_for_sedimentree_preserves_others() {
+            bolero::check!()
+                .with_arbitrary::<(
+                    SedimentreeId,
+                    SedimentreeId,
+                    Vec<Digest<Blob>>,
+                    Vec<Digest<Blob>>,
+                )>()
+                .for_each(|(id_a, id_b, digests_a, digests_b)| {
+                    if id_a == id_b {
+                        return;
+                    }
+
+                    let mut pending = PendingBlobRequests::new(10_000);
+
+                    for digest in digests_a {
+                        pending.insert(*id_a, *digest);
+                    }
+                    for digest in digests_b {
+                        pending.insert(*id_b, *digest);
+                    }
+
+                    pending.remove_for_sedimentree(*id_a);
+
+                    for digest in digests_b {
+                        assert!(
+                            pending.contains(*id_b, *digest),
+                            "entry for other tree should be preserved"
+                        );
+                    }
+                    assert_consistent(&pending);
+                });
+        }
+
+        #[test]
+        fn prop_arbitrary_operations_maintain_consistency() {
+            bolero::check!()
+                .with_arbitrary::<(u8, Vec<Op>)>()
+                .for_each(|(cap, ops)| {
+                    let capacity = (*cap as usize).max(1);
+                    let mut pending = PendingBlobRequests::new(capacity);
+
+                    for op in ops {
+                        match op {
+                            Op::Insert(id, digest) => {
+                                pending.insert(*id, *digest);
+                            }
+                            Op::Remove(id, digest) => {
+                                pending.remove(*id, *digest);
+                            }
+                            Op::RemoveForSedimentree(id) => {
+                                pending.remove_for_sedimentree(*id);
+                            }
+                        }
+
+                        assert!(pending.len() <= capacity);
+                        assert_consistent(&pending);
+                    }
+                });
+        }
     }
 }
