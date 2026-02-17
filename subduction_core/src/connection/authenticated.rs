@@ -8,8 +8,8 @@ use core::{marker::PhantomData, time::Duration};
 use future_form::FutureForm;
 
 use super::{
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     Connection, Reconnect,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use crate::peer::id::PeerId;
 
