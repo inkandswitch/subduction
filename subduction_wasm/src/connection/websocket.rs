@@ -82,7 +82,7 @@ impl WasmWebSocket {
                 tracing::debug!("WS received {} bytes", bytes.len());
                 match minicbor::decode::<Message>(&bytes) {
                     Ok(msg) => {
-                        tracing::info!("WS message decoded: {} bytes", bytes.len());
+                        tracing::trace!("WS message decoded: {} bytes", bytes.len());
                         let inner_pending = closure_pending.clone();
                         let inner_inbound_writer = inbound_writer.clone();
 
@@ -96,7 +96,7 @@ impl WasmWebSocket {
                                     let req_id = resp.req_id;
                                     let removed = { inner_pending.lock().await.remove(&req_id) };
                                     if let Some(waiting) = removed {
-                                        tracing::info!("dispatching to waiter {:?}", req_id);
+                                        tracing::trace!("dispatching to waiter {:?}", req_id);
                                         let result = waiting.send(resp);
                                         debug_assert!(result.is_ok());
                                         if result.is_err() {
@@ -106,7 +106,7 @@ impl WasmWebSocket {
                                             );
                                         }
                                     } else {
-                                        tracing::info!(
+                                        tracing::trace!(
                                             "dispatching to inbound channel {:?}",
                                             resp.req_id
                                         );
@@ -202,7 +202,7 @@ impl WasmWebSocket {
                 tracing::debug!("WS received {} bytes", bytes.len());
                 match minicbor::decode::<Message>(&bytes) {
                     Ok(msg) => {
-                        tracing::info!("WS message decoded: {} bytes", bytes.len());
+                        tracing::trace!("WS message decoded: {} bytes", bytes.len());
                         let inner_pending = closure_pending.clone();
                         let inner_inbound_writer = inbound_writer.clone();
 
@@ -216,7 +216,7 @@ impl WasmWebSocket {
                                     let req_id = resp.req_id;
                                     let removed = { inner_pending.lock().await.remove(&req_id) };
                                     if let Some(waiting) = removed {
-                                        tracing::info!("dispatching to waiter {:?}", req_id);
+                                        tracing::trace!("dispatching to waiter {:?}", req_id);
                                         let result = waiting.send(resp);
                                         debug_assert!(result.is_ok());
                                         if result.is_err() {
@@ -226,7 +226,7 @@ impl WasmWebSocket {
                                             );
                                         }
                                     } else {
-                                        tracing::info!(
+                                        tracing::trace!(
                                             "dispatching to inbound channel {:?}",
                                             resp.req_id
                                         );
