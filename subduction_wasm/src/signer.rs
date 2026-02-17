@@ -13,7 +13,7 @@ use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
 use js_sys::{Promise, Uint8Array};
 use keyhive_core::crypto::{
-    signed::SigningError as KeyhiveSigningError, signer::sync_signer::SyncSigner,
+    signed::SigningError as KeyhiveSigningError, signer::async_signer::AsyncSigner,
     verifiable::Verifiable,
 };
 use subduction_core::crypto::signer::Signer;
@@ -99,9 +99,6 @@ impl Signer<Local> for JsSigner {
 }
 
 // Keyhive trait implementations for JsSigner.
-// Note: JsSigner is fundamentally async (JavaScript Promises), so SyncSigner
-// cannot be properly implemented. These impls allow Subduction to compile,
-// but keyhive sync functionality is not supported with JsSigner.
 
 impl Verifiable for JsSigner {
     fn verifying_key(&self) -> VerifyingKey {
@@ -109,15 +106,28 @@ impl Verifiable for JsSigner {
     }
 }
 
-impl SyncSigner for JsSigner {
-    fn try_sign_bytes_sync(&self, _payload_bytes: &[u8]) -> Result<Signature, KeyhiveSigningError> {
-        // JsSigner is async-only (JavaScript Promises). Keyhive sync is not
-        // supported in Wasm with JsSigner. Use MemorySigner if keyhive sync
-        // is needed.
-        unimplemented!(
-            "JsSigner does not support synchronous signing. \
-             Keyhive sync requires a signer that implements SyncSigner. \
-             Use MemorySigner or WebCryptoSigner for keyhive sync support."
-        )
+impl AsyncSigner for JsSigner {
+    #[allow(clippy::expect_used)]
+    async fn try_sign_bytes_async(
+        &self,
+        payload_bytes: &[u8],
+    ) -> Result<Signature, KeyhiveSigningError> {
+        let result = self.js_sign(payload_bytes);
+
+        let sig_array: Uint8Array = if result.has_type::<Promise>() {
+            let promise: Promise = result.unchecked_into();
+            JsFuture::from(promise)
+                .await
+                .expect("JsSigner.sign promise rejected")
+                .unchecked_into()
+        } else {
+            result.unchecked_into()
+        };
+
+        let sig_bytes: Vec<u8> = sig_array.to_vec();
+        let sig_array: [u8; 64] = sig_bytes
+            .try_into()
+            .expect("JsSigner.sign must return exactly 64 bytes");
+        Ok(Signature::from_bytes(&sig_array))
     }
 }
