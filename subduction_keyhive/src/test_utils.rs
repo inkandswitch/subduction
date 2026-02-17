@@ -5,7 +5,7 @@ use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
 use future_form::Local;
-use futures::{future::LocalBoxFuture, FutureExt};
+use futures::{FutureExt, future::LocalBoxFuture};
 use keyhive_core::{
     access::Access,
     crypto::signer::memory::MemorySigner,
