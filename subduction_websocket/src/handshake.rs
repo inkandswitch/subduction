@@ -30,8 +30,8 @@ use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 
 use async_tungstenite::WebSocketStream;
-use future_form::{FutureForm, Sendable};
-use futures_util::{AsyncRead, AsyncWrite, SinkExt, StreamExt, future::BoxFuture};
+use future_form::{FutureForm, Local, Sendable, future_form};
+use futures_util::{AsyncRead, AsyncWrite, SinkExt, StreamExt};
 use subduction_core::connection::handshake::Handshake;
 use thiserror::Error;
 
@@ -92,21 +92,22 @@ impl<T> DerefMut for WebSocketHandshake<T> {
     }
 }
 
-impl<T> Handshake<Sendable> for WebSocketHandshake<T>
-where
-    T: AsyncRead + AsyncWrite + Unpin + Send,
-{
+#[future_form(
+    Sendable where T: AsyncRead + AsyncWrite + Unpin + Send,
+    Local where T: AsyncRead + AsyncWrite + Unpin
+)]
+impl<K: FutureForm, T> Handshake<K> for WebSocketHandshake<T> {
     type Error = WebSocketHandshakeError;
 
-    fn send(&mut self, bytes: Vec<u8>) -> BoxFuture<'_, Result<(), Self::Error>> {
-        Sendable::from_future(async move {
+    fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>> {
+        K::from_future(async move {
             SinkExt::send(&mut self.0, tungstenite::Message::Binary(bytes.into())).await?;
             Ok(())
         })
     }
 
-    fn recv(&mut self) -> BoxFuture<'_, Result<Vec<u8>, Self::Error>> {
-        Sendable::from_future(async move {
+    fn recv(&mut self) -> K::Future<'_, Result<Vec<u8>, Self::Error>> {
+        K::from_future(async move {
             loop {
                 let msg = self
                     .0
