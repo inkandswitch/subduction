@@ -19,7 +19,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
@@ -58,6 +58,7 @@ async fn rend_receive() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(async move {
@@ -185,6 +186,7 @@ async fn batch_sync() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
     tokio::spawn(async move {
         listener_fut.await?;
@@ -237,6 +239,7 @@ async fn batch_sync() -> TestResult {
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(client_manager_fut);

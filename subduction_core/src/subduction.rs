@@ -70,6 +70,7 @@
 //! [`remove_sedimentree`]: Subduction::remove_sedimentree
 
 pub mod error;
+pub mod pending_blob_requests;
 pub mod request;
 
 use crate::{
@@ -132,6 +133,8 @@ use sedimentree_core::{
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 
+use pending_blob_requests::PendingBlobRequests;
+
 /// The main synchronization manager for sedimentrees.
 #[derive(Debug, Clone)]
 pub struct Subduction<
@@ -167,8 +170,9 @@ pub struct Subduction<
     ///
     /// Used to reject unsolicited [`BlobsResponse`] messages — only blobs
     /// whose `(SedimentreeId, Digest)` pairs appear in this set are saved.
-    #[allow(clippy::type_complexity)]
-    pending_blob_requests: Arc<Mutex<Set<(SedimentreeId, Digest<Blob>)>>>,
+    /// Uses LRU eviction when capacity is exceeded (safety valve).
+    /// Primary cleanup happens on sync completion.
+    pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
 
     manager_channel: Sender<Command<C>>,
     msg_queue: async_channel::Receiver<(C, Message)>,
@@ -208,6 +212,7 @@ impl<
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
+        max_pending_blob_requests: usize,
     ) -> (
         Arc<Self>,
         ListenerFuture<'a, F, S, C, P, Sig, M, N>,
@@ -239,7 +244,9 @@ impl<
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
-            pending_blob_requests: Arc::new(Mutex::new(Set::new())),
+            pending_blob_requests: Arc::new(Mutex::new(PendingBlobRequests::new(
+                max_pending_blob_requests,
+            ))),
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -277,6 +284,7 @@ impl<
         depth_metric: M,
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
+        max_pending_blob_requests: usize,
     ) -> Result<
         (
             Arc<Self>,
@@ -298,6 +306,7 @@ impl<
             depth_metric,
             sedimentrees,
             spawner,
+            max_pending_blob_requests,
         );
         for id in ids {
             let signed_loose_commits = subduction
@@ -511,6 +520,7 @@ impl<
                         // Spawn dispatch as concurrent task
                         let this = self.clone();
                         let conn_clone = conn.clone();
+
                         in_flight.push(async move {
                             let result = this.dispatch(&conn_clone, msg).await;
                             (conn_clone, result)
@@ -637,7 +647,7 @@ impl<
                     let mut rejected_count = 0usize;
                     for blob in blobs {
                         let digest = Digest::hash_bytes(blob.as_slice());
-                        if pending.remove(&(id, digest)) {
+                        if pending.remove(id, digest) {
                             accepted.push(blob);
                         } else {
                             tracing::warn!(
@@ -1834,7 +1844,7 @@ impl<
         {
             let mut pending = self.pending_blob_requests.lock().await;
             for digest in &digests {
-                pending.insert((id, *digest));
+                pending.insert(id, *digest);
             }
         }
 
@@ -2045,6 +2055,13 @@ impl<
                     }
 
                     had_success = true;
+
+                    // Cleanup pending blob requests for this tree since sync completed
+                    self.pending_blob_requests
+                        .lock()
+                        .await
+                        .remove_for_sedimentree(id);
+
                     break;
                 }
             }
@@ -2246,6 +2263,13 @@ impl<
                     }
 
                     had_success = true;
+
+                    // Cleanup pending blob requests for this tree since sync completed
+                    self.pending_blob_requests
+                        .lock()
+                        .await
+                        .remove_for_sedimentree(id);
+
                     break;
                 }
             }
@@ -2411,6 +2435,12 @@ impl<
                         "mutual subscription: added peer {peer_id} to our subscriptions for {id:?}"
                     );
                 }
+
+                // Cleanup pending blob requests for this tree since sync completed
+                self.pending_blob_requests
+                    .lock()
+                    .await
+                    .remove_for_sedimentree(id);
 
                 Ok((true, stats, pending_send, None))
             }

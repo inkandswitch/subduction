@@ -9,7 +9,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::sync::Arc;
 use core::time::Duration;
@@ -69,6 +69,7 @@ fn new_dispatch_subduction() -> (
         CountLeadingZeroBytes,
         ShardedMap::with_key(0, 0),
         TokioSpawn,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     )
 }
 

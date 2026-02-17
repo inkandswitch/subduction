@@ -11,7 +11,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::collections::BTreeSet;
 
@@ -73,6 +73,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection
@@ -112,6 +113,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection
@@ -151,6 +153,7 @@ async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection with a different peer ID than the sender
@@ -196,6 +199,7 @@ async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResu
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection with a different peer ID than the sender
@@ -241,6 +245,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection
@@ -280,6 +285,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register two connections that will succeed

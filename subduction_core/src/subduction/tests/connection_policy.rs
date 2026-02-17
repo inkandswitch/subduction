@@ -9,7 +9,7 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::vec::Vec;
 use core::fmt;
@@ -96,6 +96,7 @@ async fn rejected_connection_is_not_registered() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let peer_id = PeerId::new([1u8; 32]);
@@ -145,6 +146,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let rejected_peer = PeerId::new([2u8; 32]);

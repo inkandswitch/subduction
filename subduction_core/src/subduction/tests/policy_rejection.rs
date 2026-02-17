@@ -13,7 +13,7 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::{collections::BTreeSet, vec::Vec};
 use core::{fmt, time::Duration};
@@ -171,6 +171,7 @@ async fn add_sedimentree_rejected_by_policy() {
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let id = SedimentreeId::new([1u8; 32]);
@@ -205,6 +206,7 @@ async fn add_commit_rejected_by_policy() {
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let id = SedimentreeId::new([1u8; 32]);
@@ -243,6 +245,7 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Adding to allowed ID should succeed
@@ -282,6 +285,7 @@ async fn policy_rejection_does_not_store_data() {
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let id = SedimentreeId::new([1u8; 32]);
@@ -373,6 +377,7 @@ async fn multiple_rejections_all_fail_cleanly() {
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Try multiple operations - all should fail
@@ -402,6 +407,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
             CountLeadingZeroBytes,
             ShardedMap::with_key(0, 0),
             TokioSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let peer_id = PeerId::new([1u8; 32]);

@@ -6,7 +6,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::Subduction,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use future_form::Sendable;
 use sedimentree_core::commit::CountLeadingZeroBytes;
@@ -26,6 +26,7 @@ fn test_new_creates_empty_subduction() {
             depth_metric,
             ShardedMap::with_key(0, 0),
             TestSpawn,
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Verify initial state via async runtime would be needed,
