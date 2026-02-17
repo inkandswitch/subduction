@@ -875,6 +875,7 @@ impl WasmAuthenticatedWebSocket {
 #[wasm_bindgen(js_class = AuthenticatedWebSocket)]
 impl WasmAuthenticatedWebSocket {
     /// The verified peer identity.
+    #[must_use]
     #[wasm_bindgen(getter, js_name = peerId)]
     pub fn peer_id(&self) -> WasmPeerId {
         self.inner.peer_id().into()
