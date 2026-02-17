@@ -150,7 +150,7 @@ use pending_blob_requests::PendingBlobRequests;
 #[allow(clippy::type_complexity)]
 pub struct Subduction<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -210,14 +210,20 @@ pub struct Subduction<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore> + 'static,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
     /// Initialize a new `Subduction` with the given storage backend, policy, signer, depth metric, sharded `Sedimentree` map, and spawner.
     ///
@@ -237,9 +243,12 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
+        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive_storage: KStore,
+        keyhive_contact_card_bytes: Vec<u8>,
     ) -> (
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, P, Sig, M, N>,
+        ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
         crate::connection::manager::ManagerFuture<F>,
     ) {
         tracing::info!("initializing Subduction instance");
@@ -312,7 +321,7 @@ impl<
     ) -> Result<
         (
             Arc<Self>,
-            ListenerFuture<'a, F, S, C, P, Sig, M, N>,
+            ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
             crate::connection::manager::ManagerFuture<F>,
         ),
         HydrationError<F, S>,
@@ -3136,14 +3145,20 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> Drop for Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> Drop for Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
@@ -3153,14 +3168,20 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> ConnectionPolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> ConnectionPolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
     type ConnectionDisallowed = P::ConnectionDisallowed;
 
@@ -3174,14 +3195,20 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> StoragePolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> StoragePolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
@@ -3226,10 +3253,16 @@ pub trait SubductionFutureForm<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self>,
+    Sig: Signer<Self> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
->: StartListener<'a, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<Self>,
+>: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
 }
 
@@ -3238,11 +3271,17 @@ impl<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self>,
+    Sig: Signer<Self> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-    U: StartListener<'a, S, C, P, Sig, M, N>,
-> SubductionFutureForm<'a, S, C, P, Sig, M, N> for U
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<Self>,
+    U: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+> SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore> for U
 {
 }
 
@@ -3254,50 +3293,92 @@ pub trait StartListener<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self>,
+    Sig: Signer<Self> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<Self>,
 >: FutureForm + RunManager<Authenticated<C, Self>> + Sized
 {
     /// Start the listener task for Subduction.
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
+        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
         Self: Sized;
 }
 
-#[future_form(
-    Sendable where
-        C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
-        S: Storage<Sendable> + Send + Sync + 'a,
-        P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
-        P::PutDisallowed: Send + 'static,
-        P::FetchDisallowed: Send + 'static,
-        Sig: Signer<Sendable> + Send + Sync + 'a,
-        M: DepthMetric + Send + Sync + 'a,
-        S::Error: Send + 'static,
-        C::DisconnectionError: Send + 'static,
-        C::CallError: Send + 'static,
-        C::RecvError: Send + 'static,
-        C::SendError: Send + 'static,
-    Local where
-        C: Connection<Local> + PartialEq + Clone + 'static,
-        S: Storage<Local> + 'a,
-        P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
-        Sig: Signer<Local> + 'a,
-        M: DepthMetric + 'a
-)]
-impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N>
-    for K
+// Manual impls for Sendable and Local because the future_form macro
+// doesn't handle complex generic bounds with angle brackets.
+
+impl<
+    'a,
+    C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
+    S: Storage<Sendable> + Send + Sync + 'a,
+    P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
+    Sig: Signer<Sendable> + AsyncSigner + Clone + Send + Sync + 'a,
+    M: DepthMetric + Send + Sync + 'a,
+    const N: usize,
+    KContentRef: ContentRef + Send + Sync + 'static,
+    KPayload: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + Send + Sync + 'static,
+    KListener: MembershipListener<Sig, KContentRef> + Send + Sync + 'static,
+    KRng: CryptoRng + RngCore + Send + 'static,
+    KStore: KeyhiveStorage<Sendable> + Send + Sync + 'static,
+> StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+    for Sendable
+where
+    P::PutDisallowed: Send + 'static,
+    P::FetchDisallowed: Send + 'static,
+    S::Error: Send + 'static,
+    C::DisconnectionError: Send + 'static,
+    C::CallError: Send + 'static,
+    C::RecvError: Send + 'static,
+    C::SendError: Send + 'static,
 {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
+        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
-            K::from_future(async move {
+            Sendable::from_future(async move {
+                if let Err(e) = subduction.listen().await {
+                    tracing::error!("Subduction listen error: {}", e.to_string());
+                }
+            }),
+            abort_reg,
+        )
+    }
+}
+
+impl<
+    'a,
+    C: Connection<Local> + PartialEq + Clone + 'static,
+    S: Storage<Local> + 'a,
+    P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
+    Sig: Signer<Local> + AsyncSigner + Clone + 'a,
+    M: DepthMetric + 'a,
+    const N: usize,
+    KContentRef: ContentRef + 'static,
+    KPayload: for<'de> serde::Deserialize<'de> + 'static,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + 'static,
+    KListener: MembershipListener<Sig, KContentRef> + 'static,
+    KRng: CryptoRng + RngCore + 'static,
+    KStore: KeyhiveStorage<Local> + 'static,
+> StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+    for Local
+{
+    fn start_listener(
+        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>>,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>> {
+        Abortable::new(
+            Local::from_future(async move {
                 if let Err(e) = subduction.listen().await {
                     tracing::error!("Subduction listen error: {}", e.to_string());
                 }
@@ -3314,28 +3395,40 @@ impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C,
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize = 256,
+    KContentRef: ContentRef = [u8; 32],
+    KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<KContentRef, KPayload>,
+    KListener: MembershipListener<Sig, KContentRef> = NoListener,
+    KRng: CryptoRng + RngCore = OsRng,
+    KStore: KeyhiveStorage<F> = MemoryKeyhiveStorage,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
-    _phantom: PhantomData<(S, C, P, Sig, M)>,
+    _phantom: PhantomData<(S, C, P, Sig, M, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore)>,
 }
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
@@ -3354,14 +3447,20 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> Deref for ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> Deref for ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
     type Target = Abortable<F::Future<'a, ()>>;
 
@@ -3372,14 +3471,20 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> Future for ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> Future for ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
     type Output = Result<(), Aborted>;
 
@@ -3390,14 +3495,20 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
     M: DepthMetric,
     const N: usize,
-> Unpin for ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+> Unpin for ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
 {
 }
 
