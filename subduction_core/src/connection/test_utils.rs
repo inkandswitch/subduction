@@ -8,9 +8,9 @@ use future_form::{FutureForm, Local, Sendable};
 use futures::FutureExt;
 
 use super::{
-    Connection,
     authenticated::Authenticated,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    Connection,
 };
 use crate::peer::id::PeerId;
 
@@ -47,8 +47,8 @@ impl MockConnection {
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
-    pub const fn authenticated(self) -> Authenticated<Self> {
-        Authenticated::from_handshake(self, self.peer_id)
+    pub fn authenticated(self) -> Authenticated<Self> {
+        Authenticated::new_for_test(self, self.peer_id)
     }
 }
 
@@ -131,8 +131,8 @@ impl FailingSendMockConnection {
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
-    pub const fn authenticated(self) -> Authenticated<Self> {
-        Authenticated::from_handshake(self, self.peer_id)
+    pub fn authenticated(self) -> Authenticated<Self> {
+        Authenticated::new_for_test(self, self.peer_id)
     }
 }
 
@@ -263,9 +263,9 @@ impl ChannelMockConnection {
     ///
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
-    pub const fn authenticated(self) -> Authenticated<Self> {
+    pub fn authenticated(self) -> Authenticated<Self> {
         let peer_id = self.peer_id;
-        Authenticated::from_handshake(self, peer_id)
+        Authenticated::new_for_test(self, peer_id)
     }
 }
 

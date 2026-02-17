@@ -8,8 +8,8 @@ use core::time::Duration;
 use future_form::FutureForm;
 
 use super::{
-    Connection, Reconnect,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    Connection, Reconnect,
 };
 use crate::peer::id::PeerId;
 
@@ -21,17 +21,26 @@ use crate::peer::id::PeerId;
 ///
 /// # Construction
 ///
-/// Only construct via [`Authenticated::from_handshake`] after successful
-/// handshake verification. The `peer_id` must come from signature
-/// verification, not self-reported by the peer.
+/// Use [`handshake::initiate`] or [`handshake::respond`] to perform
+/// handshake verification and obtain an `Authenticated` connection.
+///
+/// [`handshake::initiate`]: super::handshake::initiate
+/// [`handshake::respond`]: super::handshake::respond
 ///
 /// # Example
 ///
 /// ```ignore
-/// // After successful handshake
-/// let handshake_result = server_handshake(&mut stream, ...).await?;
-/// let conn = WebSocket::new(stream, ..., handshake_result.client_id);
-/// let authenticated = Authenticated::from_handshake(conn, handshake_result.client_id);
+/// use subduction_core::connection::handshake;
+///
+/// // Initiator side - performs handshake and returns Authenticated<MyConnection>
+/// let authenticated = handshake::initiate(
+///     &mut transport,
+///     |peer_id| MyConnection::new(stream, peer_id),
+///     &signer,
+///     audience,
+///     now,
+///     nonce,
+/// ).await?;
 ///
 /// // Now register() accepts the authenticated connection
 /// subduction.register(authenticated).await?;
@@ -45,9 +54,21 @@ pub struct Authenticated<C> {
 impl<C> Authenticated<C> {
     /// Construct from a successful handshake.
     ///
-    /// The `peer_id` must be the verified identity from signature
-    /// verification, not self-reported by the peer.
-    pub const fn from_handshake(inner: C, peer_id: PeerId) -> Self {
+    /// This is only accessible within the `connection` module.
+    /// Use [`handshake::initiate`] or [`handshake::respond`] to obtain
+    /// an `Authenticated` connection.
+    ///
+    /// [`handshake::initiate`]: super::handshake::initiate
+    /// [`handshake::respond`]: super::handshake::respond
+    pub(super) const fn from_handshake(inner: C, peer_id: PeerId) -> Self {
+        Self { inner, peer_id }
+    }
+
+    /// Construct for testing purposes only.
+    ///
+    /// This bypasses handshake verification and should only be used in tests.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub fn new_for_test(inner: C, peer_id: PeerId) -> Self {
         Self { inner, peer_id }
     }
 
