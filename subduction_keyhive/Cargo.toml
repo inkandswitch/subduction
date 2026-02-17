@@ -17,8 +17,8 @@ base64 = { workspace = true }
 blake3 = { workspace = true }
 ciborium = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
+future_form = { workspace = true }
 futures = { workspace = true }
-futures_kind = { workspace = true }
 keyhive_core = { workspace = true }
 minicbor = { workspace = true }
 rand = "0.8.5"
