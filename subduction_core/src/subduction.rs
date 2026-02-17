@@ -496,6 +496,17 @@ impl<
         &self.nonce_tracker
     }
 
+    /// Returns a reference to the keyhive instance.
+    ///
+    /// The keyhive is protected by a mutex since it may be accessed concurrently
+    /// by sync operations.
+    #[must_use]
+    pub fn keyhive(
+        &self,
+    ) -> &Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>> {
+        &self.keyhive
+    }
+
     /// Get a connection to a peer, if one exists.
     ///
     /// Returns the first available connection to the peer. Use this to get a

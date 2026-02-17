@@ -5,22 +5,21 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use alloc::{sync::Arc, vec::Vec};
-use async_lock::Mutex;
+use alloc::{collections::BTreeSet, sync::Arc, vec::Vec};
 use core::time::Duration;
 use future_form::Sendable;
 use keyhive_core::{
     access::Access,
+    crypto::digest::Digest,
+    event::Event,
     keyhive::Keyhive,
     listener::no_listener::NoListener,
-    principal::{group::id::GroupId, membered::Membered},
+    principal::{group::id::GroupId, identifier::Identifier, membered::Membered},
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use rand::rngs::OsRng;
 use sedimentree_core::commit::CountLeadingZeroBytes;
-use subduction_keyhive::{
-    KeyhivePeerId, MemoryKeyhiveStorage, SignedMessage as KeyhiveSignedMessage,
-};
+use subduction_keyhive::{KeyhivePeerId, MemoryKeyhiveStorage};
 use testresult::TestResult;
 
 use super::common::TokioSpawn;
@@ -63,42 +62,36 @@ fn serialize_contact_card(cc: &keyhive_core::contact_card::ContactCard) -> Vec<u
 
 /// Get the keyhive peer ID from a keyhive instance.
 fn keyhive_peer_id(keyhive: &TestKeyhive) -> KeyhivePeerId {
-    let vk = keyhive.active_verifying_key();
-    KeyhivePeerId::from_bytes(*vk.as_bytes())
+    let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
+    KeyhivePeerId::from_bytes(id.to_bytes())
 }
 
+/// Type alias for the Subduction type used in tests.
+type TestSubduction = Subduction<
+    'static,
+    Sendable,
+    MemoryStorage,
+    ChannelMockConnection,
+    OpenPolicy,
+    MemorySigner,
+    CountLeadingZeroBytes,
+>;
+
 /// A test harness for two peers with Subduction instances.
+///
+/// This harness creates two Subduction instances (Alice and Bob) with their
+/// keyhives pre-configured with exchanged contact cards. The keyhives are
+/// accessed via `subduction.keyhive()` to ensure we're testing the actual
+/// internal state that sync operations modify.
 struct TwoPeerSubductionHarness {
-    alice: Arc<
-        Subduction<
-            'static,
-            Sendable,
-            MemoryStorage,
-            ChannelMockConnection,
-            OpenPolicy,
-            MemorySigner,
-            CountLeadingZeroBytes,
-        >,
-    >,
-    bob: Arc<
-        Subduction<
-            'static,
-            Sendable,
-            MemoryStorage,
-            ChannelMockConnection,
-            OpenPolicy,
-            MemorySigner,
-            CountLeadingZeroBytes,
-        >,
-    >,
-    alice_keyhive: Arc<Mutex<TestKeyhive>>,
-    bob_keyhive: Arc<Mutex<TestKeyhive>>,
+    alice: Arc<TestSubduction>,
+    bob: Arc<TestSubduction>,
     alice_peer_id: PeerId,
     bob_peer_id: PeerId,
     alice_keyhive_id: KeyhivePeerId,
     bob_keyhive_id: KeyhivePeerId,
-    alice_handle: crate::connection::test_utils::ChannelMockHandle,
-    bob_handle: crate::connection::test_utils::ChannelMockHandle,
+    alice_handle: crate::connection::test_utils::ChannelMockConnectionHandle,
+    bob_handle: crate::connection::test_utils::ChannelMockConnectionHandle,
     // Abort handles for cleanup
     _alice_actor: tokio::task::JoinHandle<()>,
     _alice_listener: tokio::task::JoinHandle<()>,
@@ -108,6 +101,9 @@ struct TwoPeerSubductionHarness {
 
 impl TwoPeerSubductionHarness {
     /// Create a new two-peer harness with contact cards already exchanged.
+    ///
+    /// The keyhives are owned by their respective Subduction instances.
+    /// Use `self.alice.keyhive()` and `self.bob.keyhive()` to access them.
     async fn new() -> Self {
         let alice_signer = make_signer(1);
         let bob_signer = make_signer(2);
@@ -137,11 +133,7 @@ impl TwoPeerSubductionHarness {
         let alice_cc_bytes = serialize_contact_card(&alice_cc);
         let bob_cc_bytes = serialize_contact_card(&bob_cc);
 
-        // Wrap keyhives in Arc<Mutex> for sharing
-        let alice_keyhive = Arc::new(Mutex::new(alice_keyhive));
-        let bob_keyhive = Arc::new(Mutex::new(bob_keyhive));
-
-        // Create Subduction instances
+        // Create Subduction instances - keyhives are moved into Subduction
         let (alice, alice_listener, alice_actor) =
             Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
                 None,
@@ -153,7 +145,7 @@ impl TwoPeerSubductionHarness {
                 ShardedMap::with_key(0, 0),
                 TokioSpawn,
                 DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                alice_keyhive.lock().await.clone(),
+                alice_keyhive,
                 MemoryKeyhiveStorage::default(),
                 alice_cc_bytes,
             );
@@ -169,7 +161,7 @@ impl TwoPeerSubductionHarness {
                 ShardedMap::with_key(0, 0),
                 TokioSpawn,
                 DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                bob_keyhive.lock().await.clone(),
+                bob_keyhive,
                 MemoryKeyhiveStorage::default(),
                 bob_cc_bytes,
             );
@@ -207,8 +199,6 @@ impl TwoPeerSubductionHarness {
         Self {
             alice,
             bob,
-            alice_keyhive,
-            bob_keyhive,
             alice_peer_id,
             bob_peer_id,
             alice_keyhive_id,
@@ -223,8 +213,10 @@ impl TwoPeerSubductionHarness {
     }
 
     /// Create a group on Alice's keyhive and add Bob as a read member.
+    ///
+    /// Uses Alice's internal keyhive (via `subduction.keyhive()`).
     async fn alice_creates_group_with_bob(&self) -> GroupId {
-        let kh = self.alice_keyhive.lock().await;
+        let kh = self.alice.keyhive().lock().await;
         let group = kh.generate_group(vec![]).await.expect("generate_group");
         let group_id = group.lock().await.group_id();
 
@@ -269,31 +261,27 @@ impl TwoPeerSubductionHarness {
             .await?;
 
         // Forward Bob's response back to Alice (if any)
-        if let Ok(response) = tokio::time::timeout(
+        if let Ok(Ok(Message::Keyhive(response_msg))) = tokio::time::timeout(
             Duration::from_millis(50),
             self.bob_handle.outbound_rx.recv(),
         )
         .await
         {
-            if let Some(Message::Keyhive(response_msg)) = response {
-                self.alice
-                    .handle_keyhive_message(&self.bob_peer_id, response_msg)
-                    .await?;
-            }
+            self.alice
+                .handle_keyhive_message(&self.bob_peer_id, response_msg)
+                .await?;
         }
 
         // Forward any SyncOps from Alice to Bob
-        if let Ok(ops) = tokio::time::timeout(
+        if let Ok(Ok(Message::Keyhive(ops_msg))) = tokio::time::timeout(
             Duration::from_millis(50),
             self.alice_handle.outbound_rx.recv(),
         )
         .await
         {
-            if let Some(Message::Keyhive(ops_msg)) = ops {
-                self.bob
-                    .handle_keyhive_message(&self.alice_peer_id, ops_msg)
-                    .await?;
-            }
+            self.bob
+                .handle_keyhive_message(&self.alice_peer_id, ops_msg)
+                .await?;
         }
 
         Ok(())
@@ -307,45 +295,39 @@ impl TwoPeerSubductionHarness {
         self.bob.sync_keyhive(Some(&self.alice_peer_id)).await?;
 
         // Forward Bob's message to Alice
-        if let Ok(msg) = tokio::time::timeout(
+        if let Ok(Ok(Message::Keyhive(signed_msg))) = tokio::time::timeout(
             Duration::from_millis(100),
             self.bob_handle.outbound_rx.recv(),
         )
         .await
         {
-            if let Some(Message::Keyhive(signed_msg)) = msg {
-                self.alice
-                    .handle_keyhive_message(&self.bob_peer_id, signed_msg)
-                    .await?;
-            }
+            self.alice
+                .handle_keyhive_message(&self.bob_peer_id, signed_msg)
+                .await?;
         }
 
         // Forward Alice's response to Bob
-        if let Ok(response) = tokio::time::timeout(
+        if let Ok(Ok(Message::Keyhive(response_msg))) = tokio::time::timeout(
             Duration::from_millis(50),
             self.alice_handle.outbound_rx.recv(),
         )
         .await
         {
-            if let Some(Message::Keyhive(response_msg)) = response {
-                self.bob
-                    .handle_keyhive_message(&self.alice_peer_id, response_msg)
-                    .await?;
-            }
+            self.bob
+                .handle_keyhive_message(&self.alice_peer_id, response_msg)
+                .await?;
         }
 
         // Forward any SyncOps from Bob to Alice
-        if let Ok(ops) = tokio::time::timeout(
+        if let Ok(Ok(Message::Keyhive(ops_msg))) = tokio::time::timeout(
             Duration::from_millis(50),
             self.bob_handle.outbound_rx.recv(),
         )
         .await
         {
-            if let Some(Message::Keyhive(ops_msg)) = ops {
-                self.alice
-                    .handle_keyhive_message(&self.bob_peer_id, ops_msg)
-                    .await?;
-            }
+            self.alice
+                .handle_keyhive_message(&self.bob_peer_id, ops_msg)
+                .await?;
         }
 
         Ok(())
@@ -443,7 +425,7 @@ async fn test_group_membership_syncs() -> TestResult {
 
     // Before sync: Bob should NOT have the group
     {
-        let bob_kh = harness.bob_keyhive.lock().await;
+        let bob_kh = harness.bob.keyhive().lock().await;
         assert!(
             bob_kh.get_group(group_id).await.is_none(),
             "Bob should not have the group before sync"
@@ -458,7 +440,7 @@ async fn test_group_membership_syncs() -> TestResult {
 
     // After sync: Bob should have the group
     {
-        let bob_kh = harness.bob_keyhive.lock().await;
+        let bob_kh = harness.bob.keyhive().lock().await;
         let group = bob_kh.get_group(group_id).await;
         assert!(group.is_some(), "Bob should have the group after sync");
     }
@@ -479,7 +461,7 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
 
     // Bob creates his group and adds Alice
     let bob_group_id = {
-        let kh = harness.bob_keyhive.lock().await;
+        let kh = harness.bob.keyhive().lock().await;
         let group = kh.generate_group(vec![]).await.expect("generate_group");
         let group_id = group.lock().await.group_id();
 
@@ -506,7 +488,7 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
 
     // Before sync: each peer only has their own group
     {
-        let alice_kh = harness.alice_keyhive.lock().await;
+        let alice_kh = harness.alice.keyhive().lock().await;
         assert!(alice_kh.get_group(alice_group_id).await.is_some());
         assert!(
             alice_kh.get_group(bob_group_id).await.is_none(),
@@ -514,7 +496,7 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
         );
     }
     {
-        let bob_kh = harness.bob_keyhive.lock().await;
+        let bob_kh = harness.bob.keyhive().lock().await;
         assert!(bob_kh.get_group(bob_group_id).await.is_some());
         assert!(
             bob_kh.get_group(alice_group_id).await.is_none(),
@@ -530,7 +512,7 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
 
     // After sync: both peers should have both groups
     {
-        let alice_kh = harness.alice_keyhive.lock().await;
+        let alice_kh = harness.alice.keyhive().lock().await;
         assert!(
             alice_kh.get_group(alice_group_id).await.is_some(),
             "Alice should still have her group"
@@ -541,7 +523,7 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
         );
     }
     {
-        let bob_kh = harness.bob_keyhive.lock().await;
+        let bob_kh = harness.bob.keyhive().lock().await;
         assert!(
             bob_kh.get_group(bob_group_id).await.is_some(),
             "Bob should still have his group"
@@ -553,6 +535,31 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
     }
 
     Ok(())
+}
+
+/// Collect all sync-relevant op digests for an agent as raw bytes.
+///
+/// Includes membership ops and prekey ops. CGKA ops are excluded as they
+/// aren't synced yet (see TODO in `sync_events_for_agent`).
+async fn collect_sync_op_digests(kh: &TestKeyhive, identifier: Identifier) -> BTreeSet<[u8; 32]> {
+    let agent = kh.get_agent(identifier).await.expect("agent should exist");
+    let mut digests = BTreeSet::new();
+
+    // Membership ops
+    for digest in kh.membership_ops_for_agent(&agent).await.keys() {
+        digests.insert(*digest.raw.as_bytes());
+    }
+
+    // Prekey ops
+    for key_ops in kh.reachable_prekey_ops_for_agent(&agent).await.values() {
+        for key_op in key_ops {
+            let op = Event::<MemorySigner, [u8; 32], NoListener>::from(key_op.as_ref().clone());
+            let digest = Digest::hash(&op);
+            digests.insert(*digest.raw.as_bytes());
+        }
+    }
+
+    digests
 }
 
 /// Test that pending keyhive events are cleared after sync.
@@ -571,7 +578,7 @@ async fn test_pending_events_cleared_after_sync() -> TestResult {
 
     // Both peers should have no pending events
     {
-        let alice_kh = harness.alice_keyhive.lock().await;
+        let alice_kh = harness.alice.keyhive().lock().await;
         let pending = alice_kh.pending_event_hashes().await;
         assert!(
             pending.is_empty(),
@@ -580,7 +587,7 @@ async fn test_pending_events_cleared_after_sync() -> TestResult {
         );
     }
     {
-        let bob_kh = harness.bob_keyhive.lock().await;
+        let bob_kh = harness.bob.keyhive().lock().await;
         let pending = bob_kh.pending_event_hashes().await;
         assert!(
             pending.is_empty(),
@@ -588,6 +595,61 @@ async fn test_pending_events_cleared_after_sync() -> TestResult {
             pending.len()
         );
     }
+
+    Ok(())
+}
+
+/// Test that keyhive ops fully converge after bidirectional sync.
+///
+/// Verifies that both peers have identical StaticEvent digest sets for all agents,
+/// not just that groups exist. This catches issues where sync delivers incomplete
+/// or inconsistent op sets.
+#[tokio::test]
+async fn test_keyhive_ops_fully_converge() -> TestResult {
+    let harness = TwoPeerSubductionHarness::new().await;
+
+    // Alice creates group and adds Bob (generates ops)
+    let _group_id = harness.alice_creates_group_with_bob().await;
+
+    // Run bidirectional sync
+    harness.run_bidirectional_keyhive_sync().await?;
+
+    // Give time for events to be processed
+    tokio::time::sleep(Duration::from_millis(50)).await;
+
+    // Get identifiers
+    let alice_id = harness.alice_keyhive_id.to_identifier().expect("alice id");
+    let bob_id = harness.bob_keyhive_id.to_identifier().expect("bob id");
+
+    // Lock both keyhives
+    let alice_kh = harness.alice.keyhive().lock().await;
+    let bob_kh = harness.bob.keyhive().lock().await;
+
+    // Verify Alice's ops match on both keyhives
+    let alice_ops_on_alice = collect_sync_op_digests(&alice_kh, alice_id).await;
+    let alice_ops_on_bob = collect_sync_op_digests(&bob_kh, alice_id).await;
+    assert_eq!(
+        alice_ops_on_alice, alice_ops_on_bob,
+        "Alice's ops should be identical on both peers"
+    );
+
+    // Verify Bob's ops match on both keyhives
+    let bob_ops_on_alice = collect_sync_op_digests(&alice_kh, bob_id).await;
+    let bob_ops_on_bob = collect_sync_op_digests(&bob_kh, bob_id).await;
+    assert_eq!(
+        bob_ops_on_alice, bob_ops_on_bob,
+        "Bob's ops should be identical on both peers"
+    );
+
+    // Verify pending events are empty on both
+    assert!(
+        alice_kh.pending_event_hashes().await.is_empty(),
+        "Alice should have no pending events"
+    );
+    assert!(
+        bob_kh.pending_event_hashes().await.is_empty(),
+        "Bob should have no pending events"
+    );
 
     Ok(())
 }
