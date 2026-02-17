@@ -70,6 +70,7 @@
 //! [`remove_sedimentree`]: Subduction::remove_sedimentree
 
 pub mod error;
+mod keyhive;
 pub mod pending_blob_requests;
 pub mod request;
 
@@ -99,6 +100,7 @@ use keyhive_core::{
     crypto::signer::async_signer::AsyncSigner,
     keyhive::Keyhive,
     listener::{membership::MembershipListener, no_listener::NoListener},
+    principal::identifier::Identifier as KeyhiveIdentifier,
     store::ciphertext::{CiphertextStore, memory::MemoryCiphertextStore},
 };
 use rand::{CryptoRng, RngCore, rngs::OsRng};
@@ -117,7 +119,7 @@ use error::{
     AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
     SendRequestedDataError, Unauthorized, WriteError,
 };
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{FutureForm, Local, Sendable};
 use futures::{
     FutureExt, StreamExt,
     future::try_join_all,
@@ -266,6 +268,10 @@ impl<
         let (abort_manager_handle, abort_manager_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
 
+        // Derive keyhive peer ID from keyhive's identifier
+        let keyhive_id: KeyhiveIdentifier = keyhive.id().into();
+        let keyhive_peer_id = KeyhivePeerId::from_bytes(keyhive_id.to_bytes());
+
         let sd = Arc::new(Self {
             discovery_id,
             signer,
@@ -285,6 +291,10 @@ impl<
             connection_closed: closed_receiver,
             abort_manager_handle,
             abort_listener_handle,
+            keyhive: Arc::new(Mutex::new(keyhive)),
+            keyhive_storage,
+            keyhive_peer_id,
+            keyhive_contact_card_bytes,
             _phantom: PhantomData,
         });
 
@@ -318,6 +328,9 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
+        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive_storage: KStore,
+        keyhive_contact_card_bytes: Vec<u8>,
     ) -> Result<
         (
             Arc<Self>,
@@ -340,6 +353,9 @@ impl<
             sedimentrees,
             spawner,
             max_pending_blob_requests,
+            keyhive,
+            keyhive_storage,
+            keyhive_contact_card_bytes,
         );
         for id in ids {
             let signed_loose_commits = subduction
