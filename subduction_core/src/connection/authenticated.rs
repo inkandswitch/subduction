@@ -1,0 +1,115 @@
+//! Authenticated connection wrapper.
+//!
+//! Provides [`Authenticated<C>`], a witness type proving that a connection
+//! has completed cryptographic handshake verification.
+
+use core::time::Duration;
+
+use future_form::FutureForm;
+
+use super::{
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    Connection, Reconnect,
+};
+use crate::peer::id::PeerId;
+
+/// A connection that has completed handshake verification.
+///
+/// This is a witness type proving the connection was authenticated.
+/// The inner connection has been verified via cryptographic handshake,
+/// and the `peer_id` matches the signing key used in verification.
+///
+/// # Construction
+///
+/// Only construct via [`Authenticated::from_handshake`] after successful
+/// handshake verification. The `peer_id` must come from signature
+/// verification, not self-reported by the peer.
+///
+/// # Example
+///
+/// ```ignore
+/// // After successful handshake
+/// let handshake_result = server_handshake(&mut stream, ...).await?;
+/// let conn = WebSocket::new(stream, ..., handshake_result.client_id);
+/// let authenticated = Authenticated::from_handshake(conn, handshake_result.client_id);
+///
+/// // Now register() accepts the authenticated connection
+/// subduction.register(authenticated).await?;
+/// ```
+#[derive(Debug, Clone, PartialEq)]
+pub struct Authenticated<C> {
+    inner: C,
+    peer_id: PeerId,
+}
+
+impl<C> Authenticated<C> {
+    /// Construct from a successful handshake.
+    ///
+    /// The `peer_id` must be the verified identity from signature
+    /// verification, not self-reported by the peer.
+    pub fn from_handshake(inner: C, peer_id: PeerId) -> Self {
+        Self { inner, peer_id }
+    }
+
+    /// The verified peer identity.
+    pub fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    /// Access the inner connection.
+    pub fn inner(&self) -> &C {
+        &self.inner
+    }
+
+    /// Consume and return the inner connection.
+    pub fn into_inner(self) -> C {
+        self.inner
+    }
+}
+
+impl<K: FutureForm + ?Sized, C: Connection<K>> Connection<K> for Authenticated<C> {
+    type DisconnectionError = C::DisconnectionError;
+    type SendError = C::SendError;
+    type RecvError = C::RecvError;
+    type CallError = C::CallError;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+        self.inner.disconnect()
+    }
+
+    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
+        self.inner.send(message)
+    }
+
+    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
+        self.inner.recv()
+    }
+
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
+        self.inner.next_request_id()
+    }
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+        self.inner.call(req, timeout)
+    }
+}
+
+impl<K: FutureForm, C: Reconnect<K>> Reconnect<K> for Authenticated<C> {
+    type ReconnectionError = C::ReconnectionError;
+
+    fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ReconnectionError>> {
+        self.inner.reconnect()
+    }
+
+    fn should_retry(&self, error: &Self::ReconnectionError) -> bool {
+        self.inner.should_retry(error)
+    }
+}
