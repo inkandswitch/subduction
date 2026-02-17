@@ -7,8 +7,7 @@
 use alloc::{string::String, vec::Vec};
 use core::fmt;
 
-use crate::error::VerificationError;
-use crate::peer_id::KeyhivePeerId;
+use crate::{error::VerificationError, peer_id::KeyhivePeerId};
 use keyhive_core::crypto::signed::Signed;
 
 /// Error type for CBOR serialization/deserialization.

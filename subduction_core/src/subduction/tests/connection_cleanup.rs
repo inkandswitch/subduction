@@ -1,6 +1,6 @@
 //! Tests for connection cleanup on send failure.
 
-use super::common::{test_keyhive, test_signer, TestSpawn};
+use super::common::{TestSpawn, test_keyhive, test_signer};
 use crate::{
     connection::{
         nonce_cache::NonceCache,
@@ -11,7 +11,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::collections::BTreeSet;
 use subduction_keyhive::MemoryKeyhiveStorage;

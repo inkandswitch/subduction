@@ -95,16 +95,6 @@ use crate::{
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
 };
-use keyhive_core::{
-    content::reference::ContentRef,
-    crypto::signer::async_signer::AsyncSigner,
-    keyhive::Keyhive,
-    listener::{membership::MembershipListener, no_listener::NoListener},
-    principal::identifier::Identifier as KeyhiveIdentifier,
-    store::ciphertext::{CiphertextStore, memory::MemoryCiphertextStore},
-};
-use rand::{CryptoRng, RngCore, rngs::OsRng};
-use subduction_keyhive::{KeyhivePeerId, KeyhiveStorage, MemoryKeyhiveStorage};
 use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
 use async_lock::Mutex;
@@ -125,7 +115,16 @@ use futures::{
     future::try_join_all,
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
 };
+use keyhive_core::{
+    content::reference::ContentRef,
+    crypto::signer::async_signer::AsyncSigner,
+    keyhive::Keyhive,
+    listener::{membership::MembershipListener, no_listener::NoListener},
+    principal::identifier::Identifier as KeyhiveIdentifier,
+    store::ciphertext::{CiphertextStore, memory::MemoryCiphertextStore},
+};
 use nonempty::NonEmpty;
+use rand::{CryptoRng, RngCore, rngs::OsRng};
 use request::FragmentRequested;
 use sedimentree_core::{
     blob::Blob,
@@ -144,6 +143,7 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
+use subduction_keyhive::{KeyhivePeerId, KeyhiveStorage, MemoryKeyhiveStorage};
 
 use pending_blob_requests::PendingBlobRequests;
 
@@ -152,7 +152,21 @@ use pending_blob_requests::PendingBlobRequests;
 #[allow(clippy::type_complexity)]
 pub struct Subduction<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -162,7 +176,10 @@ pub struct Subduction<
     // Keyhive generics
     KContentRef: ContentRef = [u8; 32],
     KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<KContentRef, KPayload>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+        KContentRef,
+        KPayload,
+    >,
     KListener: MembershipListener<Sig, KContentRef> = NoListener,
     KRng: CryptoRng + RngCore = OsRng,
     KStore: KeyhiveStorage<F> = MemoryKeyhiveStorage,
@@ -212,7 +229,21 @@ pub struct Subduction<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore> + 'static,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        > + 'static,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -225,7 +256,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+>
+    Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     /// Initialize a new `Subduction` with the given storage backend, policy, signer, depth metric, sharded `Sedimentree` map, and spawner.
     ///
@@ -250,7 +297,22 @@ impl<
         keyhive_contact_card_bytes: Vec<u8>,
     ) -> (
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+        ListenerFuture<
+            'a,
+            F,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
         crate::connection::manager::ManagerFuture<F>,
     ) {
         tracing::info!("initializing Subduction instance");
@@ -334,7 +396,22 @@ impl<
     ) -> Result<
         (
             Arc<Self>,
-            ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+            ListenerFuture<
+                'a,
+                F,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
             crate::connection::manager::ManagerFuture<F>,
         ),
         HydrationError<F, S>,
@@ -3167,7 +3244,21 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3180,7 +3271,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> Drop for Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+> Drop
+    for Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
@@ -3190,7 +3297,21 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3203,7 +3324,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> ConnectionPolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+> ConnectionPolicy<F>
+    for Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type ConnectionDisallowed = P::ConnectionDisallowed;
 
@@ -3217,7 +3354,21 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3230,7 +3381,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> StoragePolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+> StoragePolicy<F>
+    for Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
@@ -3284,7 +3451,22 @@ pub trait SubductionFutureForm<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<Self>,
->: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+>:
+    StartListener<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
 }
 
@@ -3302,8 +3484,37 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<Self>,
-    U: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
-> SubductionFutureForm<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore> for U
+    U: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+>
+    SubductionFutureForm<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    > for U
 {
 }
 
@@ -3328,7 +3539,24 @@ pub trait StartListener<
 {
     /// Start the listener task for Subduction.
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>>,
+        subduction: Arc<
+            Subduction<
+                'a,
+                Self,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+        >,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -3352,8 +3580,22 @@ impl<
     KListener: MembershipListener<Sig, KContentRef> + Send + Sync + 'static,
     KRng: CryptoRng + RngCore + Send + 'static,
     KStore: KeyhiveStorage<Sendable> + Send + Sync + 'static,
-> StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
-    for Sendable
+>
+    StartListener<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    > for Sendable
 where
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
@@ -3364,7 +3606,24 @@ where
     C::SendError: Send + 'static,
 {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>>,
+        subduction: Arc<
+            Subduction<
+                'a,
+                Self,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+        >,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -3392,11 +3651,42 @@ impl<
     KListener: MembershipListener<Sig, KContentRef> + 'static,
     KRng: CryptoRng + RngCore + 'static,
     KStore: KeyhiveStorage<Local> + 'static,
-> StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
-    for Local
+>
+    StartListener<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    > for Local
 {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>>,
+        subduction: Arc<
+            Subduction<
+                'a,
+                Self,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+        >,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -3417,7 +3707,21 @@ impl<
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3426,18 +3730,47 @@ pub struct ListenerFuture<
     const N: usize = 256,
     KContentRef: ContentRef = [u8; 32],
     KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<KContentRef, KPayload>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+        KContentRef,
+        KPayload,
+    >,
     KListener: MembershipListener<Sig, KContentRef> = NoListener,
     KRng: CryptoRng + RngCore = OsRng,
     KStore: KeyhiveStorage<F> = MemoryKeyhiveStorage,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
-    _phantom: PhantomData<(S, C, P, Sig, M, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore)>,
+    _phantom: PhantomData<(
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    )>,
 }
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3450,7 +3783,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+>
+    ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
@@ -3469,7 +3818,21 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3482,7 +3845,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> Deref for ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+> Deref
+    for ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type Target = Abortable<F::Future<'a, ()>>;
 
@@ -3493,7 +3872,21 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3506,7 +3899,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> Future for ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+> Future
+    for ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type Output = Result<(), Aborted>;
 
@@ -3517,7 +3926,21 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3530,7 +3953,23 @@ impl<
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveStorage<F>,
-> Unpin for ListenerFuture<'a, F, S, C, P, Sig, M, N, KContentRef, KPayload, KCiphertextStore, KListener, KRng, KStore>
+> Unpin
+    for ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
 }
 

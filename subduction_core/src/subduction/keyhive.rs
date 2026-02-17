@@ -17,7 +17,7 @@ use alloc::{collections::BTreeSet, string::ToString, vec, vec::Vec};
 use keyhive_core::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{static_event::StaticEvent, Event},
+    event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -26,14 +26,14 @@ use keyhive_core::{
 use rand::{CryptoRng, RngCore};
 use sedimentree_core::{collections::Map, depth::DepthMetric};
 use subduction_keyhive::{
+    KeyhivePeerId, KeyhiveStorage, SignedMessage as KeyhiveSignedMessage, StorageError,
     message::{EventBytes, EventHash, Message as KeyhiveMessage},
-    storage_ops, KeyhivePeerId, KeyhiveStorage, SignedMessage as KeyhiveSignedMessage,
-    StorageError,
+    storage_ops,
 };
 
 use super::{Subduction, SubductionFutureForm};
 use crate::{
-    connection::{message::Message, Connection},
+    connection::{Connection, message::Message},
     crypto::signer::Signer,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -77,35 +77,35 @@ fn decode_message(bytes: &[u8]) -> Result<KeyhiveMessage, StorageError> {
 }
 
 impl<
-        'a,
-        F: SubductionFutureForm<
-                'a,
-                S,
-                C,
-                P,
-                Sig,
-                M,
-                N,
-                KContentRef,
-                KPayload,
-                KCiphertextStore,
-                KListener,
-                KRng,
-                KStore,
-            > + 'static,
-        S: Storage<F>,
-        C: Connection<F> + PartialEq + 'a,
-        P: ConnectionPolicy<F> + StoragePolicy<F>,
-        Sig: Signer<F> + AsyncSigner + Clone,
-        M: DepthMetric,
-        const N: usize,
-        KContentRef: ContentRef + serde::de::DeserializeOwned,
-        KPayload: for<'de> serde::Deserialize<'de>,
-        KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-        KListener: MembershipListener<Sig, KContentRef>,
-        KRng: CryptoRng + RngCore,
-        KStore: KeyhiveStorage<F>,
-    >
+    'a,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        > + 'static,
+    S: Storage<F>,
+    C: Connection<F> + PartialEq + 'a,
+    P: ConnectionPolicy<F> + StoragePolicy<F>,
+    Sig: Signer<F> + AsyncSigner + Clone,
+    M: DepthMetric,
+    const N: usize,
+    KContentRef: ContentRef + serde::de::DeserializeOwned,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveStorage<F>,
+>
     Subduction<
         'a,
         F,

@@ -17,7 +17,7 @@ use keyhive_core::crypto::{
     verifiable::Verifiable,
 };
 use subduction_core::crypto::signer::Signer;
-use wasm_bindgen::{prelude::*, JsCast};
+use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;

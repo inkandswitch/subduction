@@ -13,7 +13,7 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{test_keyhive, test_signer, TokioSpawn};
+use super::common::{TokioSpawn, test_keyhive, test_signer};
 use crate::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
@@ -25,7 +25,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::collections::BTreeSet;
 use core::time::Duration;
@@ -39,9 +39,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{id::FragmentId, Fragment, FragmentSummary},
+    fragment::{Fragment, FragmentSummary, id::FragmentId},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
 use testresult::TestResult;

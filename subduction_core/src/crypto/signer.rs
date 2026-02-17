@@ -5,7 +5,7 @@
 //! hardware security modules, remote signing services, etc.).
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use keyhive_core::crypto::{
     signed::SigningError as KeyhiveSigningError, signer::sync_signer::SyncSigner,
     verifiable::Verifiable,

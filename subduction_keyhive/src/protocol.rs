@@ -21,7 +21,7 @@ use keyhive_core::{
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{static_event::StaticEvent, Event},
+    event::{Event, static_event::StaticEvent},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -747,10 +747,10 @@ mod tests {
     use crate::{
         storage::MemoryKeyhiveStorage,
         test_utils::{
-            create_channel_pair, create_group_with_read_members, exchange_all_contact_cards,
-            exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
-            make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
-            TestProtocol, TwoPeerHarness,
+            TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
+            exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
+            make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
+            serialize_contact_card,
         },
     };
     use future_form::Local;

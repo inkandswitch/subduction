@@ -2,7 +2,7 @@
 
 #![allow(clippy::panic)]
 
-use super::common::{test_keyhive, test_signer, TestSpawn, TokioSpawn};
+use super::common::{TestSpawn, TokioSpawn, test_keyhive, test_signer};
 use crate::{
     connection::{
         message::{BatchSyncResponse, Message, SyncResult},
@@ -13,12 +13,12 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::{collections::BTreeSet, vec::Vec};
 use core::{fmt, time::Duration};
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
