@@ -143,7 +143,10 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
-use subduction_keyhive::{KeyhivePeerId, KeyhiveStorage, MemoryKeyhiveStorage};
+use subduction_keyhive::{
+    peer_id::KeyhivePeerId,
+    storage::{KeyhiveStorage, MemoryKeyhiveStorage},
+};
 
 use pending_blob_requests::PendingBlobRequests;
 

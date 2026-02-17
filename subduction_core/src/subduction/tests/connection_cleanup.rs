@@ -14,7 +14,7 @@ use crate::{
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use alloc::collections::BTreeSet;
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 
 use future_form::Sendable;
 use sedimentree_core::{

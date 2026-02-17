@@ -19,7 +19,7 @@ use keyhive_core::{
 };
 use rand::rngs::OsRng;
 use sedimentree_core::commit::CountLeadingZeroBytes;
-use subduction_keyhive::{KeyhivePeerId, MemoryKeyhiveStorage};
+use subduction_keyhive::{peer_id::KeyhivePeerId, storage::MemoryKeyhiveStorage};
 use testresult::TestResult;
 
 use super::common::TokioSpawn;

@@ -16,7 +16,7 @@ use core::fmt;
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use testresult::TestResult;
 
 #[tokio::test]

@@ -30,7 +30,7 @@ use crate::{
 use alloc::collections::BTreeSet;
 use core::time::Duration;
 use future_form::Sendable;
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},

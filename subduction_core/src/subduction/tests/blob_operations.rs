@@ -17,7 +17,7 @@ use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use testresult::TestResult;
 
 const TEST_TREE: SedimentreeId = SedimentreeId::new([42u8; 32]);

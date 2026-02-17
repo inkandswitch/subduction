@@ -17,7 +17,7 @@ use keyhive_core::{
 };
 use rand::rngs::OsRng;
 use sedimentree_core::commit::CountLeadingZeroBytes;
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 
 /// Create a test signer with deterministic key bytes.
 pub(super) fn test_signer() -> MemorySigner {

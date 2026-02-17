@@ -33,7 +33,7 @@ use subduction_core::{
     sharded_map::ShardedMap,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use wasm_bindgen::prelude::*;
 
 use crate::{

@@ -35,7 +35,7 @@ rand = { workspace = true, features = ["std", "std_rng"] }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
-subduction_keyhive = { workspace = true }
+subduction_keyhive = { workspace = true, features = ["serde", "std"] }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }

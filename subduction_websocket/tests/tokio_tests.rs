@@ -26,7 +26,7 @@ use subduction_core::{
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };

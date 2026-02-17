@@ -8,7 +8,9 @@ use keyhive_core::{
     principal::individual::ReceivePrekeyOpError,
 };
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
-use subduction_keyhive::{KeyhivePeerId, VerificationError as KeyhiveVerificationError};
+use subduction_keyhive::{
+    error::VerificationError as KeyhiveVerificationError, peer_id::KeyhivePeerId,
+};
 use thiserror::Error;
 
 use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
@@ -161,7 +163,7 @@ pub enum KeyhiveSyncError<F: FutureForm + ?Sized, C: Connection<F>> {
 
     /// Keyhive storage operation failed.
     #[error("keyhive storage error")]
-    Storage(#[from] subduction_keyhive::StorageError),
+    Storage(#[from] subduction_keyhive::error::StorageError),
 
     /// Message signing failed.
     #[error("signing failed")]

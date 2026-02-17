@@ -26,8 +26,11 @@ use keyhive_core::{
 use rand::{CryptoRng, RngCore};
 use sedimentree_core::{collections::Map, depth::DepthMetric};
 use subduction_keyhive::{
-    KeyhivePeerId, KeyhiveStorage, SignedMessage as KeyhiveSignedMessage, StorageError,
+    error::StorageError,
     message::{EventBytes, EventHash, Message as KeyhiveMessage},
+    peer_id::KeyhivePeerId,
+    signed_message::SignedMessage as KeyhiveSignedMessage,
+    storage::KeyhiveStorage,
     storage_ops,
 };
 

@@ -3158,6 +3158,7 @@ dependencies = [
  "ed25519-dalek",
  "future_form",
  "futures 0.3.31",
+ "hex",
  "keyhive_core",
  "minicbor",
  "minicbor-serde",

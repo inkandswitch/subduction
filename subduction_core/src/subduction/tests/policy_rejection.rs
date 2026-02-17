@@ -26,7 +26,7 @@ use sedimentree_core::{
     id::SedimentreeId,
     sedimentree::{FingerprintSummary, Sedimentree},
 };
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use testresult::TestResult;
 
 /// A policy that rejects all puts but allows connections and fetches.

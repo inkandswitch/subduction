@@ -12,7 +12,7 @@ use sedimentree_core::{
 };
 
 use crate::{crypto::signed::Signed, peer::id::PeerId};
-use subduction_keyhive::SignedMessage as KeyhiveSignedMessage;
+use subduction_keyhive::signed_message::SignedMessage as KeyhiveSignedMessage;
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]

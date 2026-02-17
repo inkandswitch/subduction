@@ -10,7 +10,7 @@ use crate::{
 };
 use future_form::Sendable;
 use sedimentree_core::commit::CountLeadingZeroBytes;
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 
 #[tokio::test]
 async fn test_new_creates_empty_subduction() {

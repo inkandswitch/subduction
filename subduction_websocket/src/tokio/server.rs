@@ -50,18 +50,20 @@ pub struct TokioWebSocketServer<
     Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
+    KStore: 'static + Send + Sync + KeyhiveStorage<Sendable> = MemoryKeyhiveStorage,
 > where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
+    KStore::Error: 'static + Send + Sync,
 {
-    subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+    subduction: TokioWebSocketSubduction<S, P, Sig, O, M, KStore>,
     address: SocketAddr,
     accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
 
-impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
+impl<S, P, Sig, M, O, KStore> Clone for TokioWebSocketServer<S, P, Sig, M, O, KStore>
 where
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
@@ -71,6 +73,8 @@ where
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
     S::Error: 'static + Send + Sync,
+    KStore: 'static + Send + Sync + KeyhiveStorage<Sendable>,
+    KStore::Error: 'static + Send + Sync,
 {
     fn clone(&self) -> Self {
         Self {
@@ -88,11 +92,13 @@ impl<
     Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-> TokioWebSocketServer<S, P, Sig, M, O>
+    KStore: 'static + Send + Sync + KeyhiveStorage<Sendable>,
+> TokioWebSocketServer<S, P, Sig, M, O, KStore>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
+    KStore::Error: 'static + Send + Sync,
 {
     /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
     ///
@@ -116,7 +122,7 @@ where
         timeout: O,
         default_time_limit: Duration,
         handshake_max_drift: Duration,
-        subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+        subduction: TokioWebSocketSubduction<S, P, Sig, O, M, KStore>,
     ) -> Result<Self, tungstenite::Error> {
         let server_peer_id = subduction.peer_id();
         tracing::info!(
@@ -275,7 +281,7 @@ where
             NoListener,
             OsRng,
         >,
-        keyhive_storage: MemoryKeyhiveStorage,
+        keyhive_storage: KStore,
         keyhive_contact_card_bytes: Vec<u8>,
     ) -> Result<Self, tungstenite::Error> {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
@@ -338,7 +344,7 @@ where
 
     /// Get a reference to the underlying [`Subduction`] instance.
     #[must_use]
-    pub const fn subduction(&self) -> &TokioWebSocketSubduction<S, P, Sig, O, M> {
+    pub const fn subduction(&self) -> &TokioWebSocketSubduction<S, P, Sig, O, M, KStore> {
         &self.subduction
     }
 
@@ -585,9 +591,9 @@ use keyhive_core::{
     listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
 };
 use rand::rngs::OsRng;
-use subduction_keyhive::MemoryKeyhiveStorage;
+use subduction_keyhive::storage::{KeyhiveStorage, MemoryKeyhiveStorage};
 
-type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
+type TokioWebSocketSubduction<S, P, Sig, O, M, KStore = MemoryKeyhiveStorage> = Arc<
     Subduction<
         'static,
         Sendable,
@@ -602,7 +608,7 @@ type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
         MemoryCiphertextStore<[u8; 32], Vec<u8>>,
         NoListener,
         OsRng,
-        MemoryKeyhiveStorage,
+        KStore,
     >,
 >;
 
