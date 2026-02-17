@@ -7,6 +7,7 @@ mod connection_cleanup;
 mod connection_management;
 mod connection_policy;
 mod initialization;
+mod keyhive_sync;
 mod message_flow;
 mod policy_rejection;
 mod sedimentree_operations;
