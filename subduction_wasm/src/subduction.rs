@@ -33,7 +33,8 @@ use wasm_bindgen::prelude::*;
 use crate::{
     connection::websocket::WasmWebSocket,
     error::{
-        WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError, WasmWriteError,
+        WasmAttachError, WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
+        WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -370,6 +371,27 @@ impl WasmSubduction {
             .core
             .disconnect_from_peer(&peer_id.clone().into())
             .await?)
+    }
+
+    /// Attach an authenticated WebSocket connection and sync all sedimentrees.
+    ///
+    /// The connection must have been authenticated via [`SubductionWebSocket::setup`],
+    /// [`SubductionWebSocket::tryConnect`], or [`SubductionWebSocket::tryDiscover`].
+    ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if registration or sync fails.
+    #[wasm_bindgen]
+    pub async fn attach(
+        &self,
+        conn: &crate::connection::websocket::WasmAuthenticatedWebSocket,
+    ) -> Result<bool, WasmAttachError> {
+        self.core
+            .attach(conn.inner().clone())
+            .await
+            .map_err(Into::into)
     }
 
     /// Get a local blob by its digest.
