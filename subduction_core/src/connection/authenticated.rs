@@ -68,7 +68,7 @@ impl<C> Authenticated<C> {
     ///
     /// This bypasses handshake verification and should only be used in tests.
     #[cfg(any(test, feature = "test_utils"))]
-    pub fn new_for_test(inner: C, peer_id: PeerId) -> Self {
+    pub const fn new_for_test(inner: C, peer_id: PeerId) -> Self {
         Self { inner, peer_id }
     }
 

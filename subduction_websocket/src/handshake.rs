@@ -68,7 +68,7 @@ pub struct WebSocketHandshake<T>(pub WebSocketStream<T>);
 
 impl<T> WebSocketHandshake<T> {
     /// Wrap a `WebSocketStream` for handshake.
-    pub fn new(stream: WebSocketStream<T>) -> Self {
+    pub const fn new(stream: WebSocketStream<T>) -> Self {
         Self(stream)
     }
 
@@ -119,10 +119,8 @@ where
                     tungstenite::Message::Text(_) => {
                         return Err(WebSocketHandshakeError::UnexpectedMessageType("text"));
                     }
-                    tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => {
-                        // Skip ping/pong, continue waiting for binary
-                        continue;
-                    }
+                    // Skip ping/pong, continue waiting for binary
+                    tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => {}
                     tungstenite::Message::Close(_) => {
                         return Err(WebSocketHandshakeError::ConnectionClosed);
                     }

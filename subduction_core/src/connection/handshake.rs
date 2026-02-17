@@ -543,6 +543,11 @@ pub struct RespondResult {
 /// - The responder rejects the handshake
 /// - The response signature is invalid
 /// - The response doesn't match the challenge
+///
+/// # Panics
+///
+/// Panics if CBOR encoding of the challenge message fails (should never happen
+/// with well-formed types).
 #[allow(clippy::expect_used)]
 pub async fn initiate<K, H, C, S>(
     mut handshake: H,
@@ -618,7 +623,12 @@ where
 /// - The audience doesn't match
 /// - The timestamp is outside the acceptable drift window
 /// - The nonce has already been used (replay attack)
-#[allow(clippy::expect_used)]
+///
+/// # Panics
+///
+/// Panics if CBOR encoding of the response or rejection message fails (should
+/// never happen with well-formed types).
+#[allow(clippy::expect_used, clippy::too_many_arguments)]
 pub async fn respond<K, H, C, S>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> C,
@@ -718,9 +728,10 @@ async fn send_rejection<K: FutureForm, H: Handshake<K>>(
     now: TimestampSeconds,
 ) -> Result<(), AuthenticateError<H::Error>> {
     let reason = match error {
-        HandshakeError::InvalidSignature => RejectionReason::InvalidSignature,
+        HandshakeError::InvalidSignature | HandshakeError::ResponseValidation(_) => {
+            RejectionReason::InvalidSignature
+        }
         HandshakeError::ChallengeValidation(cv) => cv.to_rejection_reason(),
-        HandshakeError::ResponseValidation(_) => RejectionReason::InvalidSignature,
     };
     let rejection = Rejection::new(reason, now);
     let msg = HandshakeMessage::Rejection(rejection);

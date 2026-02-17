@@ -75,6 +75,11 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
     /// # Errors
     ///
     /// Returns an error if the connection could not be established or handshake fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if internal state is inconsistent after a successful handshake (should never happen).
+    #[allow(clippy::expect_used)]
     pub async fn new<'a>(
         address: Uri,
         timeout: O,
