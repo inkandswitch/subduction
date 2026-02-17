@@ -8,6 +8,7 @@ use future_form::{FutureForm, Local, Sendable};
 use futures::FutureExt;
 
 use super::{
+    authenticated::Authenticated,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     Connection,
 };
@@ -40,6 +41,14 @@ impl MockConnection {
     #[must_use]
     pub const fn with_peer_id(peer_id: PeerId) -> Self {
         Self { peer_id }
+    }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    ///
+    /// Uses the connection's peer ID as the authenticated identity.
+    #[must_use]
+    pub fn authenticated(self) -> Authenticated<Self> {
+        Authenticated::from_handshake(self, self.peer_id)
     }
 }
 
@@ -116,6 +125,14 @@ impl FailingSendMockConnection {
     #[must_use]
     pub const fn with_peer_id(peer_id: PeerId) -> Self {
         Self { peer_id }
+    }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    ///
+    /// Uses the connection's peer ID as the authenticated identity.
+    #[must_use]
+    pub fn authenticated(self) -> Authenticated<Self> {
+        Authenticated::from_handshake(self, self.peer_id)
     }
 }
 
@@ -240,6 +257,15 @@ impl ChannelMockConnection {
     #[must_use]
     pub fn new_default_with_handle() -> (Self, ChannelMockConnectionHandle) {
         Self::new_with_handle(PeerId::new([0u8; 32]))
+    }
+
+    /// Wrap this connection in an `Authenticated` wrapper for testing.
+    ///
+    /// Uses the connection's peer ID as the authenticated identity.
+    #[must_use]
+    pub fn authenticated(self) -> Authenticated<Self> {
+        let peer_id = self.peer_id;
+        Authenticated::from_handshake(self, peer_id)
     }
 }
 
