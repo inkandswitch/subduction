@@ -12,8 +12,12 @@ use alloc::vec::Vec;
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
 use js_sys::{Promise, Uint8Array};
+use keyhive_core::crypto::{
+    signed::SigningError as KeyhiveSigningError, signer::sync_signer::SyncSigner,
+    verifiable::Verifiable,
+};
 use subduction_core::crypto::signer::Signer;
-use wasm_bindgen::{JsCast, prelude::*};
+use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;
@@ -25,6 +29,7 @@ extern "C" {
     /// This allows JavaScript code to provide signing implementations
     /// (e.g., hardware keys or remote signing services).
     #[wasm_bindgen(js_name = Signer)]
+    #[derive(Clone)]
     pub type JsSigner;
 
     /// Sign a message and return the 64-byte Ed25519 signature.
@@ -90,5 +95,29 @@ impl Signer<Local> for JsSigner {
             .expect("JsSigner.verifyingKey must return exactly 32 bytes");
         VerifyingKey::from_bytes(&vk_array)
             .expect("JsSigner.verifyingKey must return a valid Ed25519 public key")
+    }
+}
+
+// Keyhive trait implementations for JsSigner.
+// Note: JsSigner is fundamentally async (JavaScript Promises), so SyncSigner
+// cannot be properly implemented. These impls allow Subduction to compile,
+// but keyhive sync functionality is not supported with JsSigner.
+
+impl Verifiable for JsSigner {
+    fn verifying_key(&self) -> VerifyingKey {
+        <Self as Signer<Local>>::verifying_key(self)
+    }
+}
+
+impl SyncSigner for JsSigner {
+    fn try_sign_bytes_sync(&self, _payload_bytes: &[u8]) -> Result<Signature, KeyhiveSigningError> {
+        // JsSigner is async-only (JavaScript Promises). Keyhive sync is not
+        // supported in Wasm with JsSigner. Use MemorySigner if keyhive sync
+        // is needed.
+        unimplemented!(
+            "JsSigner does not support synchronous signing. \
+             Keyhive sync requires a signer that implements SyncSigner. \
+             Use MemorySigner or WebCryptoSigner for keyhive sync support."
+        )
     }
 }

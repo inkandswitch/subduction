@@ -12,16 +12,16 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
+    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -396,7 +396,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                         | Message::BlobsResponse { .. }
                         | Message::BatchSyncRequest(_)
                         | Message::RemoveSubscriptions(_)
-                        | Message::DataRequestRejected(_)) => {
+                        | Message::DataRequestRejected(_)
+                        | Message::Keyhive(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {
                                 tracing::error!(
                                     "failed to send inbound message to channel {}: {}",

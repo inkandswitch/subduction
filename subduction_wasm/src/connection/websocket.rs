@@ -125,7 +125,8 @@ impl WasmWebSocket {
                                 | Message::BlobsResponse { .. }
                                 | Message::BatchSyncRequest(_)
                                 | Message::RemoveSubscriptions(_)
-                                | Message::DataRequestRejected(_)) => {
+                                | Message::DataRequestRejected(_)
+                                | Message::Keyhive(_)) => {
                                     tracing::debug!("other message type received");
                                     if let Err(e) = inner_inbound_writer.clone().send(other).await {
                                         tracing::error!("failed to send inbound message: {e}");

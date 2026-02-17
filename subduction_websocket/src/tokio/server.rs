@@ -1,17 +1,23 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
+    MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
+use keyhive_core::crypto::signer::async_signer::AsyncSigner;
+use keyhive_core::{
+    content::reference::ContentRef, crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive,
+    listener::membership::MembershipListener, store::ciphertext::CiphertextStore,
+};
+use rand::{CryptoRng, RngCore};
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
 };
@@ -27,11 +33,12 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::traits::Storage,
     subduction::{
-        Subduction, error::RegistrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        error::RegistrationError, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        Subduction,
     },
     timestamp::TimestampSeconds,
 };
+use subduction_keyhive::KeyhiveStorage;
 
 use crate::tokio::TokioSpawn;
 use tokio::{
@@ -46,7 +53,7 @@ use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketC
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
 > where
@@ -66,7 +73,7 @@ where
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
-    Sig: 'static + Send + Sync + Signer<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
     S::Error: 'static + Send + Sync,
@@ -82,12 +89,12 @@ where
 }
 
 impl<
-    S: 'static + Send + Sync + Storage<Sendable>,
-    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
-    M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-> TokioWebSocketServer<S, P, Sig, M, O>
+        S: 'static + Send + Sync + Storage<Sendable>,
+        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+        Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+    > TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,

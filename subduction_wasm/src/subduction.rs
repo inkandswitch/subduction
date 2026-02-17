@@ -7,11 +7,16 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
+use keyhive_core::{
+    keyhive::Keyhive, listener::no_listener::NoListener,
+    store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::rngs::OsRng;
 use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
@@ -26,8 +31,9 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
+use subduction_keyhive::MemoryKeyhiveStorage;
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -111,9 +117,12 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
-    #[must_use]
-    #[wasm_bindgen(constructor)]
-    pub fn new(
+    /// Create a new [`Subduction`] instance.
+    ///
+    /// This is an async factory method because keyhive initialization is async.
+    /// Use this instead of a constructor.
+    #[wasm_bindgen]
+    pub async fn setup(
         signer: JsSigner,
         storage: JsSedimentreeStorage,
         service_name: Option<String>,
@@ -127,6 +136,18 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
+
+        // Create keyhive instance (keyhive sync not fully supported with JsSigner,
+        // but required for Subduction construction)
+        let keyhive = Keyhive::generate(
+            signer.clone(),
+            MemoryCiphertextStore::new(),
+            NoListener,
+            OsRng,
+        )
+        .await
+        .expect("failed to create keyhive");
+
         let (core, listener_fut, manager_fut) = Subduction::new(
             discovery_id,
             signer,
@@ -137,6 +158,9 @@ impl WasmSubduction {
             sedimentrees,
             WasmSpawn,
             max_pending,
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(), // Empty contact card bytes
         );
 
         wasm_bindgen_futures::spawn_local(async move {
@@ -189,6 +213,18 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
+
+        // Create keyhive instance (keyhive sync not fully supported with JsSigner,
+        // but required for Subduction construction)
+        let keyhive = Keyhive::generate(
+            signer.clone(),
+            MemoryCiphertextStore::new(),
+            NoListener,
+            OsRng,
+        )
+        .await
+        .expect("failed to create keyhive");
+
         let (core, listener_fut, manager_fut) = Subduction::hydrate(
             discovery_id,
             signer,
@@ -199,6 +235,9 @@ impl WasmSubduction {
             sedimentrees,
             WasmSpawn,
             max_pending,
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+            Vec::new(), // Empty contact card bytes
         )
         .await?;
 

@@ -30,10 +30,12 @@ future_form = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
+keyhive_core = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
+subduction_keyhive = { path = "../subduction_keyhive", features = ["serde", "std"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
