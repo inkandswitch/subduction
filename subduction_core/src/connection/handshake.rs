@@ -65,7 +65,7 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{
     connection::nonce_cache::NonceCache,
     crypto::{nonce::Nonce, signed::Signed, signer::Signer},
@@ -431,10 +431,6 @@ impl DriftCorrection {
     }
 }
 
-// ============================================================================
-// Transport abstraction and high-level handshake functions
-// ============================================================================
-
 /// A transport capable of exchanging handshake messages.
 ///
 /// Implementors provide raw byte send/recv over their transport layer.
@@ -743,10 +739,6 @@ async fn send_rejection<K: FutureForm, H: Handshake<K>>(
         .await
         .map_err(AuthenticateError::Transport)
 }
-
-// ============================================================================
-// Low-level handshake primitives (used internally and for testing)
-// ============================================================================
 
 /// Create a signed challenge for initiating a handshake.
 ///
