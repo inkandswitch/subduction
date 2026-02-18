@@ -31,12 +31,12 @@ use keyhive_core::{
 use crate::{
     collections::{Map, Set},
     connection::KeyhiveConnection,
-    error::{ProtocolError, SigningError, StorageError, VerificationError},
+    error::{ProtocolError, SigningError, VerificationError},
     message::{EventBytes, EventHash, Message},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
-    storage::KeyhiveStorage,
-    storage_ops,
+    storage::{KeyhiveArchiveStorage, KeyhiveEventStorage},
+    storage_ops::{self, CompactErrorFor, IngestFromStorageError},
 };
 
 /// Shared keyhive instance behind a mutex.
@@ -56,7 +56,7 @@ where
     L: MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
-    Store: KeyhiveStorage<K>,
+    Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
     keyhive: SharedKeyhive<Signer, T, P, C, L, R>,
@@ -77,7 +77,7 @@ where
     L: MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
-    Store: KeyhiveStorage<K>,
+    Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -98,7 +98,7 @@ where
     Conn: KeyhiveConnection<K>,
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
-    Store: KeyhiveStorage<K>,
+    Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
     K: future_form::FutureForm + ?Sized,
 {
     /// Create a new protocol handler.
@@ -598,7 +598,13 @@ where
     async fn try_storage_recovery(
         &self,
         event_bytes_list: &[EventBytes],
-    ) -> Result<(), StorageError> {
+    ) -> Result<
+        (),
+        IngestFromStorageError<
+            <Store as KeyhiveArchiveStorage<K>>::LoadError,
+            <Store as KeyhiveEventStorage<K>>::LoadError,
+        >,
+    > {
         {
             let keyhive = self.keyhive.lock().await;
             storage_ops::ingest_from_storage(&keyhive, &self.storage).await?;
@@ -649,12 +655,12 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError`] if any storage operation, serialization, or
+    /// Returns an error if any storage operation, serialization, or
     /// deserialization fails.
     pub async fn compact(
         &self,
         storage_id: crate::storage::StorageHash,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), CompactErrorFor<Store, K>> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::compact(&keyhive, &self.storage, storage_id).await
     }
@@ -663,8 +669,16 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError`] if loading or ingestion fails.
-    pub async fn ingest_from_storage(&self) -> Result<(), StorageError> {
+    /// Returns an error if loading or ingestion fails.
+    pub async fn ingest_from_storage(
+        &self,
+    ) -> Result<
+        (),
+        IngestFromStorageError<
+            <Store as KeyhiveArchiveStorage<K>>::LoadError,
+            <Store as KeyhiveEventStorage<K>>::LoadError,
+        >,
+    > {
         let keyhive = self.keyhive.lock().await;
         storage_ops::ingest_from_storage(&keyhive, &self.storage).await?;
         Ok(())

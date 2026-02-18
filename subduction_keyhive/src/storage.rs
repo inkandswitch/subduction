@@ -70,15 +70,20 @@ impl StorageHash {
     }
 }
 
-/// Abstraction over storage for keyhive data.
+/// Storage for keyhive archives (snapshots of keyhive state).
 ///
-/// This trait provides methods for persisting keyhive archives and events.
-/// Archives contain the full keyhive state, while events are individual
-/// operations.
+/// Archives represent complete snapshots of a keyhive's state at a point in time.
+/// They are stored with a stable identifier derived from the peer ID.
 #[allow(clippy::type_complexity)]
-pub trait KeyhiveStorage<K: FutureForm + ?Sized> {
-    /// The error type for storage operations.
-    type Error: core::error::Error;
+pub trait KeyhiveArchiveStorage<K: FutureForm + ?Sized> {
+    /// Error type for save operations.
+    type SaveError: core::error::Error;
+
+    /// Error type for load operations.
+    type LoadError: core::error::Error;
+
+    /// Error type for delete operations.
+    type DeleteError: core::error::Error;
 
     /// Save an archive to storage.
     ///
@@ -88,16 +93,32 @@ pub trait KeyhiveStorage<K: FutureForm + ?Sized> {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> K::Future<'_, Result<(), Self::SaveError>>;
 
     /// Load all archives from storage.
     ///
     /// Returns a vector of (hash, data) pairs for all stored archives.
     #[allow(clippy::type_complexity)]
-    fn load_archives(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
+    fn load_archives(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>>;
 
     /// Delete an archive from storage.
-    fn delete_archive(&self, hash: StorageHash) -> K::Future<'_, Result<(), Self::Error>>;
+    fn delete_archive(&self, hash: StorageHash) -> K::Future<'_, Result<(), Self::DeleteError>>;
+}
+
+/// Storage for keyhive events (individual operations).
+///
+/// Events are individual keyhive operations (delegations, revocations, etc.).
+/// They are stored with their BLAKE3 hash as the key.
+#[allow(clippy::type_complexity)]
+pub trait KeyhiveEventStorage<K: FutureForm + ?Sized> {
+    /// Error type for save operations.
+    type SaveError: core::error::Error;
+
+    /// Error type for load operations.
+    type LoadError: core::error::Error;
+
+    /// Error type for delete operations.
+    type DeleteError: core::error::Error;
 
     /// Save an event to storage.
     ///
@@ -107,16 +128,16 @@ pub trait KeyhiveStorage<K: FutureForm + ?Sized> {
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
+    ) -> K::Future<'_, Result<(), Self::SaveError>>;
 
     /// Load all events from storage.
     ///
     /// Returns a vector of (hash, data) pairs for all stored events.
     #[allow(clippy::type_complexity)]
-    fn load_events(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>>;
+    fn load_events(&self) -> K::Future<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>>;
 
     /// Delete an event from storage.
-    fn delete_event(&self, hash: StorageHash) -> K::Future<'_, Result<(), Self::Error>>;
+    fn delete_event(&self, hash: StorageHash) -> K::Future<'_, Result<(), Self::DeleteError>>;
 }
 
 /// An in-memory storage backend for testing.
@@ -137,14 +158,16 @@ impl MemoryKeyhiveStorage {
     }
 }
 
-impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
-    type Error = core::convert::Infallible;
+impl KeyhiveArchiveStorage<Local> for MemoryKeyhiveStorage {
+    type SaveError = core::convert::Infallible;
+    type LoadError = core::convert::Infallible;
+    type DeleteError = core::convert::Infallible;
 
     fn save_archive(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::SaveError>> {
         async move {
             self.archives.lock().await.insert(hash, data);
             Ok(())
@@ -154,7 +177,7 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
 
     fn load_archives(
         &self,
-    ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>> {
         async move {
             let archives = self.archives.lock().await;
             Ok(archives.iter().map(|(k, v)| (*k, v.clone())).collect())
@@ -162,19 +185,28 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         .boxed_local()
     }
 
-    fn delete_archive(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_archive(
+        &self,
+        hash: StorageHash,
+    ) -> LocalBoxFuture<'_, Result<(), Self::DeleteError>> {
         async move {
             self.archives.lock().await.remove(&hash);
             Ok(())
         }
         .boxed_local()
     }
+}
+
+impl KeyhiveEventStorage<Local> for MemoryKeyhiveStorage {
+    type SaveError = core::convert::Infallible;
+    type LoadError = core::convert::Infallible;
+    type DeleteError = core::convert::Infallible;
 
     fn save_event(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::SaveError>> {
         async move {
             self.events.lock().await.insert(hash, data);
             Ok(())
@@ -182,7 +214,9 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         .boxed_local()
     }
 
-    fn load_events(&self) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+    fn load_events(
+        &self,
+    ) -> LocalBoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>> {
         async move {
             let events = self.events.lock().await;
             Ok(events.iter().map(|(k, v)| (*k, v.clone())).collect())
@@ -190,7 +224,7 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
         .boxed_local()
     }
 
-    fn delete_event(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_event(&self, hash: StorageHash) -> LocalBoxFuture<'_, Result<(), Self::DeleteError>> {
         async move {
             self.events.lock().await.remove(&hash);
             Ok(())
@@ -199,14 +233,16 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
     }
 }
 
-impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
-    type Error = core::convert::Infallible;
+impl KeyhiveArchiveStorage<Sendable> for MemoryKeyhiveStorage {
+    type SaveError = core::convert::Infallible;
+    type LoadError = core::convert::Infallible;
+    type DeleteError = core::convert::Infallible;
 
     fn save_archive(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+    ) -> BoxFuture<'_, Result<(), Self::SaveError>> {
         async move {
             self.archives.lock().await.insert(hash, data);
             Ok(())
@@ -214,7 +250,7 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         .boxed()
     }
 
-    fn load_archives(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+    fn load_archives(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>> {
         async move {
             let archives = self.archives.lock().await;
             Ok(archives.iter().map(|(k, v)| (*k, v.clone())).collect())
@@ -222,19 +258,25 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         .boxed()
     }
 
-    fn delete_archive(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_archive(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::DeleteError>> {
         async move {
             self.archives.lock().await.remove(&hash);
             Ok(())
         }
         .boxed()
     }
+}
+
+impl KeyhiveEventStorage<Sendable> for MemoryKeyhiveStorage {
+    type SaveError = core::convert::Infallible;
+    type LoadError = core::convert::Infallible;
+    type DeleteError = core::convert::Infallible;
 
     fn save_event(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+    ) -> BoxFuture<'_, Result<(), Self::SaveError>> {
         async move {
             self.events.lock().await.insert(hash, data);
             Ok(())
@@ -242,7 +284,7 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         .boxed()
     }
 
-    fn load_events(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+    fn load_events(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>> {
         async move {
             let events = self.events.lock().await;
             Ok(events.iter().map(|(k, v)| (*k, v.clone())).collect())
@@ -250,7 +292,7 @@ impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
         .boxed()
     }
 
-    fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::DeleteError>> {
         async move {
             self.events.lock().await.remove(&hash);
             Ok(())

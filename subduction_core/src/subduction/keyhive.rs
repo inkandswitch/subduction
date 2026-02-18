@@ -29,8 +29,8 @@ use subduction_keyhive::{
     message::{EventBytes, EventHash, Message as KeyhiveMessage},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage as KeyhiveSignedMessage,
-    storage::KeyhiveStorage,
-    storage_ops,
+    storage::{KeyhiveArchiveStorage, KeyhiveEventStorage},
+    storage_ops::{self, CompactErrorFor, IngestFromStorageError},
 };
 
 use super::{Subduction, SubductionFutureForm};
@@ -112,7 +112,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 >
     Subduction<
         'a,
@@ -602,12 +602,16 @@ impl<
     async fn try_storage_recovery(
         &self,
         event_bytes_list: &[EventBytes],
-    ) -> Result<(), KeyhiveSyncError<F, C>> {
+    ) -> Result<
+        (),
+        IngestFromStorageError<
+            <KStore as KeyhiveArchiveStorage<F>>::LoadError,
+            <KStore as KeyhiveEventStorage<F>>::LoadError,
+        >,
+    > {
         {
             let keyhive = self.keyhive.lock().await;
-            storage_ops::ingest_from_storage(&keyhive, &self.keyhive_storage)
-                .await
-                .map_err(KeyhiveSyncError::Storage)?;
+            storage_ops::ingest_from_storage(&keyhive, &self.keyhive_storage).await?;
         }
 
         let events: Vec<StaticEvent<KContentRef>> = event_bytes_list
@@ -652,27 +656,31 @@ impl<
     ///
     /// # Errors
     ///
-    /// Returns [`KeyhiveSyncError`] if any storage operation fails.
+    /// Returns an error if any storage operation fails.
     pub async fn compact_keyhive(
         &self,
         storage_id: subduction_keyhive::storage::StorageHash,
-    ) -> Result<(), KeyhiveSyncError<F, C>> {
+    ) -> Result<(), CompactErrorFor<KStore, F>> {
         let keyhive = self.keyhive.lock().await;
-        storage_ops::compact(&keyhive, &self.keyhive_storage, storage_id)
-            .await
-            .map_err(KeyhiveSyncError::Storage)
+        storage_ops::compact(&keyhive, &self.keyhive_storage, storage_id).await
     }
 
     /// Load and ingest all stored keyhive archives and events.
     ///
     /// # Errors
     ///
-    /// Returns [`KeyhiveSyncError`] if loading or ingestion fails.
-    pub async fn ingest_keyhive_from_storage(&self) -> Result<(), KeyhiveSyncError<F, C>> {
+    /// Returns an error if loading or ingestion fails.
+    pub async fn ingest_keyhive_from_storage(
+        &self,
+    ) -> Result<
+        (),
+        IngestFromStorageError<
+            <KStore as KeyhiveArchiveStorage<F>>::LoadError,
+            <KStore as KeyhiveEventStorage<F>>::LoadError,
+        >,
+    > {
         let keyhive = self.keyhive.lock().await;
-        storage_ops::ingest_from_storage(&keyhive, &self.keyhive_storage)
-            .await
-            .map_err(KeyhiveSyncError::Storage)?;
+        storage_ops::ingest_from_storage(&keyhive, &self.keyhive_storage).await?;
         Ok(())
     }
 }

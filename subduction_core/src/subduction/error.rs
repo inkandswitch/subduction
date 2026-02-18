@@ -162,10 +162,6 @@ pub enum KeyhiveSyncError<F: FutureForm + ?Sized, C: Connection<F>> {
     #[error("failed to send keyhive message")]
     Send(#[source] C::SendError),
 
-    /// Keyhive storage operation failed.
-    #[error("keyhive storage error")]
-    Storage(#[from] subduction_keyhive::error::StorageError),
-
     /// Message signing failed.
     #[error("signing failed")]
     Signing(#[from] KeyhiveSigningError),

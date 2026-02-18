@@ -52,12 +52,17 @@ pub struct TokioWebSocketServer<
     Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
-    KStore: 'static + Send + Sync + KeyhiveStorage<Sendable> = MemoryKeyhiveStorage,
+    KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable> = MemoryKeyhiveStorage,
 > where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
-    KStore::Error: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::DeleteError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::DeleteError: 'static + Send + Sync,
 {
     subduction: TokioWebSocketSubduction<S, P, Sig, O, M, KStore>,
     address: SocketAddr,
@@ -75,8 +80,13 @@ where
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
     S::Error: 'static + Send + Sync,
-    KStore: 'static + Send + Sync + KeyhiveStorage<Sendable>,
-    KStore::Error: 'static + Send + Sync,
+    KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable>,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::DeleteError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::DeleteError: 'static + Send + Sync,
 {
     fn clone(&self) -> Self {
         Self {
@@ -94,13 +104,18 @@ impl<
     Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-    KStore: 'static + Send + Sync + KeyhiveStorage<Sendable>,
+    KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable>,
 > TokioWebSocketServer<S, P, Sig, M, O, KStore>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
-    KStore::Error: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::DeleteError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::DeleteError: 'static + Send + Sync,
 {
     /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
     ///
@@ -593,7 +608,9 @@ use keyhive_core::{
     listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
 };
 use rand::rngs::OsRng;
-use subduction_keyhive::storage::{KeyhiveStorage, MemoryKeyhiveStorage};
+use subduction_keyhive::storage::{
+    KeyhiveArchiveStorage, KeyhiveEventStorage, MemoryKeyhiveStorage,
+};
 
 type TokioWebSocketSubduction<S, P, Sig, O, M, KStore = MemoryKeyhiveStorage> = Arc<
     Subduction<

@@ -1,7 +1,7 @@
 //! Filesystem-based storage for keyhive data.
 //!
 //! This module provides [`FsKeyhiveStorage`], a filesystem storage backend
-//! that implements the [`KeyhiveStorage`] trait.
+//! that implements the [`KeyhiveArchiveStorage`] and [`KeyhiveEventStorage`] traits.
 //!
 //! # Storage Layout
 //!
@@ -19,15 +19,12 @@ use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use thiserror::Error;
 
-use crate::storage::{KeyhiveStorage, StorageHash};
+use crate::storage::{KeyhiveArchiveStorage, KeyhiveEventStorage, StorageHash};
 
-/// Errors that can occur during filesystem keyhive storage operations.
+/// Error during [`FsKeyhiveStorage`] initialization.
 #[derive(Debug, Error)]
-pub enum FsKeyhiveStorageError {
-    /// I/O error.
-    #[error("I/O error: {0}")]
-    Io(#[from] std::io::Error),
-}
+#[error("failed to create storage directory")]
+pub struct FsStorageInitError(#[source] pub std::io::Error);
 
 /// Filesystem-based storage backend for keyhive data.
 ///
@@ -52,10 +49,10 @@ impl FsKeyhiveStorage {
     /// # Errors
     ///
     /// Returns an error if the directories cannot be created.
-    pub fn new(root: PathBuf) -> Result<Self, FsKeyhiveStorageError> {
-        std::fs::create_dir_all(&root)?;
-        std::fs::create_dir_all(root.join("archives"))?;
-        std::fs::create_dir_all(root.join("events"))?;
+    pub fn new(root: PathBuf) -> Result<Self, FsStorageInitError> {
+        std::fs::create_dir_all(&root).map_err(FsStorageInitError)?;
+        std::fs::create_dir_all(root.join("archives")).map_err(FsStorageInitError)?;
+        std::fs::create_dir_all(root.join("events")).map_err(FsStorageInitError)?;
 
         Ok(Self { root })
     }
@@ -88,14 +85,16 @@ impl FsKeyhiveStorage {
     }
 }
 
-impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
-    type Error = FsKeyhiveStorageError;
+impl KeyhiveArchiveStorage<Sendable> for FsKeyhiveStorage {
+    type SaveError = std::io::Error;
+    type LoadError = std::io::Error;
+    type DeleteError = std::io::Error;
 
     fn save_archive(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+    ) -> BoxFuture<'_, Result<(), Self::SaveError>> {
         async move {
             let path = self.archive_path(hash);
 
@@ -115,7 +114,7 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
         .boxed()
     }
 
-    fn load_archives(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+    fn load_archives(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>> {
         async move {
             let archives_dir = self.archives_dir();
             let mut result = Vec::new();
@@ -123,7 +122,7 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
             let mut entries = match tokio::fs::read_dir(&archives_dir).await {
                 Ok(entries) => entries,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(result),
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             };
 
             while let Some(entry) = entries.next_entry().await? {
@@ -141,14 +140,14 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
         .boxed()
     }
 
-    fn delete_archive(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_archive(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::DeleteError>> {
         async move {
             let path = self.archive_path(hash);
 
             if let Err(e) = tokio::fs::remove_file(&path).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
-                return Err(e.into());
+                return Err(e);
             }
 
             tracing::debug!(hash = %hash.to_hex(), "deleted keyhive archive");
@@ -156,12 +155,18 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
         }
         .boxed()
     }
+}
+
+impl KeyhiveEventStorage<Sendable> for FsKeyhiveStorage {
+    type SaveError = std::io::Error;
+    type LoadError = std::io::Error;
+    type DeleteError = std::io::Error;
 
     fn save_event(
         &self,
         hash: StorageHash,
         data: Vec<u8>,
-    ) -> BoxFuture<'_, Result<(), Self::Error>> {
+    ) -> BoxFuture<'_, Result<(), Self::SaveError>> {
         async move {
             let path = self.event_path(hash);
 
@@ -181,7 +186,7 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
         .boxed()
     }
 
-    fn load_events(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::Error>> {
+    fn load_events(&self) -> BoxFuture<'_, Result<Vec<(StorageHash, Vec<u8>)>, Self::LoadError>> {
         async move {
             let events_dir = self.events_dir();
             let mut result = Vec::new();
@@ -189,7 +194,7 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
             let mut entries = match tokio::fs::read_dir(&events_dir).await {
                 Ok(entries) => entries,
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(result),
-                Err(e) => return Err(e.into()),
+                Err(e) => return Err(e),
             };
 
             while let Some(entry) = entries.next_entry().await? {
@@ -207,14 +212,14 @@ impl KeyhiveStorage<Sendable> for FsKeyhiveStorage {
         .boxed()
     }
 
-    fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::Error>> {
+    fn delete_event(&self, hash: StorageHash) -> BoxFuture<'_, Result<(), Self::DeleteError>> {
         async move {
             let path = self.event_path(hash);
 
             if let Err(e) = tokio::fs::remove_file(&path).await
                 && e.kind() != std::io::ErrorKind::NotFound
             {
-                return Err(e.into());
+                return Err(e);
             }
 
             tracing::debug!(hash = %hash.to_hex(), "deleted keyhive event");

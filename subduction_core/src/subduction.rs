@@ -146,7 +146,7 @@ use sedimentree_core::{
 };
 use subduction_keyhive::{
     peer_id::KeyhivePeerId,
-    storage::{KeyhiveStorage, MemoryKeyhiveStorage},
+    storage::{KeyhiveArchiveStorage, KeyhiveEventStorage, MemoryKeyhiveStorage},
 };
 
 use pending_blob_requests::PendingBlobRequests;
@@ -186,7 +186,7 @@ pub struct Subduction<
     >,
     KListener: MembershipListener<Sig, KContentRef> = NoListener,
     KRng: CryptoRng + RngCore = OsRng,
-    KStore: KeyhiveStorage<F> = MemoryKeyhiveStorage,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F> = MemoryKeyhiveStorage,
 > {
     signer: Sig,
     discovery_id: Option<DiscoveryId>,
@@ -259,7 +259,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 >
     Subduction<
         'a,
@@ -3285,7 +3285,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Drop
     for Subduction<
         'a,
@@ -3338,7 +3338,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > ConnectionPolicy<F>
     for Subduction<
         'a,
@@ -3395,7 +3395,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > StoragePolicy<F>
     for Subduction<
         'a,
@@ -3465,7 +3465,7 @@ pub trait SubductionFutureForm<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<Self>,
+    KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
 >:
     StartListener<
         'a,
@@ -3498,7 +3498,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<Self>,
+    KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
     U: StartListener<
             'a,
             S,
@@ -3549,7 +3549,7 @@ pub trait StartListener<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<Self>,
+    KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
 >: FutureForm + RunManager<Authenticated<C, Self>> + Sized
 {
     /// Start the listener task for Subduction.
@@ -3594,7 +3594,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + Send + Sync + 'static,
     KListener: MembershipListener<Sig, KContentRef> + Send + Sync + 'static,
     KRng: CryptoRng + RngCore + Send + 'static,
-    KStore: KeyhiveStorage<Sendable> + Send + Sync + 'static,
+    KStore: KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable> + Send + Sync + 'static,
 >
     StartListener<
         'a,
@@ -3665,7 +3665,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + 'static,
     KListener: MembershipListener<Sig, KContentRef> + 'static,
     KRng: CryptoRng + RngCore + 'static,
-    KStore: KeyhiveStorage<Local> + 'static,
+    KStore: KeyhiveArchiveStorage<Local> + KeyhiveEventStorage<Local> + 'static,
 >
     StartListener<
         'a,
@@ -3751,7 +3751,7 @@ pub struct ListenerFuture<
     >,
     KListener: MembershipListener<Sig, KContentRef> = NoListener,
     KRng: CryptoRng + RngCore = OsRng,
-    KStore: KeyhiveStorage<F> = MemoryKeyhiveStorage,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F> = MemoryKeyhiveStorage,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
     _phantom: PhantomData<(
@@ -3797,7 +3797,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 >
     ListenerFuture<
         'a,
@@ -3859,7 +3859,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Deref
     for ListenerFuture<
         'a,
@@ -3913,7 +3913,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Future
     for ListenerFuture<
         'a,
@@ -3967,7 +3967,7 @@ impl<
     KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
-    KStore: KeyhiveStorage<F>,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Unpin
     for ListenerFuture<
         'a,

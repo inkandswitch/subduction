@@ -1,6 +1,5 @@
 //! Error types for the keyhive protocol.
 
-use alloc::string::String;
 use core::convert::Infallible;
 
 use thiserror::Error;
@@ -98,38 +97,6 @@ where
     /// Failed to deserialize data.
     #[error("deserialization error")]
     Deserialization(#[source] minicbor::decode::Error),
-
-    /// Failed to deserialize data (serde).
-    #[error("deserialization error")]
-    SerdeDecode(#[from] minicbor_serde::error::DecodeError),
-}
-
-/// Errors that can occur during storage operations.
-#[derive(Debug, Error)]
-pub enum StorageError {
-    /// Failed to save data.
-    #[error("failed to save: {0}")]
-    Save(String),
-
-    /// Failed to load data.
-    #[error("failed to load: {0}")]
-    Load(String),
-
-    /// Failed to delete data.
-    #[error("failed to delete: {0}")]
-    Delete(String),
-
-    /// Failed to serialize data (minicbor).
-    #[error("serialization error")]
-    CborEncode(#[from] minicbor::encode::Error<Infallible>),
-
-    /// Failed to serialize data (serde).
-    #[error("serialization error")]
-    SerdeEncode(#[from] minicbor_serde::error::EncodeError<Infallible>),
-
-    /// Failed to deserialize data (minicbor).
-    #[error("deserialization error")]
-    CborDecode(#[from] minicbor::decode::Error),
 
     /// Failed to deserialize data (serde).
     #[error("deserialization error")]
