@@ -709,14 +709,14 @@ where
         .collect()
 }
 
-/// Serialize a value to CBOR bytes using minicbor-serde (for keyhive_core types).
+/// Serialize a value to CBOR bytes using minicbor-serde (for `keyhive_core` types).
 fn cbor_serialize<V: serde::Serialize>(
     value: &V,
 ) -> Result<Vec<u8>, minicbor_serde::error::EncodeError<core::convert::Infallible>> {
     minicbor_serde::to_vec(value)
 }
 
-/// Deserialize a value from CBOR bytes using minicbor-serde (for keyhive_core types).
+/// Deserialize a value from CBOR bytes using minicbor-serde (for `keyhive_core` types).
 fn cbor_deserialize<V: serde::de::DeserializeOwned>(
     bytes: &[u8],
 ) -> Result<V, minicbor_serde::error::DecodeError> {
