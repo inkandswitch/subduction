@@ -14,7 +14,7 @@
 //! Contact card exchange is also handled for cases where peers don't yet know
 //! each other's identity.
 
-use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
 
 use async_lock::Mutex;
 use keyhive_core::{
@@ -224,8 +224,8 @@ where
         }
 
         // Decode message with minicbor
-        let message: Message = decode_message(&verified.payload)
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+        let message: Message =
+            decode_message(&verified.payload).map_err(VerificationError::CborDecode)?;
 
         match &message {
             Message::SyncRequest { .. } => self.handle_sync_request(message).await,
@@ -284,8 +284,7 @@ where
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes = cbor_serialize(event)
-                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event)?;
                 found_ops.push(bytes);
             }
         }
@@ -447,8 +446,7 @@ where
         include_contact_card: bool,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
         // Encode message with minicbor
-        let msg_bytes =
-            encode_message(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        let msg_bytes = encode_message(&message).map_err(SigningError::CborEncode)?;
 
         let signed: Signed<Vec<u8>> = {
             let keyhive = self.keyhive.lock().await;
@@ -458,8 +456,7 @@ where
                 .map_err(SigningError::SigningFailed)?
         };
 
-        let signed_bytes =
-            cbor_serialize(&signed).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        let signed_bytes = cbor_serialize(&signed).map_err(SigningError::SerdeEncode)?;
 
         let signed_message = if include_contact_card {
             SignedMessage::with_contact_card(signed_bytes, self.contact_card_bytes.clone())
@@ -547,8 +544,7 @@ where
         for (digest, event) in &events {
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
-                let bytes = cbor_serialize(event)
-                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event)?;
                 result.push(bytes);
             }
         }
@@ -567,8 +563,7 @@ where
         let events: Vec<StaticEvent<T>> = event_bytes_list
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
-            .collect::<Result<_, _>>()
-            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
+            .collect::<Result<_, _>>()?;
 
         let pending = {
             let keyhive = self.keyhive.lock().await;
@@ -635,8 +630,7 @@ where
         &self,
         cc_bytes: &[u8],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let contact_card: ContactCard = cbor_deserialize(cc_bytes)
-            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
+        let contact_card: ContactCard = cbor_deserialize(cc_bytes)?;
 
         let keyhive = self.keyhive.lock().await;
         keyhive
@@ -716,23 +710,29 @@ where
 }
 
 /// Serialize a value to CBOR bytes using minicbor-serde (for keyhive_core types).
-fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
-    minicbor_serde::to_vec(value).map_err(|e| StorageError::Serialization(e.to_string()))
+fn cbor_serialize<V: serde::Serialize>(
+    value: &V,
+) -> Result<Vec<u8>, minicbor_serde::error::EncodeError<core::convert::Infallible>> {
+    minicbor_serde::to_vec(value)
 }
 
 /// Deserialize a value from CBOR bytes using minicbor-serde (for keyhive_core types).
-fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
-    minicbor_serde::from_slice(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+fn cbor_deserialize<V: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<V, minicbor_serde::error::DecodeError> {
+    minicbor_serde::from_slice(bytes)
 }
 
 /// Encode a keyhive protocol [`Message`] to bytes using minicbor.
-fn encode_message(msg: &Message) -> Result<Vec<u8>, StorageError> {
-    minicbor::to_vec(msg).map_err(|e| StorageError::Serialization(e.to_string()))
+fn encode_message(
+    msg: &Message,
+) -> Result<Vec<u8>, minicbor::encode::Error<core::convert::Infallible>> {
+    minicbor::to_vec(msg)
 }
 
 /// Decode a keyhive protocol [`Message`] from bytes using minicbor.
-fn decode_message(bytes: &[u8]) -> Result<Message, StorageError> {
-    minicbor::decode(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+fn decode_message(bytes: &[u8]) -> Result<Message, minicbor::decode::Error> {
+    minicbor::decode(bytes)
 }
 
 /// Convert a `Digest` to a 32-byte array.

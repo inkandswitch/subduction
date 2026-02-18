@@ -3,7 +3,7 @@
 //! This module provides high-level functions for persisting, loading, and compacting
 //! keyhive state using the [`KeyhiveStorage`] trait.
 
-use alloc::{string::ToString, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 
 use keyhive_core::{
     archive::Archive, crypto::signer::async_signer::AsyncSigner, event::static_event::StaticEvent,
@@ -17,12 +17,12 @@ use crate::{
 
 /// Serialize a value to CBOR bytes.
 fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
-    minicbor_serde::to_vec(value).map_err(|e| StorageError::Serialization(e.to_string()))
+    Ok(minicbor_serde::to_vec(value)?)
 }
 
 /// Deserialize a value from CBOR bytes.
 fn cbor_deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError> {
-    minicbor_serde::from_slice(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+    Ok(minicbor_serde::from_slice(bytes)?)
 }
 
 /// Hash event bytes using BLAKE3 to produce a storage key.

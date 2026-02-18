@@ -1,6 +1,7 @@
 //! Error types for the top-level `Subduction`.
 
-use alloc::{string::String, vec::Vec};
+use alloc::vec::Vec;
+use core::convert::Infallible;
 
 use future_form::FutureForm;
 use keyhive_core::{
@@ -198,13 +199,21 @@ pub enum KeyhiveSyncError<F: FutureForm + ?Sized, C: Connection<F>> {
     #[error("failed to receive contact card")]
     ReceiveContactCard(#[from] ReceivePrekeyOpError),
 
-    /// CBOR serialization failed.
-    #[error("serialization error: {0}")]
-    Serialization(String),
+    /// CBOR serialization failed (minicbor).
+    #[error("serialization error")]
+    CborEncode(#[from] minicbor::encode::Error<Infallible>),
 
-    /// CBOR deserialization failed.
-    #[error("deserialization error: {0}")]
-    Deserialization(String),
+    /// CBOR serialization failed (serde).
+    #[error("serialization error")]
+    SerdeEncode(#[from] minicbor_serde::error::EncodeError<Infallible>),
+
+    /// CBOR deserialization failed (minicbor).
+    #[error("deserialization error")]
+    CborDecode(#[from] minicbor::decode::Error),
+
+    /// CBOR deserialization failed (serde).
+    #[error("deserialization error")]
+    SerdeDecode(#[from] minicbor_serde::error::DecodeError),
 }
 
 #[cfg(test)]

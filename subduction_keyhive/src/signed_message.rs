@@ -4,24 +4,23 @@
 //! This module provides the wrapper type that combines the signed data
 //! with an optional contact card.
 
-use alloc::{string::String, vec::Vec};
-use core::fmt;
+use alloc::vec::Vec;
+use core::convert::Infallible;
+
+use thiserror::Error;
 
 use crate::{error::VerificationError, peer_id::KeyhivePeerId};
 use keyhive_core::crypto::signed::Signed;
 
-/// Error type for CBOR serialization/deserialization.
-#[derive(Debug, Clone)]
-pub struct CborError(pub String);
+/// Error type for CBOR encoding.
+#[derive(Debug, Error)]
+#[error("CBOR encode error")]
+pub struct CborEncodeError(#[from] pub minicbor::encode::Error<Infallible>);
 
-impl fmt::Display for CborError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CBOR error: {}", self.0)
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for CborError {}
+/// Error type for CBOR decoding.
+#[derive(Debug, Error)]
+#[error("CBOR decode error")]
+pub struct CborDecodeError(#[from] pub minicbor::decode::Error);
 
 /// A signed message for transmission over the network.
 ///
@@ -88,10 +87,7 @@ impl SignedMessage {
         self,
         expected_sender: &KeyhivePeerId,
     ) -> Result<VerifiedMessage, VerificationError> {
-        use alloc::string::ToString;
-
-        let signed: Signed<Vec<u8>> = minicbor_serde::from_slice(self.signed.as_slice())
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+        let signed: Signed<Vec<u8>> = minicbor_serde::from_slice(self.signed.as_slice())?;
 
         signed
             .try_verify()
@@ -124,10 +120,8 @@ impl SignedMessage {
     /// # Errors
     ///
     /// Returns an error if CBOR serialization fails.
-    pub fn to_cbor(&self) -> Result<Vec<u8>, CborError> {
-        use alloc::string::ToString;
-
-        minicbor::to_vec(self).map_err(|e| CborError(e.to_string()))
+    pub fn to_cbor(&self) -> Result<Vec<u8>, CborEncodeError> {
+        Ok(minicbor::to_vec(self)?)
     }
 
     /// Deserialize a message from CBOR bytes.
@@ -135,10 +129,8 @@ impl SignedMessage {
     /// # Errors
     ///
     /// Returns an error if CBOR deserialization fails.
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self, CborError> {
-        use alloc::string::ToString;
-
-        minicbor::decode(bytes).map_err(|e| CborError(e.to_string()))
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self, CborDecodeError> {
+        Ok(minicbor::decode(bytes)?)
     }
 }
 
