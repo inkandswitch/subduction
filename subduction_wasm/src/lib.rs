@@ -13,6 +13,7 @@ pub mod connection;
 pub mod connection_id;
 pub mod error;
 pub mod fragment;
+pub mod keyhive;
 pub mod peer_id;
 pub mod signer;
 pub mod subduction;

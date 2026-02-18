@@ -31,7 +31,10 @@ futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
 keyhive_core = { workspace = true }
+keyhive_wasm = { workspace = true }
+nonempty = { version = "0.10.0", default-features = false }
 rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }

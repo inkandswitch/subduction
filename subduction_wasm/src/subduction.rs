@@ -12,10 +12,7 @@ use futures::{
     stream::Aborted,
 };
 use js_sys::Uint8Array;
-use keyhive_core::{
-    keyhive::Keyhive, listener::no_listener::NoListener,
-    store::ciphertext::memory::MemoryCiphertextStore,
-};
+use keyhive_core::keyhive::Keyhive;
 use rand::rngs::OsRng;
 use sedimentree_core::{
     blob::Blob,
@@ -43,6 +40,7 @@ use crate::{
         WasmWriteError,
     },
     fragment::WasmFragmentRequested,
+    keyhive::{ChangeId, WasmCiphertextStore, WasmEventHandler, WasmKeyhive},
     peer_id::WasmPeerId,
     signer::JsSigner,
     sync_stats::WasmSyncStats,
@@ -79,6 +77,10 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
+/// Type alias for the ciphertext store used in Wasm.
+type WasmCiphertextStoreInner =
+    keyhive_core::store::ciphertext::memory::MemoryCiphertextStore<ChangeId, Vec<u8>>;
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 pub struct WasmSubduction {
@@ -92,6 +94,12 @@ pub struct WasmSubduction {
             JsSigner,
             WasmHashMetric,
             WASM_SHARD_COUNT,
+            ChangeId,
+            Vec<u8>,
+            WasmCiphertextStoreInner,
+            WasmEventHandler,
+            OsRng,
+            MemoryKeyhiveStorage,
         >,
     >,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
@@ -113,11 +121,12 @@ impl WasmSubduction {
     ///
     /// * `signer` - The cryptographic signer for this node's identity
     /// * `storage` - Storage backend for persisting data
+    /// * `ciphertext_store` - Store for encrypted keyhive content
+    /// * `event_handler` - JavaScript function to receive keyhive events
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
-    /// Create a new [`Subduction`] instance.
     ///
     /// This is an async factory method because keyhive initialization is async.
     /// Use this instead of a constructor.
@@ -129,6 +138,8 @@ impl WasmSubduction {
     pub async fn setup(
         signer: JsSigner,
         storage: JsSedimentreeStorage,
+        ciphertext_store: WasmCiphertextStore,
+        event_handler: js_sys::Function,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
@@ -141,12 +152,11 @@ impl WasmSubduction {
             ShardedMap::new();
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        // Create keyhive instance (keyhive sync not fully supported with JsSigner,
-        // but required for Subduction construction)
+        // Create keyhive instance
         let keyhive = Keyhive::generate(
             signer.clone(),
-            MemoryCiphertextStore::new(),
-            NoListener,
+            ciphertext_store.0,
+            WasmEventHandler::new(event_handler),
             OsRng,
         )
         .await
@@ -195,6 +205,8 @@ impl WasmSubduction {
     ///
     /// * `signer` - The cryptographic signer for this node's identity
     /// * `storage` - Storage backend for persisting data
+    /// * `ciphertext_store` - Store for encrypted keyhive content
+    /// * `event_handler` - JavaScript function to receive keyhive events
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
@@ -211,6 +223,8 @@ impl WasmSubduction {
     pub async fn hydrate(
         signer: JsSigner,
         storage: JsSedimentreeStorage,
+        ciphertext_store: WasmCiphertextStore,
+        event_handler: js_sys::Function,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
@@ -223,12 +237,11 @@ impl WasmSubduction {
             ShardedMap::new();
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        // Create keyhive instance (keyhive sync not fully supported with JsSigner,
-        // but required for Subduction construction)
+        // Create keyhive instance
         let keyhive = Keyhive::generate(
             signer.clone(),
-            MemoryCiphertextStore::new(),
-            NoListener,
+            ciphertext_store.0,
+            WasmEventHandler::new(event_handler),
             OsRng,
         )
         .await
@@ -720,6 +733,13 @@ impl WasmSubduction {
     #[wasm_bindgen(getter, js_name = storage)]
     pub fn storage(&self) -> JsValue {
         self.js_storage.clone()
+    }
+
+    /// Get the keyhive instance for access control operations.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn keyhive(&self) -> WasmKeyhive {
+        WasmKeyhive::new(self.core.keyhive().clone())
     }
 }
 

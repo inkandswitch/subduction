@@ -267,7 +267,7 @@ dependencies = [
  "subduction_wasm",
  "tracing",
  "wasm-bindgen",
- "wasm-tracing",
+ "wasm-tracing 3.0.0-alpha.0",
  "wasm_refgen",
 ]
 
@@ -377,6 +377,16 @@ name = "base64"
 version = "0.22.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
+name = "base64-simd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "339abbe78e73178762e23bea9dfd08e697eb3f3301cd4be981c0f78ba5859195"
+dependencies = [
+ "outref",
+ "vsimd",
+]
 
 [[package]]
 name = "base64ct"
@@ -1859,6 +1869,35 @@ dependencies = [
 ]
 
 [[package]]
+name = "keyhive_wasm"
+version = "0.2.0-alpha.1"
+source = "git+https://github.com/inkandswitch/keyhive?branch=main#a46be4928f7d55032e9c410df548ae88e28fb961"
+dependencies = [
+ "base64-simd",
+ "bincode",
+ "console_error_panic_hook",
+ "derive_more",
+ "dupe",
+ "ed25519-dalek",
+ "from_js_ref",
+ "futures 0.3.31",
+ "getrandom 0.2.17",
+ "js-sys",
+ "keyhive_core",
+ "nonempty 0.10.0",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures 0.4.58",
+ "wasm-tracing 2.1.0",
+ "wasm_refgen",
+ "web-sys",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2211,6 +2250,12 @@ dependencies = [
  "pkg-config",
  "vcpkg",
 ]
+
+[[package]]
+name = "outref"
+version = "0.5.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1a80800c0488c3a21695ea981a54918fbb37abf04f4d0720c453632255e2ff0e"
 
 [[package]]
 name = "parking"
@@ -3202,10 +3247,13 @@ dependencies = [
  "getrandom 0.3.4",
  "js-sys",
  "keyhive_core",
+ "keyhive_wasm",
  "minicbor",
+ "nonempty 0.10.0",
  "rand 0.8.5",
  "sedimentree_core",
  "sedimentree_wasm",
+ "serde",
  "subduction_core",
  "subduction_keyhive",
  "thiserror 2.0.18",
@@ -3825,6 +3873,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
 
 [[package]]
+name = "vsimd"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
+
+[[package]]
 name = "walkdir"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3953,6 +4007,16 @@ checksum = "0789dac148a8840bbcf9efe13905463b733fa96543bfbf263790535c11af7ba5"
 dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
+]
+
+[[package]]
+name = "wasm-tracing"
+version = "2.1.0"
+source = "git+https://github.com/dsgallups/wasm-tracing?rev=8c9ed933539664119681b896badb2be933338765#8c9ed933539664119681b896badb2be933338765"
+dependencies = [
+ "tracing",
+ "tracing-subscriber",
+ "wasm-bindgen",
 ]
 
 [[package]]
