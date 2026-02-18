@@ -29,7 +29,7 @@ rand = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }
 serde = { workspace = true, features = ["derive"] }
 siphasher = { workspace = true }
-subduction_keyhive = { path = "../subduction_keyhive", features = ["serde", "std"] }
+subduction_keyhive = { path = "../subduction_keyhive", features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -60,6 +60,7 @@ std = [
   "futures/std",
   "nonempty/std",
   "sedimentree_core/std",
+  "subduction_keyhive/std",
   "thiserror/std"
 ]
 test_utils = ["std"]

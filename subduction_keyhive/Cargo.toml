@@ -32,7 +32,7 @@ tracing = { workspace = true }
 [features]
 default = []
 arbitrary = ["dep:arbitrary"]
-serde = ["dep:serde", "std"]
+serde = ["dep:serde"]
 std = ["thiserror/std", "dep:hex", "dep:tokio"]
 
 [dev-dependencies]
