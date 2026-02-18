@@ -342,9 +342,9 @@ where
     Ok(pending)
 }
 
-/// Error from compacting keyhive storage.
+/// Error from keyhive persistence operations (compact, ingest, etc.).
 #[derive(Debug, thiserror::Error)]
-pub enum CompactError<
+pub enum KeyhivePersistenceErrorRaw<
     ArchiveSaveErr: core::error::Error,
     ArchiveLoadErr: core::error::Error,
     ArchiveDeleteErr: core::error::Error,
@@ -383,8 +383,11 @@ pub enum CompactError<
     ArchiveIngestion,
 }
 
-/// Type alias for compact errors from a specific storage impl.
-pub type CompactErrorFor<S, K> = CompactError<
+/// Keyhive persistence error parameterized by storage implementation.
+///
+/// This alias extracts the appropriate error types from the storage traits,
+/// hiding the 5-parameter generic type from callers.
+pub type KeyhivePersistenceError<S, K> = KeyhivePersistenceErrorRaw<
     <S as KeyhiveArchiveStorage<K>>::SaveError,
     <S as KeyhiveArchiveStorage<K>>::LoadError,
     <S as KeyhiveArchiveStorage<K>>::DeleteError,
@@ -408,7 +411,7 @@ pub async fn compact<Signer, T, P, C, L, R, S, K>(
     keyhive: &Keyhive<Signer, T, P, C, L, R>,
     storage: &S,
     storage_id: StorageHash,
-) -> Result<(), CompactErrorFor<S, K>>
+) -> Result<(), KeyhivePersistenceError<S, K>>
 where
     Signer: AsyncSigner + Clone,
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
@@ -423,11 +426,11 @@ where
     let raw_archives = storage
         .load_archives()
         .await
-        .map_err(CompactError::LoadArchives)?;
+        .map_err(KeyhivePersistenceErrorRaw::LoadArchives)?;
     let raw_events = storage
         .load_events()
         .await
-        .map_err(CompactError::LoadEvents)?;
+        .map_err(KeyhivePersistenceErrorRaw::LoadEvents)?;
 
     if raw_events.is_empty() && raw_archives.len() <= 1 {
         tracing::debug!("nothing to compact");
@@ -446,7 +449,7 @@ where
         tracing::debug!(hash = %hash.to_hex(), "ingesting archive for compaction");
         keyhive.ingest_archive(archive).await.map_err(|e| {
             tracing::error!(error = ?e, "archive ingestion failed during compaction");
-            CompactError::ArchiveIngestion
+            KeyhivePersistenceErrorRaw::ArchiveIngestion
         })?;
     }
 
@@ -480,7 +483,7 @@ where
     let archive = keyhive.into_archive().await;
     save_keyhive_archive(storage, storage_id, &archive)
         .await
-        .map_err(CompactError::SaveArchive)?;
+        .map_err(KeyhivePersistenceErrorRaw::SaveArchive)?;
 
     let mut deleted_archive_count = 0;
     let mut deleted_event_count = 0;
@@ -491,7 +494,7 @@ where
             storage
                 .delete_archive(*hash)
                 .await
-                .map_err(CompactError::DeleteArchive)?;
+                .map_err(KeyhivePersistenceErrorRaw::DeleteArchive)?;
             deleted_archive_count += 1;
         }
     }
@@ -502,7 +505,7 @@ where
             storage
                 .delete_event(*storage_hash)
                 .await
-                .map_err(CompactError::DeleteEvent)?;
+                .map_err(KeyhivePersistenceErrorRaw::DeleteEvent)?;
             deleted_event_count += 1;
         }
     }

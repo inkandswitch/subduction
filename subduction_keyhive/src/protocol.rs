@@ -36,7 +36,7 @@ use crate::{
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
     storage::{KeyhiveArchiveStorage, KeyhiveEventStorage},
-    storage_ops::{self, CompactErrorFor, IngestFromStorageError},
+    storage_ops::{self, IngestFromStorageError, KeyhivePersistenceError},
 };
 
 /// Shared keyhive instance behind a mutex.
@@ -660,7 +660,7 @@ where
     pub async fn compact(
         &self,
         storage_id: crate::storage::StorageHash,
-    ) -> Result<(), CompactErrorFor<Store, K>> {
+    ) -> Result<(), KeyhivePersistenceError<Store, K>> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::compact(&keyhive, &self.storage, storage_id).await
     }

@@ -30,7 +30,7 @@ use subduction_keyhive::{
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage as KeyhiveSignedMessage,
     storage::{KeyhiveArchiveStorage, KeyhiveEventStorage},
-    storage_ops::{self, CompactErrorFor, IngestFromStorageError},
+    storage_ops::{self, IngestFromStorageError, KeyhivePersistenceError},
 };
 
 use super::{Subduction, SubductionFutureForm};
@@ -660,7 +660,7 @@ impl<
     pub async fn compact_keyhive(
         &self,
         storage_id: subduction_keyhive::storage::StorageHash,
-    ) -> Result<(), CompactErrorFor<KStore, F>> {
+    ) -> Result<(), KeyhivePersistenceError<KStore, F>> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::compact(&keyhive, &self.keyhive_storage, storage_id).await
     }
