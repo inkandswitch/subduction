@@ -32,8 +32,9 @@ tracing = { workspace = true }
 [features]
 default = []
 arbitrary = ["dep:arbitrary"]
+fs = ["std", "dep:tokio"]
 serde = ["dep:serde"]
-std = ["thiserror/std", "dep:hex", "dep:tokio"]
+std = ["thiserror/std", "dep:hex"]
 
 [dev-dependencies]
 async-channel = { workspace = true }

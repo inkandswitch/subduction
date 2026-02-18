@@ -8,7 +8,7 @@ extern crate alloc;
 
 mod collections;
 
-#[cfg(feature = "std")]
+#[cfg(feature = "fs")]
 pub mod fs_storage;
 
 #[cfg(feature = "serde")]
