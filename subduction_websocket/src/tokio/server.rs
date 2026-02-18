@@ -278,7 +278,7 @@ where
     /// # Errors
     ///
     /// Returns an error if the socket could not be bound.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub async fn setup(
         address: SocketAddr,
         timeout: O,

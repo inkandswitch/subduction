@@ -505,6 +505,7 @@ impl<
     /// The keyhive is protected by a mutex since it may be accessed concurrently
     /// by sync operations.
     #[must_use]
+    #[allow(clippy::type_complexity)]
     pub fn keyhive(
         &self,
     ) -> &Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>> {
@@ -3553,6 +3554,7 @@ pub trait StartListener<
 >: FutureForm + RunManager<Authenticated<C, Self>> + Sized
 {
     /// Start the listener task for Subduction.
+    #[allow(clippy::type_complexity)]
     fn start_listener(
         subduction: Arc<
             Subduction<
@@ -3720,6 +3722,7 @@ impl<
 /// This lets the caller decide how they want to manage the listener's lifecycle,
 /// including the ability to abort it when needed.
 #[derive(Debug)]
+#[allow(clippy::type_complexity)]
 pub struct ListenerFuture<
     'a,
     F: StartListener<

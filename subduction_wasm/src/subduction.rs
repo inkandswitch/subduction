@@ -121,6 +121,10 @@ impl WasmSubduction {
     ///
     /// This is an async factory method because keyhive initialization is async.
     /// Use this instead of a constructor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if keyhive generation fails (should not happen with valid signer).
     #[wasm_bindgen]
     pub async fn setup(
         signer: JsSigner,
@@ -203,6 +207,10 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns [`WasmHydrationError`] if hydration fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if keyhive generation fails (should not happen with valid signer).
     #[wasm_bindgen]
     pub async fn hydrate(
         signer: JsSigner,
