@@ -139,8 +139,9 @@ impl TwoPeerSubductionHarness {
                 DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 alice_keyhive,
                 MemoryKeyhiveStorage::default(),
-                alice_cc,
-            );
+            )
+            .await
+            .expect("failed to create alice Subduction");
 
         let (bob, bob_listener, bob_actor) =
             Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
@@ -155,8 +156,9 @@ impl TwoPeerSubductionHarness {
                 DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 bob_keyhive,
                 MemoryKeyhiveStorage::default(),
-                bob_cc,
-            );
+            )
+            .await
+            .expect("failed to create bob Subduction");
 
         // Create channel connections
         let (alice_conn, alice_handle) = ChannelMockConnection::new_with_handle(bob_peer_id);

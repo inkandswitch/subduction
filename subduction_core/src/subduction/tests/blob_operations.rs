@@ -61,7 +61,7 @@ async fn new_dispatch_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
     Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
         None,
         test_signer(),
@@ -74,8 +74,9 @@ async fn new_dispatch_subduction() -> (
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         keyhive,
         MemoryKeyhiveStorage::default(),
-        contact_card,
     )
+    .await
+    .expect("failed to create Subduction")
 }
 
 #[tokio::test]

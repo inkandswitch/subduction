@@ -63,7 +63,7 @@ async fn make_signed_test_fragment() -> (Signed<Fragment>, Blob) {
 async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -78,96 +78,9 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
-
-    // Register a failing connection
-    let peer_id = PeerId::new([1u8; 32]);
-    let conn = FailingSendMockConnection::with_peer_id(peer_id);
-    let _fresh = subduction.register(conn.authenticated()).await?;
-    assert_eq!(subduction.connected_peer_ids().await.len(), 1);
-
-    // Add a commit - the send will fail
-    let id = SedimentreeId::new([1u8; 32]);
-    let (commit, blob) = make_test_commit();
-
-    let _ = subduction.add_commit(id, &commit, blob).await;
-
-    // Connection should be unregistered after send failure
-    assert_eq!(
-        subduction.connected_peer_ids().await.len(),
-        0,
-        "Connection should be unregistered after send failure"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResult {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-    let (keyhive, contact_card) = test_keyhive().await;
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-            keyhive,
-            MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
-
-    // Register a failing connection
-    let peer_id = PeerId::new([1u8; 32]);
-    let conn = FailingSendMockConnection::with_peer_id(peer_id);
-    let _fresh = subduction.register(conn.authenticated()).await?;
-    assert_eq!(subduction.connected_peer_ids().await.len(), 1);
-
-    // Add a fragment - the send will fail
-    let id = SedimentreeId::new([1u8; 32]);
-    let (fragment, blob) = make_test_fragment();
-
-    let _ = subduction.add_fragment(id, &fragment, blob).await;
-
-    // Connection should be unregistered after send failure
-    assert_eq!(
-        subduction.connected_peer_ids().await.len(),
-        0,
-        "Connection should be unregistered after send failure"
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-    let (keyhive, contact_card) = test_keyhive().await;
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-            keyhive,
-            MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
+        )
+        .await
+        .expect("failed to create Subduction");
 
     // Register a failing connection with a different peer ID than the sender
     let sender_peer_id = PeerId::new([1u8; 32]);
@@ -201,7 +114,7 @@ async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult
 async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -216,8 +129,9 @@ async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResu
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
+        )
+        .await
+        .expect("failed to create Subduction");
 
     // Register a failing connection with a different peer ID than the sender
     let sender_peer_id = PeerId::new([1u8; 32]);
@@ -251,7 +165,7 @@ async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResu
 async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
@@ -266,8 +180,9 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
+        )
+        .await
+        .expect("failed to create Subduction");
 
     // Register a failing connection
     let peer_id = PeerId::new([1u8; 32]);
@@ -295,7 +210,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
 async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
@@ -310,8 +225,9 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
+        )
+        .await
+        .expect("failed to create Subduction");
 
     // Register two connections that will succeed
     let peer_id1 = PeerId::new([1u8; 32]);

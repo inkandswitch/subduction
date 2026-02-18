@@ -12,9 +12,7 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use keyhive_core::{
-    contact_card::ContactCard, crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive,
-};
+use keyhive_core::{crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive};
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
 };
@@ -43,6 +41,18 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
+
+/// Error that can occur during server setup.
+#[derive(Debug, thiserror::Error)]
+pub enum SetupError {
+    /// Failed to generate keyhive contact card.
+    #[error("failed to generate contact card")]
+    ContactCard(#[source] keyhive_core::crypto::signed::SigningError),
+
+    /// Network/socket error.
+    #[error("network error")]
+    Network(#[from] tungstenite::Error),
+}
 
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug)]
@@ -299,8 +309,7 @@ where
             OsRng,
         >,
         keyhive_storage: KStore,
-        keyhive_contact_card: ContactCard,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Self, SetupError> {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
         let (subduction, listener_fut, manager_fut) = Subduction::new(
@@ -315,8 +324,9 @@ where
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             keyhive_storage,
-            keyhive_contact_card,
-        );
+        )
+        .await
+        .map_err(SetupError::ContactCard)?;
 
         let server = Self::new(
             address,

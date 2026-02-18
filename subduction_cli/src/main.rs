@@ -28,7 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let token = setup_signal_handlers();
 
     match args.command {
-        Command::Server(server_args) => server::run(server_args, token).await?,
+        Command::Server(server_args) => Box::pin(server::run(server_args, token)).await?,
         Command::Client(client_args) => client::run(client_args, token).await?,
         Command::EphemeralRelay(relay_args) => {
             automerge_ephemeral_relay::run(relay_args, token).await?;

@@ -285,8 +285,12 @@ impl<
     /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
     /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
     /// or provide secure random keys to [`ShardedMap::with_key`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if generating the contact card fails.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    pub fn new<Sp: Spawn<F> + Send + Sync + 'static>(
+    pub async fn new<Sp: Spawn<F> + Send + Sync + 'static>(
         discovery_id: Option<DiscoveryId>,
         signer: Sig,
         storage: S,
@@ -298,28 +302,32 @@ impl<
         max_pending_blob_requests: usize,
         keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
-        keyhive_contact_card: ContactCard,
-    ) -> (
-        Arc<Self>,
-        ListenerFuture<
-            'a,
-            F,
-            S,
-            C,
-            P,
-            Sig,
-            M,
-            N,
-            KContentRef,
-            KPayload,
-            KCiphertextStore,
-            KListener,
-            KRng,
-            KStore,
-        >,
-        crate::connection::manager::ManagerFuture<F>,
-    ) {
+    ) -> Result<
+        (
+            Arc<Self>,
+            ListenerFuture<
+                'a,
+                F,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+            crate::connection::manager::ManagerFuture<F>,
+        ),
+        keyhive_core::crypto::signed::SigningError,
+    > {
         tracing::info!("initializing Subduction instance");
+
+        let keyhive_contact_card = keyhive.contact_card().await?;
 
         let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(256);
@@ -367,11 +375,11 @@ impl<
         let manager_fut = manager.run();
         let abortable_manager = Abortable::new(manager_fut, abort_manager_reg);
 
-        (
+        Ok((
             sd.clone(),
             ListenerFuture::new(F::start_listener(sd, abort_listener_reg)),
             crate::connection::manager::ManagerFuture::new(abortable_manager),
-        )
+        ))
     }
 
     /// Hydrate a `Subduction` instance from existing sedimentrees in external storage.
@@ -396,7 +404,6 @@ impl<
         max_pending_blob_requests: usize,
         keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
-        keyhive_contact_card: ContactCard,
     ) -> Result<
         (
             Arc<Self>,
@@ -436,8 +443,9 @@ impl<
             max_pending_blob_requests,
             keyhive,
             keyhive_storage,
-            keyhive_contact_card,
-        );
+        )
+        .await
+        .map_err(HydrationError::ContactCard)?;
         for id in ids {
             let signed_loose_commits = subduction
                 .storage

@@ -16,7 +16,7 @@ use subduction_keyhive::storage::MemoryKeyhiveStorage;
 async fn test_new_creates_empty_subduction() {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
@@ -31,8 +31,9 @@ async fn test_new_creates_empty_subduction() {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
+        )
+        .await
+        .expect("failed to create Subduction");
 
     // Verify initial state via async runtime would be needed,
     // but we can at least verify construction doesn't panic

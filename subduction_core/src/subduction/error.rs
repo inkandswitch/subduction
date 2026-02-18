@@ -28,7 +28,7 @@ pub struct Unauthorized {
 }
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Error)]
 pub enum HydrationError<F: FutureForm, S: Storage<F>> {
     /// An error occurred while loading all sedimentree IDs.
     #[error("hydration error when loading all sedimentree IDs: {0}")]
@@ -41,6 +41,10 @@ pub enum HydrationError<F: FutureForm, S: Storage<F>> {
     /// An error occurred while loading fragments.
     #[error("hydration error when loading fragments: {0}")]
     LoadFragmentsError(#[source] S::Error),
+
+    /// An error occurred while generating the keyhive contact card.
+    #[error("failed to generate keyhive contact card")]
+    ContactCard(#[source] KeyhiveSigningError),
 }
 
 /// An error that can occur during I/O operations.

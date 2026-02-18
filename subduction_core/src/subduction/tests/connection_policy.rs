@@ -87,7 +87,7 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
 
 #[tokio::test]
 async fn rejected_connection_is_not_registered() -> TestResult {
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
             None,
@@ -101,8 +101,9 @@ async fn rejected_connection_is_not_registered() -> TestResult {
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let peer_id = PeerId::new([1u8; 32]);
     let conn = MockConnection::with_peer_id(peer_id).authenticated();
@@ -141,7 +142,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
     assert!(connected.contains(&allowed_peer));
 
     // Now create a subduction with reject policy and try to register
-    let (keyhive, contact_card) = test_keyhive().await;
+    let keyhive = test_keyhive().await;
     let (reject_subduction, _listener_fut2, _actor_fut2) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
             None,
@@ -155,8 +156,9 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             keyhive,
             MemoryKeyhiveStorage::default(),
-            contact_card,
-        );
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let rejected_peer = PeerId::new([2u8; 32]);
     let rejected_conn = MockConnection::with_peer_id(rejected_peer).authenticated();

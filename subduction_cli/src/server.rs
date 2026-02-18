@@ -162,11 +162,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         );
     }
 
-    let contact_card = keyhive
-        .contact_card()
-        .await
-        .expect("failed to get contact card");
-
     let server: TokioWebSocketServer<
         MetricsStorage<FsStorage>,
         OpenPolicy,
@@ -174,7 +169,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         CountLeadingZeroBytes,
         FuturesTimerTimeout,
         FsKeyhiveStorage,
-    > = TokioWebSocketServer::setup(
+    > = Box::pin(TokioWebSocketServer::setup(
         addr,
         FuturesTimerTimeout,
         Duration::from_secs(args.timeout),
@@ -187,8 +182,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         CountLeadingZeroBytes,
         keyhive,
         keyhive_storage,
-        contact_card,
-    )
+    ))
     .await?;
 
     tracing::info!("WebSocket server started on {}", addr);

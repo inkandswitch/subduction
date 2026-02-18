@@ -6,7 +6,7 @@ use testresult::TestResult;
 use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use keyhive_core::{
-    contact_card::ContactCard, keyhive::Keyhive, listener::no_listener::NoListener,
+    keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
 };
 use rand::{RngCore, rngs::OsRng};
@@ -49,25 +49,17 @@ fn test_signer(seed: u8) -> MemorySigner {
 
 async fn test_keyhive(
     signer: MemorySigner,
-) -> (
-    Keyhive<
-        MemorySigner,
-        [u8; 32],
-        Vec<u8>,
-        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-        NoListener,
-        OsRng,
-    >,
-    ContactCard,
-) {
-    let keyhive = Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
+) -> Keyhive<
+    MemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    NoListener,
+    OsRng,
+> {
+    Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
         .await
-        .expect("failed to create keyhive");
-    let contact_card = keyhive
-        .contact_card()
-        .await
-        .expect("failed to get contact card");
-    (keyhive, contact_card)
+        .expect("failed to create keyhive")
 }
 
 #[tokio::test]
@@ -80,7 +72,7 @@ async fn rend_receive() -> TestResult {
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
-    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (suduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -93,8 +85,9 @@ async fn rend_receive() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        server_contact_card,
-    );
+    )
+    .await
+    .expect("failed to create Subduction");
 
     tokio::spawn(async move {
         listener_fut.await?;
@@ -212,7 +205,7 @@ async fn batch_sync() -> TestResult {
     let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_keyhive, server_contact_card) = test_keyhive(server_signer.clone()).await;
+    let server_keyhive = test_keyhive(server_signer.clone()).await;
     let (server_subduction, listener_fut, manager_fut) = Subduction::new(
         None,
         server_signer,
@@ -225,8 +218,9 @@ async fn batch_sync() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         server_keyhive,
         MemoryKeyhiveStorage::default(),
-        server_contact_card,
-    );
+    )
+    .await
+    .expect("failed to create Subduction");
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), anyhow::Error>(())
@@ -263,7 +257,7 @@ async fn batch_sync() -> TestResult {
     ///////////////////
 
     let client_storage = MemoryStorage::default();
-    let (client_keyhive, client_contact_card) = test_keyhive(client_signer.clone()).await;
+    let client_keyhive = test_keyhive(client_signer.clone()).await;
     let (client, listener_fut, client_manager_fut) = Subduction::<
         Sendable,
         MemoryStorage,
@@ -282,8 +276,9 @@ async fn batch_sync() -> TestResult {
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         client_keyhive,
         MemoryKeyhiveStorage::default(),
-        client_contact_card,
-    );
+    )
+    .await
+    .expect("failed to create Subduction");
 
     tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);
