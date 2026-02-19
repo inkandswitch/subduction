@@ -267,7 +267,7 @@ dependencies = [
  "subduction_wasm",
  "tracing",
  "wasm-bindgen",
- "wasm-tracing 3.0.0-alpha.0",
+ "wasm-tracing",
  "wasm_refgen",
 ]
 
@@ -1846,7 +1846,7 @@ dependencies = [
 [[package]]
 name = "keyhive_core"
 version = "0.2.0-alpha.1"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#a46be4928f7d55032e9c410df548ae88e28fb961"
+source = "git+https://github.com/inkandswitch/keyhive?branch=sendable-signer#71070b8121a6516446171602af69dbaa33ebb407"
 dependencies = [
  "bincode",
  "blake3",
@@ -1856,12 +1856,13 @@ dependencies = [
  "derive_more",
  "dupe",
  "ed25519-dalek",
+ "future_form",
  "futures 0.3.31",
- "nonempty 0.10.0",
+ "nonempty",
  "rand 0.8.5",
  "serde",
  "signature",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "topological-sort",
  "tracing",
  "trait-variant",
@@ -1871,7 +1872,7 @@ dependencies = [
 [[package]]
 name = "keyhive_wasm"
 version = "0.2.0-alpha.1"
-source = "git+https://github.com/inkandswitch/keyhive?branch=main#a46be4928f7d55032e9c410df548ae88e28fb961"
+source = "git+https://github.com/inkandswitch/keyhive?branch=sendable-signer#71070b8121a6516446171602af69dbaa33ebb407"
 dependencies = [
  "base64-simd",
  "bincode",
@@ -1880,19 +1881,20 @@ dependencies = [
  "dupe",
  "ed25519-dalek",
  "from_js_ref",
+ "future_form",
  "futures 0.3.31",
  "getrandom 0.2.17",
  "js-sys",
  "keyhive_core",
- "nonempty 0.10.0",
+ "nonempty",
  "rand 0.8.5",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.18",
  "tracing",
  "wasm-bindgen",
  "wasm-bindgen-futures 0.4.58",
- "wasm-tracing 2.1.0",
+ "wasm-tracing",
  "wasm_refgen",
  "web-sys",
 ]
@@ -2118,18 +2120,12 @@ dependencies = [
 
 [[package]]
 name = "nonempty"
-version = "0.10.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "303e8749c804ccd6ca3b428de7fe0d86cb86bc7606bc15291f100fd487960bb8"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "nonempty"
 version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9737e026353e5cd0736f98eddae28665118eb6f6600902a7f50db585621fecb6"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "nu-ansi-term"
@@ -2857,7 +2853,7 @@ dependencies = [
  "futures-util",
  "getrandom 0.2.17",
  "minicbor",
- "nonempty 0.12.0",
+ "nonempty",
  "num-bigint",
  "rand 0.8.5",
  "sedimentree_core",
@@ -3178,7 +3174,7 @@ dependencies = [
  "metrics",
  "minicbor",
  "minicbor-serde",
- "nonempty 0.12.0",
+ "nonempty",
  "rand 0.8.5",
  "sedimentree_core",
  "serde",
@@ -3207,7 +3203,7 @@ dependencies = [
  "keyhive_core",
  "minicbor",
  "minicbor-serde",
- "nonempty 0.10.0",
+ "nonempty",
  "rand 0.8.5",
  "serde",
  "thiserror 2.0.18",
@@ -3251,7 +3247,7 @@ dependencies = [
  "keyhive_wasm",
  "minicbor",
  "minicbor-serde",
- "nonempty 0.10.0",
+ "nonempty",
  "rand 0.8.5",
  "sedimentree_core",
  "sedimentree_wasm",
@@ -4009,16 +4005,6 @@ checksum = "0789dac148a8840bbcf9efe13905463b733fa96543bfbf263790535c11af7ba5"
 dependencies = [
  "proc-macro2 0.4.30",
  "quote 0.6.13",
-]
-
-[[package]]
-name = "wasm-tracing"
-version = "2.1.0"
-source = "git+https://github.com/dsgallups/wasm-tracing?rev=8c9ed933539664119681b896badb2be933338765#8c9ed933539664119681b896badb2be933338765"
-dependencies = [
- "tracing",
- "tracing-subscriber",
- "wasm-bindgen",
 ]
 
 [[package]]

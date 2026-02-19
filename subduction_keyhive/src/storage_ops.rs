@@ -288,8 +288,8 @@ where
 /// # Errors
 ///
 /// Returns an error if loading, deserialization, or archive ingestion fails.
-pub async fn ingest_from_storage<Signer, T, P, C, L, R, S, K>(
-    keyhive: &Keyhive<Signer, T, P, C, L, R>,
+pub async fn ingest_from_storage<K, Signer, T, P, C, L, R, S>(
+    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
     storage: &S,
 ) -> Result<
     Vec<Arc<StaticEvent<T>>>,
@@ -299,14 +299,14 @@ pub async fn ingest_from_storage<Signer, T, P, C, L, R, S, K>(
     >,
 >
 where
+    K: future_form::FutureForm + ?Sized,
     Signer: AsyncSigner + Clone,
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
+    C: keyhive_core::store::ciphertext::CiphertextStore<K, T, P> + Clone,
+    L: keyhive_core::listener::membership::MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
-    K: future_form::FutureForm + ?Sized,
 {
     // Load archives
     let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage)
@@ -407,20 +407,20 @@ pub type KeyhivePersistenceError<S, K> = KeyhivePersistenceErrorRaw<
 /// # Errors
 ///
 /// Returns an error if any storage operation, serialization, or deserialization fails.
-pub async fn compact<Signer, T, P, C, L, R, S, K>(
-    keyhive: &Keyhive<Signer, T, P, C, L, R>,
+pub async fn compact<K, Signer, T, P, C, L, R, S>(
+    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
     storage: &S,
     storage_id: StorageHash,
 ) -> Result<(), KeyhivePersistenceError<S, K>>
 where
+    K: future_form::FutureForm + ?Sized,
     Signer: AsyncSigner + Clone,
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
+    C: keyhive_core::store::ciphertext::CiphertextStore<K, T, P> + Clone,
+    L: keyhive_core::listener::membership::MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
-    K: future_form::FutureForm + ?Sized,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage
@@ -528,7 +528,7 @@ mod tests {
         storage::{KeyhiveArchiveStorage, KeyhiveEventStorage, MemoryKeyhiveStorage, StorageHash},
         test_utils::{keyhive_peer_id, make_keyhive},
     };
-    use future_form::Local;
+    use future_form::Sendable;
 
     #[tokio::test(flavor = "current_thread")]
     async fn save_and_load_archive_roundtrip() {
@@ -537,11 +537,13 @@ mod tests {
         let storage_id = StorageHash::new([1u8; 32]);
 
         let archive = keyhive.into_archive().await;
-        save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+        save_keyhive_archive::<_, _, Sendable>(&storage, storage_id, &archive)
             .await
             .unwrap();
 
-        let loaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
+        let loaded = load_archives::<[u8; 32], _, Sendable>(&storage)
+            .await
+            .unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, storage_id);
     }
@@ -562,13 +564,13 @@ mod tests {
         // Save two separate archives (simulating multiple save points)
         let id1 = StorageHash::new([1u8; 32]);
         let archive1 = alice.into_archive().await;
-        save_keyhive_archive::<_, _, Local>(&storage, id1, &archive1)
+        save_keyhive_archive::<_, _, Sendable>(&storage, id1, &archive1)
             .await
             .unwrap();
 
         let id2 = StorageHash::new([2u8; 32]);
         let archive2 = alice.into_archive().await;
-        save_keyhive_archive::<_, _, Local>(&storage, id2, &archive2)
+        save_keyhive_archive::<_, _, Sendable>(&storage, id2, &archive2)
             .await
             .unwrap();
 
@@ -586,14 +588,14 @@ mod tests {
         );
 
         for event in events.values() {
-            save_event::<_, _, Local>(&storage, event).await.unwrap();
+            save_event::<_, _, Sendable>(&storage, event).await.unwrap();
         }
 
         // Before compaction: 2 archives, N events
-        let archives_before = KeyhiveArchiveStorage::<Local>::load_archives(&storage)
+        let archives_before = KeyhiveArchiveStorage::<Sendable>::load_archives(&storage)
             .await
             .unwrap();
-        let events_before = KeyhiveEventStorage::<Local>::load_events(&storage)
+        let events_before = KeyhiveEventStorage::<Sendable>::load_events(&storage)
             .await
             .unwrap();
         assert_eq!(archives_before.len(), 2);
@@ -601,12 +603,12 @@ mod tests {
 
         // Compact
         let consolidated_id = StorageHash::new([10u8; 32]);
-        compact::<_, _, _, _, _, _, _, Local>(&alice, &storage, consolidated_id)
+        compact::<Sendable, _, _, _, _, _, _, _>(&alice, &storage, consolidated_id)
             .await
             .unwrap();
 
         // After compaction: exactly 1 archive at the consolidated key
-        let archives_after = KeyhiveArchiveStorage::<Local>::load_archives(&storage)
+        let archives_after = KeyhiveArchiveStorage::<Sendable>::load_archives(&storage)
             .await
             .unwrap();
         assert_eq!(archives_after.len(), 1);
@@ -616,7 +618,7 @@ mod tests {
         // Alice already has these events in her keyhive state, so they are
         // "processed" — compaction ingests them, sees they aren't pending,
         // and removes them.
-        let events_after = KeyhiveEventStorage::<Local>::load_events(&storage)
+        let events_after = KeyhiveEventStorage::<Sendable>::load_events(&storage)
             .await
             .unwrap();
         assert_eq!(
@@ -626,7 +628,9 @@ mod tests {
         );
 
         // The consolidated archive should be loadable and deserializable
-        let reloaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
+        let reloaded = load_archives::<[u8; 32], _, Sendable>(&storage)
+            .await
+            .unwrap();
         assert_eq!(reloaded.len(), 1);
     }
 }

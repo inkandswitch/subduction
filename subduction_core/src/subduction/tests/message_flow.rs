@@ -9,7 +9,7 @@
 
 use alloc::collections::BTreeSet;
 
-use super::common::{TokioSpawn, test_keyhive, test_signer};
+use super::common::{test_keyhive, test_keyhive_local, test_signer, TokioSpawn};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,
@@ -17,7 +17,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use core::time::Duration;
 use future_form::{Local, Sendable};
@@ -226,7 +226,7 @@ async fn test_local_single_commit() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let storage = MemoryStorage::new();
-            let keyhive = test_keyhive().await;
+            let keyhive = test_keyhive_local().await;
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                     None,
@@ -291,7 +291,7 @@ async fn test_local_multiple_sequential() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let storage = MemoryStorage::new();
-            let keyhive = test_keyhive().await;
+            let keyhive = test_keyhive_local().await;
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                     None,
@@ -356,7 +356,7 @@ async fn test_local_same_sedimentree() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let storage = MemoryStorage::new();
-            let keyhive = test_keyhive().await;
+            let keyhive = test_keyhive_local().await;
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                     None,

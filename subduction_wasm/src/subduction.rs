@@ -7,9 +7,9 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use keyhive_core::keyhive::Keyhive;
@@ -28,7 +28,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use subduction_keyhive::storage_ops::ingest_from_storage;
 use wasm_bindgen::prelude::*;
@@ -258,7 +258,10 @@ impl WasmSubduction {
         .expect("failed to create keyhive");
 
         // Restore keyhive state from storage (archives and events)
-        if let Err(e) = ingest_from_storage::<_, _, _, _, _, _, _, Local>(&keyhive, &keyhive_storage).await {
+        if let Err(e) =
+            ingest_from_storage::<_, _, _, _, _, _, _, JsKeyhiveStorage>(&keyhive, &keyhive_storage)
+                .await
+        {
             tracing::warn!(error = ?e, "failed to ingest keyhive state from storage (may be empty)");
         }
 

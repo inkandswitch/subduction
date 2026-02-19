@@ -1,11 +1,11 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
+    MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
@@ -28,8 +28,8 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::traits::Storage,
     subduction::{
-        Subduction, error::RegistrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        error::RegistrationError, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        Subduction,
     },
     timestamp::TimestampSeconds,
 };
@@ -109,13 +109,13 @@ where
 }
 
 impl<
-    S: 'static + Send + Sync + Storage<Sendable>,
-    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
-    M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-    KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable>,
-> TokioWebSocketServer<S, P, Sig, M, O, KStore>
+        S: 'static + Send + Sync + Storage<Sendable>,
+        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+        Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+        KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable>,
+    > TokioWebSocketServer<S, P, Sig, M, O, KStore>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
@@ -301,6 +301,7 @@ where
         nonce_cache: NonceCache,
         depth_metric: M,
         keyhive: Keyhive<
+            Sendable,
             Sig,
             [u8; 32],
             Vec<u8>,

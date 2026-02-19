@@ -30,18 +30,10 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 
-/// Type alias for keyhive used in tests.
-type TestKeyhive = Keyhive<
-    MemorySigner,
-    [u8; 32],
-    Vec<u8>,
-    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-    NoListener,
-    OsRng,
->;
+use super::common::TestKeyhive;
 
 /// Create a unique signer for a peer.
 fn make_signer(seed: u8) -> MemorySigner {
@@ -547,7 +539,9 @@ async fn collect_sync_op_digests(kh: &TestKeyhive, identifier: Identifier) -> BT
     // Prekey ops
     for key_ops in kh.reachable_prekey_ops_for_agent(&agent).await.values() {
         for key_op in key_ops {
-            let op = Event::<MemorySigner, [u8; 32], NoListener>::from(key_op.as_ref().clone());
+            let op = Event::<Sendable, MemorySigner, [u8; 32], NoListener>::from(
+                key_op.as_ref().clone(),
+            );
             let digest = Digest::hash(&op);
             digests.insert(*digest.raw.as_bytes());
         }

@@ -17,7 +17,7 @@ use alloc::{collections::BTreeSet, vec, vec::Vec};
 use keyhive_core::{
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{Event, static_event::StaticEvent},
+    event::{static_event::StaticEvent, Event},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -35,7 +35,7 @@ use subduction_keyhive::{
 
 use super::{Subduction, SubductionFutureForm};
 use crate::{
-    connection::{Connection, message::Message},
+    connection::{message::Message, Connection},
     crypto::signer::Signer,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -85,35 +85,35 @@ fn decode_message(bytes: &[u8]) -> Result<KeyhiveMessage, minicbor::decode::Erro
 }
 
 impl<
-    'a,
-    F: SubductionFutureForm<
-            'a,
-            S,
-            C,
-            P,
-            Sig,
-            M,
-            N,
-            KContentRef,
-            KPayload,
-            KCiphertextStore,
-            KListener,
-            KRng,
-            KStore,
-        > + 'static,
-    S: Storage<F>,
-    C: Connection<F> + PartialEq + 'a,
-    P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
-    M: DepthMetric,
-    const N: usize,
-    KContentRef: ContentRef + serde::de::DeserializeOwned,
-    KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
-    KRng: CryptoRng + RngCore,
-    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
->
+        'a,
+        F: SubductionFutureForm<
+                'a,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            > + 'static,
+        S: Storage<F>,
+        C: Connection<F> + PartialEq + 'a,
+        P: ConnectionPolicy<F> + StoragePolicy<F>,
+        Sig: Signer<F> + AsyncSigner + Clone,
+        M: DepthMetric,
+        const N: usize,
+        KContentRef: ContentRef + serde::de::DeserializeOwned,
+        KPayload: for<'de> serde::Deserialize<'de>,
+        KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+        KListener: MembershipListener<F, Sig, KContentRef>,
+        KRng: CryptoRng + RngCore,
+        KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+    >
     Subduction<
         'a,
         F,
@@ -686,21 +686,22 @@ impl<
 }
 
 /// Get sync-relevant events for an agent, excluding CGKA operations.
-async fn sync_events_for_agent<Signer, T, P, C, L, R>(
-    keyhive: &Keyhive<Signer, T, P, C, L, R>,
-    agent: &Agent<Signer, T, L>,
+async fn sync_events_for_agent<K, Signer, T, P, C, L, R>(
+    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
+    agent: &Agent<K, Signer, T, L>,
 ) -> Map<Digest<StaticEvent<T>>, StaticEvent<T>>
 where
+    K: future_form::FutureForm + ?Sized,
     Signer: AsyncSigner + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    C: CiphertextStore<K, T, P> + Clone,
+    L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
 {
     // Membership ops
     #[allow(clippy::type_complexity)]
-    let mut ops: Map<Digest<Event<Signer, T, L>>, Event<Signer, T, L>> = keyhive
+    let mut ops: Map<Digest<Event<K, Signer, T, L>>, Event<K, Signer, T, L>> = keyhive
         .membership_ops_for_agent(agent)
         .await
         .into_iter()
@@ -710,7 +711,7 @@ where
     // Prekey ops
     for key_ops in keyhive.reachable_prekey_ops_for_agent(agent).await.values() {
         for key_op in key_ops {
-            let op = Event::<Signer, T, L>::from(key_op.as_ref().clone());
+            let op = Event::<K, Signer, T, L>::from(key_op.as_ref().clone());
             ops.insert(Digest::hash(&op), op);
         }
     }

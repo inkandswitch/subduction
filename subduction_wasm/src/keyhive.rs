@@ -12,6 +12,8 @@ use alloc::{
 };
 
 use async_lock::Mutex;
+use future_form::Local;
+use futures::future::LocalBoxFuture;
 use keyhive_core::{
     access::Access,
     archive::Archive,
@@ -46,8 +48,9 @@ use crate::signer::JsSigner;
 ///
 /// This is equivalent to `keyhive_wasm::JsChangeId` but defined locally
 /// to avoid circular dependencies.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 pub struct ChangeId(pub(crate) Vec<u8>);
 
 impl ChangeId {
@@ -295,40 +298,56 @@ impl WasmEventHandler {
     }
 }
 
-impl PrekeyListener for WasmEventHandler {
-    async fn on_prekeys_expanded(&self, e: &Arc<Signed<AddKeyOp>>) {
-        let static_event = StaticEvent::PrekeysExpanded(Box::new((**e).clone()));
-        self.call_with_event("prekeys_expanded", WasmStaticEvent(static_event));
+impl PrekeyListener<Local> for WasmEventHandler {
+    fn on_prekeys_expanded<'a>(&'a self, e: &'a Arc<Signed<AddKeyOp>>) -> LocalBoxFuture<'a, ()> {
+        Box::pin(async move {
+            let static_event = StaticEvent::PrekeysExpanded(Box::new((**e).clone()));
+            self.call_with_event("prekeys_expanded", WasmStaticEvent(static_event));
+        })
     }
 
-    async fn on_prekey_rotated(&self, e: &Arc<Signed<RotateKeyOp>>) {
-        let static_event = StaticEvent::PrekeyRotated(Box::new((**e).clone()));
-        self.call_with_event("prekey_rotated", WasmStaticEvent(static_event));
-    }
-}
-
-impl MembershipListener<JsSigner, ChangeId> for WasmEventHandler {
-    async fn on_delegation(&self, data: &Arc<Signed<Delegation<JsSigner, ChangeId, Self>>>) {
-        // Convert Delegation to StaticDelegation via Event -> StaticEvent
-        use keyhive_core::event::Event;
-        let event = Event::Delegated(Arc::clone(data));
-        let static_event: StaticEvent<ChangeId> = event.into();
-        self.call_with_event("delegation", WasmStaticEvent(static_event));
-    }
-
-    async fn on_revocation(&self, data: &Arc<Signed<Revocation<JsSigner, ChangeId, Self>>>) {
-        // Convert Revocation to StaticRevocation via Event -> StaticEvent
-        use keyhive_core::event::Event;
-        let event = Event::Revoked(Arc::clone(data));
-        let static_event: StaticEvent<ChangeId> = event.into();
-        self.call_with_event("revocation", WasmStaticEvent(static_event));
+    fn on_prekey_rotated<'a>(&'a self, e: &'a Arc<Signed<RotateKeyOp>>) -> LocalBoxFuture<'a, ()> {
+        Box::pin(async move {
+            let static_event = StaticEvent::PrekeyRotated(Box::new((**e).clone()));
+            self.call_with_event("prekey_rotated", WasmStaticEvent(static_event));
+        })
     }
 }
 
-impl CgkaListener for WasmEventHandler {
-    async fn on_cgka_op(&self, data: &Arc<Signed<CgkaOperation>>) {
-        let static_event = StaticEvent::CgkaOperation(Box::new((**data).clone()));
-        self.call_with_event("cgka_op", WasmStaticEvent(static_event));
+impl MembershipListener<Local, JsSigner, ChangeId> for WasmEventHandler {
+    fn on_delegation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Delegation<Local, JsSigner, ChangeId, Self>>>,
+    ) -> LocalBoxFuture<'a, ()> {
+        Box::pin(async move {
+            // Convert Delegation to StaticDelegation via Event -> StaticEvent
+            use keyhive_core::event::Event;
+            let event = Event::Delegated(Arc::clone(data));
+            let static_event: StaticEvent<ChangeId> = event.into();
+            self.call_with_event("delegation", WasmStaticEvent(static_event));
+        })
+    }
+
+    fn on_revocation<'a>(
+        &'a self,
+        data: &'a Arc<Signed<Revocation<Local, JsSigner, ChangeId, Self>>>,
+    ) -> LocalBoxFuture<'a, ()> {
+        Box::pin(async move {
+            // Convert Revocation to StaticRevocation via Event -> StaticEvent
+            use keyhive_core::event::Event;
+            let event = Event::Revoked(Arc::clone(data));
+            let static_event: StaticEvent<ChangeId> = event.into();
+            self.call_with_event("revocation", WasmStaticEvent(static_event));
+        })
+    }
+}
+
+impl CgkaListener<Local> for WasmEventHandler {
+    fn on_cgka_op<'a>(&'a self, data: &'a Arc<Signed<CgkaOperation>>) -> LocalBoxFuture<'a, ()> {
+        Box::pin(async move {
+            let static_event = StaticEvent::CgkaOperation(Box::new((**data).clone()));
+            self.call_with_event("cgka_op", WasmStaticEvent(static_event));
+        })
     }
 }
 
@@ -357,6 +376,7 @@ impl WasmCiphertextStore {
 
 /// The internal keyhive type used by Subduction.
 pub(crate) type InternalKeyhive = Keyhive<
+    Local,
     JsSigner,
     ChangeId,
     Vec<u8>,
@@ -417,14 +437,11 @@ impl WasmKeyhive {
     #[wasm_bindgen(js_name = contactCard)]
     pub async fn contact_card(&self) -> Result<WasmContactCard, JsValue> {
         let kh = self.inner.lock().await;
-        kh.contact_card()
-            .await
-            .map(WasmContactCard)
-            .map_err(|e| {
-                let js_err = js_sys::Error::new(&e.to_string());
-                js_err.set_name("SigningError");
-                js_err.into()
-            })
+        kh.contact_card().await.map(WasmContactCard).map_err(|e| {
+            let js_err = js_sys::Error::new(&e.to_string());
+            js_err.set_name("SigningError");
+            js_err.into()
+        })
     }
 
     /// Get the existing contact card (does not generate a new one).
@@ -654,7 +671,7 @@ impl WasmChangeId {
     /// Get the raw bytes of this change ID.
     #[wasm_bindgen(getter)]
     pub fn bytes(&self) -> Vec<u8> {
-        self.0.0.clone()
+        self.0 .0.clone()
     }
 }
 

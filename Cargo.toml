@@ -65,8 +65,8 @@ futures_kind = { version = "0.1", default-features = false }
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
-keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
-keyhive_wasm = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
+keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "sendable-signer" }
+keyhive_wasm = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "sendable-signer" }
 metrics = "0.24"
 minicbor = { version = "2.1", default-features = false, features = ["alloc", "derive"] }
 minicbor-serde = { version = "0.6", default-features = false, features = ["alloc"] }

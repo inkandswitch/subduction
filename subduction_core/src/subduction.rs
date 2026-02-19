@@ -180,11 +180,11 @@ pub struct Subduction<
     // Keyhive generics
     KContentRef: ContentRef = [u8; 32],
     KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone = MemoryCiphertextStore<
         KContentRef,
         KPayload,
     >,
-    KListener: MembershipListener<Sig, KContentRef> = NoListener,
+    KListener: MembershipListener<F, Sig, KContentRef> = NoListener,
     KRng: CryptoRng + RngCore = OsRng,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F> = MemoryKeyhiveStorage,
 > {
@@ -223,7 +223,7 @@ pub struct Subduction<
     abort_listener_handle: AbortHandle,
 
     // Keyhive state
-    keyhive: Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>>,
+    keyhive: Arc<Mutex<Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>>,
     keyhive_storage: KStore,
     keyhive_peer_id: KeyhivePeerId,
     keyhive_contact_card: ContactCard,
@@ -256,8 +256,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef + serde::de::DeserializeOwned,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 >
@@ -300,7 +300,7 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
-        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive: Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
     ) -> Result<
         (
@@ -402,7 +402,7 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
-        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive: Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
     ) -> Result<
         (
@@ -516,7 +516,7 @@ impl<
     #[allow(clippy::type_complexity)]
     pub fn keyhive(
         &self,
-    ) -> &Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>> {
+    ) -> &Arc<Mutex<Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>> {
         &self.keyhive
     }
 
@@ -3282,8 +3282,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Drop
@@ -3335,8 +3335,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > ConnectionPolicy<F>
@@ -3392,8 +3392,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > StoragePolicy<F>
@@ -3462,8 +3462,8 @@ pub trait SubductionFutureForm<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<Self, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Self, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
 >:
@@ -3495,8 +3495,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<Self, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Self, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
     U: StartListener<
@@ -3546,8 +3546,8 @@ pub trait StartListener<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<Self, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Self, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
 >: FutureForm + RunManager<Authenticated<C, Self>> + Sized
@@ -3582,6 +3582,7 @@ pub trait StartListener<
     ///
     /// For `Local` (single-threaded/Wasm), this calls `handle_keyhive_message` directly.
     /// For `Sendable` (multi-threaded), this just logs since keyhive futures aren't Send.
+    #[allow(clippy::type_complexity)]
     fn dispatch_keyhive<'b>(
         subduction: &'b Subduction<
             'a,
@@ -3619,8 +3620,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     KPayload: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + Send + Sync + 'static,
-    KListener: MembershipListener<Sig, KContentRef> + Send + Sync + 'static,
+    KCiphertextStore: CiphertextStore<Sendable, KContentRef, KPayload> + Clone + Send + Sync + 'static,
+    KListener: MembershipListener<Sendable, Sig, KContentRef> + Send + Sync + 'static,
     KRng: CryptoRng + RngCore + Send + 'static,
     KStore: KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable> + Send + Sync + 'static,
 >
@@ -3722,8 +3723,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef + serde::de::DeserializeOwned + 'static,
     KPayload: for<'de> serde::Deserialize<'de> + 'static,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + 'static,
-    KListener: MembershipListener<Sig, KContentRef> + 'static,
+    KCiphertextStore: CiphertextStore<Local, KContentRef, KPayload> + Clone + 'static,
+    KListener: MembershipListener<Local, Sig, KContentRef> + 'static,
     KRng: CryptoRng + RngCore + 'static,
     KStore: KeyhiveArchiveStorage<Local> + KeyhiveEventStorage<Local> + 'static,
 >
@@ -3838,11 +3839,11 @@ pub struct ListenerFuture<
     const N: usize = 256,
     KContentRef: ContentRef = [u8; 32],
     KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone = MemoryCiphertextStore<
         KContentRef,
         KPayload,
     >,
-    KListener: MembershipListener<Sig, KContentRef> = NoListener,
+    KListener: MembershipListener<F, Sig, KContentRef> = NoListener,
     KRng: CryptoRng + RngCore = OsRng,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F> = MemoryKeyhiveStorage,
 > {
@@ -3887,8 +3888,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 >
@@ -3949,8 +3950,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Deref
@@ -4003,8 +4004,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Future
@@ -4057,8 +4058,8 @@ impl<
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
-    KListener: MembershipListener<Sig, KContentRef>,
+    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 > Unpin

@@ -6,7 +6,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use alloc::{sync::Arc, vec::Vec};
 use future_form::Sendable;
@@ -62,8 +62,9 @@ impl Spawn<future_form::Local> for TokioSpawn {
     }
 }
 
-/// Type alias for keyhive used in tests.
+/// Type alias for keyhive used in tests (sendable version).
 pub(super) type TestKeyhive = Keyhive<
+    Sendable,
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -72,8 +73,28 @@ pub(super) type TestKeyhive = Keyhive<
     OsRng,
 >;
 
-/// Create a test keyhive instance.
+/// Type alias for keyhive used in tests (local version).
+pub(super) type TestKeyhiveLocal = Keyhive<
+    future_form::Local,
+    MemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    NoListener,
+    OsRng,
+>;
+
+/// Create a test keyhive instance (sendable version).
 pub(super) async fn test_keyhive() -> TestKeyhive {
+    let csprng = OsRng;
+    let sk = test_signer();
+    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
+        .await
+        .expect("failed to create keyhive")
+}
+
+/// Create a test keyhive instance (local/single-threaded version).
+pub(super) async fn test_keyhive_local() -> TestKeyhiveLocal {
     let csprng = OsRng;
     let sk = test_signer();
     Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
