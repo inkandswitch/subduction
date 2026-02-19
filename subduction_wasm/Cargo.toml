@@ -21,8 +21,10 @@ crate-type = ["cdylib", "rlib"]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
+blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 minicbor = { workspace = true }
+minicbor-serde = { workspace = true }
 console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
@@ -85,6 +87,7 @@ idb = ["sedimentree_wasm/idb"]
 std = [
   "async-channel/std",
   "async-lock/std",
+  "blake3/std",
   "minicbor/std",
   "futures/std",
   "futures-util/std",

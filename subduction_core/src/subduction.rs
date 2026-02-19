@@ -841,17 +841,8 @@ impl<
                 tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
             }
             Message::Keyhive(signed_msg) => {
-                // NOTE: Keyhive message handling requires calling async methods on Keyhive
-                // which don't produce Send futures (keyhive_core targets Wasm).
-                // For now, we log the message. Users can call handle_keyhive_message()
-                // directly in single-threaded (Local) contexts, or use sync_keyhive()
-                // to initiate sync after connection establishment.
-                tracing::debug!(
-                    peer = %from,
-                    has_contact_card = signed_msg.has_contact_card(),
-                    "received keyhive message (auto-handling disabled, call handle_keyhive_message manually)"
-                );
-                drop(signed_msg);
+                // Dispatch keyhive message via the FutureForm-specific handler
+                F::dispatch_keyhive(self, &from, signed_msg).await;
             }
         }
 
@@ -3586,6 +3577,33 @@ pub trait StartListener<
     ) -> Abortable<Self::Future<'a, ()>>
     where
         Self: Sized;
+
+    /// Dispatch a keyhive message.
+    ///
+    /// For `Local` (single-threaded/Wasm), this calls `handle_keyhive_message` directly.
+    /// For `Sendable` (multi-threaded), this just logs since keyhive futures aren't Send.
+    fn dispatch_keyhive<'b>(
+        subduction: &'b Subduction<
+            'a,
+            Self,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+        from: &'b PeerId,
+        signed_msg: subduction_keyhive::signed_message::SignedMessage,
+    ) -> Self::Future<'b, ()>
+    where
+        Self: Sized;
 }
 
 // Manual impls for Sendable and Local because the future_form macro
@@ -3660,6 +3678,38 @@ where
             abort_reg,
         )
     }
+
+    fn dispatch_keyhive<'b>(
+        _subduction: &'b Subduction<
+            'a,
+            Self,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+        from: &'b PeerId,
+        signed_msg: subduction_keyhive::signed_message::SignedMessage,
+    ) -> Self::Future<'b, ()> {
+        // For Sendable (multi-threaded), we can't call handle_keyhive_message
+        // because keyhive_core async methods don't produce Send futures.
+        // Users must call sync_keyhive() or handle_keyhive_message() manually.
+        Sendable::from_future(async move {
+            tracing::debug!(
+                peer = %from,
+                has_contact_card = signed_msg.has_contact_card(),
+                "received keyhive message (auto-handling disabled in multi-threaded mode)"
+            );
+        })
+    }
 }
 
 impl<
@@ -3722,6 +3772,38 @@ impl<
             }),
             abort_reg,
         )
+    }
+
+    fn dispatch_keyhive<'b>(
+        subduction: &'b Subduction<
+            'a,
+            Self,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+        from: &'b PeerId,
+        signed_msg: subduction_keyhive::signed_message::SignedMessage,
+    ) -> Self::Future<'b, ()> {
+        // For Local (single-threaded/Wasm), we can call handle_keyhive_message directly
+        Local::from_future(async move {
+            if let Err(e) = subduction.handle_keyhive_message(from, signed_msg).await {
+                tracing::warn!(
+                    peer = %from,
+                    error = %e,
+                    "failed to handle keyhive message"
+                );
+            }
+        })
     }
 }
 

@@ -6,7 +6,8 @@ use future_form::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
     subduction::error::{
-        AttachError, HydrationError, IoError, ListenError, RegistrationError, WriteError,
+        AttachError, HydrationError, IoError, KeyhiveSyncError, ListenError, RegistrationError,
+        WriteError,
     },
 };
 use thiserror::Error;
@@ -253,6 +254,19 @@ impl From<WasmHandshakeError> for JsValue {
     fn from(err: WasmHandshakeError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("HandshakeError");
+        js_err.into()
+    }
+}
+
+/// A Wasm wrapper around the [`KeyhiveSyncError`] type.
+#[derive(Debug, Error)]
+#[error(transparent)]
+pub struct WasmKeyhiveSyncError(#[from] KeyhiveSyncError<Local, WasmWebSocket>);
+
+impl From<WasmKeyhiveSyncError> for JsValue {
+    fn from(err: WasmKeyhiveSyncError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("KeyhiveSyncError");
         js_err.into()
     }
 }

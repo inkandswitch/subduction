@@ -14,6 +14,7 @@ pub mod connection_id;
 pub mod error;
 pub mod fragment;
 pub mod keyhive;
+pub mod keyhive_storage;
 pub mod peer_id;
 pub mod signer;
 pub mod subduction;
