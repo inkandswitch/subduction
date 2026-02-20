@@ -1,17 +1,18 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
+    MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
+use keyhive_core::{crypto::signer::async_signer::AsyncSigner, keyhive::Keyhive};
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
 };
@@ -27,8 +28,8 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::traits::Storage,
     subduction::{
-        Subduction, error::RegistrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        error::RegistrationError, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        Subduction,
     },
     timestamp::TimestampSeconds,
 };
@@ -41,35 +42,67 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
+/// Error that can occur during server setup.
+#[derive(Debug, thiserror::Error)]
+pub enum SetupError {
+    /// Failed to generate keyhive contact card.
+    #[error("failed to generate contact card")]
+    ContactCard(#[source] keyhive_core::crypto::signed::SigningError),
+
+    /// Network/socket error.
+    #[error("network error")]
+    Network(#[from] tungstenite::Error),
+}
+
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug)]
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner<Sendable, [u8; 32]> + keyhive_core::crypto::signer::sync_signer::SyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
+    KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable> = MemoryKeyhiveStorage,
 > where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::DeleteError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::DeleteError: 'static + Send + Sync,
 {
-    subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+    subduction: TokioWebSocketSubduction<S, P, Sig, O, M, KStore>,
     address: SocketAddr,
     accept_task: Arc<JoinHandle<()>>,
     cancellation_token: CancellationToken,
 }
 
-impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
+impl<S, P, Sig, M, O, KStore> Clone for TokioWebSocketServer<S, P, Sig, M, O, KStore>
 where
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
-    Sig: 'static + Send + Sync + Signer<Sendable>,
+    Sig: 'static
+        + Send
+        + Sync
+        + Signer<Sendable>
+        + AsyncSigner<Sendable, [u8; 32]>
+        + keyhive_core::crypto::signer::sync_signer::SyncSigner
+        + Clone,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
     S::Error: 'static + Send + Sync,
+    KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable>,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::DeleteError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::DeleteError: 'static + Send + Sync,
 {
     fn clone(&self) -> Self {
         Self {
@@ -82,16 +115,29 @@ where
 }
 
 impl<
-    S: 'static + Send + Sync + Storage<Sendable>,
-    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
-    M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-> TokioWebSocketServer<S, P, Sig, M, O>
+        S: 'static + Send + Sync + Storage<Sendable>,
+        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+        Sig: 'static
+            + Send
+            + Sync
+            + Signer<Sendable>
+            + AsyncSigner<Sendable, [u8; 32]>
+            + keyhive_core::crypto::signer::sync_signer::SyncSigner
+            + Clone,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+        KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable>,
+    > TokioWebSocketServer<S, P, Sig, M, O, KStore>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveArchiveStorage<Sendable>>::DeleteError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::SaveError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::LoadError: 'static + Send + Sync,
+    <KStore as KeyhiveEventStorage<Sendable>>::DeleteError: 'static + Send + Sync,
 {
     /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
     ///
@@ -115,7 +161,7 @@ where
         timeout: O,
         default_time_limit: Duration,
         handshake_max_drift: Duration,
-        subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
+        subduction: TokioWebSocketSubduction<S, P, Sig, O, M, KStore>,
     ) -> Result<Self, tungstenite::Error> {
         let server_peer_id = subduction.peer_id();
         tracing::info!(
@@ -254,7 +300,7 @@ where
     /// # Errors
     ///
     /// Returns an error if the socket could not be bound.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub async fn setup(
         address: SocketAddr,
         timeout: O,
@@ -266,7 +312,16 @@ where
         policy: P,
         nonce_cache: NonceCache,
         depth_metric: M,
-    ) -> Result<Self, tungstenite::Error> {
+        keyhive: Keyhive<
+            Sig,
+            [u8; 32],
+            Vec<u8>,
+            MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+            NoListener,
+            OsRng,
+        >,
+        keyhive_storage: KStore,
+    ) -> Result<Self, SetupError> {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
         let (subduction, listener_fut, manager_fut) = Subduction::new(
@@ -279,7 +334,11 @@ where
             sedimentrees,
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            keyhive_storage,
+        )
+        .await
+        .map_err(SetupError::ContactCard)?;
 
         let server = Self::new(
             address,
@@ -324,7 +383,7 @@ where
 
     /// Get a reference to the underlying [`Subduction`] instance.
     #[must_use]
-    pub const fn subduction(&self) -> &TokioWebSocketSubduction<S, P, Sig, O, M> {
+    pub const fn subduction(&self) -> &TokioWebSocketSubduction<S, P, Sig, O, M, KStore> {
         &self.subduction
     }
 
@@ -566,8 +625,33 @@ where
     }
 }
 
-type TokioWebSocketSubduction<S, P, Sig, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, P, Sig, M>>;
+use alloc::vec::Vec;
+use keyhive_core::{
+    listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::rngs::OsRng;
+use subduction_keyhive::storage::{
+    KeyhiveArchiveStorage, KeyhiveEventStorage, MemoryKeyhiveStorage,
+};
+
+type TokioWebSocketSubduction<S, P, Sig, O, M, KStore = MemoryKeyhiveStorage> = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        S,
+        UnifiedWebSocket<O>,
+        P,
+        Sig,
+        M,
+        256,
+        [u8; 32],
+        Vec<u8>,
+        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+        NoListener,
+        OsRng,
+        KStore,
+    >,
+>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]

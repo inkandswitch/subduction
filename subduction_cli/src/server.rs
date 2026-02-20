@@ -2,6 +2,12 @@
 
 use crate::metrics;
 use anyhow::Result;
+use future_form::Sendable;
+use keyhive_core::{
+    keyhive::Keyhive, listener::no_listener::NoListener,
+    store::ciphertext::memory::MemoryCiphertextStore,
+};
+use rand::rngs::OsRng;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
@@ -11,6 +17,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
 };
+use subduction_keyhive::{fs_storage::FsKeyhiveStorage, storage_ops::ingest_from_storage};
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
@@ -81,7 +88,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     }
 
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
-    let fs_storage = FsStorage::new(data_dir)?;
+    let fs_storage = FsStorage::new(data_dir.clone())?;
     let storage = MetricsStorage::new(fs_storage);
 
     // Initial metrics refresh and start background refresh task
@@ -127,20 +134,57 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .clone()
         .unwrap_or_else(|| args.socket.clone());
 
-    let server: TokioWebSocketServer<MetricsStorage<FsStorage>, OpenPolicy, MemorySigner> =
-        TokioWebSocketServer::setup(
-            addr,
-            FuturesTimerTimeout,
-            Duration::from_secs(args.timeout),
-            Duration::from_secs(args.handshake_max_drift),
-            signer.clone(),
-            Some(service_name.as_str()),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-        )
-        .await?;
+    // Initialize keyhive storage
+    let keyhive_storage_path = data_dir.join("keyhive");
+    tracing::info!("Initializing keyhive storage at {:?}", keyhive_storage_path);
+    let keyhive_storage = FsKeyhiveStorage::new(keyhive_storage_path)?;
+
+    // Initialize keyhive for access control
+    let keyhive = Keyhive::generate::<Sendable>(
+        signer.clone(),
+        MemoryCiphertextStore::new(),
+        NoListener,
+        OsRng,
+    )
+    .await
+    .expect("failed to create keyhive");
+
+    // Hydrate keyhive from storage (load any existing state)
+    let pending = ingest_from_storage::<Sendable, _, _, _, _, _, _, _>(&keyhive, &keyhive_storage)
+        .await
+        .expect("failed to hydrate keyhive from storage");
+
+    if pending.is_empty() {
+        tracing::debug!("keyhive hydrated from storage");
+    } else {
+        tracing::warn!(
+            count = pending.len(),
+            "keyhive has pending events that couldn't be ingested"
+        );
+    }
+
+    let server: TokioWebSocketServer<
+        MetricsStorage<FsStorage>,
+        OpenPolicy,
+        MemorySigner,
+        CountLeadingZeroBytes,
+        FuturesTimerTimeout,
+        FsKeyhiveStorage,
+    > = Box::pin(TokioWebSocketServer::setup(
+        addr,
+        FuturesTimerTimeout,
+        Duration::from_secs(args.timeout),
+        Duration::from_secs(args.handshake_max_drift),
+        signer.clone(),
+        Some(service_name.as_str()),
+        storage,
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+        keyhive,
+        keyhive_storage,
+    ))
+    .await?;
 
     tracing::info!("WebSocket server started on {}", addr);
     tracing::info!("Peer ID: {}", peer_id);

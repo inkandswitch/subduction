@@ -70,6 +70,7 @@
 //! [`remove_sedimentree`]: Subduction::remove_sedimentree
 
 pub mod error;
+mod keyhive;
 pub mod pending_blob_requests;
 pub mod request;
 
@@ -108,13 +109,23 @@ use error::{
     AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
     SendRequestedDataError, Unauthorized, WriteError,
 };
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{FutureForm, Local, Sendable};
 use futures::{
     FutureExt, StreamExt,
     future::try_join_all,
     stream::{AbortHandle, AbortRegistration, Abortable, Aborted, FuturesUnordered},
 };
+use keyhive_core::{
+    contact_card::ContactCard,
+    content::reference::ContentRef,
+    crypto::signer::async_signer::AsyncSigner,
+    keyhive::Keyhive,
+    listener::{membership::MembershipListener, no_listener::NoListener},
+    principal::identifier::Identifier as KeyhiveIdentifier,
+    store::ciphertext::{CiphertextStore, memory::MemoryCiphertextStore},
+};
 use nonempty::NonEmpty;
+use rand::{CryptoRng, RngCore, rngs::OsRng};
 use request::FragmentRequested;
 use sedimentree_core::{
     blob::Blob,
@@ -133,6 +144,10 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
+use subduction_keyhive::{
+    peer_id::KeyhivePeerId,
+    storage::{KeyhiveArchiveStorage, KeyhiveEventStorage, MemoryKeyhiveStorage},
+};
 
 use pending_blob_requests::PendingBlobRequests;
 
@@ -141,13 +156,37 @@ use pending_blob_requests::PendingBlobRequests;
 #[allow(clippy::type_complexity)]
 pub struct Subduction<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
+    // Keyhive generics
+    KContentRef: ContentRef = [u8; 32],
+    KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+        KContentRef,
+        KPayload,
+    >,
+    KListener: MembershipListener<F, Sig, KContentRef> = NoListener,
+    KRng: CryptoRng + RngCore = OsRng,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F> = MemoryKeyhiveStorage,
 > {
     signer: Sig,
     discovery_id: Option<DiscoveryId>,
@@ -183,19 +222,64 @@ pub struct Subduction<
     abort_manager_handle: AbortHandle,
     abort_listener_handle: AbortHandle,
 
+    // Keyhive state
+    keyhive: Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>>,
+    keyhive_storage: KStore,
+    keyhive_peer_id: KeyhivePeerId,
+    keyhive_contact_card: ContactCard,
+
     _phantom: core::marker::PhantomData<&'a F>,
 }
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        > + 'static,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef + serde::de::DeserializeOwned,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore + Send + 'static,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+>
+    Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
+where
+    keyhive_core::principal::active::Active<Sig, KContentRef, KListener>:
+        keyhive_core::principal::active::ActiveOps<F>,
 {
     /// Initialize a new `Subduction` with the given storage backend, policy, signer, depth metric, sharded `Sedimentree` map, and spawner.
     ///
@@ -204,8 +288,12 @@ impl<
     /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
     /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
     /// or provide secure random keys to [`ShardedMap::with_key`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if generating the contact card fails.
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    pub fn new<Sp: Spawn<F> + Send + Sync + 'static>(
+    pub async fn new<Sp: Spawn<F> + Send + Sync + 'static>(
         discovery_id: Option<DiscoveryId>,
         signer: Sig,
         storage: S,
@@ -215,12 +303,34 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
-    ) -> (
-        Arc<Self>,
-        ListenerFuture<'a, F, S, C, P, Sig, M, N>,
-        crate::connection::manager::ManagerFuture<F>,
-    ) {
+        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive_storage: KStore,
+    ) -> Result<
+        (
+            Arc<Self>,
+            ListenerFuture<
+                'a,
+                F,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+            crate::connection::manager::ManagerFuture<F>,
+        ),
+        keyhive_core::crypto::signed::SigningError,
+    > {
         tracing::info!("initializing Subduction instance");
+
+        let keyhive_contact_card = keyhive.contact_card().await?;
 
         let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(256);
@@ -234,6 +344,10 @@ impl<
 
         let (abort_manager_handle, abort_manager_reg) = AbortHandle::new_pair();
         let (abort_listener_handle, abort_listener_reg) = AbortHandle::new_pair();
+
+        // Derive keyhive peer ID from keyhive's identifier
+        let keyhive_id: KeyhiveIdentifier = keyhive.id().into();
+        let keyhive_peer_id = KeyhivePeerId::from_bytes(keyhive_id.to_bytes());
 
         let sd = Arc::new(Self {
             discovery_id,
@@ -254,17 +368,21 @@ impl<
             connection_closed: closed_receiver,
             abort_manager_handle,
             abort_listener_handle,
+            keyhive: Arc::new(Mutex::new(keyhive)),
+            keyhive_storage,
+            keyhive_peer_id,
+            keyhive_contact_card,
             _phantom: PhantomData,
         });
 
         let manager_fut = manager.run();
         let abortable_manager = Abortable::new(manager_fut, abort_manager_reg);
 
-        (
+        Ok((
             sd.clone(),
             ListenerFuture::new(F::start_listener(sd, abort_listener_reg)),
             crate::connection::manager::ManagerFuture::new(abortable_manager),
-        )
+        ))
     }
 
     /// Hydrate a `Subduction` instance from existing sedimentrees in external storage.
@@ -287,10 +405,27 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
+        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive_storage: KStore,
     ) -> Result<
         (
             Arc<Self>,
-            ListenerFuture<'a, F, S, C, P, Sig, M, N>,
+            ListenerFuture<
+                'a,
+                F,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
             crate::connection::manager::ManagerFuture<F>,
         ),
         HydrationError<F, S>,
@@ -309,7 +444,11 @@ impl<
             sedimentrees,
             spawner,
             max_pending_blob_requests,
-        );
+            keyhive,
+            keyhive_storage,
+        )
+        .await
+        .map_err(HydrationError::ContactCard)?;
         for id in ids {
             let signed_loose_commits = subduction
                 .storage
@@ -370,6 +509,18 @@ impl<
     #[must_use]
     pub fn nonce_cache(&self) -> &NonceCache {
         &self.nonce_tracker
+    }
+
+    /// Returns a reference to the keyhive instance.
+    ///
+    /// The keyhive is protected by a mutex since it may be accessed concurrently
+    /// by sync operations.
+    #[must_use]
+    #[allow(clippy::type_complexity)]
+    pub fn keyhive(
+        &self,
+    ) -> &Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>> {
+        &self.keyhive
     }
 
     /// Get a connection to a peer, if one exists.
@@ -691,6 +842,10 @@ impl<
             }
             Message::DataRequestRejected(DataRequestRejected { id }) => {
                 tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
+            }
+            Message::Keyhive(signed_msg) => {
+                // Dispatch keyhive message via the FutureForm-specific handler
+                F::dispatch_keyhive(self, &from, signed_msg).await;
             }
         }
 
@@ -3107,14 +3262,50 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> Drop for Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+> Drop
+    for Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
@@ -3124,14 +3315,50 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> ConnectionPolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+> ConnectionPolicy<F>
+    for Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type ConnectionDisallowed = P::ConnectionDisallowed;
 
@@ -3145,14 +3372,50 @@ impl<
 
 impl<
     'a,
-    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> StoragePolicy<F> for Subduction<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+> StoragePolicy<F>
+    for Subduction<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
@@ -3197,10 +3460,31 @@ pub trait SubductionFutureForm<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self>,
+    Sig: Signer<Self> + AsyncSigner<Self, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
->: StartListener<'a, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Self, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
+>:
+    StartListener<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
 }
 
@@ -3209,11 +3493,46 @@ impl<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self>,
+    Sig: Signer<Self> + AsyncSigner<Self, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-    U: StartListener<'a, S, C, P, Sig, M, N>,
-> SubductionFutureForm<'a, S, C, P, Sig, M, N> for U
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Self, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
+    U: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+>
+    SubductionFutureForm<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    > for U
 {
 }
 
@@ -3225,56 +3544,285 @@ pub trait StartListener<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self>,
+    Sig: Signer<Self> + AsyncSigner<Self, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<Self, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
 >: FutureForm + RunManager<Authenticated<C, Self>> + Sized
 {
     /// Start the listener task for Subduction.
+    #[allow(clippy::type_complexity)]
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
+        subduction: Arc<
+            Subduction<
+                'a,
+                Self,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+        >,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
         Self: Sized;
+
+    /// Dispatch a keyhive message.
+    ///
+    /// For `Local` (single-threaded/Wasm), this calls `handle_keyhive_message` directly.
+    /// For `Sendable` (multi-threaded), this just logs since keyhive futures aren't Send.
+    #[allow(clippy::type_complexity)]
+    fn dispatch_keyhive<'b>(
+        subduction: &'b Subduction<
+            'a,
+            Self,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+        from: &'b PeerId,
+        signed_msg: subduction_keyhive::signed_message::SignedMessage,
+    ) -> Self::Future<'b, ()>
+    where
+        Self: Sized;
 }
 
-#[future_form(
-    Sendable where
-        C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
-        S: Storage<Sendable> + Send + Sync + 'a,
-        P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
-        P::PutDisallowed: Send + 'static,
-        P::FetchDisallowed: Send + 'static,
-        Sig: Signer<Sendable> + Send + Sync + 'a,
-        M: DepthMetric + Send + Sync + 'a,
-        S::Error: Send + 'static,
-        C::DisconnectionError: Send + 'static,
-        C::CallError: Send + 'static,
-        C::RecvError: Send + 'static,
-        C::SendError: Send + 'static,
-    Local where
-        C: Connection<Local> + PartialEq + Clone + 'static,
-        S: Storage<Local> + 'a,
-        P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
-        Sig: Signer<Local> + 'a,
-        M: DepthMetric + 'a
-)]
-impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N>
-    for K
+// Manual impls for Sendable and Local because the future_form macro
+// doesn't handle complex generic bounds with angle brackets.
+
+impl<
+    'a,
+    C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
+    S: Storage<Sendable> + Send + Sync + 'a,
+    P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
+    Sig: Signer<Sendable>
+        + AsyncSigner<Sendable, KContentRef>
+        + AsyncSigner<Sendable, Vec<u8>>
+        + Clone
+        + Send
+        + Sync
+        + 'a,
+    M: DepthMetric + Send + Sync + 'a,
+    const N: usize,
+    KContentRef: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
+    KPayload: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + Send + Sync + 'static,
+    KListener: MembershipListener<Sendable, Sig, KContentRef> + Send + Sync + 'static,
+    KRng: CryptoRng + RngCore + Send + 'static,
+    KStore: KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable> + Send + Sync + 'static,
+>
+    StartListener<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    > for Sendable
+where
+    keyhive_core::principal::active::Active<Sig, KContentRef, KListener>:
+        keyhive_core::principal::active::ActiveOps<Sendable>,
+    P::PutDisallowed: Send + 'static,
+    P::FetchDisallowed: Send + 'static,
+    S::Error: Send + 'static,
+    C::DisconnectionError: Send + 'static,
+    C::CallError: Send + 'static,
+    C::RecvError: Send + 'static,
+    C::SendError: Send + 'static,
 {
     fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
+        subduction: Arc<
+            Subduction<
+                'a,
+                Self,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+        >,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
-            K::from_future(async move {
+            Sendable::from_future(async move {
                 if let Err(e) = subduction.listen().await {
                     tracing::error!("Subduction listen error: {}", e.to_string());
                 }
             }),
             abort_reg,
         )
+    }
+
+    fn dispatch_keyhive<'b>(
+        _subduction: &'b Subduction<
+            'a,
+            Self,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+        from: &'b PeerId,
+        signed_msg: subduction_keyhive::signed_message::SignedMessage,
+    ) -> Self::Future<'b, ()> {
+        // For Sendable (multi-threaded), we can't call handle_keyhive_message
+        // because keyhive_core async methods don't produce Send futures.
+        // Users must call sync_keyhive() or handle_keyhive_message() manually.
+        Sendable::from_future(async move {
+            tracing::debug!(
+                peer = %from,
+                has_contact_card = signed_msg.has_contact_card(),
+                "received keyhive message (auto-handling disabled in multi-threaded mode)"
+            );
+        })
+    }
+}
+
+impl<
+    'a,
+    C: Connection<Local> + PartialEq + Clone + 'static,
+    S: Storage<Local> + 'a,
+    P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
+    Sig: Signer<Local>
+        + AsyncSigner<Local, KContentRef>
+        + AsyncSigner<Local, Vec<u8>>
+        + Clone
+        + 'a,
+    M: DepthMetric + 'a,
+    const N: usize,
+    KContentRef: ContentRef + serde::de::DeserializeOwned + 'static,
+    KPayload: for<'de> serde::Deserialize<'de> + 'static,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + 'static,
+    KListener: MembershipListener<Local, Sig, KContentRef> + 'static,
+    KRng: CryptoRng + RngCore + Send + 'static,
+    KStore: KeyhiveArchiveStorage<Local> + KeyhiveEventStorage<Local> + 'static,
+>
+    StartListener<
+        'a,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    > for Local
+where
+    keyhive_core::principal::active::Active<Sig, KContentRef, KListener>:
+        keyhive_core::principal::active::ActiveOps<Local>,
+{
+    fn start_listener(
+        subduction: Arc<
+            Subduction<
+                'a,
+                Self,
+                S,
+                C,
+                P,
+                Sig,
+                M,
+                N,
+                KContentRef,
+                KPayload,
+                KCiphertextStore,
+                KListener,
+                KRng,
+                KStore,
+            >,
+        >,
+        abort_reg: AbortRegistration,
+    ) -> Abortable<Self::Future<'a, ()>> {
+        Abortable::new(
+            Local::from_future(async move {
+                if let Err(e) = subduction.listen().await {
+                    tracing::error!("Subduction listen error: {}", e.to_string());
+                }
+            }),
+            abort_reg,
+        )
+    }
+
+    fn dispatch_keyhive<'b>(
+        subduction: &'b Subduction<
+            'a,
+            Self,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
+        from: &'b PeerId,
+        signed_msg: subduction_keyhive::signed_message::SignedMessage,
+    ) -> Self::Future<'b, ()> {
+        // For Local (single-threaded/Wasm), we can call handle_keyhive_message directly
+        Local::from_future(async move {
+            if let Err(e) = subduction.handle_keyhive_message(from, signed_msg).await {
+                tracing::warn!(
+                    peer = %from,
+                    error = %e,
+                    "failed to handle keyhive message"
+                );
+            }
+        })
     }
 }
 
@@ -3283,30 +3831,102 @@ impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C,
 /// This lets the caller decide how they want to manage the listener's lifecycle,
 /// including the ability to abort it when needed.
 #[derive(Debug)]
+#[allow(clippy::type_complexity)]
 pub struct ListenerFuture<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize = 256,
+    KContentRef: ContentRef = [u8; 32],
+    KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+        KContentRef,
+        KPayload,
+    >,
+    KListener: MembershipListener<F, Sig, KContentRef> = NoListener,
+    KRng: CryptoRng + RngCore = OsRng,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F> = MemoryKeyhiveStorage,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
-    _phantom: PhantomData<(S, C, P, Sig, M)>,
+    _phantom: PhantomData<(
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    )>,
 }
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+>
+    ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
@@ -3325,14 +3945,50 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> Deref for ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+> Deref
+    for ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type Target = Abortable<F::Future<'a, ()>>;
 
@@ -3343,14 +3999,50 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> Future for ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+> Future
+    for ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
     type Output = Result<(), Aborted>;
 
@@ -3361,14 +4053,50 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: StartListener<
+            'a,
+            S,
+            C,
+            P,
+            Sig,
+            M,
+            N,
+            KContentRef,
+            KPayload,
+            KCiphertextStore,
+            KListener,
+            KRng,
+            KStore,
+        >,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F>,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
-> Unpin for ListenerFuture<'a, F, S, C, P, Sig, M, N>
+    KContentRef: ContentRef,
+    KPayload: for<'de> serde::Deserialize<'de>,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
+    KListener: MembershipListener<F, Sig, KContentRef>,
+    KRng: CryptoRng + RngCore,
+    KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
+> Unpin
+    for ListenerFuture<
+        'a,
+        F,
+        S,
+        C,
+        P,
+        Sig,
+        M,
+        N,
+        KContentRef,
+        KPayload,
+        KCiphertextStore,
+        KListener,
+        KRng,
+        KStore,
+    >
 {
 }
 

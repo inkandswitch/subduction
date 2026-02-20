@@ -23,9 +23,11 @@ futures = { workspace = true }
 future_form = { workspace = true }
 futures-timer = { workspace = true, optional = true }
 futures-util = { workspace = true }
+keyhive_core = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
+subduction_keyhive = { path = "../subduction_keyhive", features = ["serde", "std"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["time"] }
 tokio-util = { workspace = true, optional = true }

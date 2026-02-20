@@ -1,31 +1,48 @@
 //! Storage operations for keyhive data.
 //!
 //! This module provides high-level functions for persisting, loading, and compacting
-//! keyhive state using the [`KeyhiveStorage`] trait.
+//! keyhive state using the [`KeyhiveArchiveStorage`] and [`KeyhiveEventStorage`] traits.
 
-use alloc::{string::ToString, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
+use core::convert::Infallible;
 
 use keyhive_core::{
     archive::Archive, crypto::signer::async_signer::AsyncSigner, event::static_event::StaticEvent,
     keyhive::Keyhive,
 };
 
-use crate::{
-    error::StorageError,
-    storage::{KeyhiveStorage, StorageHash},
-};
+use crate::storage::{KeyhiveArchiveStorage, KeyhiveEventStorage, StorageHash};
+
+/// Errors that can occur during CBOR serialization/deserialization.
+///
+/// This is separate from storage errors since it doesn't depend on the storage backend.
+#[derive(Debug, thiserror::Error)]
+pub enum CborError {
+    /// Failed to serialize data (minicbor).
+    #[error("CBOR encode error")]
+    CborEncode(#[from] minicbor::encode::Error<Infallible>),
+
+    /// Failed to serialize data (serde).
+    #[error("serde encode error")]
+    SerdeEncode(#[from] minicbor_serde::error::EncodeError<Infallible>),
+
+    /// Failed to deserialize data (minicbor).
+    #[error("CBOR decode error")]
+    CborDecode(#[from] minicbor::decode::Error),
+
+    /// Failed to deserialize data (serde).
+    #[error("serde decode error")]
+    SerdeDecode(#[from] minicbor_serde::error::DecodeError),
+}
 
 /// Serialize a value to CBOR bytes.
-fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(buf)
+fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, CborError> {
+    Ok(minicbor_serde::to_vec(value)?)
 }
 
 /// Deserialize a value from CBOR bytes.
-fn cbor_deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+fn cbor_deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, CborError> {
+    Ok(minicbor_serde::from_slice(bytes)?)
 }
 
 /// Hash event bytes using BLAKE3 to produce a storage key.
@@ -35,6 +52,18 @@ pub fn hash_event_bytes(bytes: &[u8]) -> StorageHash {
     StorageHash::new(*hash.as_bytes())
 }
 
+/// Error from saving an archive (CBOR serialization + storage).
+#[derive(Debug, thiserror::Error)]
+pub enum SaveArchiveError<SaveErr: core::error::Error> {
+    /// CBOR serialization failed.
+    #[error("serialization error")]
+    Cbor(#[from] CborError),
+
+    /// Storage save failed.
+    #[error("storage save error")]
+    Storage(#[source] SaveErr),
+}
+
 /// Serialize and save a keyhive archive to storage.
 ///
 /// The archive is serialized using CBOR and stored with the provided storage ID
@@ -42,16 +71,16 @@ pub fn hash_event_bytes(bytes: &[u8]) -> StorageHash {
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if CBOR serialization or the storage write fails.
+/// Returns an error if CBOR serialization or the storage write fails.
 pub async fn save_keyhive_archive<T, S, K>(
     storage: &S,
     storage_id: StorageHash,
     archive: &Archive<T>,
-) -> Result<(), StorageError>
+) -> Result<(), SaveArchiveError<S::SaveError>>
 where
     T: keyhive_core::content::reference::ContentRef,
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveArchiveStorage<K>,
+    K: future_form::FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(archive)?;
 
@@ -64,7 +93,19 @@ where
     storage
         .save_archive(storage_id, bytes)
         .await
-        .map_err(|e| StorageError::Save(e.to_string()))
+        .map_err(SaveArchiveError::Storage)
+}
+
+/// Error from saving an event (CBOR serialization + storage).
+#[derive(Debug, thiserror::Error)]
+pub enum SaveEventError<SaveErr: core::error::Error> {
+    /// CBOR serialization failed.
+    #[error("serialization error")]
+    Cbor(#[from] CborError),
+
+    /// Storage save failed.
+    #[error("storage save error")]
+    Storage(#[source] SaveErr),
 }
 
 /// Serialize and save an event to storage.
@@ -73,15 +114,15 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if CBOR serialization or the storage write fails.
+/// Returns an error if CBOR serialization or the storage write fails.
 pub async fn save_event<T, S, K>(
     storage: &S,
     event: &StaticEvent<T>,
-) -> Result<StorageHash, StorageError>
+) -> Result<StorageHash, SaveEventError<S::SaveError>>
 where
     T: keyhive_core::content::reference::ContentRef,
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveEventStorage<K>,
+    K: future_form::FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(event)?;
     save_event_bytes(storage, bytes).await
@@ -93,14 +134,14 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if the storage write fails.
+/// Returns an error if the storage write fails.
 pub async fn save_event_bytes<S, K>(
     storage: &S,
     bytes: Vec<u8>,
-) -> Result<StorageHash, StorageError>
+) -> Result<StorageHash, SaveEventError<S::SaveError>>
 where
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveEventStorage<K>,
+    K: future_form::FutureForm + ?Sized,
 {
     let hash = hash_event_bytes(&bytes);
 
@@ -113,28 +154,40 @@ where
     storage
         .save_event(hash, bytes)
         .await
-        .map_err(|e| StorageError::Save(e.to_string()))?;
+        .map_err(SaveEventError::Storage)?;
 
     Ok(hash)
+}
+
+/// Error from loading archives (storage + CBOR deserialization).
+#[derive(Debug, thiserror::Error)]
+pub enum LoadArchivesError<LoadErr: core::error::Error> {
+    /// Storage load failed.
+    #[error("storage load error")]
+    Storage(#[source] LoadErr),
+
+    /// CBOR deserialization failed.
+    #[error("deserialization error")]
+    Cbor(#[from] CborError),
 }
 
 /// Load and deserialize all archives from storage.
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if the storage read or CBOR deserialization fails.
+/// Returns an error if the storage read or CBOR deserialization fails.
 pub async fn load_archives<T, S, K>(
     storage: &S,
-) -> Result<Vec<(StorageHash, Archive<T>)>, StorageError>
+) -> Result<Vec<(StorageHash, Archive<T>)>, LoadArchivesError<S::LoadError>>
 where
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveArchiveStorage<K>,
+    K: future_form::FutureForm + ?Sized,
 {
     let raw_archives = storage
         .load_archives()
         .await
-        .map_err(|e| StorageError::Load(e.to_string()))?;
+        .map_err(LoadArchivesError::Storage)?;
 
     let mut archives = Vec::with_capacity(raw_archives.len());
     for (hash, bytes) in raw_archives {
@@ -146,23 +199,35 @@ where
     Ok(archives)
 }
 
+/// Error from loading events (storage + CBOR deserialization).
+#[derive(Debug, thiserror::Error)]
+pub enum LoadEventsError<LoadErr: core::error::Error> {
+    /// Storage load failed.
+    #[error("storage load error")]
+    Storage(#[source] LoadErr),
+
+    /// CBOR deserialization failed.
+    #[error("deserialization error")]
+    Cbor(#[from] CborError),
+}
+
 /// Load and deserialize all events from storage.
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if the storage read or CBOR deserialization fails.
+/// Returns an error if the storage read or CBOR deserialization fails.
 pub async fn load_events<T, S, K>(
     storage: &S,
-) -> Result<Vec<(StorageHash, StaticEvent<T>)>, StorageError>
+) -> Result<Vec<(StorageHash, StaticEvent<T>)>, LoadEventsError<S::LoadError>>
 where
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveEventStorage<K>,
+    K: future_form::FutureForm + ?Sized,
 {
     let raw_events = storage
         .load_events()
         .await
-        .map_err(|e| StorageError::Load(e.to_string()))?;
+        .map_err(LoadEventsError::Storage)?;
 
     let mut events = Vec::with_capacity(raw_events.len());
     for (hash, bytes) in raw_events {
@@ -180,18 +245,38 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if the storage read fails.
+/// Returns an error if the storage read fails.
 pub async fn load_event_bytes<S, K>(
     storage: &S,
-) -> Result<Vec<(StorageHash, Vec<u8>)>, StorageError>
+) -> Result<Vec<(StorageHash, Vec<u8>)>, S::LoadError>
 where
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveEventStorage<K>,
+    K: future_form::FutureForm + ?Sized,
 {
-    storage
-        .load_events()
-        .await
-        .map_err(|e| StorageError::Load(e.to_string()))
+    storage.load_events().await
+}
+
+/// Error from ingesting archives and events from storage.
+#[derive(Debug, thiserror::Error)]
+pub enum IngestFromStorageError<ArchiveLoadErr, EventLoadErr>
+where
+    ArchiveLoadErr: core::error::Error,
+    EventLoadErr: core::error::Error,
+{
+    /// Failed to load archives.
+    #[error("failed to load archives")]
+    LoadArchives(#[source] LoadArchivesError<ArchiveLoadErr>),
+
+    /// Failed to load events.
+    #[error("failed to load events")]
+    LoadEvents(#[source] LoadEventsError<EventLoadErr>),
+
+    /// Archive ingestion failed.
+    ///
+    /// Note: The underlying error is not captured because `ReceiveStaticEventError`
+    /// has many generic parameters that would complicate this error type.
+    #[error("archive ingestion failed")]
+    ArchiveIngestion,
 }
 
 /// Ingest all stored archives and events into a keyhive instance.
@@ -202,42 +287,52 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if loading, deserialization, or archive ingestion fails.
-pub async fn ingest_from_storage<Signer, T, P, C, L, R, S, K>(
+/// Returns an error if loading, deserialization, or archive ingestion fails.
+pub async fn ingest_from_storage<K, Signer, T, P, C, L, R, S>(
     keyhive: &Keyhive<Signer, T, P, C, L, R>,
     storage: &S,
-) -> Result<Vec<Arc<StaticEvent<T>>>, StorageError>
+) -> Result<
+    Vec<Arc<StaticEvent<T>>>,
+    IngestFromStorageError<
+        <S as KeyhiveArchiveStorage<K>>::LoadError,
+        <S as KeyhiveEventStorage<K>>::LoadError,
+    >,
+>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
+    L: keyhive_core::listener::membership::MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
 {
     // Load archives
-    let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage).await?;
+    let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage)
+        .await
+        .map_err(IngestFromStorageError::LoadArchives)?;
 
     tracing::debug!(count = archives.len(), "ingesting archives from storage");
 
     // Ingest each archive
     for (hash, archive) in archives {
         tracing::debug!(hash = %hash.to_hex(), "ingesting archive");
-        keyhive
-            .ingest_archive(archive)
-            .await
-            .map_err(|e| StorageError::Load(alloc::format!("archive ingestion failed: {e:?}")))?;
+        keyhive.ingest_archive::<K>(archive).await.map_err(|e| {
+            tracing::error!(error = ?e, "archive ingestion failed");
+            IngestFromStorageError::ArchiveIngestion
+        })?;
     }
 
     // Load and ingest events
-    let events: Vec<(StorageHash, StaticEvent<T>)> = load_events(storage).await?;
+    let events: Vec<(StorageHash, StaticEvent<T>)> = load_events(storage)
+        .await
+        .map_err(IngestFromStorageError::LoadEvents)?;
 
     tracing::debug!(count = events.len(), "ingesting events from storage");
 
     let event_list: Vec<StaticEvent<T>> = events.into_iter().map(|(_, e)| e).collect();
-    let pending = keyhive.ingest_unsorted_static_events(event_list).await;
+    let pending = keyhive.ingest_unsorted_static_events::<K>(event_list).await;
 
     tracing::debug!(
         pending_count = pending.len(),
@@ -246,6 +341,59 @@ where
 
     Ok(pending)
 }
+
+/// Error from keyhive persistence operations (compact, ingest, etc.).
+#[derive(Debug, thiserror::Error)]
+pub enum KeyhivePersistenceErrorRaw<
+    ArchiveSaveErr: core::error::Error,
+    ArchiveLoadErr: core::error::Error,
+    ArchiveDeleteErr: core::error::Error,
+    EventLoadErr: core::error::Error,
+    EventDeleteErr: core::error::Error,
+> {
+    /// Failed to load archives.
+    #[error("failed to load archives")]
+    LoadArchives(#[source] ArchiveLoadErr),
+
+    /// Failed to load events.
+    #[error("failed to load events")]
+    LoadEvents(#[source] EventLoadErr),
+
+    /// Failed to save archive.
+    #[error("failed to save archive")]
+    SaveArchive(#[source] SaveArchiveError<ArchiveSaveErr>),
+
+    /// Failed to delete archive.
+    #[error("failed to delete archive")]
+    DeleteArchive(#[source] ArchiveDeleteErr),
+
+    /// Failed to delete event.
+    #[error("failed to delete event")]
+    DeleteEvent(#[source] EventDeleteErr),
+
+    /// CBOR deserialization failed.
+    #[error("deserialization error")]
+    Cbor(#[from] CborError),
+
+    /// Archive ingestion failed.
+    ///
+    /// Note: The underlying error is not captured because `ReceiveStaticEventError`
+    /// has many generic parameters that would complicate this error type.
+    #[error("archive ingestion failed")]
+    ArchiveIngestion,
+}
+
+/// Keyhive persistence error parameterized by storage implementation.
+///
+/// This alias extracts the appropriate error types from the storage traits,
+/// hiding the 5-parameter generic type from callers.
+pub type KeyhivePersistenceError<S, K> = KeyhivePersistenceErrorRaw<
+    <S as KeyhiveArchiveStorage<K>>::SaveError,
+    <S as KeyhiveArchiveStorage<K>>::LoadError,
+    <S as KeyhiveArchiveStorage<K>>::DeleteError,
+    <S as KeyhiveEventStorage<K>>::LoadError,
+    <S as KeyhiveEventStorage<K>>::DeleteError,
+>;
 
 /// Compact keyhive storage by consolidating archives and removing processed events.
 ///
@@ -258,32 +406,33 @@ where
 ///
 /// # Errors
 ///
-/// Returns [`StorageError`] if any storage operation, serialization, or
-/// deserialization fails.
-pub async fn compact<Signer, T, P, C, L, R, S, K>(
+/// Returns an error if any storage operation, serialization, or deserialization fails.
+pub async fn compact<K, Signer, T, P, C, L, R, S>(
     keyhive: &Keyhive<Signer, T, P, C, L, R>,
     storage: &S,
     storage_id: StorageHash,
-) -> Result<(), StorageError>
+) -> Result<(), KeyhivePersistenceError<S, K>>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
+    L: keyhive_core::listener::membership::MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
-    S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    S: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
+    keyhive_core::principal::active::Active<Signer, T, L>:
+        keyhive_core::principal::active::ActiveOps<K>,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage
         .load_archives()
         .await
-        .map_err(|e| StorageError::Load(e.to_string()))?;
+        .map_err(KeyhivePersistenceErrorRaw::LoadArchives)?;
     let raw_events = storage
         .load_events()
         .await
-        .map_err(|e| StorageError::Load(e.to_string()))?;
+        .map_err(KeyhivePersistenceErrorRaw::LoadEvents)?;
 
     if raw_events.is_empty() && raw_archives.len() <= 1 {
         tracing::debug!("nothing to compact");
@@ -300,10 +449,10 @@ where
     for (hash, bytes) in &raw_archives {
         let archive: Archive<T> = cbor_deserialize(bytes)?;
         tracing::debug!(hash = %hash.to_hex(), "ingesting archive for compaction");
-        keyhive
-            .ingest_archive(archive)
-            .await
-            .map_err(|e| StorageError::Load(alloc::format!("archive ingestion failed: {e:?}")))?;
+        keyhive.ingest_archive::<K>(archive).await.map_err(|e| {
+            tracing::error!(error = ?e, "archive ingestion failed during compaction");
+            KeyhivePersistenceErrorRaw::ArchiveIngestion
+        })?;
     }
 
     // Build a map from event hash to storage hash for tracking pending events
@@ -321,7 +470,7 @@ where
         .map(|(_, bytes)| cbor_deserialize(bytes))
         .collect::<Result<_, _>>()?;
 
-    let pending = keyhive.ingest_unsorted_static_events(events).await;
+    let pending = keyhive.ingest_unsorted_static_events::<K>(events).await;
 
     // Get hashes of pending events
     let pending_hashes: crate::collections::Set<[u8; 32]> = pending
@@ -333,8 +482,10 @@ where
         .collect();
 
     // Save the new consolidated archive
-    let archive = keyhive.into_archive().await;
-    save_keyhive_archive(storage, storage_id, &archive).await?;
+    let archive = keyhive.into_archive::<K>().await;
+    save_keyhive_archive(storage, storage_id, &archive)
+        .await
+        .map_err(KeyhivePersistenceErrorRaw::SaveArchive)?;
 
     let mut deleted_archive_count = 0;
     let mut deleted_event_count = 0;
@@ -345,7 +496,7 @@ where
             storage
                 .delete_archive(*hash)
                 .await
-                .map_err(|e| StorageError::Delete(e.to_string()))?;
+                .map_err(KeyhivePersistenceErrorRaw::DeleteArchive)?;
             deleted_archive_count += 1;
         }
     }
@@ -356,7 +507,7 @@ where
             storage
                 .delete_event(*storage_hash)
                 .await
-                .map_err(|e| StorageError::Delete(e.to_string()))?;
+                .map_err(KeyhivePersistenceErrorRaw::DeleteEvent)?;
             deleted_event_count += 1;
         }
     }
@@ -376,10 +527,10 @@ where
 mod tests {
     use super::*;
     use crate::{
-        storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash},
+        storage::{KeyhiveArchiveStorage, KeyhiveEventStorage, MemoryKeyhiveStorage, StorageHash},
         test_utils::{keyhive_peer_id, make_keyhive},
     };
-    use futures_kind::Local;
+    use future_form::Sendable;
 
     #[tokio::test(flavor = "current_thread")]
     async fn save_and_load_archive_roundtrip() {
@@ -387,12 +538,14 @@ mod tests {
         let storage = MemoryKeyhiveStorage::new();
         let storage_id = StorageHash::new([1u8; 32]);
 
-        let archive = keyhive.into_archive().await;
-        save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
+        let archive = keyhive.into_archive::<Sendable>().await;
+        save_keyhive_archive::<_, _, Sendable>(&storage, storage_id, &archive)
             .await
             .unwrap();
 
-        let loaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
+        let loaded = load_archives::<[u8; 32], _, Sendable>(&storage)
+            .await
+            .unwrap();
         assert_eq!(loaded.len(), 1);
         assert_eq!(loaded[0].0, storage_id);
     }
@@ -403,8 +556,8 @@ mod tests {
         let alice = make_keyhive().await;
         let bob = make_keyhive().await;
 
-        let alice_cc = alice.contact_card().await.unwrap();
-        let bob_cc = bob.contact_card().await.unwrap();
+        let alice_cc = alice.contact_card::<Sendable>().await.unwrap();
+        let bob_cc = bob.contact_card::<Sendable>().await.unwrap();
         alice.receive_contact_card(&bob_cc).await.unwrap();
         bob.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -412,14 +565,14 @@ mod tests {
 
         // Save two separate archives (simulating multiple save points)
         let id1 = StorageHash::new([1u8; 32]);
-        let archive1 = alice.into_archive().await;
-        save_keyhive_archive::<_, _, Local>(&storage, id1, &archive1)
+        let archive1 = alice.into_archive::<Sendable>().await;
+        save_keyhive_archive::<_, _, Sendable>(&storage, id1, &archive1)
             .await
             .unwrap();
 
         let id2 = StorageHash::new([2u8; 32]);
-        let archive2 = alice.into_archive().await;
-        save_keyhive_archive::<_, _, Local>(&storage, id2, &archive2)
+        let archive2 = alice.into_archive::<Sendable>().await;
+        save_keyhive_archive::<_, _, Sendable>(&storage, id2, &archive2)
             .await
             .unwrap();
 
@@ -437,14 +590,14 @@ mod tests {
         );
 
         for event in events.values() {
-            save_event::<_, _, Local>(&storage, event).await.unwrap();
+            save_event::<_, _, Sendable>(&storage, event).await.unwrap();
         }
 
         // Before compaction: 2 archives, N events
-        let archives_before = KeyhiveStorage::<Local>::load_archives(&storage)
+        let archives_before = KeyhiveArchiveStorage::<Sendable>::load_archives(&storage)
             .await
             .unwrap();
-        let events_before = KeyhiveStorage::<Local>::load_events(&storage)
+        let events_before = KeyhiveEventStorage::<Sendable>::load_events(&storage)
             .await
             .unwrap();
         assert_eq!(archives_before.len(), 2);
@@ -452,12 +605,12 @@ mod tests {
 
         // Compact
         let consolidated_id = StorageHash::new([10u8; 32]);
-        compact::<_, _, _, _, _, _, _, Local>(&alice, &storage, consolidated_id)
+        compact::<Sendable, _, _, _, _, _, _, _>(&alice, &storage, consolidated_id)
             .await
             .unwrap();
 
         // After compaction: exactly 1 archive at the consolidated key
-        let archives_after = KeyhiveStorage::<Local>::load_archives(&storage)
+        let archives_after = KeyhiveArchiveStorage::<Sendable>::load_archives(&storage)
             .await
             .unwrap();
         assert_eq!(archives_after.len(), 1);
@@ -467,7 +620,7 @@ mod tests {
         // Alice already has these events in her keyhive state, so they are
         // "processed" — compaction ingests them, sees they aren't pending,
         // and removes them.
-        let events_after = KeyhiveStorage::<Local>::load_events(&storage)
+        let events_after = KeyhiveEventStorage::<Sendable>::load_events(&storage)
             .await
             .unwrap();
         assert_eq!(
@@ -477,7 +630,9 @@ mod tests {
         );
 
         // The consolidated archive should be loadable and deserializable
-        let reloaded = load_archives::<[u8; 32], _, Local>(&storage).await.unwrap();
+        let reloaded = load_archives::<[u8; 32], _, Sendable>(&storage)
+            .await
+            .unwrap();
         assert_eq!(reloaded.len(), 1);
     }
 }

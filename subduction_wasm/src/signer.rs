@@ -9,11 +9,18 @@ pub mod webcrypto;
 
 use alloc::vec::Vec;
 
+use core::fmt::Debug;
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
 use js_sys::{Promise, Uint8Array};
+use keyhive_core::crypto::{
+    signed::{Signed, SigningError as KeyhiveSigningError},
+    signer::async_signer::{sign_payload, AsyncSigner},
+    verifiable::Verifiable,
+};
+use serde::Serialize;
 use subduction_core::crypto::signer::Signer;
-use wasm_bindgen::{JsCast, prelude::*};
+use wasm_bindgen::{prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;
@@ -25,6 +32,7 @@ extern "C" {
     /// This allows JavaScript code to provide signing implementations
     /// (e.g., hardware keys or remote signing services).
     #[wasm_bindgen(js_name = Signer)]
+    #[derive(Clone)]
     pub type JsSigner;
 
     /// Sign a message and return the 64-byte Ed25519 signature.
@@ -90,5 +98,55 @@ impl Signer<Local> for JsSigner {
             .expect("JsSigner.verifyingKey must return exactly 32 bytes");
         VerifyingKey::from_bytes(&vk_array)
             .expect("JsSigner.verifyingKey must return a valid Ed25519 public key")
+    }
+}
+
+// Keyhive trait implementations for JsSigner.
+
+impl Verifiable for JsSigner {
+    fn verifying_key(&self) -> VerifyingKey {
+        <Self as Signer<Local>>::verifying_key(self)
+    }
+}
+
+impl<T: Serialize + Debug> AsyncSigner<Local, T> for JsSigner {
+    #[allow(clippy::expect_used)]
+    fn try_sign_bytes_async<'a>(
+        &'a self,
+        payload_bytes: &'a [u8],
+    ) -> <Local as FutureForm>::Future<'a, Result<Signature, KeyhiveSigningError>> {
+        use futures::future::FutureExt;
+
+        let result = self.js_sign(payload_bytes);
+
+        async move {
+            let sig_array: Uint8Array = if result.has_type::<Promise>() {
+                let promise: Promise = result.unchecked_into();
+                JsFuture::from(promise)
+                    .await
+                    .expect("JsSigner.sign promise rejected")
+                    .unchecked_into()
+            } else {
+                result.unchecked_into()
+            };
+
+            let sig_bytes: Vec<u8> = sig_array.to_vec();
+            let sig_array: [u8; 64] = sig_bytes
+                .try_into()
+                .expect("JsSigner.sign must return exactly 64 bytes");
+            Ok(Signature::from_bytes(&sig_array))
+        }
+        .boxed_local()
+    }
+
+    fn try_sign_async<'a>(
+        &'a self,
+        payload: T,
+    ) -> <Local as FutureForm>::Future<'a, Result<Signed<T>, KeyhiveSigningError>>
+    where
+        T: 'a,
+    {
+        use futures::future::FutureExt;
+        async move { sign_payload::<Local, T, _>(self, payload).await }.boxed_local()
     }
 }

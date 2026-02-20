@@ -1,9 +1,17 @@
 //! Error types for the top-level `Subduction`.
 
 use alloc::vec::Vec;
+use core::convert::Infallible;
 
 use future_form::FutureForm;
+use keyhive_core::{
+    crypto::signed::SigningError as KeyhiveSigningError,
+    principal::individual::ReceivePrekeyOpError,
+};
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
+use subduction_keyhive::{
+    error::VerificationError as KeyhiveVerificationError, peer_id::KeyhivePeerId,
+};
 use thiserror::Error;
 
 use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
@@ -20,7 +28,7 @@ pub struct Unauthorized {
 }
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.
-#[derive(Debug, Clone, Copy, Error)]
+#[derive(Debug, Error)]
 pub enum HydrationError<F: FutureForm, S: Storage<F>> {
     /// An error occurred while loading all sedimentree IDs.
     #[error("hydration error when loading all sedimentree IDs: {0}")]
@@ -33,6 +41,10 @@ pub enum HydrationError<F: FutureForm, S: Storage<F>> {
     /// An error occurred while loading fragments.
     #[error("hydration error when loading fragments: {0}")]
     LoadFragmentsError(#[source] S::Error),
+
+    /// An error occurred while generating the keyhive contact card.
+    #[error("failed to generate keyhive contact card")]
+    ContactCard(#[source] KeyhiveSigningError),
 }
 
 /// An error that can occur during I/O operations.
@@ -145,6 +157,63 @@ pub enum SyncRejected {
     /// Not authorized to access the sedimentree.
     #[error("not authorized to access sedimentree {0}")]
     Unauthorized(SedimentreeId),
+}
+
+/// Errors that can occur during keyhive sync operations.
+#[derive(Debug, Error)]
+pub enum KeyhiveSyncError<F: FutureForm + ?Sized, C: Connection<F>> {
+    /// Failed to send a keyhive message over the connection.
+    #[error("failed to send keyhive message")]
+    Send(#[source] C::SendError),
+
+    /// Message signing failed.
+    #[error("signing failed")]
+    Signing(#[from] KeyhiveSigningError),
+
+    /// Message verification failed.
+    #[error("verification failed")]
+    Verification(#[from] KeyhiveVerificationError),
+
+    /// The peer is not connected.
+    #[error("peer not connected: {0:?}")]
+    PeerNotConnected(PeerId),
+
+    /// The peer is unknown (no contact card available).
+    #[error("unknown peer (no contact card): {0:?}")]
+    UnknownPeer(KeyhivePeerId),
+
+    /// Received an unexpected message type.
+    #[error("unexpected message type: expected {expected}, got {actual}")]
+    UnexpectedMessageType {
+        /// The expected message type.
+        expected: &'static str,
+        /// The actual message type.
+        actual: &'static str,
+    },
+
+    /// Failed to convert peer ID to keyhive identifier.
+    #[error("invalid peer identifier")]
+    InvalidIdentifier(#[source] ed25519_dalek::SignatureError),
+
+    /// Failed to ingest a contact card.
+    #[error("failed to receive contact card")]
+    ReceiveContactCard(#[from] ReceivePrekeyOpError),
+
+    /// CBOR serialization failed (minicbor).
+    #[error("serialization error")]
+    CborEncode(#[from] minicbor::encode::Error<Infallible>),
+
+    /// CBOR serialization failed (serde).
+    #[error("serialization error")]
+    SerdeEncode(#[from] minicbor_serde::error::EncodeError<Infallible>),
+
+    /// CBOR deserialization failed (minicbor).
+    #[error("deserialization error")]
+    CborDecode(#[from] minicbor::decode::Error),
+
+    /// CBOR deserialization failed (serde).
+    #[error("deserialization error")]
+    SerdeDecode(#[from] minicbor_serde::error::DecodeError),
 }
 
 #[cfg(test)]

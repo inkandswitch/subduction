@@ -2,7 +2,7 @@
 
 #![allow(clippy::expect_used)]
 
-use super::common::{TestSpawn, new_test_subduction, test_signer};
+use super::common::{TestSpawn, new_test_subduction, test_keyhive, test_signer};
 use crate::{
     connection::{nonce_cache::NonceCache, test_utils::MockConnection},
     peer::id::PeerId,
@@ -16,11 +16,12 @@ use core::fmt;
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use testresult::TestResult;
 
 #[tokio::test]
 async fn test_allowed_to_connect_allows_all_peers() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let peer_id = PeerId::new([1u8; 32]);
     let result = subduction.authorize_connect(peer_id).await;
@@ -86,6 +87,7 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
 
 #[tokio::test]
 async fn rejected_connection_is_not_registered() -> TestResult {
+    let keyhive = test_keyhive().await;
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
             None,
@@ -97,7 +99,11 @@ async fn rejected_connection_is_not_registered() -> TestResult {
             ShardedMap::with_key(0, 0),
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let peer_id = PeerId::new([1u8; 32]);
     let conn = MockConnection::with_peer_id(peer_id).authenticated();
@@ -124,7 +130,7 @@ async fn rejected_connection_is_not_registered() -> TestResult {
 
 #[tokio::test]
 async fn rejected_connection_does_not_affect_existing_connections() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     // Register an allowed connection first (OpenPolicy allows everything)
     let allowed_peer = PeerId::new([1u8; 32]);
@@ -136,6 +142,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
     assert!(connected.contains(&allowed_peer));
 
     // Now create a subduction with reject policy and try to register
+    let keyhive = test_keyhive().await;
     let (reject_subduction, _listener_fut2, _actor_fut2) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
             None,
@@ -147,7 +154,11 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
             ShardedMap::with_key(0, 0),
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let rejected_peer = PeerId::new([2u8; 32]);
     let rejected_conn = MockConnection::with_peer_id(rejected_peer).authenticated();

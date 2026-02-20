@@ -9,7 +9,7 @@
 
 use alloc::collections::BTreeSet;
 
-use super::common::{TokioSpawn, test_signer};
+use super::common::{test_keyhive, test_signer, TokioSpawn};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
     crypto::signed::Signed,
@@ -17,7 +17,7 @@ use crate::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use core::time::Duration;
 use future_form::{Local, Sendable};
@@ -28,6 +28,7 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use testresult::TestResult;
 
 async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) {
@@ -42,6 +43,7 @@ async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) 
 #[tokio::test]
 async fn test_sendable_single_commit() -> TestResult {
     let storage = MemoryStorage::new();
+    let keyhive = test_keyhive().await;
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -53,7 +55,11 @@ async fn test_sendable_single_commit() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
@@ -97,6 +103,7 @@ async fn test_sendable_single_commit() -> TestResult {
 #[tokio::test]
 async fn test_sendable_multiple_sequential() -> TestResult {
     let storage = MemoryStorage::new();
+    let keyhive = test_keyhive().await;
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -108,7 +115,11 @@ async fn test_sendable_multiple_sequential() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
@@ -151,6 +162,7 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 #[tokio::test]
 async fn test_sendable_same_sedimentree() -> TestResult {
     let storage = MemoryStorage::new();
+    let keyhive = test_keyhive().await;
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -162,7 +174,11 @@ async fn test_sendable_same_sedimentree() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
@@ -210,6 +226,7 @@ async fn test_local_single_commit() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let storage = MemoryStorage::new();
+            let keyhive = test_keyhive().await;
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                     None,
@@ -221,7 +238,11 @@ async fn test_local_single_commit() -> TestResult {
                     ShardedMap::with_key(0, 0),
                     TokioSpawn,
                     DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                );
+                    keyhive,
+                    MemoryKeyhiveStorage::default(),
+                )
+                .await
+                .expect("failed to create Subduction");
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;
@@ -270,6 +291,7 @@ async fn test_local_multiple_sequential() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let storage = MemoryStorage::new();
+            let keyhive = test_keyhive().await;
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                     None,
@@ -281,7 +303,11 @@ async fn test_local_multiple_sequential() -> TestResult {
                     ShardedMap::with_key(0, 0),
                     TokioSpawn,
                     DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                );
+                    keyhive,
+                    MemoryKeyhiveStorage::default(),
+                )
+                .await
+                .expect("failed to create Subduction");
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;
@@ -330,6 +356,7 @@ async fn test_local_same_sedimentree() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let storage = MemoryStorage::new();
+            let keyhive = test_keyhive().await;
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
                     None,
@@ -341,7 +368,11 @@ async fn test_local_same_sedimentree() -> TestResult {
                     ShardedMap::with_key(0, 0),
                     TokioSpawn,
                     DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                );
+                    keyhive,
+                    MemoryKeyhiveStorage::default(),
+                )
+                .await
+                .expect("failed to create Subduction");
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;

@@ -4,27 +4,23 @@
 //! This module provides the wrapper type that combines the signed data
 //! with an optional contact card.
 
-use alloc::{string::String, vec::Vec};
-use core::fmt;
+use alloc::vec::Vec;
+use core::convert::Infallible;
 
-#[cfg(all(feature = "serde", feature = "std"))]
-use crate::error::VerificationError;
-use crate::peer_id::KeyhivePeerId;
-#[cfg(all(feature = "serde", feature = "std"))]
+use thiserror::Error;
+
+use crate::{error::VerificationError, peer_id::KeyhivePeerId};
 use keyhive_core::crypto::signed::Signed;
 
-/// Error type for CBOR serialization/deserialization.
-#[derive(Debug, Clone)]
-pub struct CborError(pub String);
+/// Error type for CBOR encoding.
+#[derive(Debug, Error)]
+#[error("CBOR encode error")]
+pub struct CborEncodeError(#[from] pub minicbor::encode::Error<Infallible>);
 
-impl fmt::Display for CborError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CBOR error: {}", self.0)
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for CborError {}
+/// Error type for CBOR decoding.
+#[derive(Debug, Error)]
+#[error("CBOR decode error")]
+pub struct CborDecodeError(#[from] pub minicbor::decode::Error);
 
 /// A signed message for transmission over the network.
 ///
@@ -32,19 +28,22 @@ impl std::error::Error for CborError {}
 /// This wrapper combines:
 /// * An optional contact card (to introduce the sender to the recipient)
 /// * The signed message payload (message data + signature)
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SignedMessage {
     /// Optional serialized contact card.
     ///
     /// Included when the sender wants to introduce themselves to the recipient,
     /// either in the first message or when requested.
+    #[n(0)]
     contact_card: Option<Vec<u8>>,
 
     /// The signed message payload.
     ///
     /// This contains the actual message data and the cryptographic signature.
     /// The recipient should verify the signature before processing the message.
+    #[n(1)]
     signed: Vec<u8>,
 }
 
@@ -84,15 +83,11 @@ impl SignedMessage {
     ///
     /// Returns [`VerificationError`] if deserialization, signature verification,
     /// or sender identity check fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
     pub fn verify(
         self,
         expected_sender: &KeyhivePeerId,
     ) -> Result<VerifiedMessage, VerificationError> {
-        use alloc::string::ToString;
-
-        let signed: Signed<Vec<u8>> = ciborium::de::from_reader(self.signed.as_slice())
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+        let signed: Signed<Vec<u8>> = minicbor_serde::from_slice(self.signed.as_slice())?;
 
         signed
             .try_verify()
@@ -125,13 +120,8 @@ impl SignedMessage {
     /// # Errors
     ///
     /// Returns an error if CBOR serialization fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn to_cbor(&self) -> Result<Vec<u8>, CborError> {
-        use alloc::string::ToString;
-
-        let mut buf = Vec::new();
-        ciborium::ser::into_writer(self, &mut buf).map_err(|e| CborError(e.to_string()))?;
-        Ok(buf)
+    pub fn to_cbor(&self) -> Result<Vec<u8>, CborEncodeError> {
+        Ok(minicbor::to_vec(self)?)
     }
 
     /// Deserialize a message from CBOR bytes.
@@ -139,11 +129,8 @@ impl SignedMessage {
     /// # Errors
     ///
     /// Returns an error if CBOR deserialization fails.
-    #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self, CborError> {
-        use alloc::string::ToString;
-
-        ciborium::de::from_reader(bytes).map_err(|e| CborError(e.to_string()))
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self, CborDecodeError> {
+        Ok(minicbor::decode(bytes)?)
     }
 }
 

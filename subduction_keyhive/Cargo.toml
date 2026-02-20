@@ -12,27 +12,33 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+arbitrary = { workspace = true, optional = true }
 async-lock = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
-ciborium = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
+future_form = { workspace = true }
 futures = { workspace = true }
-futures_kind = { workspace = true }
+hex = { workspace = true, optional = true }
 keyhive_core = { workspace = true }
+minicbor = { workspace = true }
+minicbor-serde = { workspace = true }
 rand = "0.8.5"
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["fs"], optional = true }
 tracing = { workspace = true }
 
 [features]
 default = []
-serde = ["dep:serde", "std"]
-std = ["thiserror/std"]
+arbitrary = ["dep:arbitrary"]
+fs = ["std", "dep:tokio"]
+serde = ["dep:serde"]
+std = ["thiserror/std", "dep:hex"]
 
 [dev-dependencies]
 async-channel = { workspace = true }
-nonempty = "0.10.0"
+nonempty = "0.12.0"
 tokio = { workspace = true, features = ["macros", "rt"] }
 
 [lints]

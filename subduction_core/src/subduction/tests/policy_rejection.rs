@@ -2,7 +2,7 @@
 
 #![allow(clippy::panic)]
 
-use super::common::{TestSpawn, TokioSpawn, test_signer};
+use super::common::{TestSpawn, TokioSpawn, test_keyhive, test_signer};
 use crate::{
     connection::{
         message::{BatchSyncResponse, Message, SyncResult},
@@ -26,6 +26,7 @@ use sedimentree_core::{
     id::SedimentreeId,
     sedimentree::{FingerprintSummary, Sedimentree},
 };
+use subduction_keyhive::storage::MemoryKeyhiveStorage;
 use testresult::TestResult;
 
 /// A policy that rejects all puts but allows connections and fetches.
@@ -160,6 +161,7 @@ fn make_loose_commit(data: &[u8]) -> (sedimentree_core::loose_commit::LooseCommi
 async fn add_sedimentree_rejected_by_policy() {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
@@ -172,7 +174,11 @@ async fn add_sedimentree_rejected_by_policy() {
             ShardedMap::with_key(0, 0),
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -195,6 +201,7 @@ async fn add_sedimentree_rejected_by_policy() {
 async fn add_commit_rejected_by_policy() {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
@@ -207,7 +214,11 @@ async fn add_commit_rejected_by_policy() {
             ShardedMap::with_key(0, 0),
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let id = SedimentreeId::new([1u8; 32]);
     let (commit, blob) = make_loose_commit(b"test data");
@@ -229,6 +240,7 @@ async fn add_commit_rejected_by_policy() {
 async fn policy_allows_specific_sedimentree_id() -> TestResult {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
+    let keyhive = test_keyhive().await;
 
     let allowed_id = SedimentreeId::new([42u8; 32]);
     let disallowed_id = SedimentreeId::new([99u8; 32]);
@@ -246,7 +258,11 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
             ShardedMap::with_key(0, 0),
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     // Adding to allowed ID should succeed
     let tree = Sedimentree::default();
@@ -274,6 +290,7 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
 async fn policy_rejection_does_not_store_data() {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
@@ -286,7 +303,11 @@ async fn policy_rejection_does_not_store_data() {
             ShardedMap::with_key(0, 0),
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -366,6 +387,7 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 async fn multiple_rejections_all_fail_cleanly() {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
+    let keyhive = test_keyhive().await;
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
@@ -378,7 +400,11 @@ async fn multiple_rejections_all_fail_cleanly() {
             ShardedMap::with_key(0, 0),
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     // Try multiple operations - all should fail
     for i in 0..5u8 {
@@ -397,6 +423,7 @@ async fn multiple_rejections_all_fail_cleanly() {
 /// with `SyncResult::Unauthorized` so the peer knows they're not authorized.
 #[tokio::test]
 async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
+    let keyhive = test_keyhive().await;
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
             None,
@@ -408,7 +435,11 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
             ShardedMap::with_key(0, 0),
             TokioSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+            keyhive,
+            MemoryKeyhiveStorage::default(),
+        )
+        .await
+        .expect("failed to create Subduction");
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

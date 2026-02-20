@@ -14,14 +14,14 @@
 //! Contact card exchange is also handled for cases where peers don't yet know
 //! each other's identity.
 
-use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
 
 use async_lock::Mutex;
 use keyhive_core::{
     contact_card::ContactCard,
     content::reference::ContentRef,
     crypto::{digest::Digest, signed::Signed, signer::async_signer::AsyncSigner},
-    event::{Event, static_event::StaticEvent},
+    event::{static_event::StaticEvent, Event},
     keyhive::Keyhive,
     listener::membership::MembershipListener,
     principal::agent::Agent,
@@ -31,12 +31,12 @@ use keyhive_core::{
 use crate::{
     collections::{Map, Set},
     connection::KeyhiveConnection,
-    error::{ProtocolError, SigningError, StorageError, VerificationError},
+    error::{ProtocolError, SigningError, VerificationError},
     message::{EventBytes, EventHash, Message},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
-    storage::KeyhiveStorage,
-    storage_ops,
+    storage::{KeyhiveArchiveStorage, KeyhiveEventStorage},
+    storage_ops::{self, IngestFromStorageError, KeyhivePersistenceError},
 };
 
 /// Shared keyhive instance behind a mutex.
@@ -49,15 +49,15 @@ type SharedKeyhive<Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<Signer, T, P, C, L
 /// through an `Arc<Mutex<Keyhive>>`.
 pub struct KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
-    Store: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
 {
     keyhive: SharedKeyhive<Signer, T, P, C, L, R>,
     storage: Store,
@@ -70,15 +70,15 @@ where
 impl<Signer, T, P, C, L, R, Conn, Store, K> core::fmt::Debug
     for KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
-    Store: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("KeyhiveProtocol")
@@ -89,17 +89,19 @@ where
 
 impl<Signer, T, P, C, L, R, Conn, Store, K> KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + keyhive_core::crypto::signer::sync_signer::SyncSigner + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
-    Store: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
+    keyhive_core::principal::active::Active<Signer, T, L>:
+        keyhive_core::principal::active::ActiveOps<K>,
 {
     /// Create a new protocol handler.
     pub fn new(
@@ -223,8 +225,9 @@ where
             self.ingest_contact_card(cc_bytes).await?;
         }
 
-        let message: Message = cbor_deserialize(&verified.payload)
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+        // Decode message with minicbor
+        let message: Message =
+            decode_message(&verified.payload).map_err(VerificationError::CborDecode)?;
 
         match &message {
             Message::SyncRequest { .. } => self.handle_sync_request(message).await,
@@ -283,8 +286,7 @@ where
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes = cbor_serialize(event)
-                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event)?;
                 found_ops.push(bytes);
             }
         }
@@ -445,8 +447,8 @@ where
         message: Message,
         include_contact_card: bool,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let msg_bytes =
-            cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        // Encode message with minicbor
+        let msg_bytes = encode_message(&message).map_err(SigningError::CborEncode)?;
 
         let signed: Signed<Vec<u8>> = {
             let keyhive = self.keyhive.lock().await;
@@ -456,8 +458,7 @@ where
                 .map_err(SigningError::SigningFailed)?
         };
 
-        let signed_bytes =
-            cbor_serialize(&signed).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        let signed_bytes = cbor_serialize(&signed).map_err(SigningError::SerdeEncode)?;
 
         let signed_message = if include_contact_card {
             SignedMessage::with_contact_card(signed_bytes, self.contact_card_bytes.clone())
@@ -545,8 +546,7 @@ where
         for (digest, event) in &events {
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
-                let bytes = cbor_serialize(event)
-                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event)?;
                 result.push(bytes);
             }
         }
@@ -565,12 +565,11 @@ where
         let events: Vec<StaticEvent<T>> = event_bytes_list
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
-            .collect::<Result<_, _>>()
-            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
+            .collect::<Result<_, _>>()?;
 
         let pending = {
             let keyhive = self.keyhive.lock().await;
-            keyhive.ingest_unsorted_static_events(events).await
+            keyhive.ingest_unsorted_static_events::<K>(events).await
         };
 
         if !pending.is_empty() {
@@ -601,7 +600,13 @@ where
     async fn try_storage_recovery(
         &self,
         event_bytes_list: &[EventBytes],
-    ) -> Result<(), StorageError> {
+    ) -> Result<
+        (),
+        IngestFromStorageError<
+            <Store as KeyhiveArchiveStorage<K>>::LoadError,
+            <Store as KeyhiveEventStorage<K>>::LoadError,
+        >,
+    > {
         {
             let keyhive = self.keyhive.lock().await;
             storage_ops::ingest_from_storage(&keyhive, &self.storage).await?;
@@ -614,7 +619,7 @@ where
 
         if !events.is_empty() {
             let keyhive = self.keyhive.lock().await;
-            let retry_pending = keyhive.ingest_unsorted_static_events(events).await;
+            let retry_pending = keyhive.ingest_unsorted_static_events::<K>(events).await;
             if retry_pending.is_empty() {
                 tracing::debug!("all events ingested after storage recovery");
             } else {
@@ -633,8 +638,7 @@ where
         &self,
         cc_bytes: &[u8],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let contact_card: ContactCard = cbor_deserialize(cc_bytes)
-            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
+        let contact_card: ContactCard = cbor_deserialize(cc_bytes)?;
 
         let keyhive = self.keyhive.lock().await;
         keyhive
@@ -653,12 +657,12 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError`] if any storage operation, serialization, or
+    /// Returns an error if any storage operation, serialization, or
     /// deserialization fails.
     pub async fn compact(
         &self,
         storage_id: crate::storage::StorageHash,
-    ) -> Result<(), StorageError> {
+    ) -> Result<(), KeyhivePersistenceError<Store, K>> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::compact(&keyhive, &self.storage, storage_id).await
     }
@@ -667,8 +671,16 @@ where
     ///
     /// # Errors
     ///
-    /// Returns [`StorageError`] if loading or ingestion fails.
-    pub async fn ingest_from_storage(&self) -> Result<(), StorageError> {
+    /// Returns an error if loading or ingestion fails.
+    pub async fn ingest_from_storage(
+        &self,
+    ) -> Result<
+        (),
+        IngestFromStorageError<
+            <Store as KeyhiveArchiveStorage<K>>::LoadError,
+            <Store as KeyhiveEventStorage<K>>::LoadError,
+        >,
+    > {
         let keyhive = self.keyhive.lock().await;
         storage_ops::ingest_from_storage(&keyhive, &self.storage).await?;
         Ok(())
@@ -676,16 +688,17 @@ where
 }
 
 /// Get sync-relevant events for an agent, excluding CGKA operations.
-async fn sync_events_for_agent<Signer, T, P, C, L, R>(
+async fn sync_events_for_agent<K, Signer, T, P, C, L, R>(
     keyhive: &Keyhive<Signer, T, P, C, L, R>,
     agent: &Agent<Signer, T, L>,
 ) -> Map<Digest<StaticEvent<T>>, StaticEvent<T>>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
 {
     // Membership ops
@@ -713,17 +726,30 @@ where
         .collect()
 }
 
-/// Serialize a value to CBOR bytes.
-fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
-    let mut buf = Vec::new();
-    ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
-    Ok(buf)
+/// Serialize a value to CBOR bytes using minicbor-serde (for `keyhive_core` types).
+fn cbor_serialize<V: serde::Serialize>(
+    value: &V,
+) -> Result<Vec<u8>, minicbor_serde::error::EncodeError<core::convert::Infallible>> {
+    minicbor_serde::to_vec(value)
 }
 
-/// Deserialize a value from CBOR bytes.
-fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+/// Deserialize a value from CBOR bytes using minicbor-serde (for `keyhive_core` types).
+fn cbor_deserialize<V: serde::de::DeserializeOwned>(
+    bytes: &[u8],
+) -> Result<V, minicbor_serde::error::DecodeError> {
+    minicbor_serde::from_slice(bytes)
+}
+
+/// Encode a keyhive protocol [`Message`] to bytes using minicbor.
+fn encode_message(
+    msg: &Message,
+) -> Result<Vec<u8>, minicbor::encode::Error<core::convert::Infallible>> {
+    minicbor::to_vec(msg)
+}
+
+/// Decode a keyhive protocol [`Message`] from bytes using minicbor.
+fn decode_message(bytes: &[u8]) -> Result<Message, minicbor::decode::Error> {
+    minicbor::decode(bytes)
 }
 
 /// Convert a `Digest` to a 32-byte array.
@@ -738,13 +764,13 @@ mod tests {
     use crate::{
         storage::MemoryKeyhiveStorage,
         test_utils::{
-            TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
-            exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
-            make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
-            serialize_contact_card,
+            create_channel_pair, create_group_with_read_members, exchange_all_contact_cards,
+            exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
+            make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
+            SimpleKeyhive, TestProtocol, TwoPeerHarness,
         },
     };
-    use futures_kind::Local;
+    use future_form::Local;
     use keyhive_core::{
         access::Access,
         principal::{identifier::Identifier, membered::Membered, peer::Peer},
@@ -752,10 +778,10 @@ mod tests {
     use nonempty::nonempty;
 
     /// Helper to create a test protocol instance.
-    async fn make_protocol() -> (TestProtocol, crate::test_utils::SimpleKeyhive) {
+    async fn make_protocol() -> (TestProtocol, SimpleKeyhive) {
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
-        let cc = keyhive.contact_card().await.unwrap();
+        let cc = keyhive.contact_card::<Local>().await.unwrap();
         let cc_bytes = serialize_contact_card(&cc);
         let storage = MemoryKeyhiveStorage::new();
         let shared = Arc::new(Mutex::new(keyhive.clone()));
@@ -790,7 +816,7 @@ mod tests {
 
         // Verify and decode
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded_msg: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded_msg: Message = decode_message(&verified.payload).unwrap();
 
         // The decoded message should match
         assert!(matches!(decoded_msg, Message::RequestContactCard { .. }));
@@ -907,7 +933,7 @@ mod tests {
         // Verify we got a RequestContactCard
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded: Message = decode_message(&verified.payload).unwrap();
 
         assert!(matches!(decoded, Message::RequestContactCard { .. }));
         // Should include our contact card so the peer can learn about us
@@ -937,7 +963,7 @@ mod tests {
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
 
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1: Message = decode_message(&verified1.payload).unwrap();
         assert!(
             matches!(decoded1, Message::RequestContactCard { .. }),
             "alice should request bob's contact card"
@@ -953,7 +979,7 @@ mod tests {
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
 
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2: Message = decode_message(&verified2.payload).unwrap();
         assert!(
             matches!(decoded2, Message::MissingContactCard { .. }),
             "bob should respond with MissingContactCard"
@@ -975,7 +1001,7 @@ mod tests {
         // to Bob (depending on whether she successfully ingested Bob's CC)
         let signed_msg3 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified3 = signed_msg3.verify(&alice_id).unwrap();
-        let decoded3: Message = cbor_deserialize(&verified3.payload).unwrap();
+        let decoded3: Message = decode_message(&verified3.payload).unwrap();
 
         // After ingesting Bob's contact card, Alice should send a SyncRequest
         assert!(
@@ -994,8 +1020,8 @@ mod tests {
         let bob_id = bob_proto.peer_id.clone();
 
         // Exchange contact cards at the keyhive level
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.contact_card::<Local>().await.unwrap();
+        let bob_cc = bob_kh.contact_card::<Local>().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -1012,7 +1038,7 @@ mod tests {
         // Read Alice's SyncRequest from the channel
         let signed_msg1 = bob_conn.inbound_rx.recv().await.unwrap();
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
-        let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
+        let decoded1: Message = decode_message(&verified1.payload).unwrap();
 
         assert!(
             matches!(decoded1, Message::SyncRequest { .. }),
@@ -1028,7 +1054,7 @@ mod tests {
         // Bob should respond with SyncResponse
         let signed_msg2 = alice_conn.inbound_rx.recv().await.unwrap();
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
-        let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
+        let decoded2: Message = decode_message(&verified2.payload).unwrap();
 
         assert!(
             matches!(decoded2, Message::SyncResponse { .. }),
@@ -1055,8 +1081,8 @@ mod tests {
         let bob_id = keyhive_peer_id(&bob_kh);
 
         // Exchange contact cards
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.contact_card::<Local>().await.unwrap();
+        let bob_cc = bob_kh.contact_card::<Local>().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -1188,7 +1214,7 @@ mod tests {
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
 
         // Save an archive to storage via storage_ops
-        let archive = keyhive.into_archive().await;
+        let archive = keyhive.into_archive::<Local>().await;
         crate::storage_ops::save_keyhive_archive::<_, _, Local>(
             &MemoryKeyhiveStorage::new(),
             storage_id,
@@ -1206,13 +1232,13 @@ mod tests {
     async fn ingest_from_storage_via_protocol() {
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
-        let cc = keyhive.contact_card().await.unwrap();
+        let cc = keyhive.contact_card::<Local>().await.unwrap();
         let cc_bytes = serialize_contact_card(&cc);
 
         let storage = MemoryKeyhiveStorage::new();
 
         // Save an archive
-        let archive = keyhive.into_archive().await;
+        let archive = keyhive.into_archive::<Local>().await;
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
         crate::storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
             .await
@@ -1246,14 +1272,14 @@ mod tests {
         // Alice creates a group and adds Bob as a Read member
         let (group_id, bob_individual_id) = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
+            let group = kh.generate_group::<Local>(vec![]).await.unwrap();
             let group_id = group.lock().await.group_id();
 
             // Get Bob's Individual on Alice's keyhive
             let bob_identifier = bob_id.to_identifier().unwrap();
             let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
 
-            kh.add_member(
+            kh.add_member::<Local>(
                 bob_agent,
                 &Membered::Group(group_id, group.clone()),
                 Access::Read,
@@ -1319,13 +1345,13 @@ mod tests {
         // Alice creates group, adds Bob, creates doc owned by group
         let doc_id = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
+            let group = kh.generate_group::<Local>(vec![]).await.unwrap();
             let group_id = group.lock().await.group_id();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
             let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
 
-            kh.add_member(
+            kh.add_member::<Local>(
                 bob_agent,
                 &Membered::Group(group_id, group.clone()),
                 Access::Read,
@@ -1335,7 +1361,7 @@ mod tests {
             .unwrap();
 
             let doc = kh
-                .generate_doc(
+                .generate_doc::<Local>(
                     vec![Peer::Group(group_id, group.clone())],
                     nonempty![[0u8; 32]],
                 )
@@ -1501,13 +1527,13 @@ mod tests {
         // Alice creates group and adds Bob
         let group_id = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
+            let group = kh.generate_group::<Local>(vec![]).await.unwrap();
             let group_id = group.lock().await.group_id();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
             let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
 
-            kh.add_member(
+            kh.add_member::<Local>(
                 bob_agent,
                 &Membered::Group(group_id, group.clone()),
                 Access::Read,
@@ -1565,7 +1591,7 @@ mod tests {
             let group = kh.get_group(group_id).await.unwrap();
             let bob_identifier = bob_id.to_identifier().unwrap();
 
-            kh.revoke_member(bob_identifier, true, &Membered::Group(group_id, group))
+            kh.revoke_member::<Local>(bob_identifier, true, &Membered::Group(group_id, group))
                 .await
                 .unwrap();
         };

@@ -20,13 +20,16 @@ use keyhive_core::principal::identifier::Identifier;
 /// * With suffix: `<base64(verifying_key)>-<suffix>`
 ///
 /// For example: `"abc123...==-my-suffix"` or just `"abc123...=="`
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct KeyhivePeerId {
     /// The 32-byte Ed25519 verifying key.
+    #[n(0)]
+    #[cbor(with = "minicbor::bytes")]
     verifying_key: [u8; 32],
 
     /// Optional suffix to distinguish different connections/roles.
+    #[n(1)]
     suffix: Option<String>,
 }
 

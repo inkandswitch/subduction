@@ -7,11 +7,13 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
+use keyhive_core::keyhive::Keyhive;
+use rand::rngs::OsRng;
 use sedimentree_core::{
     blob::Blob,
     commit::CountLeadingZeroBytes,
@@ -26,8 +28,9 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
+use subduction_keyhive::storage_ops::ingest_from_storage;
 use wasm_bindgen::prelude::*;
 
 use crate::{
@@ -37,6 +40,8 @@ use crate::{
         WasmWriteError,
     },
     fragment::WasmFragmentRequested,
+    keyhive::{ChangeId, WasmCiphertextStore, WasmEventHandler, WasmKeyhive},
+    keyhive_storage::JsKeyhiveStorage,
     peer_id::WasmPeerId,
     signer::JsSigner,
     sync_stats::WasmSyncStats,
@@ -73,6 +78,10 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
+/// Type alias for the ciphertext store used in Wasm.
+type WasmCiphertextStoreInner =
+    keyhive_core::store::ciphertext::memory::MemoryCiphertextStore<ChangeId, Vec<u8>>;
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 pub struct WasmSubduction {
@@ -86,6 +95,12 @@ pub struct WasmSubduction {
             JsSigner,
             WasmHashMetric,
             WASM_SHARD_COUNT,
+            ChangeId,
+            Vec<u8>,
+            WasmCiphertextStoreInner,
+            WasmEventHandler,
+            OsRng,
+            JsKeyhiveStorage,
         >,
     >,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
@@ -107,15 +122,28 @@ impl WasmSubduction {
     ///
     /// * `signer` - The cryptographic signer for this node's identity
     /// * `storage` - Storage backend for persisting data
+    /// * `keyhive_storage` - Storage backend for keyhive archives and events (must implement
+    ///   `KeyhiveStorageInterface` - the SubductionStorageBridge works)
+    /// * `ciphertext_store` - Store for encrypted keyhive content
+    /// * `event_handler` - JavaScript function to receive keyhive events
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
-    #[must_use]
-    #[wasm_bindgen(constructor)]
-    pub fn new(
+    ///
+    /// This is an async factory method because keyhive initialization is async.
+    /// Use this instead of a constructor.
+    ///
+    /// # Panics
+    ///
+    /// Panics if keyhive generation fails (should not happen with valid signer).
+    #[wasm_bindgen]
+    pub async fn setup(
         signer: JsSigner,
         storage: JsSedimentreeStorage,
+        keyhive_storage: JsKeyhiveStorage,
+        ciphertext_store: WasmCiphertextStore,
+        event_handler: js_sys::Function,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
@@ -127,6 +155,17 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
+
+        // Create keyhive instance
+        let keyhive = Keyhive::generate(
+            signer.clone(),
+            ciphertext_store.0,
+            WasmEventHandler::new(event_handler),
+            OsRng,
+        )
+        .await
+        .expect("failed to create keyhive");
+
         let (core, listener_fut, manager_fut) = Subduction::new(
             discovery_id,
             signer,
@@ -137,7 +176,11 @@ impl WasmSubduction {
             sedimentrees,
             WasmSpawn,
             max_pending,
-        );
+            keyhive,
+            keyhive_storage,
+        )
+        .await
+        .expect("failed to initialize Subduction");
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -162,10 +205,17 @@ impl WasmSubduction {
 
     /// Hydrate a [`Subduction`] instance from external storage.
     ///
+    /// This restores both sedimentree state and keyhive state (delegations, revocations,
+    /// prekeys) from storage.
+    ///
     /// # Arguments
     ///
     /// * `signer` - The cryptographic signer for this node's identity
     /// * `storage` - Storage backend for persisting data
+    /// * `keyhive_storage` - Storage backend for keyhive archives and events (must implement
+    ///   `KeyhiveStorageInterface` - the SubductionStorageBridge works)
+    /// * `ciphertext_store` - Store for encrypted keyhive content
+    /// * `event_handler` - JavaScript function to receive keyhive events
     /// * `service_name` - Optional service identifier for discovery mode (e.g., `sync.example.com`).
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
@@ -174,10 +224,17 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns [`WasmHydrationError`] if hydration fails.
+    ///
+    /// # Panics
+    ///
+    /// Panics if keyhive generation fails (should not happen with valid signer).
     #[wasm_bindgen]
     pub async fn hydrate(
         signer: JsSigner,
         storage: JsSedimentreeStorage,
+        keyhive_storage: JsKeyhiveStorage,
+        ciphertext_store: WasmCiphertextStore,
+        event_handler: js_sys::Function,
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
@@ -189,6 +246,25 @@ impl WasmSubduction {
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
+
+        // Create keyhive instance
+        let keyhive = Keyhive::generate(
+            signer.clone(),
+            ciphertext_store.0,
+            WasmEventHandler::new(event_handler),
+            OsRng,
+        )
+        .await
+        .expect("failed to create keyhive");
+
+        // Restore keyhive state from storage (archives and events)
+        if let Err(e) =
+            ingest_from_storage::<_, _, _, _, _, _, _, JsKeyhiveStorage>(&keyhive, &keyhive_storage)
+                .await
+        {
+            tracing::warn!(error = ?e, "failed to ingest keyhive state from storage (may be empty)");
+        }
+
         let (core, listener_fut, manager_fut) = Subduction::hydrate(
             discovery_id,
             signer,
@@ -199,6 +275,8 @@ impl WasmSubduction {
             sedimentrees,
             WasmSpawn,
             max_pending,
+            keyhive,
+            keyhive_storage,
         )
         .await?;
 
@@ -673,6 +751,39 @@ impl WasmSubduction {
     #[wasm_bindgen(getter, js_name = storage)]
     pub fn storage(&self) -> JsValue {
         self.js_storage.clone()
+    }
+
+    /// Get the keyhive instance for access control operations.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn keyhive(&self) -> WasmKeyhive {
+        WasmKeyhive::new(self.core.keyhive().clone())
+    }
+
+    /// Sync keyhive state with connected peers.
+    ///
+    /// This exchanges delegations, revocations, prekeys, and other keyhive
+    /// operations with peers to ensure everyone has the latest access control
+    /// state.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_peer_id` - If provided, only sync with this peer. Otherwise
+    ///   sync with all connected peers.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`WasmKeyhiveSyncError`] if syncing fails.
+    #[wasm_bindgen(js_name = syncKeyhive)]
+    pub async fn sync_keyhive(
+        &self,
+        target_peer_id: Option<WasmPeerId>,
+    ) -> Result<(), crate::error::WasmKeyhiveSyncError> {
+        let target = target_peer_id.map(|p| p.into());
+        self.core
+            .sync_keyhive(target.as_ref())
+            .await
+            .map_err(Into::into)
     }
 }
 

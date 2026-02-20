@@ -6,6 +6,10 @@
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use future_form::{FutureForm, Local, Sendable, future_form};
+use keyhive_core::crypto::{
+    signed::SigningError as KeyhiveSigningError, signer::sync_signer::SyncSigner,
+    verifiable::Verifiable,
+};
 
 use crate::peer::id::PeerId;
 
@@ -94,6 +98,27 @@ impl core::fmt::Debug for MemorySigner {
         f.debug_struct("MemorySigner")
             .field("peer_id", &self.peer_id())
             .finish_non_exhaustive()
+    }
+}
+
+// Keyhive trait implementations for unified signer support.
+//
+// These impls allow `MemorySigner` to be used as both a Subduction `Signer<K>`
+// and a keyhive `AsyncSigner`. The `AsyncSigner` impl comes from a blanket impl
+// in keyhive_core: `impl<T: SyncSigner> AsyncSigner for T`.
+
+impl Verifiable for MemorySigner {
+    fn verifying_key(&self) -> VerifyingKey {
+        self.signing_key.verifying_key()
+    }
+}
+
+impl SyncSigner for MemorySigner {
+    fn try_sign_bytes_sync(&self, payload_bytes: &[u8]) -> Result<Signature, KeyhiveSigningError> {
+        use ed25519_dalek::Signer as _;
+        self.signing_key
+            .try_sign(payload_bytes)
+            .map_err(KeyhiveSigningError::SigningFailed)
     }
 }
 

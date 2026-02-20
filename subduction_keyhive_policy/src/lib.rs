@@ -10,8 +10,8 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
-use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use future_form::{FutureForm, Sendable};
+use futures::{future::BoxFuture, FutureExt};
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,
@@ -83,27 +83,29 @@ pub enum PutDisallowedError {
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
 #[allow(missing_debug_implementations)]
 pub struct SubductionKeyhive<
-    S: AsyncSigner + Clone,
+    K: FutureForm,
+    S: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    L: MembershipListener<K, S, T>,
     R: rand::CryptoRng + rand::RngCore,
->(Keyhive<S, T, P, C, L, R>);
+>(Keyhive<S, T, P, C, L, R>, core::marker::PhantomData<K>);
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> SubductionKeyhive<S, T, P, C, L, R>
+        K: FutureForm,
+        S: AsyncSigner<K, T> + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<K, S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > SubductionKeyhive<K, S, T, P, C, L, R>
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
     #[must_use]
     pub const fn new(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
-        Self(keyhive)
+        Self(keyhive, core::marker::PhantomData)
     }
 
     /// Get a reference to the inner [`Keyhive`].
@@ -114,13 +116,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
-    T: ContentRef + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
-    R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner<Sendable, T> + Clone + Send + Sync,
+        T: ContentRef + Send + Sync,
+        P: for<'de> Deserialize<'de> + Send + Sync,
+        C: CiphertextStore<T, P> + Clone + Send + Sync,
+        L: MembershipListener<Sendable, S, T> + Send + Sync,
+        R: rand::CryptoRng + rand::RngCore + Send + Sync,
+    > ConnectionPolicy<Sendable> for SubductionKeyhive<Sendable, S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
@@ -143,13 +145,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
-    T: ContentRef + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
-    R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner<Sendable, T> + Clone + Send + Sync,
+        T: ContentRef + Send + Sync,
+        P: for<'de> Deserialize<'de> + Send + Sync,
+        C: CiphertextStore<T, P> + Clone + Send + Sync,
+        L: MembershipListener<Sendable, S, T> + Send + Sync,
+        R: rand::CryptoRng + rand::RngCore + Send + Sync,
+    > StoragePolicy<Sendable> for SubductionKeyhive<Sendable, S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -258,29 +260,31 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
+        K: FutureForm,
+        S: AsyncSigner<K, T> + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<K, S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<K, S, T, P, C, L, R>
 {
     fn from(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
-        SubductionKeyhive(keyhive)
+        SubductionKeyhive(keyhive, core::marker::PhantomData)
     }
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
+        K: FutureForm,
+        S: AsyncSigner<K, T> + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<K, S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<SubductionKeyhive<K, S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
 {
-    fn from(subduction_keyhive: SubductionKeyhive<S, T, P, C, L, R>) -> Self {
+    fn from(subduction_keyhive: SubductionKeyhive<K, S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0
     }
 }

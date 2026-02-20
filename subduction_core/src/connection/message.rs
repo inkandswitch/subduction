@@ -12,6 +12,7 @@ use sedimentree_core::{
 };
 
 use crate::{crypto::signed::Signed, peer::id::PeerId};
+use subduction_keyhive::signed_message::SignedMessage as KeyhiveSignedMessage;
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
@@ -88,6 +89,10 @@ pub enum Message {
     /// Notification that a data request was rejected due to authorization failure.
     #[n(7)]
     DataRequestRejected(#[n(0)] DataRequestRejected),
+
+    /// Keyhive sync protocol message.
+    #[n(8)]
+    Keyhive(#[n(0)] KeyhiveSignedMessage),
 }
 
 impl Message {
@@ -102,7 +107,8 @@ impl Message {
             | Message::BlobsRequest { .. }
             | Message::BlobsResponse { .. }
             | Message::RemoveSubscriptions(_)
-            | Message::DataRequestRejected(_) => None,
+            | Message::DataRequestRejected(_)
+            | Message::Keyhive(_) => None,
         }
     }
 
@@ -118,6 +124,7 @@ impl Message {
             Message::BatchSyncResponse(_) => "BatchSyncResponse",
             Message::RemoveSubscriptions(_) => "RemoveSubscriptions",
             Message::DataRequestRejected(_) => "DataRequestRejected",
+            Message::Keyhive(_) => "Keyhive",
         }
     }
 
@@ -132,7 +139,7 @@ impl Message {
             | Message::BatchSyncRequest(BatchSyncRequest { id, .. })
             | Message::BatchSyncResponse(BatchSyncResponse { id, .. })
             | Message::DataRequestRejected(DataRequestRejected { id }) => Some(*id),
-            Message::RemoveSubscriptions(_) => None,
+            Message::RemoveSubscriptions(_) | Message::Keyhive(_) => None,
         }
     }
 }

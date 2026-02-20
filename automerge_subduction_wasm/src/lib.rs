@@ -15,6 +15,15 @@ extern crate std;
 pub use automerge_sedimentree_wasm::*;
 pub use subduction_wasm::*;
 
+// Explicit keyhive re-exports for convenience
+pub use subduction_wasm::keyhive::{
+    WasmAccess, WasmArchive, WasmChangeId, WasmCiphertextStore, WasmContactCard, WasmDocumentId,
+    WasmIdentifier, WasmIndividualId, WasmKeyhive, WasmStaticEvent, WasmStats,
+};
+
+// Re-export keyhive storage types
+pub use subduction_wasm::keyhive_storage::JsKeyhiveStorage;
+
 #[cfg(feature = "wasm-tracing")]
 use wasm_tracing::WasmLayerConfig;
 

@@ -21,8 +21,10 @@ crate-type = ["cdylib", "rlib"]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
+blake3 = { workspace = true }
 ed25519-dalek = { workspace = true }
 minicbor = { workspace = true }
+minicbor-serde = { workspace = true }
 console_error_panic_hook = { workspace = true, optional = true }
 from_js_ref = { workspace = true }
 futures = { workspace = true }
@@ -30,10 +32,15 @@ future_form = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
+keyhive_core = { workspace = true }
+keyhive_wasm = { workspace = true }
+nonempty = { version = "0.12.0", default-features = false }
 rand = { workspace = true }
+serde = { workspace = true, features = ["derive"] }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
+subduction_keyhive = { path = "../subduction_keyhive", features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -80,6 +87,7 @@ idb = ["sedimentree_wasm/idb"]
 std = [
   "async-channel/std",
   "async-lock/std",
+  "blake3/std",
   "minicbor/std",
   "futures/std",
   "futures-util/std",
@@ -88,6 +96,7 @@ std = [
   "sedimentree_core/std",
   "sedimentree_wasm/std",
   "subduction_core/std",
+  "subduction_keyhive/std",
   "thiserror/std",
   "wasm-bindgen/std",
   "wasm-bindgen-futures/std"

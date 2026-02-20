@@ -6,7 +6,7 @@ use testresult::TestResult;
 
 #[tokio::test]
 async fn test_peer_ids_returns_empty_initially() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let peer_ids = subduction.connected_peer_ids().await;
     assert_eq!(peer_ids.len(), 0);
@@ -14,7 +14,7 @@ async fn test_peer_ids_returns_empty_initially() {
 
 #[tokio::test]
 async fn test_register_adds_connection() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let conn = MockConnection::new().authenticated();
     let fresh = subduction.register(conn).await?;
@@ -27,7 +27,7 @@ async fn test_register_adds_connection() -> TestResult {
 
 #[tokio::test]
 async fn test_register_same_connection_twice_returns_false() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let conn = MockConnection::new().authenticated();
     let fresh1 = subduction.register(conn.clone()).await?;
@@ -42,7 +42,7 @@ async fn test_register_same_connection_twice_returns_false() -> TestResult {
 
 #[tokio::test]
 async fn test_unregister_removes_connection() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let conn = MockConnection::new().authenticated();
     let _fresh = subduction.register(conn.clone()).await?;
@@ -57,7 +57,7 @@ async fn test_unregister_removes_connection() -> TestResult {
 
 #[tokio::test]
 async fn test_unregister_nonexistent_returns_false() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     // Unregister a connection that was never registered
     let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32])).authenticated();
@@ -67,7 +67,7 @@ async fn test_unregister_nonexistent_returns_false() {
 
 #[tokio::test]
 async fn test_register_different_peers_increases_count() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32])).authenticated();
     let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32])).authenticated();
@@ -81,7 +81,7 @@ async fn test_register_different_peers_increases_count() -> TestResult {
 
 #[tokio::test]
 async fn test_disconnect_removes_connection() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let conn = MockConnection::new().authenticated();
     let _fresh = subduction.register(conn.clone()).await?;
@@ -95,7 +95,7 @@ async fn test_disconnect_removes_connection() -> TestResult {
 
 #[tokio::test]
 async fn test_disconnect_nonexistent_returns_false() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let conn = MockConnection::with_peer_id(PeerId::new([99u8; 32])).authenticated();
     let removed = subduction.disconnect(&conn).await?;
@@ -106,7 +106,7 @@ async fn test_disconnect_nonexistent_returns_false() -> TestResult {
 
 #[tokio::test]
 async fn test_disconnect_all_removes_all_connections() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let conn1 = MockConnection::with_peer_id(PeerId::new([1u8; 32])).authenticated();
     let conn2 = MockConnection::with_peer_id(PeerId::new([2u8; 32])).authenticated();
@@ -123,7 +123,7 @@ async fn test_disconnect_all_removes_all_connections() -> TestResult {
 
 #[tokio::test]
 async fn test_disconnect_from_peer_removes_specific_peer() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let peer_id1 = PeerId::new([1u8; 32]);
     let peer_id2 = PeerId::new([2u8; 32]);
@@ -145,7 +145,7 @@ async fn test_disconnect_from_peer_removes_specific_peer() -> TestResult {
 
 #[tokio::test]
 async fn test_disconnect_from_nonexistent_peer_returns_false() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
+    let (subduction, _listener_fut, _actor_fut) = new_test_subduction().await;
 
     let peer_id = PeerId::new([1u8; 32]);
     #[allow(clippy::unwrap_used)]

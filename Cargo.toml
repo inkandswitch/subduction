@@ -32,13 +32,14 @@ sedimentree_core = { version = "0.3.0", path = "sedimentree_core", default-featu
 sedimentree_fs_storage = { version = "0.3.1", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.3.1", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.3.1", path = "subduction_core", default-features = false }
+subduction_keyhive = { version = "0.1.0", path = "subduction_keyhive", default-features = false }
 subduction_wasm = { version = "0.3.1", path = "subduction_wasm", default-features = false }
 subduction_websocket = { version = "0.3.1", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"
 anyhow = "1.0"
-arbitrary = "1.4"
+arbitrary = { version = "1.4", features = ["derive"] }
 async-channel = { version = "2.5", default-features = false }
 async-lock = { version = "3.4", default-features = false }
 async-tungstenite = "0.31.0"
@@ -47,7 +48,7 @@ axum = "0.8"
 base58 = "0.2.0"
 base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 blake3 = { version = "1.8", default-features = false }
-ciborium = { version = "0.2", default-features = false }
+
 bolero = "0.13.4"
 clap = { version = "4.5", features = ["derive"] }
 console-subscriber = "0.5.0"
@@ -59,12 +60,13 @@ from_js_ref = "0.1.3" # no_std by default
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
-future_form = "0.2.0"
+future_form = { git = "https://codeberg.org/expede/future_form", branch = "macro-update" }
 futures_kind = { version = "0.1", default-features = false }
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
-keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
+keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "future-form-refactor" }
+keyhive_wasm = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "future-form-refactor" }
 metrics = "0.24"
 minicbor = { version = "2.1", default-features = false, features = ["alloc", "derive"] }
 minicbor-serde = { version = "0.6", default-features = false, features = ["alloc"] }
