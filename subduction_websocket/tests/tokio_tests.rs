@@ -51,7 +51,6 @@ fn test_signer(seed: u8) -> MemorySigner {
 async fn test_keyhive(
     signer: MemorySigner,
 ) -> Keyhive<
-    Sendable,
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -59,7 +58,7 @@ async fn test_keyhive(
     NoListener,
     OsRng,
 > {
-    Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
+    Keyhive::generate::<Sendable>(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
         .await
         .expect("failed to create keyhive")
 }

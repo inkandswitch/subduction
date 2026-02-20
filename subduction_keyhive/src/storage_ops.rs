@@ -289,7 +289,7 @@ where
 ///
 /// Returns an error if loading, deserialization, or archive ingestion fails.
 pub async fn ingest_from_storage<K, Signer, T, P, C, L, R, S>(
-    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
+    keyhive: &Keyhive<Signer, T, P, C, L, R>,
     storage: &S,
 ) -> Result<
     Vec<Arc<StaticEvent<T>>>,
@@ -299,11 +299,11 @@ pub async fn ingest_from_storage<K, Signer, T, P, C, L, R, S>(
     >,
 >
 where
-    K: future_form::FutureForm + ?Sized,
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: keyhive_core::store::ciphertext::CiphertextStore<K, T, P> + Clone,
+    C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
     L: keyhive_core::listener::membership::MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
@@ -318,7 +318,7 @@ where
     // Ingest each archive
     for (hash, archive) in archives {
         tracing::debug!(hash = %hash.to_hex(), "ingesting archive");
-        keyhive.ingest_archive(archive).await.map_err(|e| {
+        keyhive.ingest_archive::<K>(archive).await.map_err(|e| {
             tracing::error!(error = ?e, "archive ingestion failed");
             IngestFromStorageError::ArchiveIngestion
         })?;
@@ -332,7 +332,7 @@ where
     tracing::debug!(count = events.len(), "ingesting events from storage");
 
     let event_list: Vec<StaticEvent<T>> = events.into_iter().map(|(_, e)| e).collect();
-    let pending = keyhive.ingest_unsorted_static_events(event_list).await;
+    let pending = keyhive.ingest_unsorted_static_events::<K>(event_list).await;
 
     tracing::debug!(
         pending_count = pending.len(),
@@ -408,19 +408,21 @@ pub type KeyhivePersistenceError<S, K> = KeyhivePersistenceErrorRaw<
 ///
 /// Returns an error if any storage operation, serialization, or deserialization fails.
 pub async fn compact<K, Signer, T, P, C, L, R, S>(
-    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
+    keyhive: &Keyhive<Signer, T, P, C, L, R>,
     storage: &S,
     storage_id: StorageHash,
 ) -> Result<(), KeyhivePersistenceError<S, K>>
 where
-    K: future_form::FutureForm + ?Sized,
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: keyhive_core::store::ciphertext::CiphertextStore<K, T, P> + Clone,
+    C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
     L: keyhive_core::listener::membership::MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
+    keyhive_core::principal::active::Active<Signer, T, L>:
+        keyhive_core::principal::active::ActiveOps<K>,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage
@@ -447,7 +449,7 @@ where
     for (hash, bytes) in &raw_archives {
         let archive: Archive<T> = cbor_deserialize(bytes)?;
         tracing::debug!(hash = %hash.to_hex(), "ingesting archive for compaction");
-        keyhive.ingest_archive(archive).await.map_err(|e| {
+        keyhive.ingest_archive::<K>(archive).await.map_err(|e| {
             tracing::error!(error = ?e, "archive ingestion failed during compaction");
             KeyhivePersistenceErrorRaw::ArchiveIngestion
         })?;
@@ -468,7 +470,7 @@ where
         .map(|(_, bytes)| cbor_deserialize(bytes))
         .collect::<Result<_, _>>()?;
 
-    let pending = keyhive.ingest_unsorted_static_events(events).await;
+    let pending = keyhive.ingest_unsorted_static_events::<K>(events).await;
 
     // Get hashes of pending events
     let pending_hashes: crate::collections::Set<[u8; 32]> = pending
@@ -480,7 +482,7 @@ where
         .collect();
 
     // Save the new consolidated archive
-    let archive = keyhive.into_archive().await;
+    let archive = keyhive.into_archive::<K>().await;
     save_keyhive_archive(storage, storage_id, &archive)
         .await
         .map_err(KeyhivePersistenceErrorRaw::SaveArchive)?;
@@ -536,7 +538,7 @@ mod tests {
         let storage = MemoryKeyhiveStorage::new();
         let storage_id = StorageHash::new([1u8; 32]);
 
-        let archive = keyhive.into_archive().await;
+        let archive = keyhive.into_archive::<Sendable>().await;
         save_keyhive_archive::<_, _, Sendable>(&storage, storage_id, &archive)
             .await
             .unwrap();
@@ -554,8 +556,8 @@ mod tests {
         let alice = make_keyhive().await;
         let bob = make_keyhive().await;
 
-        let alice_cc = alice.contact_card().await.unwrap();
-        let bob_cc = bob.contact_card().await.unwrap();
+        let alice_cc = alice.contact_card::<Sendable>().await.unwrap();
+        let bob_cc = bob.contact_card::<Sendable>().await.unwrap();
         alice.receive_contact_card(&bob_cc).await.unwrap();
         bob.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -563,13 +565,13 @@ mod tests {
 
         // Save two separate archives (simulating multiple save points)
         let id1 = StorageHash::new([1u8; 32]);
-        let archive1 = alice.into_archive().await;
+        let archive1 = alice.into_archive::<Sendable>().await;
         save_keyhive_archive::<_, _, Sendable>(&storage, id1, &archive1)
             .await
             .unwrap();
 
         let id2 = StorageHash::new([2u8; 32]);
-        let archive2 = alice.into_archive().await;
+        let archive2 = alice.into_archive::<Sendable>().await;
         save_keyhive_archive::<_, _, Sendable>(&storage, id2, &archive2)
             .await
             .unwrap();

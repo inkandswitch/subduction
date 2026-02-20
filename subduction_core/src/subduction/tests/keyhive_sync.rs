@@ -42,7 +42,7 @@ fn make_signer(seed: u8) -> MemorySigner {
 
 /// Create a keyhive with a specific signer.
 async fn make_keyhive_with_signer(signer: MemorySigner) -> TestKeyhive {
-    Keyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
+    Keyhive::generate::<Sendable>(signer, MemoryCiphertextStore::new(), NoListener, OsRng)
         .await
         .expect("failed to create keyhive")
 }
@@ -103,8 +103,14 @@ impl TwoPeerSubductionHarness {
         let bob_keyhive = make_keyhive_with_signer(bob_signer.clone()).await;
 
         // Exchange contact cards
-        let alice_cc = alice_keyhive.contact_card().await.expect("alice cc");
-        let bob_cc = bob_keyhive.contact_card().await.expect("bob cc");
+        let alice_cc = alice_keyhive
+            .contact_card::<Sendable>()
+            .await
+            .expect("alice cc");
+        let bob_cc = bob_keyhive
+            .contact_card::<Sendable>()
+            .await
+            .expect("bob cc");
         alice_keyhive
             .receive_contact_card(&bob_cc)
             .await
@@ -203,13 +209,16 @@ impl TwoPeerSubductionHarness {
     /// Uses Alice's internal keyhive (via `subduction.keyhive()`).
     async fn alice_creates_group_with_bob(&self) -> GroupId {
         let kh = self.alice.keyhive().lock().await;
-        let group = kh.generate_group(vec![]).await.expect("generate_group");
+        let group = kh
+            .generate_group::<Sendable>(vec![])
+            .await
+            .expect("generate_group");
         let group_id = group.lock().await.group_id();
 
         let bob_identifier = self.bob_keyhive_id.to_identifier().expect("bob identifier");
         let bob_agent = kh.get_agent(bob_identifier).await.expect("get bob agent");
 
-        kh.add_member(
+        kh.add_member::<Sendable>(
             bob_agent,
             &Membered::Group(group_id, group.clone()),
             Access::Read,
@@ -448,7 +457,10 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
     // Bob creates his group and adds Alice
     let bob_group_id = {
         let kh = harness.bob.keyhive().lock().await;
-        let group = kh.generate_group(vec![]).await.expect("generate_group");
+        let group = kh
+            .generate_group::<Sendable>(vec![])
+            .await
+            .expect("generate_group");
         let group_id = group.lock().await.group_id();
 
         let alice_identifier = harness
@@ -460,7 +472,7 @@ async fn test_bidirectional_sync_with_divergent_keyhive_ops() -> TestResult {
             .await
             .expect("get alice agent");
 
-        kh.add_member(
+        kh.add_member::<Sendable>(
             alice_agent,
             &Membered::Group(group_id, group.clone()),
             Access::Read,
@@ -539,9 +551,7 @@ async fn collect_sync_op_digests(kh: &TestKeyhive, identifier: Identifier) -> BT
     // Prekey ops
     for key_ops in kh.reachable_prekey_ops_for_agent(&agent).await.values() {
         for key_op in key_ops {
-            let op = Event::<Sendable, MemorySigner, [u8; 32], NoListener>::from(
-                key_op.as_ref().clone(),
-            );
+            let op = Event::<MemorySigner, [u8; 32], NoListener>::from(key_op.as_ref().clone());
             let digest = Digest::hash(&op);
             digests.insert(*digest.raw.as_bytes());
         }

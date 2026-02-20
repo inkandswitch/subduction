@@ -62,9 +62,11 @@ impl Spawn<future_form::Local> for TokioSpawn {
     }
 }
 
-/// Type alias for keyhive used in tests (sendable version).
+/// Type alias for keyhive used in tests.
+///
+/// Note: The `K: FutureForm` parameter is now method-level, not type-level.
+/// Use `Sendable` when calling methods that require it (e.g., `generate::<Sendable>(...)`).
 pub(super) type TestKeyhive = Keyhive<
-    Sendable,
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -73,31 +75,11 @@ pub(super) type TestKeyhive = Keyhive<
     OsRng,
 >;
 
-/// Type alias for keyhive used in tests (local version).
-pub(super) type TestKeyhiveLocal = Keyhive<
-    future_form::Local,
-    MemorySigner,
-    [u8; 32],
-    Vec<u8>,
-    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-    NoListener,
-    OsRng,
->;
-
-/// Create a test keyhive instance (sendable version).
+/// Create a test keyhive instance.
 pub(super) async fn test_keyhive() -> TestKeyhive {
     let csprng = OsRng;
     let sk = test_signer();
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
-        .await
-        .expect("failed to create keyhive")
-}
-
-/// Create a test keyhive instance (local/single-threaded version).
-pub(super) async fn test_keyhive_local() -> TestKeyhiveLocal {
-    let csprng = OsRng;
-    let sk = test_signer();
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
+    Keyhive::generate::<Sendable>(sk, MemoryCiphertextStore::new(), NoListener, csprng)
         .await
         .expect("failed to create keyhive")
 }

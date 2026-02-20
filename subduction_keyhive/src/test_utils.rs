@@ -21,20 +21,11 @@ use crate::{
     signed_message::SignedMessage, storage::MemoryKeyhiveStorage,
 };
 
-/// Type alias for the simple keyhive type used in tests (Sendable variant).
+/// Type alias for the simple keyhive type used in tests.
+///
+/// Note: K (FutureForm) is now a method-level generic on Keyhive, not a struct
+/// type parameter.
 pub(crate) type SimpleKeyhive = Keyhive<
-    Sendable,
-    MemorySigner,
-    [u8; 32],
-    Vec<u8>,
-    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
-    NoListener,
-    OsRng,
->;
-
-/// Type alias for the simple keyhive type used in tests (Local variant).
-pub(crate) type SimpleKeyhiveLocal = Keyhive<
-    Local,
     MemorySigner,
     [u8; 32],
     Vec<u8>,
@@ -127,32 +118,17 @@ impl KeyhiveConnection<Local> for ChannelConnection {
     }
 }
 
-/// Create a simple keyhive instance for testing (Sendable variant).
+/// Create a simple keyhive instance for testing.
 pub(crate) async fn make_keyhive() -> SimpleKeyhive {
     let mut csprng = OsRng;
     let sk = MemorySigner::generate(&mut csprng);
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
+    Keyhive::generate::<Sendable>(sk, MemoryCiphertextStore::new(), NoListener, csprng)
         .await
         .expect("failed to create keyhive")
 }
 
-/// Create a simple keyhive instance for testing (Local variant).
-pub(crate) async fn make_keyhive_local() -> SimpleKeyhiveLocal {
-    let mut csprng = OsRng;
-    let sk = MemorySigner::generate(&mut csprng);
-    Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
-        .await
-        .expect("failed to create keyhive")
-}
-
-/// Get the peer ID for a keyhive instance (Sendable variant).
+/// Get the peer ID for a keyhive instance.
 pub(crate) fn keyhive_peer_id(keyhive: &SimpleKeyhive) -> KeyhivePeerId {
-    let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
-    KeyhivePeerId::from_bytes(id.to_bytes())
-}
-
-/// Get the peer ID for a keyhive instance (Local variant).
-pub(crate) fn keyhive_peer_id_local(keyhive: &SimpleKeyhiveLocal) -> KeyhivePeerId {
     let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
     KeyhivePeerId::from_bytes(id.to_bytes())
 }
@@ -180,19 +156,19 @@ pub(crate) type TestProtocol = KeyhiveProtocol<
 /// Create a test protocol with a shared keyhive reference.
 ///
 /// Unlike `make_protocol()` in the protocol tests, this does NOT clone the
-/// keyhive. The returned `Arc<Mutex<SimpleKeyhiveLocal>>` is the same one the
+/// keyhive. The returned `Arc<Mutex<SimpleKeyhive>>` is the same one the
 /// protocol uses, so mutations made through the Arc are visible to the
 /// protocol.
 pub(crate) async fn make_protocol_with_shared_keyhive(
-    keyhive: SimpleKeyhiveLocal,
+    keyhive: SimpleKeyhive,
 ) -> (
     TestProtocol,
-    Arc<Mutex<SimpleKeyhiveLocal>>,
+    Arc<Mutex<SimpleKeyhive>>,
     MemoryKeyhiveStorage,
 ) {
-    let peer_id = keyhive_peer_id_local(&keyhive);
+    let peer_id = keyhive_peer_id(&keyhive);
     let cc = keyhive
-        .contact_card()
+        .contact_card::<Sendable>()
         .await
         .expect("failed to get contact card");
     let cc_bytes = serialize_contact_card(&cc);
@@ -269,9 +245,9 @@ pub(crate) struct TwoPeerHarness {
     /// Bob's protocol handler.
     pub bob_proto: TestProtocol,
     /// Shared reference to Alice's keyhive.
-    pub alice_kh: Arc<Mutex<SimpleKeyhiveLocal>>,
+    pub alice_kh: Arc<Mutex<SimpleKeyhive>>,
     /// Shared reference to Bob's keyhive.
-    pub bob_kh: Arc<Mutex<SimpleKeyhiveLocal>>,
+    pub bob_kh: Arc<Mutex<SimpleKeyhive>>,
     /// Alice's peer ID.
     pub alice_id: KeyhivePeerId,
     /// Bob's peer ID.
@@ -285,15 +261,18 @@ pub(crate) struct TwoPeerHarness {
 /// Exchange contact cards between two fresh keyhives and set up protocols
 /// and channel pairs. Returns a [`TwoPeerHarness`] with everything wired up.
 pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
-    let alice_keyhive = make_keyhive_local().await;
-    let bob_keyhive = make_keyhive_local().await;
+    let alice_keyhive = make_keyhive().await;
+    let bob_keyhive = make_keyhive().await;
 
     // Exchange contact cards at the keyhive level
     let alice_cc = alice_keyhive
-        .contact_card()
+        .contact_card::<Sendable>()
         .await
         .expect("alice contact card");
-    let bob_cc = bob_keyhive.contact_card().await.expect("bob contact card");
+    let bob_cc = bob_keyhive
+        .contact_card::<Sendable>()
+        .await
+        .expect("bob contact card");
     alice_keyhive
         .receive_contact_card(&bob_cc)
         .await
@@ -303,8 +282,8 @@ pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
         .await
         .expect("bob receive alice cc");
 
-    let alice_id = keyhive_peer_id_local(&alice_keyhive);
-    let bob_id = keyhive_peer_id_local(&bob_keyhive);
+    let alice_id = keyhive_peer_id(&alice_keyhive);
+    let bob_id = keyhive_peer_id(&bob_keyhive);
 
     let (alice_proto, alice_kh, _) = make_protocol_with_shared_keyhive(alice_keyhive).await;
     let (bob_proto, bob_kh, _) = make_protocol_with_shared_keyhive(bob_keyhive).await;
@@ -329,10 +308,10 @@ pub(crate) async fn exchange_contact_cards_and_setup() -> TwoPeerHarness {
 }
 
 /// Exchange contact cards between every pair of keyhives.
-pub(crate) async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhiveLocal]) {
+pub(crate) async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhive]) {
     let mut cards = Vec::new();
     for kh in keyhives {
-        cards.push(kh.contact_card().await.expect("contact_card"));
+        cards.push(kh.contact_card::<Sendable>().await.expect("contact_card"));
     }
     for (i, kh) in keyhives.iter().enumerate() {
         for (j, cc) in cards.iter().enumerate() {
@@ -347,15 +326,18 @@ pub(crate) async fn exchange_all_contact_cards(keyhives: &[&SimpleKeyhiveLocal])
 
 /// Create a group and add the given peers as Read members.
 pub(crate) async fn create_group_with_read_members(
-    kh: &SimpleKeyhiveLocal,
+    kh: &SimpleKeyhive,
     member_ids: &[&KeyhivePeerId],
 ) -> GroupId {
-    let group = kh.generate_group(vec![]).await.expect("generate_group");
+    let group = kh
+        .generate_group::<Sendable>(vec![])
+        .await
+        .expect("generate_group");
     let group_id = group.lock().await.group_id();
     for member_id in member_ids {
         let identifier = member_id.to_identifier().expect("to_identifier");
         let agent = kh.get_agent(identifier).await.expect("get_agent");
-        kh.add_member(
+        kh.add_member::<Sendable>(
             agent,
             &Membered::Group(group_id, group.clone()),
             Access::Read,

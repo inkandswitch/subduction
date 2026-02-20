@@ -2,6 +2,7 @@
 
 use crate::metrics;
 use anyhow::Result;
+use future_form::Sendable;
 use keyhive_core::{
     keyhive::Keyhive, listener::no_listener::NoListener,
     store::ciphertext::memory::MemoryCiphertextStore,
@@ -139,7 +140,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let keyhive_storage = FsKeyhiveStorage::new(keyhive_storage_path)?;
 
     // Initialize keyhive for access control
-    let keyhive = Keyhive::generate(
+    let keyhive = Keyhive::generate::<Sendable>(
         signer.clone(),
         MemoryCiphertextStore::new(),
         NoListener,
@@ -149,7 +150,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     .expect("failed to create keyhive");
 
     // Hydrate keyhive from storage (load any existing state)
-    let pending = ingest_from_storage(&keyhive, &keyhive_storage)
+    let pending = ingest_from_storage::<Sendable, _, _, _, _, _, _, _>(&keyhive, &keyhive_storage)
         .await
         .expect("failed to hydrate keyhive from storage");
 

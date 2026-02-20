@@ -40,7 +40,7 @@ use crate::{
 };
 
 /// Shared keyhive instance behind a mutex.
-type SharedKeyhive<K, Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<K, Signer, T, P, C, L, R>>>;
+type SharedKeyhive<Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<Signer, T, P, C, L, R>>>;
 
 /// Main keyhive sync protocol handler.
 ///
@@ -49,17 +49,17 @@ type SharedKeyhive<K, Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<K, Signer, T, P
 /// through an `Arc<Mutex<Keyhive>>`.
 pub struct KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + Clone,
+    C: CiphertextStore<T, P> + Clone,
     L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
-    K: future_form::FutureForm + ?Sized,
 {
-    keyhive: SharedKeyhive<K, Signer, T, P, C, L, R>,
+    keyhive: SharedKeyhive<Signer, T, P, C, L, R>,
     storage: Store,
     peer_id: KeyhivePeerId,
     peers: Mutex<Map<KeyhivePeerId, Conn>>,
@@ -70,15 +70,15 @@ where
 impl<Signer, T, P, C, L, R, Conn, Store, K> core::fmt::Debug
     for KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + Clone,
+    C: CiphertextStore<T, P> + Clone,
     L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
-    K: future_form::FutureForm + ?Sized,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("KeyhiveProtocol")
@@ -89,21 +89,23 @@ where
 
 impl<Signer, T, P, C, L, R, Conn, Store, K> KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
 where
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + keyhive_core::crypto::signer::sync_signer::SyncSigner + Clone,
     T: ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + Clone,
+    C: CiphertextStore<T, P> + Clone,
     L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
     Store: KeyhiveArchiveStorage<K> + KeyhiveEventStorage<K>,
-    K: future_form::FutureForm + ?Sized,
+    keyhive_core::principal::active::Active<Signer, T, L>:
+        keyhive_core::principal::active::ActiveOps<K>,
 {
     /// Create a new protocol handler.
     pub fn new(
-        keyhive: SharedKeyhive<K, Signer, T, P, C, L, R>,
+        keyhive: SharedKeyhive<Signer, T, P, C, L, R>,
         storage: Store,
         peer_id: KeyhivePeerId,
         contact_card_bytes: Vec<u8>,
@@ -567,7 +569,7 @@ where
 
         let pending = {
             let keyhive = self.keyhive.lock().await;
-            keyhive.ingest_unsorted_static_events(events).await
+            keyhive.ingest_unsorted_static_events::<K>(events).await
         };
 
         if !pending.is_empty() {
@@ -617,7 +619,7 @@ where
 
         if !events.is_empty() {
             let keyhive = self.keyhive.lock().await;
-            let retry_pending = keyhive.ingest_unsorted_static_events(events).await;
+            let retry_pending = keyhive.ingest_unsorted_static_events::<K>(events).await;
             if retry_pending.is_empty() {
                 tracing::debug!("all events ingested after storage recovery");
             } else {
@@ -687,21 +689,21 @@ where
 
 /// Get sync-relevant events for an agent, excluding CGKA operations.
 async fn sync_events_for_agent<K, Signer, T, P, C, L, R>(
-    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
-    agent: &Agent<K, Signer, T, L>,
+    keyhive: &Keyhive<Signer, T, P, C, L, R>,
+    agent: &Agent<Signer, T, L>,
 ) -> Map<Digest<StaticEvent<T>>, StaticEvent<T>>
 where
-    K: future_form::FutureForm + ?Sized,
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + Clone,
+    C: CiphertextStore<T, P> + Clone,
     L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
 {
     // Membership ops
     #[allow(clippy::type_complexity)]
-    let mut ops: Map<Digest<Event<K, Signer, T, L>>, Event<K, Signer, T, L>> = keyhive
+    let mut ops: Map<Digest<Event<Signer, T, L>>, Event<Signer, T, L>> = keyhive
         .membership_ops_for_agent(agent)
         .await
         .into_iter()
@@ -711,7 +713,7 @@ where
     // Prekey ops
     for key_ops in keyhive.reachable_prekey_ops_for_agent(agent).await.values() {
         for key_op in key_ops {
-            let op = Event::<K, Signer, T, L>::from(key_op.as_ref().clone());
+            let op = Event::<Signer, T, L>::from(key_op.as_ref().clone());
             ops.insert(Digest::hash(&op), op);
         }
     }
@@ -763,9 +765,9 @@ mod tests {
         storage::MemoryKeyhiveStorage,
         test_utils::{
             create_channel_pair, create_group_with_read_members, exchange_all_contact_cards,
-            exchange_contact_cards_and_setup, keyhive_peer_id_local, make_keyhive_local,
+            exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
             make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
-            SimpleKeyhiveLocal, TestProtocol, TwoPeerHarness,
+            SimpleKeyhive, TestProtocol, TwoPeerHarness,
         },
     };
     use future_form::Local;
@@ -776,10 +778,10 @@ mod tests {
     use nonempty::nonempty;
 
     /// Helper to create a test protocol instance.
-    async fn make_protocol() -> (TestProtocol, SimpleKeyhiveLocal) {
-        let keyhive = make_keyhive_local().await;
-        let peer_id = keyhive_peer_id_local(&keyhive);
-        let cc = keyhive.contact_card().await.unwrap();
+    async fn make_protocol() -> (TestProtocol, SimpleKeyhive) {
+        let keyhive = make_keyhive().await;
+        let peer_id = keyhive_peer_id(&keyhive);
+        let cc = keyhive.contact_card::<Local>().await.unwrap();
         let cc_bytes = serialize_contact_card(&cc);
         let storage = MemoryKeyhiveStorage::new();
         let shared = Arc::new(Mutex::new(keyhive.clone()));
@@ -793,8 +795,8 @@ mod tests {
         let peer_id = protocol.peer_id.clone();
 
         // Create a peer so we can send to them
-        let other = make_keyhive_local().await;
-        let other_id = keyhive_peer_id_local(&other);
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
         protocol.add_peer(other_id.clone(), conn_to_other).await;
@@ -830,8 +832,8 @@ mod tests {
         let (protocol, _keyhive) = make_protocol().await;
         let peer_id = protocol.peer_id.clone();
 
-        let other = make_keyhive_local().await;
-        let other_id = keyhive_peer_id_local(&other);
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
         protocol.add_peer(other_id.clone(), conn_to_other).await;
@@ -848,7 +850,7 @@ mod tests {
         let signed_msg = conn_to_us.inbound_rx.recv().await.unwrap();
 
         // Try to verify as if it came from the wrong sender
-        let wrong_sender = keyhive_peer_id_local(&make_keyhive_local().await);
+        let wrong_sender = keyhive_peer_id(&make_keyhive().await);
         let result = signed_msg.verify(&wrong_sender);
 
         assert!(result.is_err());
@@ -864,8 +866,8 @@ mod tests {
         let (protocol, _keyhive) = make_protocol().await;
         let peer_id = protocol.peer_id.clone();
 
-        let other = make_keyhive_local().await;
-        let other_id = keyhive_peer_id_local(&other);
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
         protocol.add_peer(other_id.clone(), conn_to_other).await;
@@ -895,8 +897,8 @@ mod tests {
         let (protocol, _keyhive) = make_protocol().await;
         let peer_id = protocol.peer_id.clone();
 
-        let peer1 = keyhive_peer_id_local(&make_keyhive_local().await);
-        let peer2 = keyhive_peer_id_local(&make_keyhive_local().await);
+        let peer1 = keyhive_peer_id(&make_keyhive().await);
+        let peer2 = keyhive_peer_id(&make_keyhive().await);
 
         let (conn1, _) = create_channel_pair(peer_id.clone(), &peer1);
         let (conn2, _) = create_channel_pair(peer_id.clone(), &peer2);
@@ -919,8 +921,8 @@ mod tests {
         let peer_id = protocol.peer_id.clone();
 
         // Create a peer that our keyhive doesn't know about
-        let other = make_keyhive_local().await;
-        let other_id = keyhive_peer_id_local(&other);
+        let other = make_keyhive().await;
+        let other_id = keyhive_peer_id(&other);
 
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
         protocol.add_peer(other_id.clone(), conn_to_other).await;
@@ -1018,8 +1020,8 @@ mod tests {
         let bob_id = bob_proto.peer_id.clone();
 
         // Exchange contact cards at the keyhive level
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.contact_card::<Local>().await.unwrap();
+        let bob_cc = bob_kh.contact_card::<Local>().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -1072,15 +1074,15 @@ mod tests {
     #[tokio::test(flavor = "current_thread")]
     async fn full_bidirectional_sync() {
         // Create Alice and Bob, exchange contact cards, then sync both ways
-        let alice_kh = make_keyhive_local().await;
-        let bob_kh = make_keyhive_local().await;
+        let alice_kh = make_keyhive().await;
+        let bob_kh = make_keyhive().await;
 
-        let alice_id = keyhive_peer_id_local(&alice_kh);
-        let bob_id = keyhive_peer_id_local(&bob_kh);
+        let alice_id = keyhive_peer_id(&alice_kh);
+        let bob_id = keyhive_peer_id(&bob_kh);
 
         // Exchange contact cards
-        let alice_cc = alice_kh.contact_card().await.unwrap();
-        let bob_cc = bob_kh.contact_card().await.unwrap();
+        let alice_cc = alice_kh.contact_card::<Local>().await.unwrap();
+        let bob_cc = bob_kh.contact_card::<Local>().await.unwrap();
         alice_kh.receive_contact_card(&bob_cc).await.unwrap();
         bob_kh.receive_contact_card(&alice_cc).await.unwrap();
 
@@ -1197,7 +1199,7 @@ mod tests {
     async fn handle_message_rejects_unsigned_junk() {
         let (protocol, _keyhive) = make_protocol().await;
 
-        let fake_sender = keyhive_peer_id_local(&make_keyhive_local().await);
+        let fake_sender = keyhive_peer_id(&make_keyhive().await);
 
         // Create a SignedMessage with junk data
         let junk = SignedMessage::new(vec![0xFF, 0xFE, 0xFD]);
@@ -1212,7 +1214,7 @@ mod tests {
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
 
         // Save an archive to storage via storage_ops
-        let archive = keyhive.into_archive().await;
+        let archive = keyhive.into_archive::<Local>().await;
         crate::storage_ops::save_keyhive_archive::<_, _, Local>(
             &MemoryKeyhiveStorage::new(),
             storage_id,
@@ -1228,15 +1230,15 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn ingest_from_storage_via_protocol() {
-        let keyhive = make_keyhive_local().await;
-        let peer_id = keyhive_peer_id_local(&keyhive);
-        let cc = keyhive.contact_card().await.unwrap();
+        let keyhive = make_keyhive().await;
+        let peer_id = keyhive_peer_id(&keyhive);
+        let cc = keyhive.contact_card::<Local>().await.unwrap();
         let cc_bytes = serialize_contact_card(&cc);
 
         let storage = MemoryKeyhiveStorage::new();
 
         // Save an archive
-        let archive = keyhive.into_archive().await;
+        let archive = keyhive.into_archive::<Local>().await;
         let storage_id = crate::storage::StorageHash::new([1u8; 32]);
         crate::storage_ops::save_keyhive_archive::<_, _, Local>(&storage, storage_id, &archive)
             .await
@@ -1270,14 +1272,14 @@ mod tests {
         // Alice creates a group and adds Bob as a Read member
         let (group_id, bob_individual_id) = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
+            let group = kh.generate_group::<Local>(vec![]).await.unwrap();
             let group_id = group.lock().await.group_id();
 
             // Get Bob's Individual on Alice's keyhive
             let bob_identifier = bob_id.to_identifier().unwrap();
             let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
 
-            kh.add_member(
+            kh.add_member::<Local>(
                 bob_agent,
                 &Membered::Group(group_id, group.clone()),
                 Access::Read,
@@ -1343,13 +1345,13 @@ mod tests {
         // Alice creates group, adds Bob, creates doc owned by group
         let doc_id = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
+            let group = kh.generate_group::<Local>(vec![]).await.unwrap();
             let group_id = group.lock().await.group_id();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
             let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
 
-            kh.add_member(
+            kh.add_member::<Local>(
                 bob_agent,
                 &Membered::Group(group_id, group.clone()),
                 Access::Read,
@@ -1359,7 +1361,7 @@ mod tests {
             .unwrap();
 
             let doc = kh
-                .generate_doc(
+                .generate_doc::<Local>(
                     vec![Peer::Group(group_id, group.clone())],
                     nonempty![[0u8; 32]],
                 )
@@ -1525,13 +1527,13 @@ mod tests {
         // Alice creates group and adds Bob
         let group_id = {
             let kh = alice_kh.lock().await;
-            let group = kh.generate_group(vec![]).await.unwrap();
+            let group = kh.generate_group::<Local>(vec![]).await.unwrap();
             let group_id = group.lock().await.group_id();
 
             let bob_identifier = bob_id.to_identifier().unwrap();
             let bob_agent = kh.get_agent(bob_identifier).await.unwrap();
 
-            kh.add_member(
+            kh.add_member::<Local>(
                 bob_agent,
                 &Membered::Group(group_id, group.clone()),
                 Access::Read,
@@ -1589,7 +1591,7 @@ mod tests {
             let group = kh.get_group(group_id).await.unwrap();
             let bob_identifier = bob_id.to_identifier().unwrap();
 
-            kh.revoke_member(bob_identifier, true, &Membered::Group(group_id, group))
+            kh.revoke_member::<Local>(bob_identifier, true, &Membered::Group(group_id, group))
                 .await
                 .unwrap();
         };
@@ -1625,15 +1627,15 @@ mod tests {
 
     #[tokio::test(flavor = "current_thread")]
     async fn three_peer_transitive_sync() {
-        let alice_keyhive = make_keyhive_local().await;
-        let bob_keyhive = make_keyhive_local().await;
-        let carol_keyhive = make_keyhive_local().await;
+        let alice_keyhive = make_keyhive().await;
+        let bob_keyhive = make_keyhive().await;
+        let carol_keyhive = make_keyhive().await;
 
         exchange_all_contact_cards(&[&alice_keyhive, &bob_keyhive, &carol_keyhive]).await;
 
-        let alice_id = keyhive_peer_id_local(&alice_keyhive);
-        let bob_id = keyhive_peer_id_local(&bob_keyhive);
-        let carol_id = keyhive_peer_id_local(&carol_keyhive);
+        let alice_id = keyhive_peer_id(&alice_keyhive);
+        let bob_id = keyhive_peer_id(&bob_keyhive);
+        let carol_id = keyhive_peer_id(&carol_keyhive);
 
         let (alice_proto, alice_kh, _) = make_protocol_with_shared_keyhive(alice_keyhive).await;
         let (bob_proto, bob_kh, _) = make_protocol_with_shared_keyhive(bob_keyhive).await;

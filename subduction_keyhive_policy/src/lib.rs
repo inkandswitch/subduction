@@ -83,43 +83,43 @@ pub enum PutDisallowedError {
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
 #[allow(missing_debug_implementations)]
 pub struct SubductionKeyhive<
-    K: FutureForm + ?Sized,
-    S: AsyncSigner + Clone,
+    K: FutureForm,
+    S: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + Clone,
+    C: CiphertextStore<T, P> + Clone,
     L: MembershipListener<K, S, T>,
     R: rand::CryptoRng + rand::RngCore,
->(Keyhive<K, S, T, P, C, L, R>);
+>(Keyhive<S, T, P, C, L, R>, core::marker::PhantomData<K>);
 
 impl<
-        K: FutureForm + ?Sized,
-        S: AsyncSigner + Clone,
+        K: FutureForm,
+        S: AsyncSigner<K, T> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<K, T, P> + Clone,
+        C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<K, S, T>,
         R: rand::CryptoRng + rand::RngCore,
     > SubductionKeyhive<K, S, T, P, C, L, R>
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
     #[must_use]
-    pub const fn new(keyhive: Keyhive<K, S, T, P, C, L, R>) -> Self {
-        Self(keyhive)
+    pub const fn new(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
+        Self(keyhive, core::marker::PhantomData)
     }
 
     /// Get a reference to the inner [`Keyhive`].
     #[must_use]
-    pub const fn keyhive(&self) -> &Keyhive<K, S, T, P, C, L, R> {
+    pub const fn keyhive(&self) -> &Keyhive<S, T, P, C, L, R> {
         &self.0
     }
 }
 
 impl<
-        S: AsyncSigner + Clone + Send + Sync,
+        S: AsyncSigner<Sendable, T> + Clone + Send + Sync,
         T: ContentRef + Send + Sync,
         P: for<'de> Deserialize<'de> + Send + Sync,
-        C: CiphertextStore<Sendable, T, P> + Clone + Send + Sync,
+        C: CiphertextStore<T, P> + Clone + Send + Sync,
         L: MembershipListener<Sendable, S, T> + Send + Sync,
         R: rand::CryptoRng + rand::RngCore + Send + Sync,
     > ConnectionPolicy<Sendable> for SubductionKeyhive<Sendable, S, T, P, C, L, R>
@@ -145,10 +145,10 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone + Send + Sync,
+        S: AsyncSigner<Sendable, T> + Clone + Send + Sync,
         T: ContentRef + Send + Sync,
         P: for<'de> Deserialize<'de> + Send + Sync,
-        C: CiphertextStore<Sendable, T, P> + Clone + Send + Sync,
+        C: CiphertextStore<T, P> + Clone + Send + Sync,
         L: MembershipListener<Sendable, S, T> + Send + Sync,
         R: rand::CryptoRng + rand::RngCore + Send + Sync,
     > StoragePolicy<Sendable> for SubductionKeyhive<Sendable, S, T, P, C, L, R>
@@ -260,29 +260,29 @@ impl<
 }
 
 impl<
-        K: FutureForm + ?Sized,
-        S: AsyncSigner + Clone,
+        K: FutureForm,
+        S: AsyncSigner<K, T> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<K, T, P> + Clone,
+        C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<K, S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > From<Keyhive<K, S, T, P, C, L, R>> for SubductionKeyhive<K, S, T, P, C, L, R>
+    > From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<K, S, T, P, C, L, R>
 {
-    fn from(keyhive: Keyhive<K, S, T, P, C, L, R>) -> Self {
-        SubductionKeyhive(keyhive)
+    fn from(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
+        SubductionKeyhive(keyhive, core::marker::PhantomData)
     }
 }
 
 impl<
-        K: FutureForm + ?Sized,
-        S: AsyncSigner + Clone,
+        K: FutureForm,
+        S: AsyncSigner<K, T> + Clone,
         T: ContentRef,
         P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<K, T, P> + Clone,
+        C: CiphertextStore<T, P> + Clone,
         L: MembershipListener<K, S, T>,
         R: rand::CryptoRng + rand::RngCore,
-    > From<SubductionKeyhive<K, S, T, P, C, L, R>> for Keyhive<K, S, T, P, C, L, R>
+    > From<SubductionKeyhive<K, S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
 {
     fn from(subduction_keyhive: SubductionKeyhive<K, S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0

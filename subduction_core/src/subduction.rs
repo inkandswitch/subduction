@@ -174,13 +174,13 @@ pub struct Subduction<
     S: Storage<F>,
     C: Connection<F> + PartialEq + Clone + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
     // Keyhive generics
     KContentRef: ContentRef = [u8; 32],
     KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
         KContentRef,
         KPayload,
     >,
@@ -223,7 +223,7 @@ pub struct Subduction<
     abort_listener_handle: AbortHandle,
 
     // Keyhive state
-    keyhive: Arc<Mutex<Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>>,
+    keyhive: Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>>,
     keyhive_storage: KStore,
     keyhive_peer_id: KeyhivePeerId,
     keyhive_contact_card: ContactCard,
@@ -251,14 +251,14 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef + serde::de::DeserializeOwned,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
-    KRng: CryptoRng + RngCore,
+    KRng: CryptoRng + RngCore + Send + 'static,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
 >
     Subduction<
@@ -277,6 +277,9 @@ impl<
         KRng,
         KStore,
     >
+where
+    keyhive_core::principal::active::Active<Sig, KContentRef, KListener>:
+        keyhive_core::principal::active::ActiveOps<F>,
 {
     /// Initialize a new `Subduction` with the given storage backend, policy, signer, depth metric, sharded `Sedimentree` map, and spawner.
     ///
@@ -300,7 +303,7 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
-        keyhive: Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
     ) -> Result<
         (
@@ -402,7 +405,7 @@ impl<
         sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
         max_pending_blob_requests: usize,
-        keyhive: Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
+        keyhive: Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>,
         keyhive_storage: KStore,
     ) -> Result<
         (
@@ -516,7 +519,7 @@ impl<
     #[allow(clippy::type_complexity)]
     pub fn keyhive(
         &self,
-    ) -> &Arc<Mutex<Keyhive<F, Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>> {
+    ) -> &Arc<Mutex<Keyhive<Sig, KContentRef, KPayload, KCiphertextStore, KListener, KRng>>> {
         &self.keyhive
     }
 
@@ -3277,12 +3280,12 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
@@ -3330,12 +3333,12 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
@@ -3387,12 +3390,12 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
@@ -3457,12 +3460,12 @@ pub trait SubductionFutureForm<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self> + AsyncSigner + Clone,
+    Sig: Signer<Self> + AsyncSigner<Self, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<Self, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Self, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
@@ -3490,12 +3493,12 @@ impl<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self> + AsyncSigner + Clone,
+    Sig: Signer<Self> + AsyncSigner<Self, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<Self, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Self, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
@@ -3541,12 +3544,12 @@ pub trait StartListener<
     S: Storage<Self>,
     C: Connection<Self> + PartialEq + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
-    Sig: Signer<Self> + AsyncSigner + Clone,
+    Sig: Signer<Self> + AsyncSigner<Self, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<Self, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<Self, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<Self> + KeyhiveEventStorage<Self>,
@@ -3615,12 +3618,18 @@ impl<
     C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
     S: Storage<Sendable> + Send + Sync + 'a,
     P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
-    Sig: Signer<Sendable> + AsyncSigner + Clone + Send + Sync + 'a,
+    Sig: Signer<Sendable>
+        + AsyncSigner<Sendable, KContentRef>
+        + AsyncSigner<Sendable, Vec<u8>>
+        + Clone
+        + Send
+        + Sync
+        + 'a,
     M: DepthMetric + Send + Sync + 'a,
     const N: usize,
     KContentRef: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     KPayload: for<'de> serde::Deserialize<'de> + Send + Sync + 'static,
-    KCiphertextStore: CiphertextStore<Sendable, KContentRef, KPayload> + Clone + Send + Sync + 'static,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + Send + Sync + 'static,
     KListener: MembershipListener<Sendable, Sig, KContentRef> + Send + Sync + 'static,
     KRng: CryptoRng + RngCore + Send + 'static,
     KStore: KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable> + Send + Sync + 'static,
@@ -3641,6 +3650,8 @@ impl<
         KStore,
     > for Sendable
 where
+    keyhive_core::principal::active::Active<Sig, KContentRef, KListener>:
+        keyhive_core::principal::active::ActiveOps<Sendable>,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
     S::Error: Send + 'static,
@@ -3718,14 +3729,18 @@ impl<
     C: Connection<Local> + PartialEq + Clone + 'static,
     S: Storage<Local> + 'a,
     P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
-    Sig: Signer<Local> + AsyncSigner + Clone + 'a,
+    Sig: Signer<Local>
+        + AsyncSigner<Local, KContentRef>
+        + AsyncSigner<Local, Vec<u8>>
+        + Clone
+        + 'a,
     M: DepthMetric + 'a,
     const N: usize,
     KContentRef: ContentRef + serde::de::DeserializeOwned + 'static,
     KPayload: for<'de> serde::Deserialize<'de> + 'static,
-    KCiphertextStore: CiphertextStore<Local, KContentRef, KPayload> + Clone + 'static,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone + 'static,
     KListener: MembershipListener<Local, Sig, KContentRef> + 'static,
-    KRng: CryptoRng + RngCore + 'static,
+    KRng: CryptoRng + RngCore + Send + 'static,
     KStore: KeyhiveArchiveStorage<Local> + KeyhiveEventStorage<Local> + 'static,
 >
     StartListener<
@@ -3743,6 +3758,9 @@ impl<
         KRng,
         KStore,
     > for Local
+where
+    keyhive_core::principal::active::Active<Sig, KContentRef, KListener>:
+        keyhive_core::principal::active::ActiveOps<Local>,
 {
     fn start_listener(
         subduction: Arc<
@@ -3834,12 +3852,12 @@ pub struct ListenerFuture<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize = 256,
     KContentRef: ContentRef = [u8; 32],
     KPayload: for<'de> serde::Deserialize<'de> = Vec<u8>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone = MemoryCiphertextStore<
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone = MemoryCiphertextStore<
         KContentRef,
         KPayload,
     >,
@@ -3883,12 +3901,12 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
@@ -3945,12 +3963,12 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
@@ -3999,12 +4017,12 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
@@ -4053,12 +4071,12 @@ impl<
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
-    Sig: Signer<F> + AsyncSigner + Clone,
+    Sig: Signer<F> + AsyncSigner<F, KContentRef> + Clone,
     M: DepthMetric,
     const N: usize,
     KContentRef: ContentRef,
     KPayload: for<'de> serde::Deserialize<'de>,
-    KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+    KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
     KListener: MembershipListener<F, Sig, KContentRef>,
     KRng: CryptoRng + RngCore,
     KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,

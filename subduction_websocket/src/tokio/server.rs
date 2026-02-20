@@ -59,7 +59,7 @@ pub enum SetupError {
 pub struct TokioWebSocketServer<
     S: 'static + Send + Sync + Storage<Sendable>,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
+    Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner<Sendable, [u8; 32]> + keyhive_core::crypto::signer::sync_signer::SyncSigner + Clone,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
     KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable> = MemoryKeyhiveStorage,
@@ -86,7 +86,13 @@ where
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
-    Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
+    Sig: 'static
+        + Send
+        + Sync
+        + Signer<Sendable>
+        + AsyncSigner<Sendable, [u8; 32]>
+        + keyhive_core::crypto::signer::sync_signer::SyncSigner
+        + Clone,
     M: 'static + Send + Sync + DepthMetric,
     O: 'static + Send + Sync + Timeout<Sendable> + Clone,
     S::Error: 'static + Send + Sync,
@@ -111,7 +117,13 @@ where
 impl<
         S: 'static + Send + Sync + Storage<Sendable>,
         P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-        Sig: 'static + Send + Sync + Signer<Sendable> + AsyncSigner + Clone,
+        Sig: 'static
+            + Send
+            + Sync
+            + Signer<Sendable>
+            + AsyncSigner<Sendable, [u8; 32]>
+            + keyhive_core::crypto::signer::sync_signer::SyncSigner
+            + Clone,
         M: 'static + Send + Sync + DepthMetric,
         O: 'static + Send + Sync + Timeout<Sendable> + Clone,
         KStore: 'static + Send + Sync + KeyhiveArchiveStorage<Sendable> + KeyhiveEventStorage<Sendable>,
@@ -301,7 +313,6 @@ where
         nonce_cache: NonceCache,
         depth_metric: M,
         keyhive: Keyhive<
-            Sendable,
             Sig,
             [u8; 32],
             Vec<u8>,

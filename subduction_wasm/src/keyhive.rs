@@ -317,7 +317,7 @@ impl PrekeyListener<Local> for WasmEventHandler {
 impl MembershipListener<Local, JsSigner, ChangeId> for WasmEventHandler {
     fn on_delegation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Delegation<Local, JsSigner, ChangeId, Self>>>,
+        data: &'a Arc<Signed<Delegation<JsSigner, ChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move {
             // Convert Delegation to StaticDelegation via Event -> StaticEvent
@@ -330,7 +330,7 @@ impl MembershipListener<Local, JsSigner, ChangeId> for WasmEventHandler {
 
     fn on_revocation<'a>(
         &'a self,
-        data: &'a Arc<Signed<Revocation<Local, JsSigner, ChangeId, Self>>>,
+        data: &'a Arc<Signed<Revocation<JsSigner, ChangeId, Self>>>,
     ) -> LocalBoxFuture<'a, ()> {
         Box::pin(async move {
             // Convert Revocation to StaticRevocation via Event -> StaticEvent
@@ -376,7 +376,6 @@ impl WasmCiphertextStore {
 
 /// The internal keyhive type used by Subduction.
 pub(crate) type InternalKeyhive = Keyhive<
-    Local,
     JsSigner,
     ChangeId,
     Vec<u8>,

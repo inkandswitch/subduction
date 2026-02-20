@@ -104,14 +104,14 @@ impl<
         S: Storage<F>,
         C: Connection<F> + PartialEq + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
-        Sig: Signer<F> + AsyncSigner + Clone,
+        Sig: Signer<F> + AsyncSigner<F, KContentRef> + AsyncSigner<F, Vec<u8>> + Clone,
         M: DepthMetric,
         const N: usize,
         KContentRef: ContentRef + serde::de::DeserializeOwned,
         KPayload: for<'de> serde::Deserialize<'de>,
-        KCiphertextStore: CiphertextStore<F, KContentRef, KPayload> + Clone,
+        KCiphertextStore: CiphertextStore<KContentRef, KPayload> + Clone,
         KListener: MembershipListener<F, Sig, KContentRef>,
-        KRng: CryptoRng + RngCore,
+        KRng: CryptoRng + RngCore + Send + 'static,
         KStore: KeyhiveArchiveStorage<F> + KeyhiveEventStorage<F>,
     >
     Subduction<
@@ -130,6 +130,9 @@ impl<
         KRng,
         KStore,
     >
+where
+    keyhive_core::principal::active::Active<Sig, KContentRef, KListener>:
+        keyhive_core::principal::active::ActiveOps<F>,
 {
     /// Initiate a keyhive sync with connected peers.
     ///
@@ -455,7 +458,7 @@ impl<
         let signed: Signed<Vec<u8>> = {
             let keyhive = self.keyhive.lock().await;
             keyhive
-                .try_sign(msg_bytes)
+                .try_sign_async::<F, _>(msg_bytes)
                 .await
                 .map_err(KeyhiveSyncError::Signing)?
         };
@@ -687,21 +690,21 @@ impl<
 
 /// Get sync-relevant events for an agent, excluding CGKA operations.
 async fn sync_events_for_agent<K, Signer, T, P, C, L, R>(
-    keyhive: &Keyhive<K, Signer, T, P, C, L, R>,
-    agent: &Agent<K, Signer, T, L>,
+    keyhive: &Keyhive<Signer, T, P, C, L, R>,
+    agent: &Agent<Signer, T, L>,
 ) -> Map<Digest<StaticEvent<T>>, StaticEvent<T>>
 where
-    K: future_form::FutureForm + ?Sized,
-    Signer: AsyncSigner + Clone,
+    K: future_form::FutureForm,
+    Signer: AsyncSigner<K, T> + Clone,
     T: ContentRef,
     P: for<'de> serde::Deserialize<'de>,
-    C: CiphertextStore<K, T, P> + Clone,
+    C: CiphertextStore<T, P> + Clone,
     L: MembershipListener<K, Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
 {
     // Membership ops
     #[allow(clippy::type_complexity)]
-    let mut ops: Map<Digest<Event<K, Signer, T, L>>, Event<K, Signer, T, L>> = keyhive
+    let mut ops: Map<Digest<Event<Signer, T, L>>, Event<Signer, T, L>> = keyhive
         .membership_ops_for_agent(agent)
         .await
         .into_iter()
@@ -711,7 +714,7 @@ where
     // Prekey ops
     for key_ops in keyhive.reachable_prekey_ops_for_agent(agent).await.values() {
         for key_op in key_ops {
-            let op = Event::<K, Signer, T, L>::from(key_op.as_ref().clone());
+            let op = Event::<Signer, T, L>::from(key_op.as_ref().clone());
             ops.insert(Digest::hash(&op), op);
         }
     }
