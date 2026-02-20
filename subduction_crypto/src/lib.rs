@@ -21,7 +21,7 @@
 //! - [`verified_meta`] — The `VerifiedMeta<T>` witness (includes blob verification)
 //! - [`cbor`] — CBOR encoding helpers for Ed25519 types
 
-#![no_std]
+#![cfg_attr(not(feature = "std"), no_std)]
 
 extern crate alloc;
 

@@ -88,7 +88,7 @@ use crate::{
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
     },
-    crypto::{BlobMismatch, Signed, VerifiedMeta, VerifiedSignature, signer::Signer},
+    crypto::{Signed, VerifiedMeta, VerifiedSignature, signer::Signer},
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -2033,7 +2033,16 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_commit_locally(&putter, verified, blob).await?;
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync commit blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_commit_locally(&putter, verified_meta)
+                            .await
+                            .map_err(IoError::Storage)?;
                     }
 
                     for (signed_fragment, blob) in missing_fragments {
@@ -2044,8 +2053,16 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_fragment_locally(&putter, verified, blob)
-                            .await?;
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync fragment blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_fragment_locally(&putter, verified_meta)
+                            .await
+                            .map_err(IoError::Storage)?;
                     }
 
                     // Update received stats (count what was offered, not verified)
@@ -2270,7 +2287,16 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_commit_locally(&putter, verified, blob).await?;
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync commit blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_commit_locally(&putter, verified_meta)
+                            .await
+                            .map_err(IoError::Storage)?;
                     }
 
                     for (signed_fragment, blob) in missing_fragments {
@@ -2281,8 +2307,16 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_fragment_locally(&putter, verified, blob)
-                            .await?;
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync fragment blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_fragment_locally(&putter, verified_meta)
+                            .await
+                            .map_err(IoError::Storage)?;
                     }
 
                     // Update received stats (count what was offered, not verified)
@@ -2652,9 +2686,16 @@ impl<
                                             continue;
                                         }
                                     };
-                                    self.insert_commit_locally(&putter, verified, blob)
+                                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                                        Ok(vm) => vm,
+                                        Err(e) => {
+                                            tracing::warn!("full sync commit blob mismatch: {e}");
+                                            continue;
+                                        }
+                                    };
+                                    self.insert_commit_locally(&putter, verified_meta)
                                         .await
-                                        ?;
+                                        .map_err(IoError::Storage)?;
                                 }
 
                                 for (signed_fragment, blob) in missing_fragments {
@@ -2667,9 +2708,16 @@ impl<
                                             continue;
                                         }
                                     };
-                                    self.insert_fragment_locally(&putter, verified, blob)
+                                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                                        Ok(vm) => vm,
+                                        Err(e) => {
+                                            tracing::warn!("full sync fragment blob mismatch: {e}");
+                                            continue;
+                                        }
+                                    };
+                                    self.insert_fragment_locally(&putter, verified_meta)
                                         .await
-                                        ?;
+                                        .map_err(IoError::Storage)?;
                                 }
 
                                 // Update received stats

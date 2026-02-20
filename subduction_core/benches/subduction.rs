@@ -42,7 +42,10 @@ mod generators {
         connection::message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncResult,
         },
-        crypto::{signed::Signed, signer::MemorySigner},
+        crypto::{
+            Signed,
+            signer::{MemorySigner, seal},
+        },
         peer::id::PeerId,
         storage::key::StorageKey,
     };
@@ -141,14 +144,14 @@ mod generators {
     pub(super) fn signed_loose_commit_from_seed(seed: u64) -> Signed<LooseCommit> {
         let signer = signer_from_seed(seed);
         let commit = loose_commit_from_seed(seed);
-        block_on(Signed::seal::<Sendable, _>(&signer, commit)).into_signed()
+        block_on(seal::<_, Sendable, _>(&signer, commit)).into_signed()
     }
 
     /// Generate a signed fragment from a seed.
     pub(super) fn signed_fragment_from_seed(seed: u64) -> Signed<Fragment> {
         let signer = signer_from_seed(seed);
         let fragment = fragment_from_seed(seed, 3, 10);
-        block_on(Signed::seal::<Sendable, _>(&signer, fragment)).into_signed()
+        block_on(seal::<_, Sendable, _>(&signer, fragment)).into_signed()
     }
 
     /// Generate a sync diff with commits and fragments.
@@ -163,7 +166,7 @@ mod generators {
         let missing_commits: Vec<(Signed<LooseCommit>, Blob)> = (0..num_commits)
             .map(|i| {
                 let commit = loose_commit_from_seed(seed.wrapping_add(i as u64));
-                let verified = block_on(Signed::seal::<Sendable, _>(&signer, commit));
+                let verified = block_on(seal::<_, Sendable, _>(&signer, commit));
                 let blob = blob_from_seed(seed.wrapping_add(1000 + i as u64), blob_size);
                 (verified.into_signed(), blob)
             })
@@ -172,7 +175,7 @@ mod generators {
         let missing_fragments: Vec<(Signed<Fragment>, Blob)> = (0..num_fragments)
             .map(|i| {
                 let fragment = fragment_from_seed(seed.wrapping_add(2000 + i as u64), 3, 10);
-                let verified = block_on(Signed::seal::<Sendable, _>(&signer, fragment));
+                let verified = block_on(seal::<_, Sendable, _>(&signer, fragment));
                 let blob = blob_from_seed(seed.wrapping_add(3000 + i as u64), blob_size * 4);
                 (verified.into_signed(), blob)
             })

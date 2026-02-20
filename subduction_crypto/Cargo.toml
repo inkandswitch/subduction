@@ -29,9 +29,9 @@ testresult = { workspace = true }
 
 [features]
 default = []
-arbitrary = ["dep:arbitrary"]
+arbitrary = ["dep:arbitrary", "std"]
 bolero = ["dep:bolero", "arbitrary", "std"]
-serde = ["dep:serde"]
+serde = ["dep:serde", "ed25519-dalek/serde"]
 std = [
   "ed25519-dalek/std",
   "minicbor/std",

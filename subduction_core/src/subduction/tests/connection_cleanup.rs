@@ -6,7 +6,7 @@ use crate::{
         nonce_cache::NonceCache,
         test_utils::{FailingSendMockConnection, MockConnection},
     },
-    crypto::signed::Signed,
+    crypto::{Signed, signer::seal},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -37,7 +37,7 @@ fn make_test_commit() -> (LooseCommit, Blob) {
 
 async fn make_signed_test_commit() -> (Signed<LooseCommit>, Blob) {
     let (commit, blob) = make_test_commit();
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
+    let verified = seal::<_, Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
 
@@ -54,7 +54,7 @@ fn make_test_fragment() -> (Fragment, Blob) {
 
 async fn make_signed_test_fragment() -> (Signed<Fragment>, Blob) {
     let (fragment, blob) = make_test_fragment();
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
+    let verified = seal::<_, Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob)
 }
 
