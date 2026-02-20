@@ -1,6 +1,6 @@
-//! Encode/decode `ed25519_dalek::VerifyingKey` as CBOR bytes.
+//! Encode/decode `ed25519_dalek::Signature` as CBOR bytes.
 
-/// Encode a `VerifyingKey` as CBOR bytes.
+/// Encode a `Signature` as CBOR bytes.
 ///
 /// # Errors
 ///
@@ -14,11 +14,11 @@ pub fn encode<Ctx, W: minicbor::encode::Write>(
     Ok(())
 }
 
-/// Decode a `VerifyingKey` from CBOR bytes.
+/// Decode a `Signature` from CBOR bytes.
 ///
 /// # Errors
 ///
-/// Returns an error if decoding fails or the bytes are not a valid key.
+/// Returns an error if decoding fails or the bytes are not a valid signature.
 pub fn decode<Ctx>(
     d: &mut minicbor::Decoder<'_>,
     _ctx: &mut Ctx,

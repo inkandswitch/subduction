@@ -6,6 +6,16 @@ use alloc::vec::Vec;
 
 use crate::crypto::digest::Digest;
 
+/// Types that claim a blob via metadata.
+///
+/// This trait is implemented by types that reference a blob and claim its
+/// size and content hash. Used by `VerifiedMeta` (in `subduction_crypto`) to
+/// verify that blob content matches the claimed metadata.
+pub trait ClaimsBlobMeta {
+    /// Returns the blob metadata claimed by this type.
+    fn claimed_blob_meta(&self) -> BlobMeta;
+}
+
 /// A binary object.
 ///
 /// Just a wrapper around a `Vec<u8>`.

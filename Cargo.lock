@@ -3151,10 +3151,26 @@ dependencies = [
  "serde",
  "siphasher",
  "subduction_core",
+ "subduction_crypto",
  "testresult",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "subduction_crypto"
+version = "0.1.0"
+dependencies = [
+ "arbitrary",
+ "bolero",
+ "ed25519-dalek",
+ "minicbor",
+ "sedimentree_core",
+ "serde",
+ "subduction_crypto",
+ "testresult",
+ "thiserror 2.0.18",
 ]
 
 [[package]]

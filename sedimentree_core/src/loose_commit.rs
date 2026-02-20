@@ -5,7 +5,10 @@ pub mod id;
 use alloc::collections::BTreeSet;
 use id::CommitId;
 
-use crate::{blob::BlobMeta, crypto::digest::Digest};
+use crate::{
+    blob::{BlobMeta, ClaimsBlobMeta},
+    crypto::digest::Digest,
+};
 
 /// The smallest unit of metadata in a Sedimentree.
 ///
@@ -63,5 +66,11 @@ impl LooseCommit {
     #[must_use]
     pub const fn blob_meta(&self) -> &BlobMeta {
         &self.blob_meta
+    }
+}
+
+impl ClaimsBlobMeta for LooseCommit {
+    fn claimed_blob_meta(&self) -> BlobMeta {
+        *self.blob_meta()
     }
 }

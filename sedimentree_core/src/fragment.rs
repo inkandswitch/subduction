@@ -9,14 +9,14 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::BlobMeta,
+    blob::{BlobMeta, ClaimsBlobMeta},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -166,6 +166,12 @@ impl Fragment {
     #[must_use]
     pub const fn fragment_id(&self) -> FragmentId {
         FragmentId::new(self.summary.head)
+    }
+}
+
+impl ClaimsBlobMeta for Fragment {
+    fn claimed_blob_meta(&self) -> BlobMeta {
+        self.summary().blob_meta()
     }
 }
 

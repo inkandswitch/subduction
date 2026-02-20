@@ -1,4 +1,4 @@
 //! CBOR encoding helpers for types not natively supported by minicbor.
 
-pub mod signature;
-pub mod verifying_key;
+// Re-export from subduction_crypto
+pub use subduction_crypto::cbor::{signature, verifying_key};

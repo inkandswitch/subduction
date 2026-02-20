@@ -5,7 +5,14 @@
 //! hardware security modules, remote signing services, etc.).
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
+use subduction_crypto::{
+    signed::{
+        encoded_payload::EncodedPayload, envelope::Envelope, magic::Magic,
+        protocol_version::ProtocolVersion,
+    },
+    Signed, VerifiedSignature,
+};
 
 use crate::peer::id::PeerId;
 
@@ -95,6 +102,43 @@ impl core::fmt::Debug for MemorySigner {
             .field("peer_id", &self.peer_id())
             .finish_non_exhaustive()
     }
+}
+
+/// Seal a payload with the given signer's cryptographic signature.
+///
+/// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
+/// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
+/// for wire transmission.
+///
+/// # Panics
+///
+/// Panics if CBOR encoding fails (should never happen for well-formed types).
+#[allow(clippy::expect_used)]
+pub async fn seal<T, K, S>(signer: &S, payload: T) -> VerifiedSignature<T>
+where
+    K: FutureForm,
+    S: Signer<K>,
+    T: minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>,
+{
+    let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
+    let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
+    let signature = signer.sign(&encoded).await;
+
+    // Decode payload back from encoded bytes (avoids Clone bound)
+    let decoded_envelope =
+        minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
+
+    let signed = Signed::new(
+        signer.verifying_key(),
+        signature,
+        EncodedPayload::new(encoded),
+    );
+
+    // Use the try_verify path which creates VerifiedSignature
+    // Since we just signed it, verification is guaranteed to succeed
+    signed
+        .try_verify()
+        .expect("self-signed payload should verify")
 }
 
 #[cfg(test)]
