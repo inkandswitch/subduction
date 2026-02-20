@@ -65,16 +65,6 @@ impl From<ed25519_dalek::VerifyingKey> for PeerId {
     }
 }
 
-/// Extension trait to get a [`PeerId`] from any [`Signer`].
-pub trait GetPeerId<K: FutureForm>: Signer<K> {
-    /// Get the peer ID derived from the verifying key.
-    fn peer_id(&self) -> PeerId {
-        PeerId::from(self.verifying_key())
-    }
-}
-
-impl<K: FutureForm, S: Signer<K>> GetPeerId<K> for S {}
-
 #[cfg(test)]
 mod tests {
     use super::*;

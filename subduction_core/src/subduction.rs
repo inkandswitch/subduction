@@ -89,7 +89,7 @@ use crate::{
         stats::{SendCount, SyncStats},
     },
     crypto::{Signed, VerifiedMeta, VerifiedSignature},
-    peer::id::{GetPeerId, PeerId},
+    peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
@@ -364,7 +364,7 @@ impl<
     /// Get this instance's peer ID (derived from the signer's verifying key).
     #[must_use]
     pub fn peer_id(&self) -> PeerId {
-        self.signer.peer_id()
+        PeerId::from(self.signer.verifying_key())
     }
 
     /// Returns a reference to the nonce cache for replay protection.

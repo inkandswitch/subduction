@@ -3,7 +3,8 @@
 use anyhow::Result;
 use sedimentree_fs_storage::FsStorage;
 use std::{path::PathBuf, time::Duration};
-use subduction_core::{connection::handshake::Audience, crypto::signer::MemorySigner};
+use subduction_core::{connection::handshake::Audience, peer::id::GetPeerId};
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;

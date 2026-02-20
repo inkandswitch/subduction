@@ -12,7 +12,7 @@ use alloc::vec::Vec;
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
 use js_sys::{Promise, Uint8Array};
-use subduction_core::crypto::signer::Signer;
+use subduction_crypto::signer::Signer;
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 

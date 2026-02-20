@@ -17,6 +17,7 @@ arbitrary = { workspace = true, optional = true, features = ["derive"] }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ed25519-dalek = { workspace = true }
 future_form = { workspace = true }
+futures = { workspace = true }
 getrandom = { workspace = true }
 minicbor = { workspace = true }
 sedimentree_core = { workspace = true }

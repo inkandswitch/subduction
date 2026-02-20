@@ -7,10 +7,11 @@ use sedimentree_fs_storage::FsStorage;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
     connection::nonce_cache::NonceCache,
-    crypto::signer::MemorySigner,
+    peer::id::GetPeerId,
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;

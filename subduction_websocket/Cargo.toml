@@ -26,6 +26,7 @@ futures-util = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["time"] }
 tokio-util = { workspace = true, optional = true }
