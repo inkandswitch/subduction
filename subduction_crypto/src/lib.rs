@@ -6,6 +6,7 @@
 //! - [`VerifiedSignature<T>`] — Witness that the signature is valid
 //! - [`VerifiedMeta<T>`] — Witness that signature is valid AND blob matches metadata
 //! - [`Signer<K>`] — Trait for signing data with an ed25519 key
+//! - [`Nonce`] — Random nonce for replay protection
 //!
 //! # Type-State Flow
 //!
@@ -17,11 +18,14 @@
 //!
 //! # Crate Organization
 //!
+//! - [`cbor`] — CBOR encoding helpers for Ed25519 types
+//! - [`nonce`] — Random nonces for replay protection
 //! - [`signed`] — The `Signed<T>` envelope and related types
 //! - [`signer`] — The `Signer<K>` trait for signing operations
-//! - [`verified_signature`] — The `VerifiedSignature<T>` witness
 //! - [`verified_meta`] — The `VerifiedMeta<T>` witness (includes blob verification)
-//! - [`cbor`] — CBOR encoding helpers for Ed25519 types
+//! - [`verified_signature`] — The `VerifiedSignature<T>` witness
+//!
+//! [`Nonce`]: nonce::Nonce
 
 #![cfg_attr(not(feature = "std"), no_std)]
 
