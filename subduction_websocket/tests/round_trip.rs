@@ -13,19 +13,20 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+use subduction_core::peer::id::PeerId;
 use subduction_core::{
     connection::{
-        Connection, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
+        authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache, Connection,
     },
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
-use subduction_crypto::signer::memory::MemorySigner;
+use subduction_crypto::signer::{memory::MemorySigner, Signer};
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -48,7 +49,7 @@ async fn rend_receive() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
@@ -127,7 +128,7 @@ async fn batch_sync() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 

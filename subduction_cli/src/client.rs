@@ -3,7 +3,7 @@
 use anyhow::Result;
 use sedimentree_fs_storage::FsStorage;
 use std::{path::PathBuf, time::Duration};
-use subduction_core::{connection::handshake::Audience, peer::id::GetPeerId};
+use subduction_core::{connection::handshake::Audience, peer::id::PeerId};
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
@@ -52,7 +52,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
         }
         None => MemorySigner::generate(),
     };
-    let peer_id = signer.peer_id();
+    let peer_id = PeerId::from(signer.verifying_key());
 
     let server_peer_id = crate::parse_peer_id(&args.server_peer_id)?;
 

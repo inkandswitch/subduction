@@ -11,19 +11,20 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
+use subduction_core::peer::id::PeerId;
 use subduction_core::{
     connection::{
-        Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
+        authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache, Connection, Reconnect,
     },
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
-use subduction_crypto::signer::memory::MemorySigner;
+use subduction_crypto::signer::{memory::MemorySigner, Signer};
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -70,7 +71,7 @@ async fn client_reconnect() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -154,7 +155,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -242,7 +243,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     init_tracing();
 
     let server_signer = test_signer(0);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -417,7 +418,7 @@ async fn request_with_delayed_response() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -530,7 +531,7 @@ async fn connection_to_invalid_address() -> TestResult {
     init_tracing();
 
     let client_signer = test_signer(1);
-    let fake_server_peer_id = test_signer(0).peer_id();
+    let fake_server_peer_id = PeerId::from(test_signer(0).verifying_key());
 
     // Try to connect to an address that's not listening
     let uri = "ws://127.0.0.1:9".parse()?; // Port 9 is discard protocol, unlikely to have WS server
@@ -556,7 +557,7 @@ async fn large_message_handling() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -684,7 +685,7 @@ async fn message_ordering() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -810,7 +811,7 @@ async fn server_try_connect_known_peer() -> TestResult {
 
     let server1_signer = test_signer(0);
     let server2_signer = test_signer(1);
-    let server2_peer_id = server2_signer.peer_id();
+    let server2_peer_id = PeerId::from(server2_signer.verifying_key());
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
     let server1 = TokioWebSocketServer::setup(
@@ -863,7 +864,7 @@ async fn server_try_connect_discover() -> TestResult {
 
     let server1_signer = test_signer(0);
     let server2_signer = test_signer(1);
-    let server2_peer_id = server2_signer.peer_id();
+    let server2_peer_id = PeerId::from(server2_signer.verifying_key());
 
     let service_name = "test.subduction.local";
 

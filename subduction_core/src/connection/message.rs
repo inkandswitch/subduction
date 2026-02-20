@@ -5,9 +5,9 @@ use alloc::vec::Vec;
 use sedimentree_core::{
     blob::Blob,
     crypto::{digest::Digest, fingerprint::Fingerprint},
-    fragment::{Fragment, id::FragmentId},
+    fragment::{id::FragmentId, Fragment},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 
@@ -336,8 +336,9 @@ mod tests {
 
     mod message_request_id {
         use super::*;
-        use crate::crypto::{Signed, signer::MemorySigner};
+        use crate::crypto::Signed;
         use future_form::Sendable;
+        use subduction_crypto::signer::memory::MemorySigner;
 
         fn test_signer() -> MemorySigner {
             MemorySigner::from_bytes(&[42u8; 32])
@@ -436,8 +437,9 @@ mod tests {
 
     mod sync_diff {
         use super::*;
-        use crate::crypto::{Signed, signer::MemorySigner};
+        use crate::crypto::Signed;
         use future_form::Sendable;
+        use subduction_crypto::signer::memory::MemorySigner;
 
         fn test_signer() -> MemorySigner {
             MemorySigner::from_bytes(&[42u8; 32])

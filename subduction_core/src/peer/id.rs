@@ -3,9 +3,6 @@
 use alloc::string::String;
 use core::fmt::Write;
 
-use future_form::FutureForm;
-use subduction_crypto::signer::Signer;
-
 /// A Peer ID.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -118,10 +115,9 @@ mod tests {
             let hex = format!("{peer_id}");
 
             assert!(hex.starts_with("ab")); // lowercase
-            assert!(
-                hex.chars()
-                    .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase())
-            );
+            assert!(hex
+                .chars()
+                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()));
         }
 
         #[test]

@@ -35,7 +35,7 @@ use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 
 use async_tungstenite::WebSocketStream;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures_util::{AsyncRead, AsyncWrite, SinkExt, StreamExt};
 use subduction_core::connection::handshake::Handshake;
 use thiserror::Error;
@@ -146,9 +146,10 @@ mod tests {
         connection::handshake::{
             Audience, Challenge, HandshakeMessage, Rejection, RejectionReason,
         },
-        crypto::{Signed, nonce::Nonce, signer::MemorySigner},
+        crypto::{nonce::Nonce, Signed},
         timestamp::TimestampSeconds,
     };
+    use subduction_crypto::signer::memory::MemorySigner;
 
     fn test_signer(seed: u8) -> MemorySigner {
         MemorySigner::from_bytes(&[seed; 32])

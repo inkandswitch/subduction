@@ -65,10 +65,10 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{
     connection::nonce_cache::NonceCache,
-    crypto::{Signed, nonce::Nonce},
+    crypto::{nonce::Nonce, Signed},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
@@ -1017,8 +1017,9 @@ mod tests {
 
     mod executor {
         use super::*;
+        use crate::peer::id::PeerId;
         use future_form::Sendable;
-        use subduction_crypto::signer::memory::MemorySigner;
+        use subduction_crypto::signer::{memory::MemorySigner, Signer};
 
         fn test_signer(seed: u8) -> MemorySigner {
             MemorySigner::from_bytes(&[seed; 32])
@@ -1042,7 +1043,10 @@ mod tests {
                 verify_challenge(&signed_challenge, &audience, now, MAX_PLAUSIBLE_DRIFT)
                     .expect("challenge should verify");
 
-            assert_eq!(verified_challenge.client_id, client_signer.peer_id());
+            assert_eq!(
+                verified_challenge.client_id,
+                PeerId::from(client_signer.verifying_key())
+            );
             assert_eq!(verified_challenge.challenge.nonce, nonce);
 
             // Server creates response
@@ -1055,7 +1059,10 @@ mod tests {
             let verified_response = verify_response(&signed_response, &original_challenge)
                 .expect("response should verify");
 
-            assert_eq!(verified_response.server_id, server_signer.peer_id());
+            assert_eq!(
+                verified_response.server_id,
+                PeerId::from(server_signer.verifying_key())
+            );
         }
 
         #[tokio::test]

@@ -29,6 +29,7 @@ arbitrary = { workspace = true, optional = false, features = ["derive"] }
 bolero = { workspace = true, features = ["arbitrary"] }
 subduction_crypto = { path = ".", features = ["bolero"] }
 testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
 
 [features]
 default = []
