@@ -9,7 +9,7 @@ use alloc::collections::BTreeSet;
 use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
-    crypto::{Signed, signer::Signer},
+    crypto::{Signed, signer::seal},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -34,7 +34,7 @@ async fn make_valid_commit(data: &[u8]) -> (Signed<LooseCommit>, Blob) {
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = test_signer().seal(commit).await;
+    let verified = seal::<_, Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
 
@@ -46,7 +46,7 @@ async fn make_mismatched_commit() -> (Signed<LooseCommit>, Blob) {
     let blob_meta = BlobMeta::new(claimed_data);
     let digest = Digest::<LooseCommit>::hash_bytes(claimed_data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = test_signer().seal(commit).await;
+    let verified = seal::<_, Sendable, _>(&test_signer(), commit).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different data";
@@ -62,7 +62,7 @@ async fn make_valid_fragment(data: &[u8]) -> (Signed<Fragment>, Blob) {
     let head = Digest::<LooseCommit>::hash_bytes(b"head");
     let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
     let fragment = Fragment::new(head, boundary, &[], blob_meta);
-    let verified = test_signer().seal(fragment).await;
+    let verified = seal::<_, Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob)
 }
 
@@ -74,7 +74,7 @@ async fn make_mismatched_fragment() -> (Signed<Fragment>, Blob) {
     let head = Digest::<LooseCommit>::hash_bytes(b"head");
     let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
     let fragment = Fragment::new(head, boundary, &[], blob_meta);
-    let verified = test_signer().seal(fragment).await;
+    let verified = seal::<_, Sendable, _>(&test_signer(), fragment).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different fragment data";

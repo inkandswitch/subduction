@@ -147,7 +147,6 @@ mod tests {
             Audience, Challenge, HandshakeMessage, Rejection, RejectionReason,
         },
         crypto::{
-            Signed,
             nonce::Nonce,
             signer::{MemorySigner, seal},
         },

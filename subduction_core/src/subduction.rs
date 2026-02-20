@@ -88,7 +88,10 @@ use crate::{
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
     },
-    crypto::{Signed, VerifiedMeta, VerifiedSignature, signer::Signer},
+    crypto::{
+        Signed, VerifiedMeta, VerifiedSignature,
+        signer::{Signer, seal},
+    },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -1238,13 +1241,13 @@ impl<
         // Sign all commits and fragments with our signer (seal returns Verified)
         let mut verified_commits = Vec::with_capacity(sedimentree.loose_commits().count());
         for commit in sedimentree.loose_commits() {
-            let verified = self.signer.seal(commit.clone()).await;
+            let verified = seal::<_, F, _>(&self.signer, commit.clone()).await;
             verified_commits.push(verified);
         }
 
         let mut verified_fragments = Vec::with_capacity(sedimentree.fragments().count());
         for fragment in sedimentree.fragments() {
-            let verified = self.signer.seal(fragment.clone()).await;
+            let verified = seal::<_, F, _>(&self.signer, fragment.clone()).await;
             verified_fragments.push(verified);
         }
 
@@ -1328,7 +1331,7 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = self.signer.seal(commit.clone()).await;
+        let verified = seal::<_, F, _>(&self.signer, commit.clone()).await;
         let signed_for_wire = verified.signed().clone();
 
         // For locally created commits, blob always matches (we just created it)
@@ -1412,7 +1415,7 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = self.signer.seal(fragment.clone()).await;
+        let verified = seal::<_, F, _>(&self.signer, fragment.clone()).await;
         let signed_for_wire = verified.signed().clone();
 
         // For locally created fragments, blob always matches (we just created it)

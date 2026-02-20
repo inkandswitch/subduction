@@ -22,6 +22,15 @@ use crate::peer::id::PeerId;
 /// - Key derivation schemes
 ///
 /// For synchronous signers like [`MemorySigner`], the async overhead is negligible.
+///
+/// # Sealing Payloads
+///
+/// Use the [`seal`] free function to sign a payload. The `K` type parameter
+/// determines whether the future is `Send` (`Sendable`) or not (`Local`):
+///
+/// ```ignore
+/// seal::<_, Sendable, _>(&signer, payload).await
+/// ```
 pub trait Signer<K: FutureForm> {
     /// Sign the given message bytes.
     fn sign(&self, message: &[u8]) -> K::Future<'_, Signature>;
@@ -33,36 +42,38 @@ pub trait Signer<K: FutureForm> {
     fn peer_id(&self) -> PeerId {
         PeerId::from(self.verifying_key())
     }
+}
 
-    /// Seal a payload with this signer's cryptographic signature.
-    ///
-    /// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
-    /// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
-    /// for wire transmission.
-    ///
-    /// # Panics
-    ///
-    /// Panics if CBOR encoding fails (should never happen for well-formed types).
-    #[allow(clippy::expect_used)]
-    async fn seal<T>(&self, payload: T) -> VerifiedSignature<T>
-    where
-        T: minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>,
-    {
-        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
-        let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
-        let signature = self.sign(&encoded).await;
+/// Seal a payload with the given signer's cryptographic signature.
+///
+/// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
+/// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
+/// for wire transmission.
+///
+/// # Panics
+///
+/// Panics if CBOR encoding fails (should never happen for well-formed types).
+#[allow(clippy::expect_used)]
+pub async fn seal<T, K, S>(signer: &S, payload: T) -> VerifiedSignature<T>
+where
+    K: FutureForm,
+    S: Signer<K>,
+    T: minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>,
+{
+    let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
+    let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
+    let signature = signer.sign(&encoded).await;
 
-        let signed = Signed::new(
-            self.verifying_key(),
-            signature,
-            EncodedPayload::new(encoded),
-        );
+    let signed = Signed::new(
+        signer.verifying_key(),
+        signature,
+        EncodedPayload::new(encoded),
+    );
 
-        // Since we just signed it, verification is guaranteed to succeed
-        signed
-            .try_verify()
-            .expect("self-signed payload should verify")
-    }
+    // Since we just signed it, verification is guaranteed to succeed
+    signed
+        .try_verify()
+        .expect("self-signed payload should verify")
 }
 
 /// An in-memory signer that holds an ed25519 signing key.
