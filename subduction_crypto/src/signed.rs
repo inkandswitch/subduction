@@ -1,25 +1,19 @@
 //! Signed payloads.
 
-/// CBOR-encoded payload bytes with phantom type tracking.
-pub mod encoded_payload;
+mod encoded_payload;
+mod envelope;
+mod magic;
+mod protocol_version;
 
-/// Envelope wrapper with magic bytes and protocol version.
-pub mod envelope;
-
-/// Magic bytes for signed payload identification.
-pub mod magic;
-
-/// Protocol version for signed payload format evolution.
-pub mod protocol_version;
+pub use encoded_payload::EncodedPayload;
+pub use envelope::Envelope;
+pub use magic::Magic;
+pub use protocol_version::ProtocolVersion;
 
 use core::cmp::Ordering;
 
 use thiserror::Error;
 
-use self::{
-    encoded_payload::EncodedPayload, envelope::Envelope, magic::Magic,
-    protocol_version::ProtocolVersion,
-};
 use crate::verified_signature::VerifiedSignature;
 
 /// A signed payload with its issuer and signature.

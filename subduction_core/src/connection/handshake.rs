@@ -68,11 +68,7 @@ use thiserror::Error;
 use super::{Connection, authenticated::Authenticated};
 use crate::{
     connection::nonce_cache::NonceCache,
-    crypto::{
-        Signed,
-        nonce::Nonce,
-        signer::{Signer, seal},
-    },
+    crypto::{Signed, nonce::Nonce, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };

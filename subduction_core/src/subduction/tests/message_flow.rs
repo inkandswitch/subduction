@@ -12,7 +12,7 @@ use alloc::collections::BTreeSet;
 use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
-    crypto::{Signed, signer::seal},
+    crypto::{Signed, signer::Signer},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -35,7 +35,7 @@ async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) 
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = seal::<_, Sendable, _>(&test_signer(), commit).await;
+    let verified = test_signer().seal(commit).await;
     (verified.into_signed(), blob)
 }
 

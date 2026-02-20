@@ -10,7 +10,7 @@ use thiserror::Error;
 pub struct Magic;
 
 /// The magic byte sequence `SDN` identifying Subduction signed payloads.
-pub const MAGIC: &[u8] = b"SDN";
+const MAGIC: &[u8] = b"SDN";
 
 impl TryFrom<&[u8]> for Magic {
     type Error = InvalidMagicError;

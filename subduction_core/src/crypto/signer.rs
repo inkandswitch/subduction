@@ -8,10 +8,7 @@ use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use future_form::{FutureForm, Local, Sendable, future_form};
 use subduction_crypto::{
     Signed, VerifiedSignature,
-    signed::{
-        encoded_payload::EncodedPayload, envelope::Envelope, magic::Magic,
-        protocol_version::ProtocolVersion,
-    },
+    signed::{EncodedPayload, Envelope, Magic, ProtocolVersion},
 };
 
 use crate::peer::id::PeerId;
@@ -35,6 +32,36 @@ pub trait Signer<K: FutureForm> {
     /// Get the peer ID derived from the verifying key.
     fn peer_id(&self) -> PeerId {
         PeerId::from(self.verifying_key())
+    }
+
+    /// Seal a payload with this signer's cryptographic signature.
+    ///
+    /// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
+    /// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
+    /// for wire transmission.
+    ///
+    /// # Panics
+    ///
+    /// Panics if CBOR encoding fails (should never happen for well-formed types).
+    #[allow(clippy::expect_used)]
+    async fn seal<T>(&self, payload: T) -> VerifiedSignature<T>
+    where
+        T: minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>,
+    {
+        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
+        let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
+        let signature = self.sign(&encoded).await;
+
+        let signed = Signed::new(
+            self.verifying_key(),
+            signature,
+            EncodedPayload::new(encoded),
+        );
+
+        // Since we just signed it, verification is guaranteed to succeed
+        signed
+            .try_verify()
+            .expect("self-signed payload should verify")
     }
 }
 
@@ -102,38 +129,6 @@ impl core::fmt::Debug for MemorySigner {
             .field("peer_id", &self.peer_id())
             .finish_non_exhaustive()
     }
-}
-
-/// Seal a payload with the given signer's cryptographic signature.
-///
-/// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
-/// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
-/// for wire transmission.
-///
-/// # Panics
-///
-/// Panics if CBOR encoding fails (should never happen for well-formed types).
-#[allow(clippy::expect_used)]
-pub async fn seal<T, K, S>(signer: &S, payload: T) -> VerifiedSignature<T>
-where
-    K: FutureForm,
-    S: Signer<K>,
-    T: minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>,
-{
-    let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
-    let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
-    let signature = signer.sign(&encoded).await;
-
-    let signed = Signed::new(
-        signer.verifying_key(),
-        signature,
-        EncodedPayload::new(encoded),
-    );
-
-    // Since we just signed it, verification is guaranteed to succeed
-    signed
-        .try_verify()
-        .expect("self-signed payload should verify")
 }
 
 #[cfg(test)]
