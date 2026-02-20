@@ -6,7 +6,7 @@ use alloc::collections::BTreeSet;
 use id::CommitId;
 
 use crate::{
-    blob::{BlobMeta, ClaimsBlobMeta},
+    blob::{BlobMeta, HasBlobMeta},
     crypto::digest::Digest,
 };
 
@@ -69,8 +69,8 @@ impl LooseCommit {
     }
 }
 
-impl ClaimsBlobMeta for LooseCommit {
-    fn claimed_blob_meta(&self) -> BlobMeta {
-        *self.blob_meta()
+impl HasBlobMeta for LooseCommit {
+    fn blob_meta(&self) -> BlobMeta {
+        self.blob_meta
     }
 }

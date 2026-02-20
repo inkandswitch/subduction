@@ -1,6 +1,6 @@
 //! A payload whose signature is valid AND whose blob matches the claimed metadata.
 
-use sedimentree_core::blob::{Blob, BlobMeta, ClaimsBlobMeta};
+use sedimentree_core::blob::{Blob, BlobMeta, HasBlobMeta};
 use thiserror::Error;
 
 use crate::{Signed, VerifiedSignature};
@@ -42,7 +42,7 @@ pub struct BlobMismatch {
 
 impl<T> VerifiedMeta<T>
 where
-    T: ClaimsBlobMeta + for<'a> minicbor::Decode<'a, ()>,
+    T: HasBlobMeta + for<'a> minicbor::Decode<'a, ()>,
 {
     /// Create a `VerifiedMeta<T>` after verifying the blob matches the claimed metadata.
     ///
@@ -52,7 +52,7 @@ where
     /// the metadata claimed by the payload.
     pub fn new(verified: VerifiedSignature<T>, blob: Blob) -> Result<Self, BlobMismatch> {
         let actual = blob.meta();
-        let claimed = verified.payload().claimed_blob_meta();
+        let claimed = verified.payload().blob_meta();
         if actual != claimed {
             return Err(BlobMismatch { claimed, actual });
         }

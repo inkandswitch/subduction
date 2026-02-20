@@ -1515,9 +1515,19 @@ impl<
 
         let signed_for_wire = verified.signed().clone();
 
+        // Verify blob matches claimed metadata
+        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
+            Ok(vm) => vm,
+            Err(e) => {
+                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
+                return Err(IoError::BlobMismatch(e));
+            }
+        };
+
         let was_new = self
-            .insert_commit_locally(&putter, verified, blob.clone())
-            .await?;
+            .insert_commit_locally(&putter, verified_meta)
+            .await
+            .map_err(IoError::Storage)?;
 
         if was_new {
             let msg = Message::LooseCommit {
@@ -1592,9 +1602,19 @@ impl<
         // Clone signed for forwarding before consuming verified
         let signed_for_wire = verified.signed().clone();
 
+        // Verify blob matches claimed metadata
+        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
+            Ok(vm) => vm,
+            Err(e) => {
+                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
+                return Err(IoError::BlobMismatch(e));
+            }
+        };
+
         let was_new = self
-            .insert_fragment_locally(&putter, verified, blob.clone())
-            .await?;
+            .insert_fragment_locally(&putter, verified_meta)
+            .await
+            .map_err(IoError::Storage)?;
 
         if was_new {
             let msg = Message::Fragment {
@@ -1840,7 +1860,16 @@ impl<
                     continue;
                 }
             };
-            self.insert_commit_locally(&putter, verified, blob).await?;
+            let verified_meta = match VerifiedMeta::new(verified, blob) {
+                Ok(vm) => vm,
+                Err(e) => {
+                    tracing::warn!("batch sync commit blob mismatch: {e}");
+                    continue;
+                }
+            };
+            self.insert_commit_locally(&putter, verified_meta)
+                .await
+                .map_err(IoError::Storage)?;
         }
 
         for (signed_fragment, blob) in diff.missing_fragments {
@@ -1851,8 +1880,16 @@ impl<
                     continue;
                 }
             };
-            self.insert_fragment_locally(&putter, verified, blob)
-                .await?;
+            let verified_meta = match VerifiedMeta::new(verified, blob) {
+                Ok(vm) => vm,
+                Err(e) => {
+                    tracing::warn!("batch sync fragment blob mismatch: {e}");
+                    continue;
+                }
+            };
+            self.insert_fragment_locally(&putter, verified_meta)
+                .await
+                .map_err(IoError::Storage)?;
         }
 
         Ok(())
@@ -2403,7 +2440,16 @@ impl<
                             continue;
                         }
                     };
-                    self.insert_commit_locally(&putter, verified, blob).await?;
+                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                        Ok(vm) => vm,
+                        Err(e) => {
+                            tracing::warn!("sync commit blob mismatch: {e}");
+                            continue;
+                        }
+                    };
+                    self.insert_commit_locally(&putter, verified_meta)
+                        .await
+                        .map_err(IoError::Storage)?;
                 }
 
                 for (signed_fragment, blob) in missing_fragments {
@@ -2414,8 +2460,16 @@ impl<
                             continue;
                         }
                     };
-                    self.insert_fragment_locally(&putter, verified, blob)
-                        .await?;
+                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                        Ok(vm) => vm,
+                        Err(e) => {
+                            tracing::warn!("sync fragment blob mismatch: {e}");
+                            continue;
+                        }
+                    };
+                    self.insert_fragment_locally(&putter, verified_meta)
+                        .await
+                        .map_err(IoError::Storage)?;
                 }
 
                 // Update received stats
