@@ -128,11 +128,50 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
 }
 
 impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
+    /// Seal a payload with the given signer's cryptographic signature.
+    ///
+    /// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
+    /// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
+    /// for wire transmission.
+    ///
+    /// The `K` type parameter determines whether the future is `Send` (`Sendable`)
+    /// or `!Send` (`Local`). Specify it with turbofish syntax:
+    ///
+    /// ```ignore
+    /// Signed::seal::<Sendable, _>(&signer, payload).await
+    /// ```
+    ///
+    /// # Panics
+    ///
+    /// Panics if CBOR encoding fails (should never happen for well-formed types).
+    #[allow(clippy::expect_used)]
+    pub async fn seal<K, S>(signer: &S, payload: T) -> VerifiedSignature<T>
+    where
+        K: future_form::FutureForm,
+        S: crate::signer::Signer<K>,
+    {
+        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
+        let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
+        let signature = signer.sign(&encoded).await;
+
+        // Decode payload back from encoded bytes (avoids Clone bound on T)
+        let decoded_envelope =
+            minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
+
+        let signed = Self {
+            issuer: signer.verifying_key(),
+            signature,
+            encoded_payload: EncodedPayload::new(encoded),
+        };
+
+        // We just signed it, so we know it's valid — no need to verify
+        VerifiedSignature::new(signed, decoded_envelope.into_payload())
+    }
+
     /// Create a signed payload from raw components.
     ///
     /// This is a low-level constructor. Most callers should use
-    /// [`seal`](crate::seal) from `subduction_core` which handles
-    /// async signing.
+    /// [`seal`](Self::seal) instead.
     ///
     /// # Panics
     ///

@@ -6,75 +6,21 @@
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use future_form::{FutureForm, Local, Sendable, future_form};
-use subduction_crypto::{
-    Signed, VerifiedSignature,
-    signed::{EncodedPayload, Envelope, Magic, ProtocolVersion},
-};
 
 use crate::peer::id::PeerId;
 
-/// A trait for signing data with an ed25519 key.
-///
-/// This abstraction allows different key management strategies:
-/// - In-memory keys via [`MemorySigner`]
-/// - Hardware security modules
-/// - Remote signing services
-/// - Key derivation schemes
-///
-/// For synchronous signers like [`MemorySigner`], the async overhead is negligible.
-///
-/// # Sealing Payloads
-///
-/// Use the [`seal`] free function to sign a payload. The `K` type parameter
-/// determines whether the future is `Send` (`Sendable`) or not (`Local`):
-///
-/// ```ignore
-/// seal::<_, Sendable, _>(&signer, payload).await
-/// ```
-pub trait Signer<K: FutureForm> {
-    /// Sign the given message bytes.
-    fn sign(&self, message: &[u8]) -> K::Future<'_, Signature>;
+// Re-export the Signer trait from subduction_crypto
+pub use subduction_crypto::Signer;
 
-    /// Get the verifying (public) key corresponding to this signer.
-    fn verifying_key(&self) -> VerifyingKey;
-
+/// Extension trait adding `peer_id()` to any `Signer`.
+pub trait GetPeerId<K: FutureForm>: Signer<K> {
     /// Get the peer ID derived from the verifying key.
     fn peer_id(&self) -> PeerId {
         PeerId::from(self.verifying_key())
     }
 }
 
-/// Seal a payload with the given signer's cryptographic signature.
-///
-/// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
-/// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
-/// for wire transmission.
-///
-/// # Panics
-///
-/// Panics if CBOR encoding fails (should never happen for well-formed types).
-#[allow(clippy::expect_used)]
-pub async fn seal<T, K, S>(signer: &S, payload: T) -> VerifiedSignature<T>
-where
-    K: FutureForm,
-    S: Signer<K>,
-    T: minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>,
-{
-    let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
-    let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
-    let signature = signer.sign(&encoded).await;
-
-    let signed = Signed::new(
-        signer.verifying_key(),
-        signature,
-        EncodedPayload::new(encoded),
-    );
-
-    // Since we just signed it, verification is guaranteed to succeed
-    signed
-        .try_verify()
-        .expect("self-signed payload should verify")
-}
+impl<K: FutureForm, S: Signer<K>> GetPeerId<K> for S {}
 
 /// An in-memory signer that holds an ed25519 signing key.
 #[derive(Clone)]

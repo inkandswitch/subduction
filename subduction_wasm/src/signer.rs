@@ -41,7 +41,8 @@ impl JsSigner {
     /// Get the peer ID derived from this signer's verifying key.
     #[must_use]
     pub fn peer_id(&self) -> WasmPeerId {
-        WasmPeerId::from(<Self as Signer<Local>>::peer_id(self))
+        use subduction_core::peer::id::PeerId;
+        WasmPeerId::from(PeerId::from(Signer::<Local>::verifying_key(self)))
     }
 }
 

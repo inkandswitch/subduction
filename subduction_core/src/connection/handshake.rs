@@ -68,11 +68,7 @@ use thiserror::Error;
 use super::{Connection, authenticated::Authenticated};
 use crate::{
     connection::nonce_cache::NonceCache,
-    crypto::{
-        Signed,
-        nonce::Nonce,
-        signer::{Signer, seal},
-    },
+    crypto::{Signed, nonce::Nonce, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
@@ -559,7 +555,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
 ) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
-    let signed_challenge = seal::<_, K, _>(signer, challenge).await.into_signed();
+    let signed_challenge = Signed::seal::<K, _>(signer, challenge).await.into_signed();
     let msg = HandshakeMessage::SignedChallenge(signed_challenge);
     let bytes = minicbor::to_vec(&msg).expect("challenge encoding should not fail");
     handshake
@@ -743,7 +739,7 @@ pub async fn create_challenge<K: FutureForm, S: Signer<K>>(
     nonce: Nonce,
 ) -> Signed<Challenge> {
     let challenge = Challenge::new(audience, now, nonce);
-    seal::<_, K, _>(signer, challenge).await.into_signed()
+    Signed::seal::<K, _>(signer, challenge).await.into_signed()
 }
 
 /// Result of verifying a challenge on the server side.
@@ -795,7 +791,7 @@ pub async fn create_response<K: FutureForm, S: Signer<K>>(
     now: TimestampSeconds,
 ) -> Signed<Response> {
     let response = Response::for_challenge(challenge, now);
-    seal::<_, K, _>(signer, response).await.into_signed()
+    Signed::seal::<K, _>(signer, response).await.into_signed()
 }
 
 /// Result of verifying a response on the client side.

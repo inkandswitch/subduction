@@ -5,6 +5,7 @@
 //! - [`Signed<T>`] — A payload with an Ed25519 signature (unverified)
 //! - [`VerifiedSignature<T>`] — Witness that the signature is valid
 //! - [`VerifiedMeta<T>`] — Witness that signature is valid AND blob matches metadata
+//! - [`Signer<K>`] — Trait for signing data with an ed25519 key
 //!
 //! # Type-State Flow
 //!
@@ -17,6 +18,7 @@
 //! # Crate Organization
 //!
 //! - [`signed`] — The `Signed<T>` envelope and related types
+//! - [`signer`] — The `Signer<K>` trait for signing operations
 //! - [`verified_signature`] — The `VerifiedSignature<T>` witness
 //! - [`verified_meta`] — The `VerifiedMeta<T>` witness (includes blob verification)
 //! - [`cbor`] — CBOR encoding helpers for Ed25519 types
@@ -27,9 +29,11 @@ extern crate alloc;
 
 pub mod cbor;
 pub mod signed;
+pub mod signer;
 pub mod verified_meta;
 pub mod verified_signature;
 
 pub use signed::Signed;
+pub use signer::Signer;
 pub use verified_meta::VerifiedMeta;
 pub use verified_signature::VerifiedSignature;

@@ -146,10 +146,7 @@ mod tests {
         connection::handshake::{
             Audience, Challenge, HandshakeMessage, Rejection, RejectionReason,
         },
-        crypto::{
-            nonce::Nonce,
-            signer::{MemorySigner, seal},
-        },
+        crypto::{Signed, nonce::Nonce, signer::MemorySigner},
         timestamp::TimestampSeconds,
     };
 
@@ -168,7 +165,7 @@ mod tests {
                 TimestampSeconds::new(1000),
                 Nonce::from_u128(42),
             );
-            let signed_challenge = seal::<_, Sendable, _>(&test_signer, challenge)
+            let signed_challenge = Signed::seal::<Sendable, _>(&test_signer, challenge)
                 .await
                 .into_signed();
             let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());

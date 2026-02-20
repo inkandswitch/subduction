@@ -20,7 +20,7 @@ use crate::{
         nonce_cache::NonceCache,
         test_utils::ChannelMockConnection,
     },
-    crypto::{Signed, signer::seal},
+    crypto::Signed,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -53,7 +53,7 @@ async fn make_test_commit(data: &[u8]) -> (Signed<LooseCommit>, Blob, LooseCommi
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = seal::<_, Sendable, _>(&test_signer(), commit.clone()).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit.clone()).await;
     (verified.into_signed(), blob, commit)
 }
 
@@ -64,7 +64,7 @@ async fn make_test_fragment(data: &[u8]) -> (Signed<Fragment>, Blob, FragmentSum
     let head = Digest::<LooseCommit>::hash_bytes(data);
     let fragment = Fragment::new(head, BTreeSet::new(), &[], blob_meta);
     let summary = fragment.summary().clone();
-    let verified = seal::<_, Sendable, _>(&test_signer(), fragment).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob, summary)
 }
 

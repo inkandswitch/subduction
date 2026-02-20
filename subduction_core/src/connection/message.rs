@@ -336,7 +336,7 @@ mod tests {
 
     mod message_request_id {
         use super::*;
-        use crate::crypto::signer::{MemorySigner, seal};
+        use crate::crypto::{Signed, signer::MemorySigner};
         use future_form::Sendable;
 
         fn test_signer() -> MemorySigner {
@@ -351,7 +351,9 @@ mod tests {
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_commit = seal::<_, Sendable, _>(&signer, commit).await.into_signed();
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
             let msg = Message::LooseCommit {
                 id: SedimentreeId::new([1u8; 32]),
                 commit: signed_commit,
@@ -369,7 +371,7 @@ mod tests {
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_fragment = seal::<_, Sendable, _>(&signer, fragment)
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
                 .await
                 .into_signed();
             let msg = Message::Fragment {
@@ -434,7 +436,7 @@ mod tests {
 
     mod sync_diff {
         use super::*;
-        use crate::crypto::signer::{MemorySigner, seal};
+        use crate::crypto::{Signed, signer::MemorySigner};
         use future_form::Sendable;
 
         fn test_signer() -> MemorySigner {
@@ -450,7 +452,9 @@ mod tests {
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([2u8; 16]));
-            let signed_commit = seal::<_, Sendable, _>(&signer, commit).await.into_signed();
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+                .await
+                .into_signed();
 
             let diff = SyncDiff {
                 missing_commits: vec![(signed_commit.clone(), blob.clone())],
@@ -476,7 +480,7 @@ mod tests {
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([3u8; 16]));
-            let signed_fragment = seal::<_, Sendable, _>(&signer, fragment)
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
                 .await
                 .into_signed();
 
