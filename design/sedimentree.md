@@ -54,17 +54,22 @@ A checkpoint grouping multiple commits at a specific depth:
 
 ```rust
 struct Fragment {
-    summary: FragmentSummary,   // Head + boundary
-    checkpoints: Vec<Digest>,  // Interior checkpoints
-    digest: Digest,            // Hash of the fragment itself
+    summary: FragmentSummary,         // Head + boundary
+    checkpoints: BTreeSet<Checkpoint>, // Interior checkpoints (truncated)
+    digest: Digest,                   // Hash of the fragment itself
 }
 
 struct FragmentSummary {
-    head: Digest,              // Most recent commit
-    boundary: Vec<Digest>,     // Ending commits
+    head: Digest,                     // Most recent commit
+    boundary: BTreeSet<Digest>,       // Ending commits
     blob_meta: BlobMeta,
 }
+
+/// A 12-byte truncation of a commit digest for compact storage.
+struct Checkpoint(Truncated<Digest, 12>);
 ```
+
+Checkpoints use 12-byte truncated digests (96 bits) instead of full 32-byte digests, saving ~62% on wire size while maintaining negligible collision probability (~10⁻¹⁷ at 1M items).
 
 Fragments consolidate history, reducing the number of items to track and sync.
 

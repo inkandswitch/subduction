@@ -199,5 +199,3 @@ For signature verification, CBOR encoding must be deterministic:
 - Map keys sorted by encoded length, then lexicographically
 - Integers use smallest encoding
 - No indefinite-length arrays/maps
-
-The `minicbor` crate enforces this by default.
