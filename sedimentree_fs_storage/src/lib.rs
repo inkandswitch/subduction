@@ -39,7 +39,7 @@ use std::{
     sync::Arc,
 };
 use subduction_core::{
-    crypto::signed::Signed,
+    crypto::Signed,
     storage::traits::{BatchResult, Storage},
 };
 use thiserror::Error;

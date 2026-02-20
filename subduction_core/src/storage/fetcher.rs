@@ -11,7 +11,7 @@ use sedimentree_core::{
 };
 
 use super::traits::Storage;
-use crate::crypto::signed::Signed;
+use crate::crypto::Signed;
 
 /// A capability granting fetch access to a specific sedimentree's data.
 ///

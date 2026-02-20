@@ -22,9 +22,8 @@
 //! [`Fetcher`]: storage::fetcher::Fetcher
 //! [`Putter`]: storage::putter::Putter
 //! [`Destroyer`]: storage::destroyer::Destroyer
-//! [`Signer`]: crypto::signer::Signer
-//! [`Signed`]: crypto::signed::Signed
-//! [`Verified`]: crypto::verified::Verified
+//! [`Signer`]: subduction_crypto::signer::Signer
+//! [`Signed`]: subduction_crypto::signed::Signed
 //! [`PeerId`]: peer::id::PeerId
 
 #![cfg_attr(not(feature = "std"), no_std)]
@@ -35,7 +34,6 @@ extern crate std;
 
 extern crate alloc;
 
-pub mod cbor;
 pub mod connection;
 pub mod crypto;
 pub mod peer;

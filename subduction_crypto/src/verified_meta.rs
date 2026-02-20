@@ -3,7 +3,7 @@
 use sedimentree_core::blob::{Blob, BlobMeta, HasBlobMeta};
 use thiserror::Error;
 
-use crate::{Signed, VerifiedSignature};
+use crate::{signed::Signed, verified_signature::VerifiedSignature};
 
 /// A commit or fragment whose signature is valid AND whose blob matches the claimed metadata.
 ///

@@ -4,13 +4,15 @@
 //! operations, allowing different key management strategies (in-memory keys,
 //! hardware security modules, remote signing services, etc.).
 
+pub mod memory;
+
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::FutureForm;
 
 /// A trait for signing data with an ed25519 key.
 ///
 /// This abstraction allows different key management strategies:
-/// - In-memory keys
+/// - In-memory keys via [`memory::MemorySigner`]
 /// - Hardware security modules
 /// - Remote signing services
 /// - Key derivation schemes
@@ -19,7 +21,7 @@ use future_form::FutureForm;
 ///
 /// # Sealing Payloads
 ///
-/// Use [`Signed::seal`](crate::Signed::seal) to sign a payload:
+/// Use [`Signed::seal`](crate::signed::Signed::seal) to sign a payload:
 ///
 /// ```ignore
 /// Signed::seal::<Sendable, _>(&signer, payload).await

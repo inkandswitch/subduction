@@ -3166,6 +3166,7 @@ dependencies = [
  "bolero",
  "ed25519-dalek",
  "future_form",
+ "getrandom 0.2.17",
  "minicbor",
  "sedimentree_core",
  "serde",

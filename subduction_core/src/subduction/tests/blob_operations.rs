@@ -53,7 +53,7 @@ fn new_dispatch_subduction() -> (
             MemoryStorage,
             ChannelMockConnection,
             OpenPolicy,
-            crate::crypto::signer::MemorySigner,
+            subduction_crypto::signer::memory::MemorySigner,
             CountLeadingZeroBytes,
         >,
     >,

@@ -1,7 +1,10 @@
-//! A simple wrapper around a String to represent a Peer ID.
+//! Peer identity types.
 
 use alloc::string::String;
 use core::fmt::Write;
+
+use future_form::FutureForm;
+use subduction_crypto::signer::Signer;
 
 /// A Peer ID.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
@@ -61,6 +64,16 @@ impl From<ed25519_dalek::VerifyingKey> for PeerId {
         PeerId::new(key.to_bytes())
     }
 }
+
+/// Extension trait to get a [`PeerId`] from any [`Signer`].
+pub trait GetPeerId<K: FutureForm>: Signer<K> {
+    /// Get the peer ID derived from the verifying key.
+    fn peer_id(&self) -> PeerId {
+        PeerId::from(self.verifying_key())
+    }
+}
+
+impl<K: FutureForm, S: Signer<K>> GetPeerId<K> for S {}
 
 #[cfg(test)]
 mod tests {

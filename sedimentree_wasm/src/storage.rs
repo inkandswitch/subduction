@@ -20,7 +20,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    crypto::signed::Signed,
+    crypto::Signed,
     storage::traits::{BatchResult, Storage},
 };
 use thiserror::Error;

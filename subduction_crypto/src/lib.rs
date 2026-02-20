@@ -32,8 +32,3 @@ pub mod signed;
 pub mod signer;
 pub mod verified_meta;
 pub mod verified_signature;
-
-pub use signed::Signed;
-pub use signer::Signer;
-pub use verified_meta::VerifiedMeta;
-pub use verified_signature::VerifiedSignature;

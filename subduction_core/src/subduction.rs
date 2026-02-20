@@ -88,11 +88,8 @@ use crate::{
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
     },
-    crypto::{
-        Signed, VerifiedMeta, VerifiedSignature,
-        signer::{GetPeerId, Signer},
-    },
-    peer::id::PeerId,
+    crypto::{Signed, VerifiedMeta, VerifiedSignature},
+    peer::id::{GetPeerId, PeerId},
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
@@ -136,6 +133,7 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
 };
+use subduction_crypto::signer::Signer;
 
 use pending_blob_requests::PendingBlobRequests;
 

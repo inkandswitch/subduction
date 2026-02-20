@@ -2,7 +2,6 @@
 
 use crate::{
     connection::{manager::Spawn, nonce_cache::NonceCache, test_utils::MockConnection},
-    crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
@@ -12,6 +11,7 @@ use alloc::sync::Arc;
 use future_form::Sendable;
 use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
 use sedimentree_core::commit::CountLeadingZeroBytes;
+use subduction_crypto::signer::memory::MemorySigner;
 
 /// Create a test signer with deterministic key bytes.
 pub(super) fn test_signer() -> MemorySigner {

@@ -1,14 +1,14 @@
 //! Signed payloads.
 
-mod encoded_payload;
-mod envelope;
-mod magic;
-mod protocol_version;
+pub mod encoded_payload;
+pub mod envelope;
+pub mod magic;
+pub mod protocol_version;
 
-pub use encoded_payload::EncodedPayload;
-pub use envelope::Envelope;
-pub use magic::Magic;
-pub use protocol_version::ProtocolVersion;
+use encoded_payload::EncodedPayload;
+use envelope::Envelope;
+use magic::Magic;
+use protocol_version::ProtocolVersion;
 
 use core::cmp::Ordering;
 

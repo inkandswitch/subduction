@@ -16,12 +16,12 @@ use subduction_core::{
         Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
         nonce_cache::NonceCache,
     },
-    crypto::signer::MemorySigner,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };

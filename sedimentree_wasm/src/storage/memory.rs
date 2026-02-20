@@ -8,7 +8,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::{
-    crypto::signed::Signed,
+    crypto::Signed,
     storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage},
 };
 use wasm_bindgen::prelude::*;

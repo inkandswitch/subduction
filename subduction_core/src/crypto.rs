@@ -1,14 +1,15 @@
 //! Cryptographic primitives for verified data.
 
 pub mod nonce;
-pub mod signer;
 
-// Re-export from subduction_crypto
-pub use subduction_crypto::{
-    Signed, VerifiedMeta, VerifiedSignature, signed, verified_meta, verified_meta::BlobMismatch,
-    verified_signature,
-};
+/// A signed payload. See [`subduction_crypto::signed::Signed`].
+pub type Signed<T> = subduction_crypto::signed::Signed<T>;
 
-/// Backwards compatibility alias — use [`VerifiedSignature`] instead.
-#[deprecated(since = "0.4.0", note = "Renamed to VerifiedSignature")]
-pub type Verified<T> = VerifiedSignature<T>;
+/// A verified signature witness. See [`subduction_crypto::verified_signature::VerifiedSignature`].
+pub type VerifiedSignature<T> = subduction_crypto::verified_signature::VerifiedSignature<T>;
+
+/// A verified metadata witness. See [`subduction_crypto::verified_meta::VerifiedMeta`].
+pub type VerifiedMeta<T> = subduction_crypto::verified_meta::VerifiedMeta<T>;
+
+/// Error when blob doesn't match claimed metadata. See [`subduction_crypto::verified_meta::BlobMismatch`].
+pub type BlobMismatch = subduction_crypto::verified_meta::BlobMismatch;
