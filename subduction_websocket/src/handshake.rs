@@ -163,7 +163,7 @@ mod tests {
             let challenge = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(42),
+                Nonce::from_u128(42),
             );
             let signed_challenge = Signed::seal::<Sendable, _>(&test_signer, challenge)
                 .await

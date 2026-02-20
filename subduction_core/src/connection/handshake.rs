@@ -859,7 +859,7 @@ mod tests {
 
         #[test]
         fn roundtrip_from_bytes() {
-            let nonce = Nonce::new(0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0);
+            let nonce = Nonce::from_u128(0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0);
             let bytes = *nonce.as_bytes();
             let recovered = Nonce::from_bytes(bytes);
             assert_eq!(nonce, recovered);
@@ -868,7 +868,7 @@ mod tests {
         #[test]
         fn roundtrip_from_u128() {
             let value = 0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0u128;
-            let nonce = Nonce::new(value);
+            let nonce = Nonce::from_u128(value);
             assert_eq!(nonce.as_u128(), value);
         }
     }
@@ -881,7 +881,7 @@ mod tests {
             let challenge = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(42),
+                Nonce::from_u128(42),
             );
             assert_eq!(
                 Digest::<Challenge>::hash(&challenge),
@@ -894,12 +894,12 @@ mod tests {
             let c1 = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(1),
+                Nonce::from_u128(1),
             );
             let c2 = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(2),
+                Nonce::from_u128(2),
             );
             assert_ne!(
                 Digest::<Challenge>::hash(&c1),
@@ -912,7 +912,7 @@ mod tests {
             let challenge = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(42),
+                Nonce::from_u128(42),
             );
             let now = TimestampSeconds::new(1005);
             assert!(challenge.is_fresh(now, Duration::from_secs(10)));
@@ -923,7 +923,7 @@ mod tests {
             let challenge = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(42),
+                Nonce::from_u128(42),
             );
             let now = TimestampSeconds::new(2000);
             assert!(!challenge.is_fresh(now, Duration::from_secs(10)));
@@ -938,7 +938,7 @@ mod tests {
             let challenge = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(42),
+                Nonce::from_u128(42),
             );
             let response = Response::for_challenge(&challenge, TimestampSeconds::new(1001));
             assert!(response.validate(&challenge).is_ok());
@@ -949,12 +949,12 @@ mod tests {
             let challenge1 = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(1),
+                Nonce::from_u128(1),
             );
             let challenge2 = Challenge::new(
                 Audience::discover(b"test"),
                 TimestampSeconds::new(1000),
-                Nonce::new(2),
+                Nonce::from_u128(2),
             );
             let response = Response::for_challenge(&challenge1, TimestampSeconds::new(1001));
             assert!(response.validate(&challenge2).is_err());
@@ -1030,7 +1030,7 @@ mod tests {
 
             let now = TimestampSeconds::new(1000);
             let audience = Audience::discover(b"https://example.com");
-            let nonce = Nonce::new(12345);
+            let nonce = Nonce::from_u128(12345);
 
             // Client creates challenge
             let signed_challenge =
@@ -1064,7 +1064,7 @@ mod tests {
             let now = TimestampSeconds::new(1000);
             let client_audience = Audience::discover(b"https://example.com");
             let server_audience = Audience::discover(b"https://other.com");
-            let nonce = Nonce::new(12345);
+            let nonce = Nonce::from_u128(12345);
 
             let signed_challenge =
                 create_challenge::<Sendable, _>(&client_signer, client_audience, now, nonce).await;
@@ -1091,7 +1091,7 @@ mod tests {
             let client_now = TimestampSeconds::new(1000);
             let server_now = TimestampSeconds::new(2000); // 1000 seconds later
             let audience = Audience::discover(b"https://example.com");
-            let nonce = Nonce::new(12345);
+            let nonce = Nonce::from_u128(12345);
 
             let signed_challenge =
                 create_challenge::<Sendable, _>(&client_signer, audience, client_now, nonce).await;
@@ -1118,8 +1118,8 @@ mod tests {
 
             let now = TimestampSeconds::new(1000);
             let audience = Audience::discover(b"https://example.com");
-            let nonce1 = Nonce::new(11111);
-            let nonce2 = Nonce::new(22222);
+            let nonce1 = Nonce::from_u128(11111);
+            let nonce2 = Nonce::from_u128(22222);
 
             // Client creates challenge with nonce1
             let challenge1 = Challenge::new(audience, now, nonce1);
@@ -1157,7 +1157,7 @@ mod tests {
         #[test]
         fn prop_nonce_u128_roundtrip() {
             bolero::check!().with_type::<u128>().for_each(|value| {
-                let nonce = Nonce::new(*value);
+                let nonce = Nonce::from_u128(*value);
                 assert_eq!(nonce.as_u128(), *value);
             });
         }
