@@ -16,7 +16,7 @@ use sedimentree_core::{
 
 use crate::{
     metrics,
-    storage::traits::{BatchResult, Storage},
+    storage::{batch_result::BatchResult, traits::Storage},
 };
 use subduction_crypto::signed::Signed;
 

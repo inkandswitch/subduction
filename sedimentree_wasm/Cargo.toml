@@ -68,6 +68,7 @@ std = [
   "minicbor/std",
   "sedimentree_core/std",
   "subduction_core/std",
+  "subduction_crypto/std",
   "thiserror/std",
   "wasm-bindgen/std",
   "wasm-bindgen-futures/std"

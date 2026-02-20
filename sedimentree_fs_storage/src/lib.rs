@@ -38,7 +38,7 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use subduction_core::storage::traits::{BatchResult, Storage};
+use subduction_core::storage::{batch_result::BatchResult, traits::Storage};
 use subduction_crypto::signed::Signed;
 use thiserror::Error;
 

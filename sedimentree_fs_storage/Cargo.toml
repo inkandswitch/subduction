@@ -20,7 +20,7 @@ hex = { workspace = true }
 minicbor = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 subduction_core = { workspace = true, features = ["std"] }
-subduction_crypto = { workspace = true }
+subduction_crypto = { workspace = true, features = ["std"] }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true, default-features = true }

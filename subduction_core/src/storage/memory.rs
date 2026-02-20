@@ -13,7 +13,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 
-use super::traits::{BatchResult, Storage};
+use super::{batch_result::BatchResult, traits::Storage};
 use subduction_crypto::signed::Signed;
 
 /// An in-memory storage backend.
