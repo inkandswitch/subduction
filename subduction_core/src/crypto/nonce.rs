@@ -18,31 +18,9 @@ pub struct Nonce(
 );
 
 impl Nonce {
-    /// Create a new nonce from a raw value.
-    #[must_use]
-    pub const fn new(value: u128) -> Self {
-        Self(value.to_le_bytes())
-    }
-
-    /// Get the raw nonce value.
-    #[must_use]
-    pub const fn as_u128(&self) -> u128 {
-        u128::from_le_bytes(self.0)
-    }
-
-    /// Create a nonce from bytes.
-    #[must_use]
-    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
-        Self(bytes)
-    }
-
-    /// Get the raw bytes.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 16] {
-        &self.0
-    }
-
     /// Create a random nonce using `getrandom`.
+    ///
+    /// This is the recommended constructor for production use.
     ///
     /// # Panics
     ///
@@ -53,5 +31,35 @@ impl Nonce {
         let mut bytes = [0u8; 16];
         getrandom::getrandom(&mut bytes).expect("getrandom failed");
         Self(bytes)
+    }
+
+    /// Create a nonce from a raw `u128` value.
+    ///
+    /// This is intended for testing and deserialization. Production code should
+    /// use [`Nonce::random()`] to ensure cryptographic uniqueness.
+    #[must_use]
+    pub const fn from_u128(value: u128) -> Self {
+        Self(value.to_le_bytes())
+    }
+
+    /// Get the raw nonce value as `u128`.
+    #[must_use]
+    pub const fn as_u128(&self) -> u128 {
+        u128::from_le_bytes(self.0)
+    }
+
+    /// Create a nonce from raw bytes.
+    ///
+    /// This is intended for deserialization. Production code should use
+    /// [`Nonce::random()`] to ensure cryptographic uniqueness.
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 16]) -> Self {
+        Self(bytes)
+    }
+
+    /// Get the raw bytes.
+    #[must_use]
+    pub const fn as_bytes(&self) -> &[u8; 16] {
+        &self.0
     }
 }

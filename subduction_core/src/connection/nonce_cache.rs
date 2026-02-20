@@ -155,7 +155,7 @@ mod tests {
         let cache = cache();
         let now = TimestampSeconds::new(1000);
 
-        let result = cache.try_claim(peer(1), Nonce::new(42), now).await;
+        let result = cache.try_claim(peer(1), Nonce::from_u128(42), now).await;
         assert!(result.is_ok());
     }
 
@@ -165,11 +165,11 @@ mod tests {
         let now = TimestampSeconds::new(1000);
 
         cache
-            .try_claim(peer(1), Nonce::new(42), now)
+            .try_claim(peer(1), Nonce::from_u128(42), now)
             .await
             .expect("first claim should succeed");
 
-        let result = cache.try_claim(peer(1), Nonce::new(42), now).await;
+        let result = cache.try_claim(peer(1), Nonce::from_u128(42), now).await;
         assert!(matches!(result, Err(NonceReused)));
     }
 
@@ -179,11 +179,11 @@ mod tests {
         let now = TimestampSeconds::new(1000);
 
         cache
-            .try_claim(peer(1), Nonce::new(42), now)
+            .try_claim(peer(1), Nonce::from_u128(42), now)
             .await
             .expect("first claim should succeed");
 
-        let result = cache.try_claim(peer(2), Nonce::new(42), now).await;
+        let result = cache.try_claim(peer(2), Nonce::from_u128(42), now).await;
         assert!(result.is_ok());
     }
 
@@ -193,11 +193,11 @@ mod tests {
         let now = TimestampSeconds::new(1000);
 
         cache
-            .try_claim(peer(1), Nonce::new(1), now)
+            .try_claim(peer(1), Nonce::from_u128(1), now)
             .await
             .expect("first claim should succeed");
 
-        let result = cache.try_claim(peer(1), Nonce::new(2), now).await;
+        let result = cache.try_claim(peer(1), Nonce::from_u128(2), now).await;
         assert!(result.is_ok());
     }
 
@@ -209,16 +209,18 @@ mod tests {
 
         // Claim a nonce at t0
         cache
-            .try_claim(peer(1), Nonce::new(42), t0)
+            .try_claim(peer(1), Nonce::from_u128(42), t0)
             .await
             .expect("first claim should succeed");
 
         // Same nonce still rejected immediately
-        let result = cache.try_claim(peer(1), Nonce::new(42), t0).await;
+        let result = cache.try_claim(peer(1), Nonce::from_u128(42), t0).await;
         assert!(matches!(result, Err(NonceReused)));
 
         // After 15 minutes, the bucket has rotated and the nonce is claimable again
-        let result = cache.try_claim(peer(1), Nonce::new(42), t_later).await;
+        let result = cache
+            .try_claim(peer(1), Nonce::from_u128(42), t_later)
+            .await;
         assert!(result.is_ok());
     }
 
@@ -232,29 +234,29 @@ mod tests {
         let t2 = TimestampSeconds::new(360); // 6 minutes
 
         cache
-            .try_claim(peer(1), Nonce::new(1), t0)
+            .try_claim(peer(1), Nonce::from_u128(1), t0)
             .await
             .expect("bucket 0");
         cache
-            .try_claim(peer(1), Nonce::new(2), t1)
+            .try_claim(peer(1), Nonce::from_u128(2), t1)
             .await
             .expect("bucket 1");
         cache
-            .try_claim(peer(1), Nonce::new(3), t2)
+            .try_claim(peer(1), Nonce::from_u128(3), t2)
             .await
             .expect("bucket 2");
 
         // All should still be tracked (within 12 min window)
         assert!(matches!(
-            cache.try_claim(peer(1), Nonce::new(1), t2).await,
+            cache.try_claim(peer(1), Nonce::from_u128(1), t2).await,
             Err(NonceReused)
         ));
         assert!(matches!(
-            cache.try_claim(peer(1), Nonce::new(2), t2).await,
+            cache.try_claim(peer(1), Nonce::from_u128(2), t2).await,
             Err(NonceReused)
         ));
         assert!(matches!(
-            cache.try_claim(peer(1), Nonce::new(3), t2).await,
+            cache.try_claim(peer(1), Nonce::from_u128(3), t2).await,
             Err(NonceReused)
         ));
     }
