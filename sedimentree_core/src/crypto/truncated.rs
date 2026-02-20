@@ -4,13 +4,13 @@
 //! set membership testing at the cost of a small (negligible for realistic
 //! workloads) false positive probability.
 //!
-//! The default truncation size is 16 bytes (128 bits). Security properties:
+//! The default truncation size is 12 bytes (96 bits). Security properties:
 //!
-//! - **Random collision** (birthday): ~N²/2¹²⁸ where N is set size.
-//!   For 1 million items: ~10⁻²⁷ — effectively zero.
-//! - **Adversarial collision**: ~2⁶⁴ work (birthday attack on 128 bits).
-//!   Feasible for nation-state with specialized hardware, not casual attackers.
-//! - **Preimage resistance**: ~2¹²⁸ work — infeasible.
+//! - **Random collision** (birthday): ~N²/2⁹⁶ where N is set size.
+//!   For 1 million items: ~10⁻¹⁷ — effectively zero.
+//! - **Adversarial collision**: ~2⁴⁸ work (birthday attack on 96 bits).
+//!   Feasible for well-resourced attackers, but checkpoints are non-security-critical.
+//! - **Preimage resistance**: ~2⁹⁶ work — infeasible.
 //!
 //! For cryptographic collision resistance, use the full 32-byte digest.
 //!
@@ -20,8 +20,8 @@ use core::marker::PhantomData;
 
 use super::digest::Digest;
 
-/// Default truncation size in bytes (128 bits).
-pub const DEFAULT_TRUNCATION_BYTES: usize = 16;
+/// Default truncation size in bytes (96 bits).
+pub const DEFAULT_TRUNCATION_BYTES: usize = 12;
 
 /// The first `N` bytes of a value, used for compact membership checks.
 ///
@@ -33,12 +33,14 @@ pub const DEFAULT_TRUNCATION_BYTES: usize = 16;
 /// The collision probability is ~n²/2^(8N) where n is the set size:
 ///
 /// | N (bytes) | Bits | Collision at 1M items |
-/// |-----------|------|----------------------|
-/// | 8         | 64   | ~10⁻⁸ (1 in 100M)    |
-/// | 16        | 128  | ~10⁻²⁷ (effectively 0)|
-/// | 32        | 256  | ~10⁻⁶⁶ (cryptographic)|
+/// |-----------|------|------------------------|
+/// | 8         | 64   | ~10⁻⁸ (1 in 100M)      |
+/// | 12        | 96   | ~10⁻¹⁷ (effectively 0) |
+/// | 16        | 128  | ~10⁻²⁷ (effectively 0) |
+/// | 32        | 256  | ~10⁻⁶⁶ (cryptographic) |
 ///
-/// The default is 16 bytes (128 bits), which is safe for all realistic workloads.
+/// The default is 12 bytes (96 bits), which is safe for all realistic workloads
+/// while saving 25% on wire size compared to 16 bytes.
 pub struct Truncated<V, const N: usize = DEFAULT_TRUNCATION_BYTES> {
     bytes: [u8; N],
     _phantom: PhantomData<V>,
@@ -222,9 +224,9 @@ mod tests {
     fn truncation_preserves_first_n_bytes() {
         let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
 
-        // Default (16 bytes)
+        // Default (12 bytes)
         let truncated: Truncated<Digest<LooseCommit>> = Truncated::new(digest);
-        assert_eq!(truncated.as_bytes(), &[42u8; 16]);
+        assert_eq!(truncated.as_bytes(), &[42u8; 12]);
 
         // Explicit 8 bytes
         let truncated_8: Truncated<Digest<LooseCommit>, 8> = Truncated::new(digest);
@@ -256,7 +258,7 @@ mod tests {
     #[test]
     fn different_bytes_after_n_produce_same_truncation() {
         let mut bytes_a = [0u8; 32];
-        bytes_a[31] = 1; // After first 16 bytes
+        bytes_a[31] = 1; // After first 12 bytes
         let mut bytes_b = [0u8; 32];
         bytes_b[31] = 2;
 
@@ -272,11 +274,13 @@ mod tests {
         let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
 
         let t8: Truncated<Digest<LooseCommit>, 8> = Truncated::new(digest);
+        let t12: Truncated<Digest<LooseCommit>, 12> = Truncated::new(digest);
         let t16: Truncated<Digest<LooseCommit>, 16> = Truncated::new(digest);
 
         // These are different types, so this is a compile-time check.
         // At runtime, we verify the byte lengths differ.
         assert_eq!(t8.as_bytes().len(), 8);
+        assert_eq!(t12.as_bytes().len(), 12);
         assert_eq!(t16.as_bytes().len(), 16);
     }
 }

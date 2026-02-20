@@ -13,17 +13,17 @@ use crate::{
 
 /// A truncated commit digest marking a commit within a fragment's range.
 ///
-/// Checkpoints are stored as 16-byte truncations of the full 32-byte BLAKE3
+/// Checkpoints are stored as 12-byte truncations of the full 32-byte BLAKE3
 /// commit digest. This provides:
-/// - Compact storage (~50% savings vs full digest)
-/// - Negligible random collision probability (~10⁻²⁷ at 1M items)
+/// - Compact storage (~62% savings vs full digest)
+/// - Negligible random collision probability (~10⁻¹⁷ at 1M items)
 /// - Efficient set membership checks
 ///
 /// # Security Properties
 ///
-/// - **Random collision**: ~N²/2¹²⁸ where N is set size
-/// - **Adversarial collision**: ~2⁶⁴ work (birthday attack on 128 bits)
-/// - **Preimage**: ~2¹²⁸ work
+/// - **Random collision**: ~N²/2⁹⁶ where N is set size
+/// - **Adversarial collision**: ~2⁴⁸ work (birthday attack on 96 bits)
+/// - **Preimage**: ~2⁹⁶ work
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
 #[cbor(transparent)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -33,7 +33,7 @@ pub struct Checkpoint(#[n(0)] Truncated<Digest<LooseCommit>>);
 impl Checkpoint {
     /// Create a checkpoint from a full commit digest.
     ///
-    /// The digest is truncated to 16 bytes.
+    /// The digest is truncated to 12 bytes.
     #[must_use]
     pub fn new(digest: Digest<LooseCommit>) -> Self {
         Self(Truncated::new(digest))
@@ -53,7 +53,7 @@ impl Checkpoint {
 
     /// The raw bytes of the truncated checkpoint.
     #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 16] {
+    pub const fn as_bytes(&self) -> &[u8; 12] {
         self.0.as_bytes()
     }
 }
@@ -105,7 +105,7 @@ mod tests {
     fn checkpoint_from_digest() {
         let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
         let checkpoint = Checkpoint::new(digest);
-        assert_eq!(checkpoint.as_bytes(), &[42u8; 16]);
+        assert_eq!(checkpoint.as_bytes(), &[42u8; 12]);
     }
 
     #[test]
@@ -125,6 +125,6 @@ mod tests {
 
         let a = Checkpoint::new(Digest::<LooseCommit>::from_bytes(bytes_a));
         let b = Checkpoint::new(Digest::<LooseCommit>::from_bytes(bytes_b));
-        assert_eq!(a, b); // Same first 16 bytes
+        assert_eq!(a, b); // Same first 12 bytes
     }
 }
