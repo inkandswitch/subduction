@@ -88,7 +88,7 @@ use crate::{
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
     },
-    crypto::{signed::Signed, signer::Signer, verified::Verified},
+    crypto::{BlobMismatch, Signed, VerifiedMeta, VerifiedSignature, signer::Signer},
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -105,8 +105,8 @@ use core::{
     time::Duration,
 };
 use error::{
-    AttachError, BlobMismatch, BlobRequestErr, HydrationError, InsertError, IoError, ListenError,
-    RegistrationError, SendRequestedDataError, Unauthorized, WriteError,
+    AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
+    SendRequestedDataError, Unauthorized, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -1238,13 +1238,15 @@ impl<
         // Sign all commits and fragments with our signer (seal returns Verified)
         let mut verified_commits = Vec::with_capacity(sedimentree.loose_commits().count());
         for commit in sedimentree.loose_commits() {
-            let verified = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
+            let verified =
+                crate::crypto::signer::seal::<_, F, _>(&self.signer, commit.clone()).await;
             verified_commits.push(verified);
         }
 
         let mut verified_fragments = Vec::with_capacity(sedimentree.fragments().count());
         for fragment in sedimentree.fragments() {
-            let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
+            let verified =
+                crate::crypto::signer::seal::<_, F, _>(&self.signer, fragment.clone()).await;
             verified_fragments.push(verified);
         }
 
@@ -1328,12 +1330,16 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
+        let verified = crate::crypto::signer::seal::<_, F, _>(&self.signer, commit.clone()).await;
         let signed_for_wire = verified.signed().clone();
 
-        self.insert_commit_locally(&putter, verified, blob.clone())
+        // For locally created commits, blob always matches (we just created it)
+        let verified_meta = VerifiedMeta::new(verified, blob.clone())
+            .expect("locally created commit should have matching blob");
+
+        self.insert_commit_locally(&putter, verified_meta)
             .await
-            .map_err(|e: InsertError<_>| WriteError::Io(e.into()))?;
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
         let msg = Message::LooseCommit {
             id,
@@ -1408,12 +1414,16 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
+        let verified = crate::crypto::signer::seal::<_, F, _>(&self.signer, fragment.clone()).await;
         let signed_for_wire = verified.signed().clone();
 
-        self.insert_fragment_locally(&putter, verified, blob.clone())
+        // For locally created fragments, blob always matches (we just created it)
+        let verified_meta = VerifiedMeta::new(verified, blob.clone())
+            .expect("locally created fragment should have matching blob");
+
+        self.insert_fragment_locally(&putter, verified_meta)
             .await
-            .map_err(|e: InsertError<_>| WriteError::Io(e.into()))?;
+            .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
         let msg = Message::Fragment {
             id,
@@ -2785,8 +2795,8 @@ impl<
     async fn insert_sedimentree_locally(
         &self,
         putter: &Putter<F, S>,
-        verified_commits: Vec<Verified<LooseCommit>>,
-        verified_fragments: Vec<Verified<Fragment>>,
+        verified_commits: Vec<VerifiedSignature<LooseCommit>>,
+        verified_fragments: Vec<VerifiedSignature<Fragment>>,
         blobs: Vec<Blob>,
     ) -> Result<(), S::Error> {
         let id = putter.sedimentree_id();
@@ -3042,41 +3052,21 @@ impl<
     ///
     /// # Errors
     ///
-    /// Returns [`InsertError::BlobMismatch`] if the blob content doesn't match
-    /// the metadata claimed in the commit. This prevents poisoned metadata from
-    /// being stored.
+    /// Returns a storage error if persistence fails.
     async fn insert_commit_locally(
         &self,
         putter: &Putter<F, S>,
-        verified: Verified<LooseCommit>,
-        blob: Blob,
-    ) -> Result<bool, InsertError<S::Error>> {
+        verified_meta: VerifiedMeta<LooseCommit>,
+    ) -> Result<bool, S::Error> {
         let id = putter.sedimentree_id();
-        let commit = verified.payload().clone();
-
-        // Verify blob matches claimed metadata before storing anything
-        let actual_meta = blob.meta();
-        let claimed_meta = *commit.blob_meta();
-        if actual_meta != claimed_meta {
-            return Err(BlobMismatch {
-                claimed: claimed_meta,
-                actual: actual_meta,
-            }
-            .into());
-        }
+        let commit = verified_meta.payload().clone();
 
         tracing::debug!("inserting commit {:?} locally", commit.digest());
 
         // Persist to storage first (cancel-safe: idempotent CAS writes)
-        putter.save_blob(blob).await.map_err(InsertError::Storage)?;
-        putter
-            .save_sedimentree_id()
-            .await
-            .map_err(InsertError::Storage)?;
-        putter
-            .save_loose_commit(verified)
-            .await
-            .map_err(InsertError::Storage)?;
+        // VerifiedMeta guarantees blob matches claimed metadata at construction
+        putter.save_sedimentree_id().await?;
+        putter.save_commit(verified_meta).await?;
 
         // Update in-memory tree last (returns false if already present)
         let was_added = self
@@ -3093,39 +3083,19 @@ impl<
     ///
     /// # Errors
     ///
-    /// Returns [`InsertError::BlobMismatch`] if the blob content doesn't match
-    /// the metadata claimed in the fragment. This prevents poisoned metadata from
-    /// being stored.
+    /// Returns a storage error if persistence fails.
     async fn insert_fragment_locally(
         &self,
         putter: &Putter<F, S>,
-        verified: Verified<Fragment>,
-        blob: Blob,
-    ) -> Result<bool, InsertError<S::Error>> {
+        verified_meta: VerifiedMeta<Fragment>,
+    ) -> Result<bool, S::Error> {
         let id = putter.sedimentree_id();
-        let fragment = verified.payload().clone();
-
-        // Verify blob matches claimed metadata before storing anything
-        let actual_meta = blob.meta();
-        let claimed_meta = fragment.summary().blob_meta();
-        if actual_meta != claimed_meta {
-            return Err(BlobMismatch {
-                claimed: claimed_meta,
-                actual: actual_meta,
-            }
-            .into());
-        }
+        let fragment = verified_meta.payload().clone();
 
         // Persist to storage first (cancel-safe: idempotent CAS writes)
-        putter.save_blob(blob).await.map_err(InsertError::Storage)?;
-        putter
-            .save_sedimentree_id()
-            .await
-            .map_err(InsertError::Storage)?;
-        putter
-            .save_fragment(verified)
-            .await
-            .map_err(InsertError::Storage)?;
+        // VerifiedMeta guarantees blob matches claimed metadata at construction
+        putter.save_sedimentree_id().await?;
+        putter.save_fragment_with_blob(verified_meta).await?;
 
         // Update in-memory tree last
         let was_added = self

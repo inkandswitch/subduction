@@ -5,13 +5,13 @@
 //! hardware security modules, remote signing services, etc.).
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use subduction_crypto::{
+    Signed, VerifiedSignature,
     signed::{
         encoded_payload::EncodedPayload, envelope::Envelope, magic::Magic,
         protocol_version::ProtocolVersion,
     },
-    Signed, VerifiedSignature,
 };
 
 use crate::peer::id::PeerId;
@@ -124,17 +124,12 @@ where
     let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
     let signature = signer.sign(&encoded).await;
 
-    // Decode payload back from encoded bytes (avoids Clone bound)
-    let decoded_envelope =
-        minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
-
     let signed = Signed::new(
         signer.verifying_key(),
         signature,
         EncodedPayload::new(encoded),
     );
 
-    // Use the try_verify path which creates VerifiedSignature
     // Since we just signed it, verification is guaranteed to succeed
     signed
         .try_verify()

@@ -3,14 +3,12 @@
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
-use sedimentree_core::{
-    blob::{Blob, BlobMeta},
-    crypto::digest::Digest,
-    id::SedimentreeId,
-};
+use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
-use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
+use crate::{
+    connection::Connection, crypto::BlobMismatch, peer::id::PeerId, storage::traits::Storage,
+};
 
 /// The peer is not authorized to perform the requested operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
@@ -21,43 +19,6 @@ pub struct Unauthorized {
 
     /// The sedimentree they attempted to access.
     pub sedimentree_id: SedimentreeId,
-}
-
-/// The blob content doesn't match the claimed metadata.
-///
-/// This occurs when a commit or fragment claims a blob has a certain digest,
-/// but the actual blob content hashes to a different value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
-#[error("blob mismatch: claimed {claimed:?}, actual {actual:?}")]
-pub struct BlobMismatch {
-    /// The metadata claimed by the commit or fragment.
-    pub claimed: BlobMeta,
-
-    /// The actual metadata computed from the blob content.
-    pub actual: BlobMeta,
-}
-
-/// Error that can occur when inserting a commit or fragment locally.
-#[derive(Debug, Error)]
-pub enum InsertError<E> {
-    /// The blob content doesn't match the claimed metadata.
-    #[error(transparent)]
-    BlobMismatch(#[from] BlobMismatch),
-
-    /// A storage error occurred.
-    #[error("storage error: {0}")]
-    Storage(E),
-}
-
-impl<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> From<InsertError<S::Error>>
-    for IoError<F, S, C>
-{
-    fn from(err: InsertError<S::Error>) -> Self {
-        match err {
-            InsertError::BlobMismatch(e) => IoError::BlobMismatch(e),
-            InsertError::Storage(e) => IoError::Storage(e),
-        }
-    }
 }
 
 /// An error indicating that a [`Sedimentree`] could not be hydrated from storage.

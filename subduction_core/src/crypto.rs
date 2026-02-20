@@ -5,7 +5,8 @@ pub mod signer;
 
 // Re-export from subduction_crypto
 pub use subduction_crypto::{
-    signed, verified_meta, verified_signature, Signed, VerifiedMeta, VerifiedSignature,
+    Signed, VerifiedMeta, VerifiedSignature, signed, verified_meta, verified_meta::BlobMismatch,
+    verified_signature,
 };
 
 /// Backwards compatibility alias — use [`VerifiedSignature`] instead.
