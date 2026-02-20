@@ -18,7 +18,7 @@ use sedimentree_core::{
 };
 
 use super::traits::Storage;
-use crate::crypto::Signed;
+use subduction_crypto::signed::Signed;
 
 /// Direct storage access for trusted local operations.
 ///

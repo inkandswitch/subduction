@@ -26,7 +26,8 @@ use core::time::Duration;
 use async_lock::Mutex;
 use sedimentree_core::collections::Set;
 
-use crate::{crypto::nonce::Nonce, peer::id::PeerId, timestamp::TimestampSeconds};
+use crate::{peer::id::PeerId, timestamp::TimestampSeconds};
+use subduction_crypto::nonce::Nonce;
 
 /// Default bucket duration (3 minutes).
 const DEFAULT_BUCKET_DURATION: Duration = Duration::from_secs(180);

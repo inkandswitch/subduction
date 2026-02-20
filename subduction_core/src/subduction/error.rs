@@ -6,9 +6,8 @@ use future_form::FutureForm;
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
-use crate::{
-    connection::Connection, crypto::BlobMismatch, peer::id::PeerId, storage::traits::Storage,
-};
+use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
+use subduction_crypto::verified_meta::BlobMismatch;
 
 /// The peer is not authorized to perform the requested operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]

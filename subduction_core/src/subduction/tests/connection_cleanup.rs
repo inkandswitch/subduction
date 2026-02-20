@@ -1,17 +1,16 @@
 //! Tests for connection cleanup on send failure.
 
-use super::common::{TestSpawn, test_signer};
+use super::common::{test_signer, TestSpawn};
 use crate::{
     connection::{
         nonce_cache::NonceCache,
         test_utils::{FailingSendMockConnection, MockConnection},
     },
-    crypto::Signed,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use alloc::collections::BTreeSet;
 
@@ -24,6 +23,7 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
 fn make_test_commit() -> (LooseCommit, Blob) {

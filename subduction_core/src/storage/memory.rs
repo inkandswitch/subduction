@@ -14,7 +14,7 @@ use sedimentree_core::{
 };
 
 use super::traits::{BatchResult, Storage};
-use crate::crypto::Signed;
+use subduction_crypto::signed::Signed;
 
 /// An in-memory storage backend.
 ///

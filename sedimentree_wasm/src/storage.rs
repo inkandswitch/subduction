@@ -19,10 +19,8 @@ use sedimentree_core::{
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::LooseCommit,
 };
-use subduction_core::{
-    crypto::Signed,
-    storage::traits::{BatchResult, Storage},
-};
+use subduction_core::storage::traits::{BatchResult, Storage};
+use subduction_crypto::signed::Signed;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;

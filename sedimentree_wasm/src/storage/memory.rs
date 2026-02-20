@@ -7,10 +7,8 @@ use sedimentree_core::{
     blob::Blob, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
-use subduction_core::{
-    crypto::Signed,
-    storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage},
-};
+use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
+use subduction_crypto::signed::Signed;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 

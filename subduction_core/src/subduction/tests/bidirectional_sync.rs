@@ -13,19 +13,18 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{TokioSpawn, test_signer};
+use super::common::{test_signer, TokioSpawn};
 use crate::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
         nonce_cache::NonceCache,
         test_utils::ChannelMockConnection,
     },
-    crypto::Signed,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use alloc::collections::BTreeSet;
 use core::time::Duration;
@@ -38,11 +37,12 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, FragmentSummary, id::FragmentId},
+    fragment::{id::FragmentId, Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
+use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
 /// A deterministic seed for tests (not security-sensitive).

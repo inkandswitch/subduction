@@ -13,8 +13,9 @@
 //! - [`connection`] — Connection traits and handshake protocol
 //! - [`policy`] — Authorization policies ([`ConnectionPolicy`], [`StoragePolicy`])
 //! - [`storage`] — Storage capabilities ([`Fetcher`], [`Putter`], [`Destroyer`])
-//! - [`crypto`] — Cryptographic primitives ([`Signer`], [`Signed`], [`Verified`])
 //! - [`peer`] — Peer identity ([`PeerId`])
+//!
+//! For cryptographic primitives ([`Signer`], [`Signed`]), see [`subduction_crypto`].
 //!
 //! [`Sedimentree`]: sedimentree_core::sedimentree::Sedimentree
 //! [`ConnectionPolicy`]: policy::ConnectionPolicy
@@ -35,7 +36,6 @@ extern crate std;
 extern crate alloc;
 
 pub mod connection;
-pub mod crypto;
 pub mod peer;
 pub mod policy;
 pub mod sharded_map;

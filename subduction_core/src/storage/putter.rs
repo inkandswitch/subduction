@@ -11,7 +11,9 @@ use sedimentree_core::{
 };
 
 use super::{fetcher::Fetcher, traits::Storage};
-use crate::crypto::{Signed, VerifiedMeta, VerifiedSignature};
+use subduction_crypto::{
+    signed::Signed, verified_meta::VerifiedMeta, verified_signature::VerifiedSignature,
+};
 
 /// A capability granting put access to a specific sedimentree's data.
 ///

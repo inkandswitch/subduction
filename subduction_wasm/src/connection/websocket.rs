@@ -197,7 +197,8 @@ impl WasmWebSocket {
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedConnectionError> {
-        use subduction_core::{crypto::nonce::Nonce, timestamp::TimestampSeconds};
+        use subduction_core::timestamp::TimestampSeconds;
+        use subduction_crypto::nonce::Nonce;
 
         // Ensure WebSocket is ready
         let ws = Self::wait_for_open(ws.clone()).await?;
@@ -301,7 +302,8 @@ impl WasmWebSocket {
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
     ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
-        use subduction_core::{crypto::nonce::Nonce, timestamp::TimestampSeconds};
+        use subduction_core::timestamp::TimestampSeconds;
+        use subduction_crypto::nonce::Nonce;
 
         let ws = WebSocket::new(&address.href())
             .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
@@ -349,7 +351,8 @@ impl WasmWebSocket {
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
-        use subduction_core::{crypto::nonce::Nonce, timestamp::TimestampSeconds};
+        use subduction_core::timestamp::TimestampSeconds;
+        use subduction_crypto::nonce::Nonce;
 
         let timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);
         let service_name = service_name.unwrap_or_else(|| address.host());

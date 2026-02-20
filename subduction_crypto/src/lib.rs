@@ -28,6 +28,7 @@
 extern crate alloc;
 
 pub mod cbor;
+pub mod nonce;
 pub mod signed;
 pub mod signer;
 pub mod verified_meta;

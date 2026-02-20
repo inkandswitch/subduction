@@ -65,15 +65,10 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{authenticated::Authenticated, Connection};
-use crate::{
-    connection::nonce_cache::NonceCache,
-    crypto::{nonce::Nonce, Signed},
-    peer::id::PeerId,
-    timestamp::TimestampSeconds,
-};
+use super::{Connection, authenticated::Authenticated};
+use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::crypto::digest::Digest;
-use subduction_crypto::signer::Signer;
+use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
@@ -1019,7 +1014,7 @@ mod tests {
         use super::*;
         use crate::peer::id::PeerId;
         use future_form::Sendable;
-        use subduction_crypto::signer::{memory::MemorySigner, Signer};
+        use subduction_crypto::signer::memory::MemorySigner;
 
         fn test_signer(seed: u8) -> MemorySigner {
             MemorySigner::from_bytes(&[seed; 32])

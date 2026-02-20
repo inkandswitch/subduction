@@ -15,10 +15,10 @@ use sedimentree_core::{
 };
 
 use crate::{
-    crypto::Signed,
     metrics,
     storage::traits::{BatchResult, Storage},
 };
+use subduction_crypto::signed::Signed;
 
 /// A storage wrapper that records metrics for all operations.
 ///

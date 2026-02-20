@@ -5,13 +5,14 @@ use alloc::vec::Vec;
 use sedimentree_core::{
     blob::Blob,
     crypto::{digest::Digest, fingerprint::Fingerprint},
-    fragment::{id::FragmentId, Fragment},
+    fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
 
-use crate::{crypto::Signed, peer::id::PeerId};
+use crate::peer::id::PeerId;
+use subduction_crypto::signed::Signed;
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
@@ -336,9 +337,8 @@ mod tests {
 
     mod message_request_id {
         use super::*;
-        use crate::crypto::Signed;
         use future_form::Sendable;
-        use subduction_crypto::signer::memory::MemorySigner;
+        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
         fn test_signer() -> MemorySigner {
             MemorySigner::from_bytes(&[42u8; 32])
@@ -437,9 +437,8 @@ mod tests {
 
     mod sync_diff {
         use super::*;
-        use crate::crypto::Signed;
         use future_form::Sendable;
-        use subduction_crypto::signer::memory::MemorySigner;
+        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
         fn test_signer() -> MemorySigner {
             MemorySigner::from_bytes(&[42u8; 32])

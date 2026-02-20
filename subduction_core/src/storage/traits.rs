@@ -26,7 +26,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 
-use crate::crypto::Signed;
+use subduction_crypto::signed::Signed;
 
 /// Abstraction over storage for `Sedimentree` data.
 ///

@@ -38,10 +38,8 @@ use std::{
     path::{Path, PathBuf},
     sync::Arc,
 };
-use subduction_core::{
-    crypto::Signed,
-    storage::traits::{BatchResult, Storage},
-};
+use subduction_core::storage::traits::{BatchResult, Storage};
+use subduction_crypto::signed::Signed;
 use thiserror::Error;
 
 /// Errors that can occur during filesystem storage operations.
