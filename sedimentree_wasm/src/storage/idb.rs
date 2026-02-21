@@ -326,10 +326,6 @@ impl WasmIndexedDbStorage {
     /// # Errors
     ///
     /// Returns a [`WasmSaveLooseCommitError`] if the loose commit could not be saved.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the fragment is not serializable to CBOR.
     #[wasm_bindgen( js_name = saveLooseCommit)]
     pub async fn wasm_save_loose_commit(
         &self,
@@ -339,9 +335,7 @@ impl WasmIndexedDbStorage {
         let core_commit = LooseCommit::from(loose_commit.clone());
         let digest = core_commit.digest();
 
-        #[allow(clippy::expect_used)]
-        let bytes =
-            minicbor::to_vec(&core_commit).expect("CBOR serialization should be infallible");
+        let bytes = core_commit.to_bytes();
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -395,8 +389,8 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadLooseCommitsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let commit: LooseCommit =
-                minicbor::decode(&bytes).map_err(|_| WasmLoadLooseCommitsError::DecodeError)?;
+            let commit = LooseCommit::try_from_bytes(&bytes)
+                .map_err(|_| WasmLoadLooseCommitsError::DecodeError)?;
             out.push(commit.into());
         }
 
@@ -465,10 +459,6 @@ impl WasmIndexedDbStorage {
     /// # Errors
     ///
     /// Returns a [`WasmSaveFragmentError`] if the fragment could not be saved.
-    ///
-    /// # Panics
-    ///
-    /// Panics if the fragment is not serializable to CBOR.
     #[wasm_bindgen(js_name = saveFragment)]
     pub async fn wasm_save_fragment(
         &self,
@@ -478,9 +468,7 @@ impl WasmIndexedDbStorage {
         let core_fragment = Fragment::from(fragment.clone());
         let digest = core_fragment.digest();
 
-        #[allow(clippy::expect_used)]
-        let bytes =
-            minicbor::to_vec(&core_fragment).expect("CBOR serialization should be infallible");
+        let bytes = core_fragment.to_bytes();
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -534,9 +522,9 @@ impl WasmIndexedDbStorage {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadFragmentsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let commit: Fragment =
-                minicbor::decode(&bytes).map_err(|_| WasmLoadFragmentsError::DecodeError)?;
-            out.push(commit.into());
+            let fragment = Fragment::try_from_bytes(&bytes)
+                .map_err(|_| WasmLoadFragmentsError::DecodeError)?;
+            out.push(fragment.into());
         }
 
         Ok(out)

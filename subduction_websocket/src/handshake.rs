@@ -35,7 +35,7 @@ use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 
 use async_tungstenite::WebSocketStream;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use futures_util::{AsyncRead, AsyncWrite, SinkExt, StreamExt};
 use subduction_core::connection::handshake::Handshake;
 use thiserror::Error;

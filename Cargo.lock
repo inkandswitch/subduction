@@ -2067,26 +2067,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6877bb514081ee2a7ff5ef9de3281f14a4dd4bceac4c09388074a6b5df8a139a"
 
 [[package]]
-name = "minicbor"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "22b95c464ffa47c47d1a101546b1b5170dac5ffe72c1aab5ff13a63f69c94d76"
-dependencies = [
- "minicbor-derive",
-]
-
-[[package]]
-name = "minicbor-derive"
-version = "0.19.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b3e1b176cfd1b03e2d3ceeaa430f34879f8955e10ab57b4c1e7393787651143"
-dependencies = [
- "proc-macro2 1.0.106",
- "quote 1.0.44",
- "syn 2.0.116",
-]
-
-[[package]]
 name = "minimal-lexical"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2915,7 +2895,6 @@ dependencies = [
  "futures 0.3.32",
  "getrandom 0.2.17",
  "js-sys",
- "minicbor",
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
@@ -3164,7 +3143,6 @@ dependencies = [
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
- "minicbor",
  "rand 0.8.5",
  "sedimentree_core",
  "sedimentree_fs_storage",
