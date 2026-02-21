@@ -22,6 +22,8 @@ use url::Url;
 
 #[tokio::main]
 async fn main() -> eyre::Result<()> {
+    color_eyre::install()?;
+
     let args = Arguments::parse();
 
     setup_tracing();

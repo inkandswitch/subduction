@@ -20,6 +20,7 @@ async-tungstenite = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
 clap = { workspace = true }
+color-eyre = { workspace = true }
 console-subscriber = { workspace = true }
 eyre = { workspace = true }
 futures = { workspace = true }

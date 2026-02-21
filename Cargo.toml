@@ -51,6 +51,7 @@ blake3 = { version = "1.8", default-features = false }
 bolero = "0.13.4"
 ciborium = { version = "0.2", default-features = false }
 clap = { version = "4.5", features = ["derive"] }
+color-eyre = "0.6"
 console-subscriber = "0.5.0"
 console_error_panic_hook = { version = "0.1.7" }
 criterion = { version = "0.5", default-features = false }
