@@ -284,8 +284,6 @@ impl WasmSubduction {
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
     ) -> Result<WasmPeerId, WasmConnectError> {
-        use crate::connection::websocket::WasmWebSocket;
-
         // Perform handshake and get Authenticated<WasmWebSocket, Local>
         let authenticated = WasmWebSocket::connect_authenticated(
             address,
@@ -328,8 +326,6 @@ impl WasmSubduction {
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmConnectError> {
-        use crate::connection::websocket::WasmWebSocket;
-
         // Perform discovery handshake and get Authenticated<WasmWebSocket, Local>
         let authenticated = WasmWebSocket::connect_discover_authenticated(
             address,

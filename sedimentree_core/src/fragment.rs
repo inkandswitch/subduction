@@ -302,7 +302,7 @@ impl FragmentSpec {
 
 #[cfg(test)]
 mod tests {
-    use alloc::{collections::BTreeSet, vec::Vec};
+    use alloc::collections::BTreeSet;
 
     use testresult::TestResult;
 

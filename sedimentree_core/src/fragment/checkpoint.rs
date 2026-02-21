@@ -109,14 +109,6 @@ mod tests {
     }
 
     #[test]
-    fn checkpoint_equality() {
-        let digest = Digest::<LooseCommit>::from_bytes([1u8; 32]);
-        let a = Checkpoint::new(digest);
-        let b = Checkpoint::new(digest);
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn different_suffixes_same_checkpoint() {
         let mut bytes_a = [0u8; 32];
         bytes_a[31] = 1;

@@ -158,14 +158,14 @@ impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
         let decoded_envelope =
             minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
 
-        let signed = Self {
+        let result = Self {
             issuer: signer.verifying_key(),
             signature,
             encoded_payload: EncodedPayload::new(encoded),
         };
 
         // We just signed it, so we know it's valid — no need to verify
-        VerifiedSignature::new(signed, decoded_envelope.into_payload())
+        VerifiedSignature::new(result, decoded_envelope.into_payload())
     }
 
     /// Create a signed payload from raw components.

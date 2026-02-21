@@ -13,6 +13,7 @@ pub struct VerifiedBlobMeta {
 
 impl VerifiedBlobMeta {
     /// Create by computing metadata from the blob.
+    #[must_use]
     pub fn new(blob: Blob) -> Self {
         Self {
             meta: blob.meta(),
@@ -22,13 +23,13 @@ impl VerifiedBlobMeta {
 
     /// The verified metadata.
     #[must_use]
-    pub fn meta(&self) -> BlobMeta {
+    pub const fn meta(&self) -> BlobMeta {
         self.meta
     }
 
     /// The blob content.
     #[must_use]
-    pub fn blob(&self) -> &Blob {
+    pub const fn blob(&self) -> &Blob {
         &self.blob
     }
 

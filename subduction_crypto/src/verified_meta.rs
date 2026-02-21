@@ -74,19 +74,19 @@ where
 
     /// Returns a reference to the verified payload.
     #[must_use]
-    pub fn payload(&self) -> &T {
+    pub const fn payload(&self) -> &T {
         self.verified.payload()
     }
 
     /// Returns the issuer's verifying key.
     #[must_use]
-    pub fn issuer(&self) -> ed25519_dalek::VerifyingKey {
+    pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
         self.verified.issuer()
     }
 
     /// Returns a reference to the original signed value.
     #[must_use]
-    pub fn signed(&self) -> &Signed<T> {
+    pub const fn signed(&self) -> &Signed<T> {
         self.verified.signed()
     }
 

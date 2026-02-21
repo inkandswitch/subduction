@@ -39,7 +39,7 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> VerifiedSignature<T> {
     ///
     /// This is `pub(crate)` because it should only be constructed by
     /// `Signed::try_verify` or `seal()`.
-    pub(crate) fn new(signed: Signed<T>, payload: T) -> Self {
+    pub(crate) const fn new(signed: Signed<T>, payload: T) -> Self {
         Self { signed, payload }
     }
 
