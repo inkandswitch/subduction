@@ -6,18 +6,13 @@ use super::{magic::Magic, protocol_version::ProtocolVersion};
 ///
 /// The envelope ensures signed data has identifying markers and version information
 /// for forward compatibility.
-#[derive(Clone, Debug, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Envelope<T> {
-    #[n(0)]
     magic: Magic,
-
-    #[n(1)]
     protocol: ProtocolVersion,
-
-    #[n(2)]
     payload: T,
 }
 

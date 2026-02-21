@@ -153,37 +153,6 @@ impl<T: 'static, const N: usize> Truncated<Digest<T>, N> {
     }
 }
 
-impl<Ctx, V: 'static, const N: usize> minicbor::Encode<Ctx> for Truncated<V, N> {
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        _ctx: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.bytes(&self.bytes)?;
-        Ok(())
-    }
-}
-
-impl<'b, Ctx, V: 'static, const N: usize> minicbor::Decode<'b, Ctx> for Truncated<V, N> {
-    fn decode(
-        d: &mut minicbor::Decoder<'b>,
-        _ctx: &mut Ctx,
-    ) -> Result<Self, minicbor::decode::Error> {
-        let bytes = d.bytes()?;
-        if bytes.len() != N {
-            return Err(minicbor::decode::Error::message(
-                "truncated digest has wrong length",
-            ));
-        }
-        let mut arr = [0u8; N];
-        arr.copy_from_slice(bytes);
-        Ok(Self {
-            bytes: arr,
-            _phantom: PhantomData,
-        })
-    }
-}
-
 #[cfg(feature = "arbitrary")]
 impl<'a, V: 'static, const N: usize> arbitrary::Arbitrary<'a> for Truncated<V, N> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {

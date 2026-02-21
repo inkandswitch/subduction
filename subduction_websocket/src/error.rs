@@ -1,6 +1,7 @@
 //! Error types.
 
 use futures::channel::oneshot;
+use sedimentree_core::codec::error::CodecError;
 use subduction_core::connection::message::Message;
 use thiserror::Error;
 
@@ -47,7 +48,7 @@ pub enum RunError {
     #[error(transparent)]
     WebSocket(#[from] tungstenite::Error),
 
-    /// CBOR deserialization error.
+    /// Message deserialization error.
     #[error("deserialize error: {0}")]
-    Deserialize(minicbor::decode::Error),
+    Deserialize(CodecError),
 }

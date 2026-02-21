@@ -4,16 +4,11 @@ use alloc::string::String;
 use core::fmt::Write;
 
 /// A Peer ID.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct PeerId(
-    #[n(0)]
-    #[cbor(with = "minicbor::bytes")]
-    [u8; 32],
-);
+pub struct PeerId([u8; 32]);
 
 impl PeerId {
     /// Create a new [`PeerId`].

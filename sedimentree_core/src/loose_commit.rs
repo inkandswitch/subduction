@@ -16,19 +16,12 @@ use crate::{
 /// The smallest unit of metadata in a Sedimentree.
 ///
 /// It includes the digest of the data, plus pointers to any (causal) parents.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
-    #[n(0)]
     digest: Digest<LooseCommit>,
-
-    #[n(1)]
     parents: BTreeSet<Digest<LooseCommit>>,
-
-    #[n(2)]
     blob_meta: BlobMeta,
 }
 
@@ -116,7 +109,7 @@ impl Codec for LooseCommit {
         }
     }
 
-    fn decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
+    fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
             return Err(CodecError::BufferTooShort {
                 need: CODEC_FIXED_FIELDS_SIZE,
@@ -205,7 +198,7 @@ mod codec_tests {
         commit.encode_fields(&ctx, &mut buf);
         assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
 
-        let decoded = LooseCommit::decode_fields(&buf, &ctx).expect("decode should succeed");
+        let decoded = LooseCommit::try_decode_fields(&buf, &ctx).expect("decode should succeed");
         assert_eq!(decoded, commit);
     }
 
@@ -223,7 +216,7 @@ mod codec_tests {
         commit.encode_fields(&ctx, &mut buf);
         assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE + 3 * 32);
 
-        let decoded = LooseCommit::decode_fields(&buf, &ctx).expect("decode should succeed");
+        let decoded = LooseCommit::try_decode_fields(&buf, &ctx).expect("decode should succeed");
         assert_eq!(decoded, commit);
     }
 
@@ -240,7 +233,7 @@ mod codec_tests {
         let mut buf = Vec::new();
         commit.encode_fields(&ctx, &mut buf);
 
-        let result = LooseCommit::decode_fields(&buf, &wrong_ctx);
+        let result = LooseCommit::try_decode_fields(&buf, &wrong_ctx);
         assert!(matches!(result, Err(CodecError::ContextMismatch { .. })));
     }
 
@@ -257,7 +250,7 @@ mod codec_tests {
         encode::array(&[0x50; 32], &mut buf);
         encode::array(&[0x30; 32], &mut buf);
 
-        let result = LooseCommit::decode_fields(&buf, &ctx);
+        let result = LooseCommit::try_decode_fields(&buf, &ctx);
         assert!(matches!(result, Err(CodecError::UnsortedArray { .. })));
     }
 
@@ -266,7 +259,7 @@ mod codec_tests {
         let ctx = make_sedimentree_id(0x01);
         let buf = vec![0u8; 50];
 
-        let result = LooseCommit::decode_fields(&buf, &ctx);
+        let result = LooseCommit::try_decode_fields(&buf, &ctx);
         assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
     }
 

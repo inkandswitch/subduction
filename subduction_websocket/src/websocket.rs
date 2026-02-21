@@ -152,8 +152,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             self.peer_id
         );
 
-        #[allow(clippy::expect_used)]
-        let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
+        let msg_bytes = message.encode();
 
         let tx = self.outbound_tx.clone();
         async move {
@@ -196,9 +195,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connec
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            #[allow(clippy::expect_used)]
-            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
-                .expect("serialization should be infallible");
+            let msg_bytes = Message::BatchSyncRequest(req).encode();
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
@@ -344,7 +341,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
-                    let msg: Message = minicbor::decode(&bytes).map_err(|e| {
+                    let msg = Message::try_decode(&bytes).map_err(|e| {
                         tracing::error!(
                             "failed to deserialize inbound message from peer {:?}: {}",
                             self.peer_id,
@@ -481,8 +478,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             message.request_id()
         );
 
-        #[allow(clippy::expect_used)]
-        let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
+        let msg_bytes = message.encode();
 
         let tx = self.outbound_tx.clone();
         async move {

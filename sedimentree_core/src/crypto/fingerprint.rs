@@ -23,14 +23,9 @@ use siphasher::sip::SipHasher24;
 /// assert_eq!(seed.key0(), 42);
 /// assert_eq!(seed.key1(), 99);
 /// ```
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct FingerprintSeed {
-    #[n(0)]
     key0: u64,
-
-    #[n(1)]
     key1: u64,
 }
 
@@ -239,26 +234,6 @@ impl<T> core::fmt::Debug for Fingerprint<T> {
 impl<T> core::fmt::Display for Fingerprint<T> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         write!(f, "{:016x}", self.hash)
-    }
-}
-
-impl<T, Ctx> minicbor::Encode<Ctx> for Fingerprint<T> {
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        _ctx: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.u64(self.hash)?;
-        Ok(())
-    }
-}
-
-impl<'b, T, Ctx> minicbor::Decode<'b, Ctx> for Fingerprint<T> {
-    fn decode(
-        d: &mut minicbor::Decoder<'b>,
-        _ctx: &mut Ctx,
-    ) -> Result<Self, minicbor::decode::Error> {
-        Ok(Self::from_u64(d.u64()?))
     }
 }
 

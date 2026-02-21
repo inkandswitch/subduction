@@ -24,11 +24,10 @@ use crate::{
 /// - **Random collision**: ~N²/2⁹⁶ where N is set size
 /// - **Adversarial collision**: ~2⁴⁸ work (birthday attack on 96 bits)
 /// - **Preimage**: ~2⁹⁶ work
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
-#[cbor(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct Checkpoint(#[n(0)] Truncated<Digest<LooseCommit>>);
+pub struct Checkpoint(Truncated<Digest<LooseCommit>>);
 
 impl Checkpoint {
     /// Create a checkpoint from a full commit digest.

@@ -210,7 +210,7 @@ fn commit_digest(
     sedimentree_id: &SedimentreeId,
 ) -> Option<Digest<LooseCommit>> {
     signed
-        .decode_payload(sedimentree_id)
+        .try_decode_payload(sedimentree_id)
         .ok()
         .map(|c| c.digest())
 }
@@ -221,7 +221,7 @@ fn fragment_digest(
     sedimentree_id: &SedimentreeId,
 ) -> Option<Digest<Fragment>> {
     signed
-        .decode_payload(sedimentree_id)
+        .try_decode_payload(sedimentree_id)
         .ok()
         .map(|f| f.digest())
 }
@@ -232,7 +232,7 @@ fn fragment_blob_digest(
     sedimentree_id: &SedimentreeId,
 ) -> Option<Digest<Blob>> {
     signed
-        .decode_payload(sedimentree_id)
+        .try_decode_payload(sedimentree_id)
         .ok()
         .map(|f| f.summary().blob_meta().digest())
 }
@@ -349,7 +349,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
             // Get the blob digest from the commit's blob metadata
             let blob_digest = loose_commit
-                .decode_payload(&sedimentree_id)
+                .try_decode_payload(&sedimentree_id)
                 .ok()
                 .map(|commit| commit.blob_meta().digest())
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;

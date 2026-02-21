@@ -23,9 +23,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{id::FragmentId, Fragment},
+    fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
-    loose_commit::{id::CommitId, LooseCommit},
+    loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -33,80 +33,62 @@ use subduction_crypto::signed::Signed;
 use crate::peer::id::PeerId;
 
 /// The API contact messages to be sent over a [`Connection`].
-#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Message {
     /// A single loose commit being sent for a particular [`Sedimentree`].
-    #[n(0)]
     LooseCommit {
         /// The ID of the [`Sedimentree`] that this commit belongs to.
-        #[n(0)]
         id: SedimentreeId,
 
         /// The signed [`LooseCommit`] being sent.
-        #[n(1)]
         commit: Signed<LooseCommit>,
 
         /// The [`Blob`] containing the commit data.
-        #[n(2)]
         blob: Blob,
     },
 
     /// A single fragment being sent for a particular [`Sedimentree`].
-    #[n(1)]
     Fragment {
         /// The ID of the [`Sedimentree`] that this fragment belongs to.
-        #[n(0)]
         id: SedimentreeId,
 
         /// The signed [`Fragment`] being sent.
-        #[n(1)]
         fragment: Signed<Fragment>,
 
         /// The [`Blob`] containing the fragment data.
-        #[n(2)]
         blob: Blob,
     },
 
     /// A request for blobs by their [`Digest`]s within a specific sedimentree.
-    #[n(2)]
     BlobsRequest {
         /// The sedimentree to fetch blobs from.
-        #[n(0)]
         id: SedimentreeId,
         /// The blob digests being requested.
-        #[n(1)]
         digests: Vec<Digest<Blob>>,
     },
 
     /// A response to a [`BlobsRequest`] with blobs for a specific sedimentree.
-    #[n(3)]
     BlobsResponse {
         /// The sedimentree these blobs belong to.
-        #[n(0)]
         id: SedimentreeId,
         /// The requested blobs.
-        #[n(1)]
         blobs: Vec<Blob>,
     },
 
     /// A request to "batch sync" an entire [`Sedimentree`].
-    #[n(4)]
-    BatchSyncRequest(#[n(0)] BatchSyncRequest),
+    BatchSyncRequest(BatchSyncRequest),
 
     /// A response to a [`BatchSyncRequest`].
-    #[n(5)]
-    BatchSyncResponse(#[n(0)] BatchSyncResponse),
+    BatchSyncResponse(BatchSyncResponse),
 
     /// A request to remove subscriptions from specific sedimentrees.
-    #[n(6)]
-    RemoveSubscriptions(#[n(0)] RemoveSubscriptions),
+    RemoveSubscriptions(RemoveSubscriptions),
 
     /// Notification that a data request was rejected due to authorization failure.
-    #[n(7)]
-    DataRequestRejected(#[n(0)] DataRequestRejected),
+    DataRequestRejected(DataRequestRejected),
 }
 
 impl Message {
@@ -157,28 +139,24 @@ impl Message {
 }
 
 /// A request to sync a sedimentree in batch.
-#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncRequest {
     /// The ID of the sedimentree to sync.
-    #[n(0)]
     pub id: SedimentreeId,
 
     /// The unique ID of the request.
-    #[n(1)]
     pub req_id: RequestId,
 
     /// Compact fingerprint summary of the requester's sedimentree.
     ///
     /// Uses SipHash-2-4 fingerprints with a per-request random seed
     /// instead of full structural data.
-    #[n(2)]
     pub fingerprint_summary: FingerprintSummary,
 
     /// Whether to subscribe to future updates for this sedimentree.
-    #[n(3)]
     pub subscribe: bool,
 }
 
@@ -189,40 +167,34 @@ impl From<BatchSyncRequest> for Message {
 }
 
 /// A response to a [`BatchSyncRequest`].
-#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BatchSyncResponse {
     /// The ID of the request that this is a response to.
-    #[n(0)]
     pub req_id: RequestId,
 
     /// The ID of the sedimentree that was synced.
-    #[n(1)]
     pub id: SedimentreeId,
 
     /// The result of the sync request.
-    #[n(2)]
     pub result: SyncResult,
 }
 
 /// The result of a batch sync request.
-#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum SyncResult {
     /// Sync succeeded.
-    #[n(0)]
-    Ok(#[n(0)] SyncDiff),
+    Ok(SyncDiff),
 
     /// Sedimentree not found (peer is authorized but tree doesn't exist).
-    #[n(1)]
     NotFound,
 
     /// Peer is not authorized to access this sedimentree.
-    #[n(2)]
     Unauthorized,
 }
 
@@ -233,13 +205,12 @@ impl From<BatchSyncResponse> for Message {
 }
 
 /// A request to remove subscriptions from specific sedimentrees.
-#[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(Hash))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RemoveSubscriptions {
     /// The IDs of the sedimentrees to unsubscribe from.
-    #[n(0)]
     pub ids: Vec<SedimentreeId>,
 }
 
@@ -253,12 +224,11 @@ impl From<RemoveSubscriptions> for Message {
 ///
 /// This is informational — the receiver's original sync completed, but their
 /// opportunistic `requesting` field could not be fulfilled.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct DataRequestRejected {
     /// The sedimentree ID that was rejected.
-    #[n(0)]
     pub id: SedimentreeId,
 }
 
@@ -269,9 +239,7 @@ impl From<DataRequestRejected> for Message {
 }
 
 /// A unique identifier for a particular request.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -281,11 +249,9 @@ pub struct RequestId {
     /// This namespaces nonces so they only need to be unique per-peer rather than globally.
     /// Not redundant with connection-level auth or `Signed<T>` — `RequestId` must be
     /// matchable without accessing the connection, and these messages aren't individually signed.
-    #[n(0)]
     pub requestor: PeerId,
 
     /// A nonce unique to this user and connection.
-    #[n(1)]
     pub nonce: u64,
 }
 
@@ -294,23 +260,20 @@ pub struct RequestId {
 /// Contains both:
 /// - Data to send to the requestor (`missing_commits`, `missing_fragments`)
 /// - Data the responder is requesting back (`requesting`)
-#[derive(Debug, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct SyncDiff {
     /// Commits the requestor is missing (responder sends these).
-    #[n(0)]
     pub missing_commits: Vec<(Signed<LooseCommit>, Blob)>,
 
     /// Fragments the requestor is missing (responder sends these).
-    #[n(1)]
     pub missing_fragments: Vec<(Signed<Fragment>, Blob)>,
 
     /// Data the responder is requesting from the requestor.
     ///
     /// The requestor should send these commits and fragments back
     /// as individual [`Message::LooseCommit`] and [`Message::Fragment`] messages.
-    #[n(2)]
     pub requesting: RequestedData,
 }
 
@@ -322,16 +285,14 @@ pub struct SyncDiff {
 /// The fingerprints are echoed back from the requestor's original
 /// [`FingerprintSummary`]. The requestor reverse-lookups each fingerprint
 /// to find the corresponding local item.
-#[derive(Debug, Default, Clone, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct RequestedData {
     /// Fingerprints of commits the responder needs from the requestor.
-    #[n(0)]
     pub commit_fingerprints: Vec<Fingerprint<CommitId>>,
 
     /// Fingerprints of fragments the responder needs from the requestor.
-    #[n(1)]
     pub fragment_fingerprints: Vec<Fingerprint<FragmentId>>,
 }
 
@@ -438,7 +399,7 @@ impl Message {
     /// # Errors
     ///
     /// Returns an error if the message is malformed.
-    pub fn decode(bytes: &[u8]) -> Result<Self, CodecError> {
+    pub fn try_decode(bytes: &[u8]) -> Result<Self, CodecError> {
         if bytes.len() < ENVELOPE_HEADER_SIZE {
             return Err(CodecError::BufferTooShort {
                 need: ENVELOPE_HEADER_SIZE,
@@ -479,7 +440,7 @@ impl Message {
                 return Err(CodecError::InvalidEnumTag {
                     tag,
                     type_name: "Message",
-                })
+                });
             }
         };
 
@@ -700,7 +661,7 @@ fn decode_loose_commit(payload: &[u8]) -> Result<Message, CodecError> {
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
 
-    let commit = Signed::<LooseCommit>::from_bytes(payload[offset..].to_vec())?;
+    let commit = Signed::<LooseCommit>::try_from_bytes(payload[offset..].to_vec())?;
     offset += commit.as_bytes().len();
 
     let blob_size = read_u32(payload, &mut offset)? as usize;
@@ -721,7 +682,7 @@ fn decode_fragment(payload: &[u8]) -> Result<Message, CodecError> {
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
 
-    let fragment = Signed::<Fragment>::from_bytes(payload[offset..].to_vec())?;
+    let fragment = Signed::<Fragment>::try_from_bytes(payload[offset..].to_vec())?;
     offset += fragment.as_bytes().len();
 
     let blob_size = read_u32(payload, &mut offset)? as usize;
@@ -790,7 +751,7 @@ fn decode_batch_sync_request(payload: &[u8]) -> Result<Message, CodecError> {
             return Err(CodecError::InvalidEnumTag {
                 tag: subscribe_byte,
                 type_name: "Subscribe",
-            })
+            });
         }
     };
 
@@ -838,7 +799,7 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<Message, CodecError> {
             return Err(CodecError::InvalidEnumTag {
                 tag: result_tag,
                 type_name: "SyncResult",
-            })
+            });
         }
     };
 
@@ -857,7 +818,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Code
 
     let mut missing_commits = Vec::with_capacity(commit_count);
     for _ in 0..commit_count {
-        let commit = Signed::<LooseCommit>::from_bytes(payload[*offset..].to_vec())?;
+        let commit = Signed::<LooseCommit>::try_from_bytes(payload[*offset..].to_vec())?;
         *offset += commit.as_bytes().len();
 
         let blob_size = read_u32(payload, offset)? as usize;
@@ -875,7 +836,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Code
 
     let mut missing_fragments = Vec::with_capacity(fragment_count);
     for _ in 0..fragment_count {
-        let fragment = Signed::<Fragment>::from_bytes(payload[*offset..].to_vec())?;
+        let fragment = Signed::<Fragment>::try_from_bytes(payload[*offset..].to_vec())?;
         *offset += fragment.as_bytes().len();
 
         let blob_size = read_u32(payload, offset)? as usize;
@@ -1214,7 +1175,7 @@ mod tests {
             };
 
             let encoded = msg.encode();
-            let decoded = Message::decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded).expect("decode failed");
             assert_eq!(msg, decoded);
         }
 
@@ -1229,7 +1190,7 @@ mod tests {
             };
 
             let encoded = msg.encode();
-            let decoded = Message::decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded).expect("decode failed");
             assert_eq!(msg, decoded);
         }
 
@@ -1254,7 +1215,7 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded).expect("decode failed");
             assert_eq!(msg, decoded);
         }
 
@@ -1270,7 +1231,7 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded).expect("decode failed");
             assert_eq!(msg, decoded);
         }
 
@@ -1286,7 +1247,7 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded).expect("decode failed");
             assert_eq!(msg, decoded);
         }
 
@@ -1297,7 +1258,7 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded).expect("decode failed");
             assert_eq!(msg, decoded);
         }
 
@@ -1308,7 +1269,7 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded).expect("decode failed");
             assert_eq!(msg, decoded);
         }
 
@@ -1318,7 +1279,7 @@ mod tests {
             bad_bytes[0..4].copy_from_slice(b"BAD\x00");
             bad_bytes[4..8].copy_from_slice(&20u32.to_be_bytes());
 
-            let result = Message::decode(&bad_bytes);
+            let result = Message::try_decode(&bad_bytes);
             assert!(matches!(result, Err(CodecError::InvalidSchema { .. })));
         }
 
@@ -1330,7 +1291,7 @@ mod tests {
             let mut encoded = msg.encode();
             encoded.truncate(encoded.len() - 5);
 
-            let result = Message::decode(&encoded);
+            let result = Message::try_decode(&encoded);
             assert!(matches!(result, Err(CodecError::SizeMismatch { .. })));
         }
 
@@ -1341,7 +1302,7 @@ mod tests {
             bad_bytes[4..8].copy_from_slice(&20u32.to_be_bytes());
             bad_bytes[8] = 0xFF;
 
-            let result = Message::decode(&bad_bytes);
+            let result = Message::try_decode(&bad_bytes);
             assert!(matches!(result, Err(CodecError::InvalidEnumTag { .. })));
         }
     }

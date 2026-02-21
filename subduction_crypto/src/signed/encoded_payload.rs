@@ -33,23 +33,6 @@ impl<T> EncodedPayload<T> {
     }
 }
 
-impl<Ctx, T> minicbor::Encode<Ctx> for EncodedPayload<T> {
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        _: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.bytes(&self.0)?;
-        Ok(())
-    }
-}
-
-impl<'b, Ctx, T> minicbor::Decode<'b, Ctx> for EncodedPayload<T> {
-    fn decode(d: &mut minicbor::Decoder<'b>, _: &mut Ctx) -> Result<Self, minicbor::decode::Error> {
-        Ok(Self(d.bytes()?.to_vec(), PhantomData))
-    }
-}
-
 impl<T> PartialEq for EncodedPayload<T> {
     fn eq(&self, other: &Self) -> bool {
         self.0 == other.0

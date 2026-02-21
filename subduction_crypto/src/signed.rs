@@ -136,7 +136,7 @@ impl<T: Codec> Signed<T> {
             .map_err(|_| VerificationError::InvalidSignature)?;
 
         // Decode payload from fields bytes
-        let payload = T::decode_fields(self.fields_bytes(), ctx)?;
+        let payload = T::try_decode_fields(self.fields_bytes(), ctx)?;
 
         Ok(VerifiedSignature::new(self.clone(), payload))
     }
@@ -151,8 +151,8 @@ impl<T: Codec> Signed<T> {
     /// # Errors
     ///
     /// Returns an error if the payload cannot be decoded.
-    pub fn decode_payload(&self, ctx: &T::Context) -> Result<T, CodecError> {
-        T::decode_fields(self.fields_bytes(), ctx)
+    pub fn try_decode_payload(&self, ctx: &T::Context) -> Result<T, CodecError> {
+        T::try_decode_fields(self.fields_bytes(), ctx)
     }
 
     /// Decode from wire bytes.
@@ -167,7 +167,7 @@ impl<T: Codec> Signed<T> {
     /// - The buffer is too short
     /// - The schema header doesn't match `T::SCHEMA`
     /// - The verifying key is invalid
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, CodecError> {
+    pub fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, CodecError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIZE {
             return Err(CodecError::BufferTooShort {
@@ -325,28 +325,6 @@ impl<T: Codec> PartialOrd for Signed<T> {
 impl<T: Codec> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.bytes.cmp(&other.bytes)
-    }
-}
-
-impl<Ctx, T: Codec> minicbor::Encode<Ctx> for Signed<T> {
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        _ctx: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.bytes(&self.bytes)?;
-        Ok(())
-    }
-}
-
-impl<'b, Ctx, T: Codec> minicbor::Decode<'b, Ctx> for Signed<T> {
-    fn decode(
-        d: &mut minicbor::Decoder<'b>,
-        _ctx: &mut Ctx,
-    ) -> Result<Self, minicbor::decode::Error> {
-        let bytes = d.bytes()?;
-        Self::from_bytes(bytes.to_vec())
-            .map_err(|e| minicbor::decode::Error::message(alloc::format!("signed decode: {e}")))
     }
 }
 

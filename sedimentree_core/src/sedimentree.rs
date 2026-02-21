@@ -24,17 +24,12 @@ use crate::{
 ///
 /// Bandwidth: ~16 bytes (seed) + 8 bytes per item, vs ~100+ bytes
 /// per item with [`SedimentreeSummary`].
-#[derive(Clone, Debug, Hash, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct FingerprintSummary {
-    #[n(0)]
     seed: FingerprintSeed,
-
-    #[n(1)]
     commit_fingerprints: BTreeSet<Fingerprint<CommitId>>,
-
-    #[n(2)]
     fragment_fingerprints: BTreeSet<Fingerprint<FragmentId>>,
 }
 

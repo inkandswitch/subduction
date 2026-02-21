@@ -82,7 +82,7 @@ impl WasmWebSocket {
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
                 tracing::debug!("WS received {} bytes", bytes.len());
-                match minicbor::decode::<Message>(&bytes) {
+                match Message::try_decode(&bytes) {
                     Ok(msg) => {
                         tracing::trace!("WS message decoded: {} bytes", bytes.len());
                         let inner_pending = closure_pending.clone();
@@ -535,8 +535,7 @@ impl Connection<Local> for WasmWebSocket {
     fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let request_id = message.request_id();
 
-        #[allow(clippy::expect_used)]
-        let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
+        let msg_bytes = message.encode();
 
         async move {
             self.socket
@@ -579,9 +578,7 @@ impl Connection<Local> for WasmWebSocket {
                 self.pending.lock().await.insert(req_id, tx);
             }
 
-            #[allow(clippy::expect_used)]
-            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
-                .expect("serialization should be infallible");
+            let msg_bytes = Message::BatchSyncRequest(req).encode();
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())

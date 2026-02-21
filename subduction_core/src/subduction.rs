@@ -330,11 +330,11 @@ impl<
             // Extract payloads from trusted storage (already verified before storage)
             let loose_commits: Vec<_> = signed_loose_commits
                 .into_iter()
-                .filter_map(|(_, signed)| signed.decode_payload(&id).ok())
+                .filter_map(|(_, signed)| signed.try_decode_payload(&id).ok())
                 .collect();
             let fragments: Vec<_> = signed_fragments
                 .into_iter()
-                .filter_map(|(_, signed)| signed.decode_payload(&id).ok())
+                .filter_map(|(_, signed)| signed.try_decode_payload(&id).ok())
                 .collect();
 
             let sedimentree = Sedimentree::new(fragments, loose_commits);
@@ -1721,11 +1721,11 @@ impl<
             if let Entry::Vacant(entry) = locked.entry(id) {
                 let loose_commits: Vec<_> = commit_by_digest
                     .values()
-                    .filter_map(|signed| signed.decode_payload(&id).ok())
+                    .filter_map(|signed| signed.try_decode_payload(&id).ok())
                     .collect();
                 let fragments: Vec<_> = fragment_by_digest
                     .values()
-                    .filter_map(|signed| signed.decode_payload(&id).ok())
+                    .filter_map(|signed| signed.try_decode_payload(&id).ok())
                     .collect();
 
                 if !loose_commits.is_empty() || !fragments.is_empty() {
@@ -1764,7 +1764,7 @@ impl<
 
         for digest in local_commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(&digest)
-                && let Ok(payload) = signed_commit.decode_payload(&id)
+                && let Ok(payload) = signed_commit.try_decode_payload(&id)
             {
                 let blob_digest = payload.blob_meta().digest();
                 if let Some(blob) = fetcher
@@ -1782,7 +1782,7 @@ impl<
 
         for digest in local_fragment_digests {
             if let Some(signed_fragment) = fragment_by_digest.get(&digest)
-                && let Ok(payload) = signed_fragment.decode_payload(&id)
+                && let Ok(payload) = signed_fragment.try_decode_payload(&id)
             {
                 let blob_digest = payload.summary().blob_meta().digest();
                 if let Some(blob) = fetcher
@@ -2641,7 +2641,7 @@ impl<
 
                 for commit_digest in &requested_commit_digests {
                     if let Some(signed_commit) = commit_by_digest.get(commit_digest)
-                        && let Ok(payload) = signed_commit.decode_payload(&id)
+                        && let Ok(payload) = signed_commit.try_decode_payload(&id)
                     {
                         blob_digests.push(payload.blob_meta().digest());
                     }
@@ -2649,7 +2649,7 @@ impl<
 
                 for fragment_digest in &requested_fragment_digests {
                     if let Some(signed_fragment) = fragment_by_digest.get(fragment_digest)
-                        && let Ok(payload) = signed_fragment.decode_payload(&id)
+                        && let Ok(payload) = signed_fragment.try_decode_payload(&id)
                     {
                         blob_digests.push(payload.summary().blob_meta().digest());
                     }
@@ -2667,7 +2667,7 @@ impl<
                 .iter()
                 .filter_map(|commit_digest| {
                     let signed_commit = commit_by_digest.get(commit_digest)?;
-                    let payload = signed_commit.decode_payload(&id).ok()?;
+                    let payload = signed_commit.try_decode_payload(&id).ok()?;
                     let blob = blob_by_digest.get(&payload.blob_meta().digest())?;
                     Some(Message::LooseCommit {
                         id,
@@ -2681,7 +2681,7 @@ impl<
                 .iter()
                 .filter_map(|fragment_digest| {
                     let signed_fragment = fragment_by_digest.get(fragment_digest)?;
-                    let payload = signed_fragment.decode_payload(&id).ok()?;
+                    let payload = signed_fragment.try_decode_payload(&id).ok()?;
                     let blob = blob_by_digest.get(&payload.summary().blob_meta().digest())?;
                     Some(Message::Fragment {
                         id,

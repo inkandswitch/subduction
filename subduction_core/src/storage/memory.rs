@@ -47,7 +47,7 @@ impl MemoryStorage {
         sedimentree_id: &SedimentreeId,
     ) -> Option<Digest<LooseCommit>> {
         signed
-            .decode_payload(sedimentree_id)
+            .try_decode_payload(sedimentree_id)
             .ok()
             .map(|c| c.digest())
     }
@@ -58,7 +58,7 @@ impl MemoryStorage {
         sedimentree_id: &SedimentreeId,
     ) -> Option<Digest<Fragment>> {
         signed
-            .decode_payload(sedimentree_id)
+            .try_decode_payload(sedimentree_id)
             .ok()
             .map(|f| f.digest())
     }

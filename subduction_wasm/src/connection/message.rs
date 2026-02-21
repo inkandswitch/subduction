@@ -5,7 +5,7 @@ use alloc::{
     vec::Vec,
 };
 use js_sys::Uint8Array;
-use sedimentree_core::blob::Blob;
+use sedimentree_core::{blob::Blob, codec::error::CodecError};
 use subduction_core::connection::message::Message;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -26,26 +26,21 @@ pub struct WasmMessage(pub(crate) Message);
 #[wasm_refgen(js_ref = JsMessage)]
 #[wasm_bindgen(js_class = Message)]
 impl WasmMessage {
-    /// Serialize the message to CBOR bytes.
-    ///
-    /// # Panics
-    ///
-    /// Panics if serialization of the Subduction protocol message fails.
+    /// Serialize the message to bytes.
     #[must_use]
-    #[wasm_bindgen(js_name = toCborBytes)]
-    pub fn to_cbor_bytes(&self) -> Vec<u8> {
-        #[allow(clippy::expect_used)]
-        minicbor::to_vec(&self.0).expect("serialization should be infallible")
+    #[wasm_bindgen(js_name = toBytes)]
+    pub fn to_bytes(&self) -> Vec<u8> {
+        self.0.encode()
     }
 
-    /// Deserialize a message from CBOR bytes.
+    /// Deserialize a message from bytes.
     ///
     /// # Errors
     ///
     /// Returns a [`JsMessageDeserializationError`] if deserialization fails.
-    #[wasm_bindgen(js_name = fromCborBytes)]
-    pub fn from_cbor_bytes(bytes: &[u8]) -> Result<Self, JsMessageDeserializationError> {
-        let msg: Message = minicbor::decode(bytes).map_err(JsMessageDeserializationError)?;
+    #[wasm_bindgen(js_name = fromBytes)]
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, JsMessageDeserializationError> {
+        let msg = Message::try_decode(bytes).map_err(JsMessageDeserializationError)?;
         Ok(msg.into())
     }
 
@@ -108,9 +103,10 @@ impl WasmMessage {
     #[must_use]
     pub fn commit(&self) -> Option<WasmLooseCommit> {
         match &self.0 {
-            Message::LooseCommit { id, commit, .. } => {
-                commit.decode_payload(id).ok().map(WasmLooseCommit::from)
-            }
+            Message::LooseCommit { id, commit, .. } => commit
+                .try_decode_payload(id)
+                .ok()
+                .map(WasmLooseCommit::from),
             Message::Fragment { .. }
             | Message::BlobsRequest { .. }
             | Message::BlobsResponse { .. }
@@ -129,7 +125,7 @@ impl WasmMessage {
     pub fn fragment(&self) -> Option<WasmFragment> {
         match &self.0 {
             Message::Fragment { id, fragment, .. } => {
-                fragment.decode_payload(id).ok().map(WasmFragment::from)
+                fragment.try_decode_payload(id).ok().map(WasmFragment::from)
             }
             Message::LooseCommit { .. }
             | Message::BlobsRequest { .. }
@@ -242,10 +238,10 @@ impl From<WasmMessage> for Message {
     }
 }
 
-/// An error indicating a failure to deserialize a [`Message`] from CBOR.
+/// An error indicating a failure to deserialize a [`Message`].
 #[derive(Debug, Error)]
 #[error("failed to deserialize Message: {0}")]
-pub struct JsMessageDeserializationError(minicbor::decode::Error);
+pub struct JsMessageDeserializationError(CodecError);
 
 impl From<JsMessageDeserializationError> for JsValue {
     fn from(err: JsMessageDeserializationError) -> Self {

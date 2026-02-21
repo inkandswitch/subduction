@@ -4,18 +4,11 @@
 ///
 /// 128 bits provides sufficient collision resistance for replay protection
 /// within a ~5 minute window, especially when combined with timestamps.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct Nonce(
-    #[n(0)]
-    #[cbor(with = "minicbor::bytes")]
-    [u8; 16],
-);
+pub struct Nonce([u8; 16]);
 
 impl Nonce {
     /// Create a random nonce using `getrandom`.

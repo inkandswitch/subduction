@@ -98,7 +98,7 @@ pub trait Codec: Sized {
     ///
     /// Returns [`CodecError`] if the buffer is malformed, too short,
     /// contains invalid values, or fails validation (e.g., unsorted arrays).
-    fn decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError>;
+    fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError>;
 
     /// Size of the encoded fields (for buffer pre-allocation).
     fn fields_size(&self, ctx: &Self::Context) -> usize;

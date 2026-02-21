@@ -27,17 +27,12 @@ use crate::{
 /// read the content in a particular fragment (e.g. because it's in
 /// an arbitrary format or is encrypted), it maintains some basic
 /// metadata about the the content to aid in deduplication and synchronization.
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fragment {
-    #[n(0)]
     summary: FragmentSummary,
-    #[n(1)]
     checkpoints: BTreeSet<Checkpoint>,
-    #[n(2)]
     digest: Digest<Fragment>,
 }
 
@@ -200,17 +195,12 @@ impl HasBlobMeta for Fragment {
 }
 
 /// The minimal data for a [`Fragment`].
-#[derive(
-    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FragmentSummary {
-    #[n(0)]
     head: Digest<LooseCommit>,
-    #[n(1)]
     boundary: BTreeSet<Digest<LooseCommit>>,
-    #[n(2)]
     blob_meta: BlobMeta,
 }
 
@@ -356,7 +346,7 @@ impl Codec for Fragment {
         }
     }
 
-    fn decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
+    fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
             return Err(CodecError::BufferTooShort {
                 need: CODEC_FIXED_FIELDS_SIZE,
@@ -474,7 +464,7 @@ mod codec_tests {
         fragment.encode_fields(&ctx, &mut buf);
         assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
 
-        let decoded = Fragment::decode_fields(&buf, &ctx).expect("decode should succeed");
+        let decoded = Fragment::try_decode_fields(&buf, &ctx).expect("decode should succeed");
         assert_eq!(decoded.head(), fragment.head());
         assert_eq!(decoded.boundary(), fragment.boundary());
         assert_eq!(decoded.checkpoints(), fragment.checkpoints());
@@ -496,7 +486,7 @@ mod codec_tests {
         let mut buf = Vec::new();
         fragment.encode_fields(&ctx, &mut buf);
 
-        let decoded = Fragment::decode_fields(&buf, &ctx).expect("decode should succeed");
+        let decoded = Fragment::try_decode_fields(&buf, &ctx).expect("decode should succeed");
         assert_eq!(decoded.head(), fragment.head());
         assert_eq!(decoded.boundary(), fragment.boundary());
         assert_eq!(decoded.checkpoints(), fragment.checkpoints());
@@ -516,7 +506,7 @@ mod codec_tests {
         let mut buf = Vec::new();
         fragment.encode_fields(&ctx, &mut buf);
 
-        let result = Fragment::decode_fields(&buf, &wrong_ctx);
+        let result = Fragment::try_decode_fields(&buf, &wrong_ctx);
         assert!(matches!(result, Err(CodecError::ContextMismatch { .. })));
     }
 
@@ -534,7 +524,7 @@ mod codec_tests {
         encode::array(&[0x50; 32], &mut buf);
         encode::array(&[0x30; 32], &mut buf);
 
-        let result = Fragment::decode_fields(&buf, &ctx);
+        let result = Fragment::try_decode_fields(&buf, &ctx);
         assert!(matches!(result, Err(CodecError::UnsortedArray { .. })));
     }
 
@@ -543,7 +533,7 @@ mod codec_tests {
         let ctx = make_sedimentree_id(0x01);
         let buf = vec![0u8; 50];
 
-        let result = Fragment::decode_fields(&buf, &ctx);
+        let result = Fragment::try_decode_fields(&buf, &ctx);
         assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
     }
 
@@ -778,36 +768,9 @@ mod tests {
         assert!(!deep.supports(&shallow_summary, &CountLeadingZeroBytes));
     }
 
-    #[test]
-    fn cbor_round_trip() -> TestResult {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
-        let checkpoint = digest_with_depth(1, 50);
-        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[checkpoint]);
-
-        let encoded = minicbor::to_vec(&fragment)?;
-        let decoded: Fragment = minicbor::decode(&encoded)?;
-
-        assert_eq!(fragment, decoded);
-        Ok(())
-    }
-
     #[cfg(feature = "bolero")]
     mod proptests {
         use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
-
-        #[test]
-        #[allow(clippy::expect_used)]
-        fn cbor_round_trip() {
-            bolero::check!()
-                .with_arbitrary::<Fragment>()
-                .for_each(|fragment| {
-                    let encoded = minicbor::to_vec(fragment).expect("encoding should succeed");
-                    let decoded: Fragment =
-                        minicbor::decode(&encoded).expect("decoding should succeed");
-                    assert_eq!(fragment, &decoded, "CBOR round-trip should preserve data");
-                });
-        }
 
         #[test]
         fn supports_self() {

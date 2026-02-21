@@ -1,24 +1,11 @@
 //! Types for identifying connections.
 
 /// A unique identifier for a particular connection.
-#[derive(
-    Debug,
-    Default,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    PartialOrd,
-    Ord,
-    Hash,
-    minicbor::Encode,
-    minicbor::Decode,
-)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct ConnectionId(#[n(0)] usize);
+pub struct ConnectionId(usize);
 
 impl ConnectionId {
     /// Create a new [`ConnectionId`] from a `usize`.

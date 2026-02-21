@@ -162,7 +162,7 @@ impl FsStorage {
         sedimentree_id: &SedimentreeId,
     ) -> Option<Digest<LooseCommit>> {
         signed
-            .decode_payload(sedimentree_id)
+            .try_decode_payload(sedimentree_id)
             .ok()
             .map(|c| c.digest())
     }
@@ -172,7 +172,7 @@ impl FsStorage {
         sedimentree_id: &SedimentreeId,
     ) -> Option<Digest<Fragment>> {
         signed
-            .decode_payload(sedimentree_id)
+            .try_decode_payload(sedimentree_id)
             .ok()
             .map(|f| f.digest())
     }
@@ -273,8 +273,7 @@ impl Storage<Sendable> for FsStorage {
 
             tokio::fs::create_dir_all(self.commits_dir(sedimentree_id)).await?;
 
-            let data = minicbor::to_vec(&loose_commit)
-                .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
+            let data = loose_commit.as_bytes().to_vec();
 
             let temp_path = commit_path.with_extension("tmp");
             tokio::fs::write(&temp_path, &data).await?;
@@ -296,7 +295,7 @@ impl Storage<Sendable> for FsStorage {
             let commit_path = self.commit_path(sedimentree_id, digest);
             match tokio::fs::read(&commit_path).await {
                 Ok(data) => {
-                    let signed: Signed<LooseCommit> = minicbor::decode(&data)
+                    let signed = Signed::try_from_bytes(data)
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
                     Ok(Some(signed))
                 }
@@ -358,7 +357,7 @@ impl Storage<Sendable> for FsStorage {
                     && let Some(digest) = Self::parse_commit_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
-                    let signed: Signed<LooseCommit> = minicbor::decode(&data)
+                    let signed = Signed::try_from_bytes(data)
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
                     result.push((digest, signed));
                 }
@@ -424,8 +423,7 @@ impl Storage<Sendable> for FsStorage {
 
             tokio::fs::create_dir_all(self.fragments_dir(sedimentree_id)).await?;
 
-            let data = minicbor::to_vec(&fragment)
-                .map_err(|e| FsStorageError::CborSerialization(e.to_string()))?;
+            let data = fragment.as_bytes().to_vec();
 
             let temp_path = fragment_path.with_extension("tmp");
             tokio::fs::write(&temp_path, &data).await?;
@@ -446,7 +444,7 @@ impl Storage<Sendable> for FsStorage {
             let fragment_path = self.fragment_path(sedimentree_id, digest);
             match tokio::fs::read(&fragment_path).await {
                 Ok(data) => {
-                    let signed: Signed<Fragment> = minicbor::decode(&data)
+                    let signed = Signed::try_from_bytes(data)
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
                     Ok(Some(signed))
                 }
@@ -508,7 +506,7 @@ impl Storage<Sendable> for FsStorage {
                     && let Some(digest) = Self::parse_fragment_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
-                    let signed: Signed<Fragment> = minicbor::decode(&data)
+                    let signed = Signed::try_from_bytes(data)
                         .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
                     result.push((digest, signed));
                 }

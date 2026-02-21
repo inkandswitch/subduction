@@ -11,10 +11,7 @@ use crate::{crypto::digest::Digest, loose_commit::LooseCommit};
 ///
 /// Two commits with the same [`CommitId`] are the same item for
 /// set reconciliation, regardless of parent or blob metadata.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
-#[cbor(transparent)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct CommitId(Digest<LooseCommit>);

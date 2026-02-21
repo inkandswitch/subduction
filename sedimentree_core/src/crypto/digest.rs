@@ -13,34 +13,6 @@ pub struct Digest<T> {
     _marker: PhantomData<T>,
 }
 
-impl<T, Ctx> minicbor::Encode<Ctx> for Digest<T> {
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        _ctx: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.bytes(&self.bytes)?;
-        Ok(())
-    }
-}
-
-impl<'b, T, Ctx> minicbor::Decode<'b, Ctx> for Digest<T> {
-    fn decode(
-        d: &mut minicbor::Decoder<'b>,
-        _ctx: &mut Ctx,
-    ) -> Result<Self, minicbor::decode::Error> {
-        let bytes = d.bytes()?;
-        if bytes.len() != 32 {
-            return Err(minicbor::decode::Error::message(
-                "expected 32 bytes for digest",
-            ));
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(bytes);
-        Ok(Self::from_bytes(arr))
-    }
-}
-
 impl<T> Digest<T> {
     /// Create a digest from raw bytes.
     #[must_use]
@@ -89,17 +61,17 @@ impl<T> Digest<T> {
     }
 }
 
-impl<T: minicbor::Encode<()>> Digest<T> {
+impl<T: crate::codec::Codec<Context = ()>> Digest<T> {
     /// Encode and hash a value to create a digest.
     ///
-    /// # Panics
-    ///
-    /// Panics if CBOR encoding fails (should never happen for well-formed types).
-    #[allow(clippy::expect_used)]
+    /// The value is encoded using its [`Codec`](crate::codec::Codec) implementation
+    /// and then hashed with BLAKE3.
     #[must_use]
     pub fn hash(value: &T) -> Self {
-        let encoded = minicbor::to_vec(value).expect("encoding should not fail");
-        Self::hash_bytes(&encoded)
+        let mut buf = alloc::vec::Vec::with_capacity(T::MIN_SIZE);
+        buf.extend_from_slice(&T::SCHEMA);
+        value.encode_fields(&(), &mut buf);
+        Self::hash_bytes(&buf)
     }
 }
 

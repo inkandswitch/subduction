@@ -12,11 +12,10 @@ use crate::crypto::digest::Digest;
 /// A binary object.
 ///
 /// Just a wrapper around a `Vec<u8>`.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct Blob(#[n(0)] Vec<u8>);
+pub struct Blob(Vec<u8>);
 
 impl core::fmt::Debug for Blob {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -130,16 +129,11 @@ impl From<Blob> for Vec<u8> {
 }
 
 /// Metadata for the underlying payload data itself.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlobMeta {
-    #[n(0)]
     digest: Digest<Blob>,
-
-    #[n(1)]
     size_bytes: u64,
 }
 
