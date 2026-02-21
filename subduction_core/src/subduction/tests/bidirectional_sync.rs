@@ -48,23 +48,29 @@ use testresult::TestResult;
 /// A deterministic seed for tests (not security-sensitive).
 const TEST_SEED: FingerprintSeed = FingerprintSeed::new(12345, 67890);
 
-async fn make_test_commit(data: &[u8]) -> (Signed<LooseCommit>, Blob, LooseCommit) {
+async fn make_test_commit(
+    id: &SedimentreeId,
+    data: &[u8],
+) -> (Signed<LooseCommit>, Blob, LooseCommit) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit.clone()).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit.clone(), id).await;
     (verified.into_signed(), blob, commit)
 }
 
-async fn make_test_fragment(data: &[u8]) -> (Signed<Fragment>, Blob, FragmentSummary) {
+async fn make_test_fragment(
+    id: &SedimentreeId,
+    data: &[u8],
+) -> (Signed<Fragment>, Blob, FragmentSummary) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     // Fragment head is a LooseCommit digest (the starting point of the fragment)
     let head = Digest::<LooseCommit>::hash_bytes(data);
     let fragment = Fragment::new(head, BTreeSet::new(), &[], blob_meta);
     let summary = fragment.summary().clone();
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment, id).await;
     (verified.into_signed(), blob, summary)
 }
 
@@ -99,7 +105,8 @@ async fn test_responder_requests_missing_commits() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Alice receives commit A (she has it, peer doesn't know she has it yet)
-    let (commit_a, blob_a, _raw_commit_a) = make_test_commit(b"commit A - alice has this").await;
+    let (commit_a, blob_a, _raw_commit_a) =
+        make_test_commit(&sedimentree_id, b"commit A - alice has this").await;
     handle
         .inbound_tx
         .send(Message::LooseCommit {
@@ -197,7 +204,8 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Create a commit that Bob has but Alice doesn't
-    let (_commit_b, _blob_b, raw_commit_b) = make_test_commit(b"commit B - bob has this").await;
+    let (_commit_b, _blob_b, raw_commit_b) =
+        make_test_commit(&sedimentree_id, b"commit B - bob has this").await;
     let commit_b_id = raw_commit_b.commit_id();
     let commit_b_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_b_id);
 
@@ -264,8 +272,10 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     let bob_peer_id = PeerId::new([2u8; 32]);
 
     // Create commits
-    let (commit_a, blob_a, _raw_commit_a) = make_test_commit(b"commit A - alice").await;
-    let (commit_b, blob_b, raw_commit_b) = make_test_commit(b"commit B - bob").await;
+    let (commit_a, blob_a, _raw_commit_a) =
+        make_test_commit(&sedimentree_id, b"commit A - alice").await;
+    let (commit_b, blob_b, raw_commit_b) =
+        make_test_commit(&sedimentree_id, b"commit B - bob").await;
     let commit_b_id = raw_commit_b.commit_id();
     let commit_b_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_b_id);
 
@@ -459,7 +469,8 @@ async fn test_responder_requests_fragments() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Create a fragment that Bob has but Alice doesn't
-    let (_fragment, _blob, fragment_summary) = make_test_fragment(b"fragment - bob has this").await;
+    let (_fragment, _blob, fragment_summary) =
+        make_test_fragment(&sedimentree_id, b"fragment - bob has this").await;
     let frag_id = FragmentId::new(fragment_summary.head());
     let frag_fp: Fingerprint<FragmentId> = Fingerprint::new(&TEST_SEED, &frag_id);
 
@@ -534,7 +545,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     // Create a commit that both have
-    let (commit, blob, raw_commit) = make_test_commit(b"shared commit").await;
+    let (commit, blob, raw_commit) = make_test_commit(&sedimentree_id, b"shared commit").await;
 
     // Give Alice the commit
     handle

@@ -1,20 +1,45 @@
 //! Signed payloads.
+//!
+//! This module provides [`Signed<T>`], a wrapper for payloads that have been
+//! cryptographically signed with an Ed25519 key.
+//!
+//! # Wire Format
+//!
+//! All signed payloads use a canonical binary format:
+//!
+//! ```text
+//! ┌─────────────────────────── Payload ────────────────────────────┬─ Seal ─┐
+//! ╔════════╦══════════╦═══════════════════════════════════════════╦════════╗
+//! ║ Schema ║ IssuerVK ║           Type-Specific Fields            ║  Sig   ║
+//! ║   4B   ║   32B    ║              (variable)                   ║  64B   ║
+//! ╚════════╩══════════╩═══════════════════════════════════════════╩════════╝
+//! ```
+//!
+//! - **Schema**: 4-byte header identifying type and version
+//! - **IssuerVK**: Ed25519 verifying key of the signer (32 bytes)
+//! - **Fields**: Type-specific data encoded by the [`Codec`] implementation
+//! - **Signature**: Ed25519 signature over bytes `[0..len-64]`
 
-pub mod encoded_payload;
-pub mod envelope;
-pub mod magic;
-pub mod protocol_version;
+use alloc::vec::Vec;
+use core::{cmp::Ordering, marker::PhantomData};
 
-use encoded_payload::EncodedPayload;
-use envelope::Envelope;
-use magic::Magic;
-use protocol_version::ProtocolVersion;
-
-use core::cmp::Ordering;
-
+use ed25519_dalek::{Signature, VerifyingKey};
+use sedimentree_core::codec::{Codec, CodecError};
 use thiserror::Error;
 
 use crate::verified_signature::VerifiedSignature;
+
+/// Size of the schema header.
+pub const SCHEMA_SIZE: usize = 4;
+
+/// Size of an Ed25519 verifying key.
+pub const VERIFYING_KEY_SIZE: usize = 32;
+
+/// Size of an Ed25519 signature.
+pub const SIGNATURE_SIZE: usize = 64;
+
+/// Minimum size of any signed message (schema + issuer + signature, no fields).
+pub const MIN_SIGNED_SIZE: usize = SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_SIZE;
 
 /// A signed payload with its issuer and signature.
 ///
@@ -41,47 +66,62 @@ use crate::verified_signature::VerifiedSignature;
 /// To access the payload, verify first:
 ///
 /// ```ignore
-/// let verified = signed.try_verify()?;
+/// let verified = signed.try_verify(&ctx)?;
 /// let payload: &T = verified.payload();
 /// ```
-#[derive(Debug, minicbor::Encode, minicbor::Decode)]
+#[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Signed<T: for<'a> minicbor::Decode<'a, ()>> {
-    #[n(0)]
-    #[cbor(with = "crate::cbor::verifying_key")]
-    issuer: ed25519_dalek::VerifyingKey,
+pub struct Signed<T: Codec> {
+    /// Cached issuer verifying key (also at bytes[4..36]).
+    issuer: VerifyingKey,
 
-    #[n(1)]
-    #[cbor(with = "crate::cbor::signature")]
-    signature: ed25519_dalek::Signature,
+    /// Cached signature (also at bytes[len-64..]).
+    signature: Signature,
 
-    #[n(2)]
-    encoded_payload: EncodedPayload<T>,
+    /// Full wire bytes: schema(4) + issuer(32) + fields(N) + signature(64).
+    bytes: Vec<u8>,
+
+    _marker: PhantomData<T>,
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> Clone for Signed<T> {
+impl<T: Codec> Clone for Signed<T> {
     fn clone(&self) -> Self {
         Self {
             issuer: self.issuer,
             signature: self.signature,
-            encoded_payload: self.encoded_payload.clone(),
+            bytes: self.bytes.clone(),
+            _marker: PhantomData,
         }
     }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
-    /// Create a new [`Signed`] instance.
+impl<T: Codec> Signed<T> {
+    /// Get the issuer's verifying key.
     #[must_use]
-    pub const fn new(
-        issuer: ed25519_dalek::VerifyingKey,
-        signature: ed25519_dalek::Signature,
-        encoded_payload: EncodedPayload<T>,
-    ) -> Self {
-        Self {
-            issuer,
-            signature,
-            encoded_payload,
-        }
+    pub const fn issuer(&self) -> VerifyingKey {
+        self.issuer
+    }
+
+    /// Get the full wire bytes.
+    ///
+    /// This includes the schema, issuer, fields, and signature.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.bytes
+    }
+
+    /// Get the payload bytes (everything before the signature).
+    ///
+    /// This is the data that was signed: schema + issuer + fields.
+    #[must_use]
+    pub fn payload_bytes(&self) -> &[u8] {
+        &self.bytes[..self.bytes.len() - SIGNATURE_SIZE]
+    }
+
+    /// Get the fields bytes (after schema + issuer, before signature).
+    #[must_use]
+    pub fn fields_bytes(&self) -> &[u8] {
+        &self.bytes[SCHEMA_SIZE + VERIFYING_KEY_SIZE..self.bytes.len() - SIGNATURE_SIZE]
     }
 
     /// Verify the signature and decode the payload.
@@ -89,26 +129,16 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
     /// # Errors
     ///
     /// Returns an error if the signature is invalid or the payload cannot be decoded.
-    pub fn try_verify(&self) -> Result<VerifiedSignature<T>, VerificationError> {
+    pub fn try_verify(&self, ctx: &T::Context) -> Result<VerifiedSignature<T>, VerificationError> {
+        // Verify signature over payload bytes
         self.issuer
-            .verify_strict(self.encoded_payload.as_slice(), &self.signature)?;
-        let envelope = minicbor::decode::<Envelope<T>>(self.encoded_payload.as_slice())?;
-        Ok(VerifiedSignature::new(
-            self.clone(),
-            envelope.into_payload(),
-        ))
-    }
+            .verify_strict(self.payload_bytes(), &self.signature)
+            .map_err(|_| VerificationError::InvalidSignature)?;
 
-    /// Get the issuer's verifying key.
-    #[must_use]
-    pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
-        self.issuer
-    }
+        // Decode payload from fields bytes
+        let payload = T::decode_fields(self.fields_bytes(), ctx)?;
 
-    /// Get the encoded payload bytes.
-    #[must_use]
-    pub const fn encoded_payload(&self) -> &EncodedPayload<T> {
-        &self.encoded_payload
+        Ok(VerifiedSignature::new(self.clone(), payload))
     }
 
     /// Decode the payload without signature verification.
@@ -121,179 +151,257 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Signed<T> {
     /// # Errors
     ///
     /// Returns an error if the payload cannot be decoded.
-    pub fn decode_payload(&self) -> Result<T, minicbor::decode::Error> {
-        let envelope = minicbor::decode::<Envelope<T>>(self.encoded_payload.as_slice())?;
-        Ok(envelope.into_payload())
+    pub fn decode_payload(&self, ctx: &T::Context) -> Result<T, CodecError> {
+        T::decode_fields(self.fields_bytes(), ctx)
     }
-}
 
-impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
+    /// Decode from wire bytes.
+    ///
+    /// This validates the schema header and extracts the issuer and signature,
+    /// but does NOT verify the signature. Use [`try_verify`](Self::try_verify)
+    /// to verify.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The buffer is too short
+    /// - The schema header doesn't match `T::SCHEMA`
+    /// - The verifying key is invalid
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, CodecError> {
+        // Check minimum size
+        if bytes.len() < T::MIN_SIZE {
+            return Err(CodecError::BufferTooShort {
+                need: T::MIN_SIZE,
+                have: bytes.len(),
+            });
+        }
+
+        // Validate schema
+        let schema: [u8; SCHEMA_SIZE] = bytes[0..SCHEMA_SIZE]
+            .try_into()
+            .expect("length checked above");
+        if schema != T::SCHEMA {
+            return Err(CodecError::InvalidSchema {
+                expected: T::SCHEMA,
+                got: schema,
+            });
+        }
+
+        // Extract issuer
+        let issuer_bytes: [u8; VERIFYING_KEY_SIZE] = bytes
+            [SCHEMA_SIZE..SCHEMA_SIZE + VERIFYING_KEY_SIZE]
+            .try_into()
+            .expect("length checked above");
+        let issuer =
+            VerifyingKey::from_bytes(&issuer_bytes).map_err(|_| CodecError::InvalidVerifyingKey)?;
+
+        // Extract signature
+        let sig_start = bytes.len() - SIGNATURE_SIZE;
+        let sig_bytes: [u8; SIGNATURE_SIZE] =
+            bytes[sig_start..].try_into().expect("length checked above");
+        let signature = Signature::from_bytes(&sig_bytes);
+
+        Ok(Self {
+            issuer,
+            signature,
+            bytes,
+            _marker: PhantomData,
+        })
+    }
+
+    /// Consume and return the wire bytes.
+    #[must_use]
+    pub fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+
     /// Seal a payload with the given signer's cryptographic signature.
     ///
     /// Returns a [`VerifiedSignature<T>`] since we know our own signature is valid.
     /// Use [`.into_signed()`](VerifiedSignature::into_signed) to get the [`Signed<T>`]
     /// for wire transmission.
     ///
-    /// The `K` type parameter determines whether the future is `Send` (`Sendable`)
-    /// or `!Send` (`Local`). Specify it with turbofish syntax:
+    /// # Arguments
     ///
-    /// ```ignore
-    /// Signed::seal::<Sendable, _>(&signer, payload).await
-    /// ```
-    ///
-    /// # Panics
-    ///
-    /// Panics if CBOR encoding fails (should never happen for well-formed types).
-    #[allow(clippy::expect_used)]
+    /// * `signer` - The signer to use
+    /// * `payload` - The payload to sign
+    /// * `ctx` - Context for encoding (e.g., `SedimentreeId` for commits)
     pub async fn seal<K: future_form::FutureForm, S: crate::signer::Signer<K>>(
         signer: &S,
         payload: T,
+        ctx: &T::Context,
     ) -> VerifiedSignature<T> {
-        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
-        let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
-        let signature = signer.sign(&encoded).await;
+        let issuer = signer.verifying_key();
 
-        // Decode payload back from encoded bytes (avoids Clone bound on T)
-        let decoded_envelope =
-            minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
+        // Calculate size and pre-allocate
+        let fields_size = payload.fields_size(ctx);
+        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        let mut bytes = Vec::with_capacity(total_size);
 
-        let sealed = Self {
-            issuer: signer.verifying_key(),
+        // Write schema
+        bytes.extend_from_slice(&T::SCHEMA);
+
+        // Write issuer
+        bytes.extend_from_slice(issuer.as_bytes());
+
+        // Write fields
+        payload.encode_fields(ctx, &mut bytes);
+
+        // Sign the payload (everything so far)
+        let signature = signer.sign(&bytes).await;
+
+        // Append signature
+        bytes.extend_from_slice(&signature.to_bytes());
+
+        debug_assert_eq!(bytes.len(), total_size);
+
+        let signed = Self {
+            issuer,
             signature,
-            encoded_payload: EncodedPayload::new(encoded),
+            bytes,
+            _marker: PhantomData,
         };
 
         // We just signed it, so we know it's valid — no need to verify
-        VerifiedSignature::new(sealed, decoded_envelope.into_payload())
+        VerifiedSignature::new(signed, payload)
     }
 
     /// Create a signed payload from raw components.
     ///
-    /// This is a low-level constructor. Most callers should use
-    /// [`seal`](Self::seal) instead.
+    /// This is a low-level constructor for testing and deserialization.
+    /// Most callers should use [`seal`](Self::seal) instead.
     ///
-    /// # Panics
+    /// # Arguments
     ///
-    /// Panics if CBOR encoding fails (should never happen for well-formed types).
-    #[allow(clippy::expect_used)]
+    /// * `issuer` - The verifying key of the signer
+    /// * `signature` - The Ed25519 signature
+    /// * `payload` - The payload
+    /// * `ctx` - Context for encoding
     #[must_use]
     pub fn from_parts(
-        issuer: ed25519_dalek::VerifyingKey,
-        signature: ed25519_dalek::Signature,
-        payload: T,
+        issuer: VerifyingKey,
+        signature: Signature,
+        payload: &T,
+        ctx: &T::Context,
     ) -> Self {
-        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
-        let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
+        let fields_size = payload.fields_size(ctx);
+        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        let mut bytes = Vec::with_capacity(total_size);
+
+        bytes.extend_from_slice(&T::SCHEMA);
+        bytes.extend_from_slice(issuer.as_bytes());
+        payload.encode_fields(ctx, &mut bytes);
+        bytes.extend_from_slice(&signature.to_bytes());
 
         Self {
             issuer,
             signature,
-            encoded_payload: EncodedPayload::new(encoded),
+            bytes,
+            _marker: PhantomData,
         }
     }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> PartialEq for Signed<T> {
+impl<T: Codec> PartialEq for Signed<T> {
     fn eq(&self, other: &Self) -> bool {
-        let Signed {
-            issuer: a_issuer,
-            signature: a_sig,
-            encoded_payload: a_bytes,
-        } = self;
-        let Signed {
-            issuer: b_issuer,
-            signature: b_sig,
-            encoded_payload: b_bytes,
-        } = other;
-
-        a_issuer.as_bytes() == b_issuer.as_bytes()
-            && a_sig.to_bytes() == b_sig.to_bytes()
-            && a_bytes.as_slice() == b_bytes.as_slice()
+        self.bytes == other.bytes
     }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> Eq for Signed<T> {}
+impl<T: Codec> Eq for Signed<T> {}
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> core::hash::Hash for Signed<T> {
+impl<T: Codec> core::hash::Hash for Signed<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
-        self.issuer.as_bytes().hash(state);
-        self.signature.to_bytes().hash(state);
-        self.encoded_payload.as_slice().hash(state);
+        self.bytes.hash(state);
     }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> PartialOrd for Signed<T> {
+impl<T: Codec> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> Ord for Signed<T> {
+impl<T: Codec> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
-        let Signed {
-            issuer: a_issuer,
-            signature: a_sig,
-            encoded_payload: a_bytes,
-        } = self;
-        let Signed {
-            issuer: b_issuer,
-            signature: b_sig,
-            encoded_payload: b_bytes,
-        } = other;
+        self.bytes.cmp(&other.bytes)
+    }
+}
 
-        match a_issuer.as_bytes().cmp(b_issuer.as_bytes()) {
-            Ordering::Equal => match a_sig.to_bytes().cmp(&b_sig.to_bytes()) {
-                Ordering::Equal => a_bytes.as_slice().cmp(b_bytes.as_slice()),
-                ord @ (Ordering::Less | Ordering::Greater) => ord,
-            },
-            ord @ (Ordering::Less | Ordering::Greater) => ord,
-        }
+impl<Ctx, T: Codec> minicbor::Encode<Ctx> for Signed<T> {
+    fn encode<W: minicbor::encode::Write>(
+        &self,
+        e: &mut minicbor::Encoder<W>,
+        _ctx: &mut Ctx,
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
+        e.bytes(&self.bytes)?;
+        Ok(())
+    }
+}
+
+impl<'b, Ctx, T: Codec> minicbor::Decode<'b, Ctx> for Signed<T> {
+    fn decode(
+        d: &mut minicbor::Decoder<'b>,
+        _ctx: &mut Ctx,
+    ) -> Result<Self, minicbor::decode::Error> {
+        let bytes = d.bytes()?;
+        Self::from_bytes(bytes.to_vec())
+            .map_err(|e| minicbor::decode::Error::message(alloc::format!("signed decode: {e}")))
     }
 }
 
 /// Errors that can occur during signature verification.
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Copy, Error)]
 pub enum VerificationError {
     /// Invalid signature error.
     #[error("invalid signature")]
     InvalidSignature,
 
-    /// CBOR decoding error.
-    #[error("CBOR decode error: {0}")]
-    DecodeError(#[from] minicbor::decode::Error),
-}
-
-impl From<ed25519_dalek::SignatureError> for VerificationError {
-    fn from(_: ed25519_dalek::SignatureError) -> Self {
-        Self::InvalidSignature
-    }
+    /// Codec error (decoding failed).
+    #[error("codec error: {0}")]
+    Codec(#[from] CodecError),
 }
 
 #[cfg(feature = "arbitrary")]
-impl<'a, T: for<'b> minicbor::Decode<'b, ()> + minicbor::Encode<()> + arbitrary::Arbitrary<'a>>
-    arbitrary::Arbitrary<'a> for Signed<T>
+impl<'a, T: Codec + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Signed<T>
+where
+    T::Context: arbitrary::Arbitrary<'a>,
 {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use ed25519_dalek::{Signer as _, SigningKey};
 
-        // Generate arbitrary payload
+        // Generate arbitrary payload and context
         let payload: T = u.arbitrary()?;
+        let ctx: T::Context = u.arbitrary()?;
 
         // Generate a random signing key from arbitrary bytes
         let key_bytes: [u8; 32] = u.arbitrary()?;
         let signing_key = SigningKey::from_bytes(&key_bytes);
+        let issuer = signing_key.verifying_key();
 
-        // Wrap in envelope and encode
-        let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
-        let encoded = minicbor::to_vec(&envelope).map_err(|_| arbitrary::Error::IncorrectFormat)?;
+        // Encode the payload
+        let fields_size = payload.fields_size(&ctx);
+        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        let mut bytes = Vec::with_capacity(total_size);
 
-        // Sign the encoded payload
-        let signature = signing_key.sign(&encoded);
+        bytes.extend_from_slice(&T::SCHEMA);
+        bytes.extend_from_slice(issuer.as_bytes());
+        payload.encode_fields(&ctx, &mut bytes);
+
+        // Sign the payload
+        let signature = signing_key.sign(&bytes);
+        bytes.extend_from_slice(&signature.to_bytes());
 
         Ok(Self {
-            issuer: signing_key.verifying_key(),
+            issuer,
             signature,
-            encoded_payload: EncodedPayload::new(encoded),
+            bytes,
+            _marker: PhantomData,
         })
     }
+}
+
+#[cfg(test)]
+mod tests {
+    // Tests will be added after we implement Codec for test types
 }

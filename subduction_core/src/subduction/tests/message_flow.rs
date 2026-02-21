@@ -30,12 +30,15 @@ use sedimentree_core::{
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
-async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) {
+async fn make_test_commit_with_data(
+    id: &SedimentreeId,
+    data: &[u8],
+) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit, id).await;
     (verified.into_signed(), blob)
 }
 
@@ -63,7 +66,7 @@ async fn test_sendable_single_commit() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
-    let (commit, blob) = make_test_commit_with_data(b"test commit").await;
+    let (commit, blob) = make_test_commit_with_data(&sedimentree_id, b"test commit").await;
 
     handle
         .inbound_tx
@@ -119,7 +122,8 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 
     for i in 0..3u8 {
         let sedimentree_id = SedimentreeId::new([i; 32]);
-        let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+        let (commit, blob) =
+            make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes()).await;
 
         handle
             .inbound_tx
@@ -174,7 +178,8 @@ async fn test_sendable_same_sedimentree() -> TestResult {
     let sedimentree_id = SedimentreeId::new([99u8; 32]);
 
     for i in 0..3usize {
-        let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+        let (commit, blob) =
+            make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes()).await;
 
         handle
             .inbound_tx
@@ -231,7 +236,7 @@ async fn test_local_single_commit() -> TestResult {
             tokio::time::sleep(Duration::from_millis(10)).await;
 
             let sedimentree_id = SedimentreeId::new([42u8; 32]);
-            let (commit, blob) = make_test_commit_with_data(b"test commit").await;
+            let (commit, blob) = make_test_commit_with_data(&sedimentree_id, b"test commit").await;
 
             handle
                 .inbound_tx
@@ -293,7 +298,8 @@ async fn test_local_multiple_sequential() -> TestResult {
             for i in 0..3u8 {
                 let sedimentree_id = SedimentreeId::new([i; 32]);
                 let (commit, blob) =
-                    make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+                    make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes())
+                        .await;
 
                 handle
                     .inbound_tx
@@ -354,7 +360,8 @@ async fn test_local_same_sedimentree() -> TestResult {
 
             for i in 0..3usize {
                 let (commit, blob) =
-                    make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+                    make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes())
+                        .await;
 
                 handle
                     .inbound_tx

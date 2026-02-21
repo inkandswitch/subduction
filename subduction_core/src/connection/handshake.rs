@@ -65,7 +65,7 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::crypto::digest::Digest;
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
@@ -274,6 +274,142 @@ impl Response {
             return Err(ResponseValidationError::ChallengeMismatch);
         }
         Ok(())
+    }
+}
+
+// ============================================================================
+// Codec implementations for Challenge and Response
+// ============================================================================
+
+use sedimentree_core::codec::{decode, encode, Codec, CodecError};
+
+/// Schema header for `Signed<Challenge>`.
+pub const CHALLENGE_SCHEMA: [u8; 4] = *b"SUH\x00";
+
+/// Size of Challenge fields (after schema + issuer, before signature).
+const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
+
+/// Minimum size of a signed Challenge message.
+pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 157 bytes
+
+impl Codec for Challenge {
+    type Context = ();
+
+    const SCHEMA: [u8; 4] = CHALLENGE_SCHEMA;
+    const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
+
+    fn encode_fields(&self, _ctx: &Self::Context, buf: &mut Vec<u8>) {
+        // AudienceTag (1 byte)
+        match &self.audience {
+            Audience::Known(_) => encode::u8(0x00, buf),
+            Audience::Discover(_) => encode::u8(0x01, buf),
+        }
+
+        // AudienceValue (32 bytes)
+        match &self.audience {
+            Audience::Known(peer_id) => encode::array(peer_id.as_bytes(), buf),
+            Audience::Discover(disc_id) => encode::array(disc_id.as_bytes(), buf),
+        }
+
+        // Timestamp (8 bytes, big-endian)
+        encode::u64(self.timestamp.as_secs(), buf);
+
+        // Nonce (16 bytes)
+        encode::array(self.nonce.as_bytes(), buf);
+    }
+
+    fn decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, CodecError> {
+        if buf.len() < CHALLENGE_FIELDS_SIZE {
+            return Err(CodecError::BufferTooShort {
+                need: CHALLENGE_FIELDS_SIZE,
+                have: buf.len(),
+            });
+        }
+
+        // AudienceTag (1 byte)
+        let audience_tag = decode::u8(buf, 0)?;
+
+        // AudienceValue (32 bytes)
+        let audience_value: [u8; 32] = decode::array(buf, 1)?;
+
+        let audience = match audience_tag {
+            0x00 => Audience::Known(PeerId::new(audience_value)),
+            0x01 => Audience::Discover(DiscoveryId::from_raw(audience_value)),
+            tag => {
+                return Err(CodecError::InvalidEnumTag {
+                    tag,
+                    type_name: "Audience",
+                })
+            }
+        };
+
+        // Timestamp (8 bytes)
+        let timestamp_secs = decode::u64(buf, 33)?;
+        let timestamp = TimestampSeconds::new(timestamp_secs);
+
+        // Nonce (16 bytes)
+        let nonce_bytes: [u8; 16] = decode::array(buf, 41)?;
+        let nonce = Nonce::from_bytes(nonce_bytes);
+
+        Ok(Self {
+            audience,
+            timestamp,
+            nonce,
+        })
+    }
+
+    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+        CHALLENGE_FIELDS_SIZE
+    }
+}
+
+/// Schema header for `Signed<Response>`.
+pub const RESPONSE_SCHEMA: [u8; 4] = *b"SUR\x00";
+
+/// Size of Response fields (after schema + issuer, before signature).
+const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
+
+/// Minimum size of a signed Response message.
+pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 bytes
+
+impl Codec for Response {
+    type Context = ();
+
+    const SCHEMA: [u8; 4] = RESPONSE_SCHEMA;
+    const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
+
+    fn encode_fields(&self, _ctx: &Self::Context, buf: &mut Vec<u8>) {
+        // ChallengeDigest (32 bytes)
+        encode::array(self.challenge_digest.as_bytes(), buf);
+
+        // ServerTimestamp (8 bytes, big-endian)
+        encode::u64(self.server_timestamp.as_secs(), buf);
+    }
+
+    fn decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, CodecError> {
+        if buf.len() < RESPONSE_FIELDS_SIZE {
+            return Err(CodecError::BufferTooShort {
+                need: RESPONSE_FIELDS_SIZE,
+                have: buf.len(),
+            });
+        }
+
+        // ChallengeDigest (32 bytes)
+        let challenge_digest_bytes: [u8; 32] = decode::array(buf, 0)?;
+        let challenge_digest = Digest::from_bytes(challenge_digest_bytes);
+
+        // ServerTimestamp (8 bytes)
+        let server_timestamp_secs = decode::u64(buf, 32)?;
+        let server_timestamp = TimestampSeconds::new(server_timestamp_secs);
+
+        Ok(Self {
+            challenge_digest,
+            server_timestamp,
+        })
+    }
+
+    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+        RESPONSE_FIELDS_SIZE
     }
 }
 
@@ -551,7 +687,9 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
 ) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
-    let signed_challenge = Signed::seal::<K, _>(signer, challenge).await.into_signed();
+    let signed_challenge = Signed::seal::<K, _>(signer, challenge, &())
+        .await
+        .into_signed();
     let msg = HandshakeMessage::SignedChallenge(signed_challenge);
     let bytes = minicbor::to_vec(&msg).expect("challenge encoding should not fail");
     handshake
@@ -735,7 +873,9 @@ pub async fn create_challenge<K: FutureForm, S: Signer<K>>(
     nonce: Nonce,
 ) -> Signed<Challenge> {
     let challenge = Challenge::new(audience, now, nonce);
-    Signed::seal::<K, _>(signer, challenge).await.into_signed()
+    Signed::seal::<K, _>(signer, challenge, &())
+        .await
+        .into_signed()
 }
 
 /// Result of verifying a challenge on the server side.
@@ -764,7 +904,7 @@ pub fn verify_challenge(
 ) -> Result<VerifiedChallenge, HandshakeError> {
     // Verify signature and decode
     let verified = signed_challenge
-        .try_verify()
+        .try_verify(&())
         .map_err(|_| HandshakeError::InvalidSignature)?;
 
     let challenge = verified.payload();
@@ -787,7 +927,9 @@ pub async fn create_response<K: FutureForm, S: Signer<K>>(
     now: TimestampSeconds,
 ) -> Signed<Response> {
     let response = Response::for_challenge(challenge, now);
-    Signed::seal::<K, _>(signer, response).await.into_signed()
+    Signed::seal::<K, _>(signer, response, &())
+        .await
+        .into_signed()
 }
 
 /// Result of verifying a response on the client side.
@@ -813,7 +955,7 @@ pub fn verify_response(
 ) -> Result<VerifiedResponse, HandshakeError> {
     // Verify signature and decode
     let verified = signed_response
-        .try_verify()
+        .try_verify(&())
         .map_err(|_| HandshakeError::InvalidSignature)?;
 
     let response = verified.payload();

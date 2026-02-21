@@ -45,6 +45,14 @@ impl Checkpoint {
         Self(truncated)
     }
 
+    /// Create a checkpoint from raw bytes.
+    ///
+    /// This is the inverse of [`as_bytes`](Self::as_bytes).
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 12]) -> Self {
+        Self(Truncated::from_bytes(bytes))
+    }
+
     /// The underlying truncated digest.
     #[must_use]
     pub const fn as_truncated(&self) -> &Truncated<Digest<LooseCommit>> {
@@ -67,6 +75,12 @@ impl From<Digest<LooseCommit>> for Checkpoint {
 impl From<Truncated<Digest<LooseCommit>>> for Checkpoint {
     fn from(truncated: Truncated<Digest<LooseCommit>>) -> Self {
         Self::from_truncated(truncated)
+    }
+}
+
+impl From<[u8; 12]> for Checkpoint {
+    fn from(bytes: [u8; 12]) -> Self {
+        Self::from_bytes(bytes)
     }
 }
 

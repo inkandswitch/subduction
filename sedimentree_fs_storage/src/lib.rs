@@ -157,12 +157,24 @@ impl FsStorage {
             .join(blob_hex)
     }
 
-    fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest<LooseCommit>> {
-        signed.decode_payload().ok().map(|c| c.digest())
+    fn commit_digest(
+        signed: &Signed<LooseCommit>,
+        sedimentree_id: &SedimentreeId,
+    ) -> Option<Digest<LooseCommit>> {
+        signed
+            .decode_payload(sedimentree_id)
+            .ok()
+            .map(|c| c.digest())
     }
 
-    fn fragment_digest(signed: &Signed<Fragment>) -> Option<Digest<Fragment>> {
-        signed.decode_payload().ok().map(|f| f.digest())
+    fn fragment_digest(
+        signed: &Signed<Fragment>,
+        sedimentree_id: &SedimentreeId,
+    ) -> Option<Digest<Fragment>> {
+        signed
+            .decode_payload(sedimentree_id)
+            .ok()
+            .map(|f| f.digest())
     }
 
     fn parse_commit_digest_from_filename(name: &str) -> Option<Digest<LooseCommit>> {
@@ -250,7 +262,7 @@ impl Storage<Sendable> for FsStorage {
         loose_commit: Signed<LooseCommit>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Digest<LooseCommit>, Self::Error>> {
         Sendable::from_future(async move {
-            let digest = Self::commit_digest(&loose_commit)
+            let digest = Self::commit_digest(&loose_commit, &sedimentree_id)
                 .ok_or(FsStorageError::DigestComputationFailed)?;
             tracing::debug!(?sedimentree_id, ?digest, "FsStorage::save_loose_commit");
 
@@ -401,8 +413,8 @@ impl Storage<Sendable> for FsStorage {
         fragment: Signed<Fragment>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<Digest<Fragment>, Self::Error>> {
         Sendable::from_future(async move {
-            let digest =
-                Self::fragment_digest(&fragment).ok_or(FsStorageError::DigestComputationFailed)?;
+            let digest = Self::fragment_digest(&fragment, &sedimentree_id)
+                .ok_or(FsStorageError::DigestComputationFailed)?;
             tracing::debug!(?sedimentree_id, ?digest, "FsStorage::save_fragment");
 
             let fragment_path = self.fragment_path(sedimentree_id, digest);

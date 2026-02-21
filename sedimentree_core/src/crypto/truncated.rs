@@ -106,10 +106,27 @@ impl<V, const N: usize> core::fmt::Display for Truncated<V, N> {
 }
 
 impl<V, const N: usize> Truncated<V, N> {
+    /// Create a truncated value from raw bytes.
+    ///
+    /// This is the inverse of [`as_bytes`](Self::as_bytes).
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; N]) -> Self {
+        Self {
+            bytes,
+            _phantom: PhantomData,
+        }
+    }
+
     /// The raw bytes of the truncated value.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; N] {
         &self.bytes
+    }
+}
+
+impl<V, const N: usize> From<[u8; N]> for Truncated<V, N> {
+    fn from(bytes: [u8; N]) -> Self {
+        Self::from_bytes(bytes)
     }
 }
 

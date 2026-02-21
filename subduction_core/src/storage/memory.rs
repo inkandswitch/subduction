@@ -42,13 +42,25 @@ impl MemoryStorage {
     }
 
     /// Compute digest from a signed commit by decoding the payload.
-    fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest<LooseCommit>> {
-        signed.decode_payload().ok().map(|c| c.digest())
+    fn commit_digest(
+        signed: &Signed<LooseCommit>,
+        sedimentree_id: &SedimentreeId,
+    ) -> Option<Digest<LooseCommit>> {
+        signed
+            .decode_payload(sedimentree_id)
+            .ok()
+            .map(|c| c.digest())
     }
 
     /// Compute digest from a signed fragment by decoding the payload.
-    fn fragment_digest(signed: &Signed<Fragment>) -> Option<Digest<Fragment>> {
-        signed.decode_payload().ok().map(|f| f.digest())
+    fn fragment_digest(
+        signed: &Signed<Fragment>,
+        sedimentree_id: &SedimentreeId,
+    ) -> Option<Digest<Fragment>> {
+        signed
+            .decode_payload(sedimentree_id)
+            .ok()
+            .map(|f| f.digest())
     }
 }
 
@@ -96,7 +108,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     ) -> K::Future<'_, Result<Digest<LooseCommit>, Self::Error>> {
         K::from_future(async move {
             #[allow(clippy::expect_used)]
-            let digest = Self::commit_digest(&loose_commit)
+            let digest = Self::commit_digest(&loose_commit, &sedimentree_id)
                 .expect("signed commit should decode for digest computation");
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
             self.commits
@@ -189,7 +201,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     ) -> K::Future<'_, Result<Digest<Fragment>, Self::Error>> {
         K::from_future(async move {
             #[allow(clippy::expect_used)]
-            let digest = Self::fragment_digest(&fragment)
+            let digest = Self::fragment_digest(&fragment, &sedimentree_id)
                 .expect("signed fragment should decode for digest computation");
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
             self.fragments
@@ -364,7 +376,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 .or_insert(blob);
 
             #[allow(clippy::expect_used)]
-            let commit_digest = Self::commit_digest(&commit)
+            let commit_digest = Self::commit_digest(&commit, &sedimentree_id)
                 .expect("signed commit should decode for digest computation");
             self.commits
                 .lock()
@@ -394,7 +406,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                 .or_insert(blob);
 
             #[allow(clippy::expect_used)]
-            let fragment_digest = Self::fragment_digest(&fragment)
+            let fragment_digest = Self::fragment_digest(&fragment, &sedimentree_id)
                 .expect("signed fragment should decode for digest computation");
             self.fragments
                 .lock()
@@ -436,7 +448,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                     .or_insert(blob);
 
                 #[allow(clippy::expect_used)]
-                let commit_digest = Self::commit_digest(&commit)
+                let commit_digest = Self::commit_digest(&commit, &sedimentree_id)
                     .expect("signed commit should decode for digest computation");
                 self.commits
                     .lock()
@@ -458,7 +470,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
                     .or_insert(blob);
 
                 #[allow(clippy::expect_used)]
-                let fragment_digest = Self::fragment_digest(&fragment)
+                let fragment_digest = Self::fragment_digest(&fragment, &sedimentree_id)
                     .expect("signed fragment should decode for digest computation");
                 self.fragments
                     .lock()

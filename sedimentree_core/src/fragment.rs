@@ -9,7 +9,8 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{BlobMeta, has_meta::HasBlobMeta},
+    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    codec::{Codec, CodecError, decode, encode},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
@@ -44,7 +45,7 @@ impl Fragment {
     /// Constructor for a [`Fragment`].
     ///
     /// The `checkpoints` are raw commit digests that fall within the fragment's
-    /// range. They are truncated to 16 bytes internally for compact storage.
+    /// range. They are truncated to 12 bytes internally for compact storage.
     #[must_use]
     pub fn new(
         head: Digest<LooseCommit>,
@@ -55,6 +56,19 @@ impl Fragment {
         let truncated_checkpoints: BTreeSet<Checkpoint> =
             checkpoints.iter().map(|d| Checkpoint::new(*d)).collect();
 
+        Self::from_parts(head, boundary, truncated_checkpoints, blob_meta)
+    }
+
+    /// Constructor from pre-truncated checkpoints.
+    ///
+    /// Used by codec decoding where checkpoints are already in truncated form.
+    #[must_use]
+    pub fn from_parts(
+        head: Digest<LooseCommit>,
+        boundary: BTreeSet<Digest<LooseCommit>>,
+        checkpoints: BTreeSet<Checkpoint>,
+        blob_meta: BlobMeta,
+    ) -> Self {
         let digest = {
             let mut hasher = blake3::Hasher::new();
             hasher.update(head.as_bytes());
@@ -64,7 +78,7 @@ impl Fragment {
             }
             hasher.update(blob_meta.digest().as_bytes());
 
-            for checkpoint in &truncated_checkpoints {
+            for checkpoint in &checkpoints {
                 hasher.update(checkpoint.as_bytes());
             }
 
@@ -77,7 +91,7 @@ impl Fragment {
                 boundary,
                 blob_meta,
             },
-            checkpoints: truncated_checkpoints,
+            checkpoints,
             digest,
         }
     }
@@ -297,6 +311,250 @@ impl FragmentSpec {
     #[must_use]
     pub const fn checkpoints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
         &self.checkpoints
+    }
+}
+
+// ============================================================================
+// Codec Implementation
+// ============================================================================
+
+/// Fixed fields size: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(4).
+const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 4;
+
+/// Minimum signed message size: Schema(4) + IssuerVK(32) + Fields(103) + Signature(64).
+const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
+
+/// Checkpoint truncation size in bytes.
+const CHECKPOINT_BYTES: usize = 12;
+
+impl Codec for Fragment {
+    type Context = SedimentreeId;
+
+    const SCHEMA: [u8; 4] = *b"STF\x00";
+    const MIN_SIZE: usize = CODEC_MIN_SIZE;
+
+    fn encode_fields(&self, ctx: &Self::Context, buf: &mut Vec<u8>) {
+        encode::array(ctx.as_bytes(), buf);
+        encode::array(self.head().as_bytes(), buf);
+        encode::array(self.summary().blob_meta().digest().as_bytes(), buf);
+
+        #[allow(clippy::cast_possible_truncation)]
+        encode::u8(self.boundary().len() as u8, buf);
+
+        #[allow(clippy::cast_possible_truncation)]
+        encode::u16(self.checkpoints().len() as u16, buf);
+
+        #[allow(clippy::cast_possible_truncation)]
+        encode::u32(self.summary().blob_meta().size_bytes() as u32, buf);
+
+        for boundary in self.boundary() {
+            encode::array(boundary.as_bytes(), buf);
+        }
+
+        for checkpoint in self.checkpoints() {
+            encode::array(checkpoint.as_bytes(), buf);
+        }
+    }
+
+    fn decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
+        if buf.len() < CODEC_FIXED_FIELDS_SIZE {
+            return Err(CodecError::BufferTooShort {
+                need: CODEC_FIXED_FIELDS_SIZE,
+                have: buf.len(),
+            });
+        }
+
+        let mut offset = 0;
+
+        let sedimentree_id_bytes: [u8; 32] = decode::array(buf, offset)?;
+        offset += 32;
+
+        if sedimentree_id_bytes != *ctx.as_bytes() {
+            return Err(CodecError::ContextMismatch {
+                field: "SedimentreeId",
+            });
+        }
+
+        let head_bytes: [u8; 32] = decode::array(buf, offset)?;
+        let head = Digest::<LooseCommit>::from_bytes(head_bytes);
+        offset += 32;
+
+        let blob_digest_bytes: [u8; 32] = decode::array(buf, offset)?;
+        let blob_digest = Digest::<Blob>::from_bytes(blob_digest_bytes);
+        offset += 32;
+
+        let boundary_count = decode::u8(buf, offset)? as usize;
+        offset += 1;
+
+        let checkpoint_count = decode::u16(buf, offset)? as usize;
+        offset += 2;
+
+        let blob_size = decode::u32(buf, offset)? as u64;
+        offset += 4;
+
+        let boundary_size = boundary_count * 32;
+        let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
+
+        if buf.len() < offset + boundary_size + checkpoints_size {
+            return Err(CodecError::BufferTooShort {
+                need: offset + boundary_size + checkpoints_size,
+                have: buf.len(),
+            });
+        }
+
+        let mut boundary_arrays: Vec<[u8; 32]> = Vec::with_capacity(boundary_count);
+        for _ in 0..boundary_count {
+            let boundary_bytes: [u8; 32] = decode::array(buf, offset)?;
+            boundary_arrays.push(boundary_bytes);
+            offset += 32;
+        }
+
+        decode::verify_sorted(&boundary_arrays)?;
+
+        let boundary: BTreeSet<Digest<LooseCommit>> = boundary_arrays
+            .into_iter()
+            .map(Digest::from_bytes)
+            .collect();
+
+        let mut checkpoint_arrays: Vec<[u8; CHECKPOINT_BYTES]> =
+            Vec::with_capacity(checkpoint_count);
+        for _ in 0..checkpoint_count {
+            let checkpoint_bytes: [u8; CHECKPOINT_BYTES] = decode::array(buf, offset)?;
+            checkpoint_arrays.push(checkpoint_bytes);
+            offset += CHECKPOINT_BYTES;
+        }
+
+        decode::verify_sorted(&checkpoint_arrays)?;
+
+        let checkpoints: BTreeSet<Checkpoint> = checkpoint_arrays
+            .into_iter()
+            .map(Checkpoint::from_bytes)
+            .collect();
+
+        let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
+
+        Ok(Fragment::from_parts(head, boundary, checkpoints, blob_meta))
+    }
+
+    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+        CODEC_FIXED_FIELDS_SIZE
+            + (self.boundary().len() * 32)
+            + (self.checkpoints().len() * CHECKPOINT_BYTES)
+    }
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+    use alloc::vec;
+
+    fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
+        Digest::from_bytes([byte; 32])
+    }
+
+    fn make_sedimentree_id(byte: u8) -> SedimentreeId {
+        SedimentreeId::new([byte; 32])
+    }
+
+    fn make_checkpoint(byte: u8) -> Checkpoint {
+        Checkpoint::new(make_digest(byte))
+    }
+
+    #[test]
+    fn codec_round_trip_empty() {
+        let ctx = make_sedimentree_id(0x01);
+        let fragment = Fragment::from_parts(
+            make_digest(0x10),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BlobMeta::from_digest_size(make_digest(0x20), 1024),
+        );
+
+        let mut buf = Vec::new();
+        fragment.encode_fields(&ctx, &mut buf);
+        assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
+
+        let decoded = Fragment::decode_fields(&buf, &ctx).expect("decode should succeed");
+        assert_eq!(decoded.head(), fragment.head());
+        assert_eq!(decoded.boundary(), fragment.boundary());
+        assert_eq!(decoded.checkpoints(), fragment.checkpoints());
+    }
+
+    #[test]
+    fn codec_round_trip_with_data() {
+        let ctx = make_sedimentree_id(0x01);
+        let boundary = BTreeSet::from([make_digest(0x30), make_digest(0x40)]);
+        let checkpoints = BTreeSet::from([make_checkpoint(0x50), make_checkpoint(0x60)]);
+
+        let fragment = Fragment::from_parts(
+            make_digest(0x10),
+            boundary,
+            checkpoints,
+            BlobMeta::from_digest_size(make_digest(0x20), 2048),
+        );
+
+        let mut buf = Vec::new();
+        fragment.encode_fields(&ctx, &mut buf);
+
+        let decoded = Fragment::decode_fields(&buf, &ctx).expect("decode should succeed");
+        assert_eq!(decoded.head(), fragment.head());
+        assert_eq!(decoded.boundary(), fragment.boundary());
+        assert_eq!(decoded.checkpoints(), fragment.checkpoints());
+    }
+
+    #[test]
+    fn codec_context_mismatch_rejected() {
+        let ctx = make_sedimentree_id(0x01);
+        let wrong_ctx = make_sedimentree_id(0x02);
+        let fragment = Fragment::from_parts(
+            make_digest(0x10),
+            BTreeSet::new(),
+            BTreeSet::new(),
+            BlobMeta::from_digest_size(make_digest(0x20), 1024),
+        );
+
+        let mut buf = Vec::new();
+        fragment.encode_fields(&ctx, &mut buf);
+
+        let result = Fragment::decode_fields(&buf, &wrong_ctx);
+        assert!(matches!(result, Err(CodecError::ContextMismatch { .. })));
+    }
+
+    #[test]
+    fn codec_unsorted_boundary_rejected() {
+        let ctx = make_sedimentree_id(0x01);
+
+        let mut buf = Vec::new();
+        encode::array(ctx.as_bytes(), &mut buf);
+        encode::array(&[0x10; 32], &mut buf);
+        encode::array(&[0x20; 32], &mut buf);
+        encode::u8(2, &mut buf);
+        encode::u16(0, &mut buf);
+        encode::u32(1024, &mut buf);
+        encode::array(&[0x50; 32], &mut buf);
+        encode::array(&[0x30; 32], &mut buf);
+
+        let result = Fragment::decode_fields(&buf, &ctx);
+        assert!(matches!(result, Err(CodecError::UnsortedArray { .. })));
+    }
+
+    #[test]
+    fn codec_buffer_too_short_rejected() {
+        let ctx = make_sedimentree_id(0x01);
+        let buf = vec![0u8; 50];
+
+        let result = Fragment::decode_fields(&buf, &ctx);
+        assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
+    }
+
+    #[test]
+    fn codec_schema_is_correct() {
+        assert_eq!(Fragment::SCHEMA, *b"STF\x00");
+    }
+
+    #[test]
+    fn codec_min_size_is_correct() {
+        assert_eq!(Fragment::MIN_SIZE, 203);
     }
 }
 

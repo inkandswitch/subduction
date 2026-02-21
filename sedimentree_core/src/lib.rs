@@ -22,6 +22,7 @@ extern crate alloc;
 
 pub mod blob;
 pub mod cbor;
+pub mod codec;
 pub mod collections;
 pub mod commit;
 pub mod crypto;

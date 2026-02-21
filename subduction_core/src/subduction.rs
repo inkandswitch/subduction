@@ -330,11 +330,11 @@ impl<
             // Extract payloads from trusted storage (already verified before storage)
             let loose_commits: Vec<_> = signed_loose_commits
                 .into_iter()
-                .filter_map(|(_, signed)| signed.decode_payload().ok())
+                .filter_map(|(_, signed)| signed.decode_payload(&id).ok())
                 .collect();
             let fragments: Vec<_> = signed_fragments
                 .into_iter()
-                .filter_map(|(_, signed)| signed.decode_payload().ok())
+                .filter_map(|(_, signed)| signed.decode_payload(&id).ok())
                 .collect();
 
             let sedimentree = Sedimentree::new(fragments, loose_commits);
@@ -1241,13 +1241,13 @@ impl<
         // Sign all commits and fragments with our signer (seal returns Verified)
         let mut verified_commits = Vec::with_capacity(sedimentree.loose_commits().count());
         for commit in sedimentree.loose_commits() {
-            let verified = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
+            let verified = Signed::seal::<F, _>(&self.signer, commit.clone(), &id).await;
             verified_commits.push(verified);
         }
 
         let mut verified_fragments = Vec::with_capacity(sedimentree.fragments().count());
         for fragment in sedimentree.fragments() {
-            let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
+            let verified = Signed::seal::<F, _>(&self.signer, fragment.clone(), &id).await;
             verified_fragments.push(verified);
         }
 
@@ -1333,7 +1333,7 @@ impl<
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<F, _>(&self.signer, (digest, parents), verified_blob).await;
+            VerifiedMeta::seal::<F, _>(&self.signer, (digest, parents), verified_blob, &id).await;
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 
@@ -1419,6 +1419,7 @@ impl<
             &self.signer,
             (head, boundary, checkpoints.to_vec()),
             verified_blob,
+            &id,
         )
         .await;
         let fragment_digest = verified_meta.payload().digest();
@@ -1490,7 +1491,7 @@ impl<
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
-        let verified = match signed_commit.try_verify() {
+        let verified = match signed_commit.try_verify(&id) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(
@@ -1575,7 +1576,7 @@ impl<
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
         // Verify the signature
-        let verified = match signed_fragment.try_verify() {
+        let verified = match signed_fragment.try_verify(&id) {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(
@@ -1720,11 +1721,11 @@ impl<
             if let Entry::Vacant(entry) = locked.entry(id) {
                 let loose_commits: Vec<_> = commit_by_digest
                     .values()
-                    .filter_map(|signed| signed.decode_payload().ok())
+                    .filter_map(|signed| signed.decode_payload(&id).ok())
                     .collect();
                 let fragments: Vec<_> = fragment_by_digest
                     .values()
-                    .filter_map(|signed| signed.decode_payload().ok())
+                    .filter_map(|signed| signed.decode_payload(&id).ok())
                     .collect();
 
                 if !loose_commits.is_empty() || !fragments.is_empty() {
@@ -1763,7 +1764,7 @@ impl<
 
         for digest in local_commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(&digest)
-                && let Ok(payload) = signed_commit.decode_payload()
+                && let Ok(payload) = signed_commit.decode_payload(&id)
             {
                 let blob_digest = payload.blob_meta().digest();
                 if let Some(blob) = fetcher
@@ -1781,7 +1782,7 @@ impl<
 
         for digest in local_fragment_digests {
             if let Some(signed_fragment) = fragment_by_digest.get(&digest)
-                && let Ok(payload) = signed_fragment.decode_payload()
+                && let Ok(payload) = signed_fragment.decode_payload(&id)
             {
                 let blob_digest = payload.summary().blob_meta().digest();
                 if let Some(blob) = fetcher
@@ -1863,7 +1864,7 @@ impl<
         };
 
         for (signed_commit, blob) in diff.missing_commits {
-            let verified = match signed_commit.try_verify() {
+            let verified = match signed_commit.try_verify(&id) {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!("batch sync commit signature verification failed: {e}");
@@ -1883,7 +1884,7 @@ impl<
         }
 
         for (signed_fragment, blob) in diff.missing_fragments {
-            let verified = match signed_fragment.try_verify() {
+            let verified = match signed_fragment.try_verify(&id) {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!("batch sync fragment signature verification failed: {e}");
@@ -2036,7 +2037,7 @@ impl<
                     let fragments_to_receive = missing_fragments.len();
 
                     for (signed_commit, blob) in missing_commits {
-                        let verified = match signed_commit.try_verify() {
+                        let verified = match signed_commit.try_verify(&id) {
                             Ok(v) => v,
                             Err(e) => {
                                 tracing::warn!("sync commit signature verification failed: {e}");
@@ -2056,7 +2057,7 @@ impl<
                     }
 
                     for (signed_fragment, blob) in missing_fragments {
-                        let verified = match signed_fragment.try_verify() {
+                        let verified = match signed_fragment.try_verify(&id) {
                             Ok(v) => v,
                             Err(e) => {
                                 tracing::warn!("sync fragment signature verification failed: {e}");
@@ -2103,18 +2104,6 @@ impl<
                                 stats.commits_sent += sent.commits;
                                 stats.fragments_sent += sent.fragments;
                             }
-                            Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
-                                let msg: Message = DataRequestRejected { id }.into();
-                                if let Err(send_err) = conn.send(&msg).await {
-                                    tracing::error!(
-                                        "failed to send DataRequestRejected: {send_err}"
-                                    );
-                                }
-                                tracing::warn!(
-                                    "failed to send requested data to peer {:?}: {e}",
-                                    to_ask
-                                );
-                            }
                             Err(e) => {
                                 tracing::warn!(
                                     "failed to send requested data to peer {:?}: {e}",
@@ -2135,424 +2124,12 @@ impl<
                     }
 
                     had_success = true;
-
-                    // Cleanup pending blob requests for this tree since sync completed
-                    self.pending_blob_requests
-                        .lock()
-                        .await
-                        .remove_for_sedimentree(id);
-
                     break;
                 }
             }
         }
 
         Ok((had_success, stats, conn_errs))
-    }
-
-    /// Request a batch sync from a given peer, returning requested data for background sending.
-    ///
-    /// Like [`sync_with_peer`](Self::sync_with_peer), but instead of sending requested data
-    /// back to the peer (which blocks), this method returns the connection and requested data
-    /// so the caller can spawn the send as a background task.
-    ///
-    /// This enables better pipelining when syncing many sedimentrees concurrently, as the
-    /// caller can use `tokio::spawn` (or similar) to fire off the sends without blocking.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of:
-    /// - `bool`: Whether at least one sync was successful
-    /// - `SyncStats`: Statistics about the sync (note: `commits_sent`/`fragments_sent` will be 0)
-    /// - `Option<(Authenticated<C, F>, FingerprintSeed, RequestedData)>`: If the peer requested data, the connection, seed, and data to send
-    /// - `Vec<(Authenticated<C, F>, C::CallError)>`: Any connection errors encountered
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IoError`] if storage operations fail.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// let (success, stats, pending_send, errors) = subduction
-    ///     .sync_with_peer_receive_only(&peer_id, sed_id, true, timeout)
-    ///     .await?;
-    ///
-    /// // Spawn the send as a background task (fire-and-forget)
-    /// if let Some((conn, seed, requested_data)) = pending_send {
-    ///     let subduction = subduction.clone();
-    ///     tokio::spawn(async move {
-    ///         let _ = subduction.send_requested_data(&conn, sed_id, &seed, &requested_data).await;
-    ///     });
-    /// }
-    /// ```
-    #[allow(clippy::too_many_lines, clippy::type_complexity)]
-    pub async fn sync_with_peer_receive_only(
-        &self,
-        to_ask: &PeerId,
-        id: SedimentreeId,
-        subscribe: bool,
-        timeout: Option<Duration>,
-    ) -> Result<
-        (
-            bool,
-            SyncStats,
-            Option<(Authenticated<C, F>, FingerprintSeed, RequestedData)>,
-            Vec<(Authenticated<C, F>, C::CallError)>,
-        ),
-        IoError<F, S, C>,
-    > {
-        tracing::info!(
-            "Requesting batch sync (receive-only) for sedimentree {:?} from peer {:?}",
-            id,
-            to_ask
-        );
-
-        let mut stats = SyncStats::new();
-        let mut had_success = false;
-        let mut pending_send: Option<(Authenticated<C, F>, FingerprintSeed, RequestedData)> = None;
-
-        let peer_conns: Vec<Authenticated<C, F>> = {
-            self.connections
-                .lock()
-                .await
-                .get(to_ask)
-                .map(|ne| ne.iter().cloned().collect())
-                .unwrap_or_default()
-        };
-
-        let mut conn_errs = Vec::new();
-
-        for conn in peer_conns {
-            tracing::info!("Using connection to peer {}", to_ask);
-            let seed = FingerprintSeed::random();
-            let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
-                || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
-                |t| t.fingerprint_summarize(&seed),
-            );
-
-            tracing::debug!(
-                "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
-                id,
-                fp_summary.commit_fingerprints().len(),
-                fp_summary.fragment_fingerprints().len()
-            );
-
-            let req_id = conn.next_request_id().await;
-
-            let result = conn
-                .call(
-                    BatchSyncRequest {
-                        id,
-                        req_id,
-                        fingerprint_summary: fp_summary,
-                        subscribe,
-                    },
-                    timeout,
-                )
-                .await;
-
-            match result {
-                Err(e) => conn_errs.push((conn, e)),
-                Ok(BatchSyncResponse { result, .. }) => {
-                    let SyncDiff {
-                        missing_commits,
-                        missing_fragments,
-                        requesting,
-                    } = match result {
-                        SyncResult::Ok(diff) => diff,
-                        SyncResult::NotFound => {
-                            tracing::debug!("peer {to_ask:?} reports sedimentree {id:?} not found");
-                            continue;
-                        }
-                        SyncResult::Unauthorized => {
-                            tracing::debug!(
-                                "peer {to_ask:?} reports we are unauthorized for sedimentree {id:?}"
-                            );
-                            continue;
-                        }
-                    };
-
-                    let putter = match self.storage.get_putter::<F>(*to_ask, *to_ask, id).await {
-                        Ok(p) => p,
-                        Err(e) => {
-                            tracing::warn!(
-                                "policy rejected sync from peer {:?} for sedimentree {:?}: {e}",
-                                to_ask,
-                                id
-                            );
-                            continue;
-                        }
-                    };
-
-                    // Track counts for stats
-                    let commits_to_receive = missing_commits.len();
-                    let fragments_to_receive = missing_fragments.len();
-
-                    for (signed_commit, blob) in missing_commits {
-                        let verified = match signed_commit.try_verify() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!("sync commit signature verification failed: {e}");
-                                continue;
-                            }
-                        };
-                        let verified_meta = match VerifiedMeta::new(verified, blob) {
-                            Ok(vm) => vm,
-                            Err(e) => {
-                                tracing::warn!("sync commit blob mismatch: {e}");
-                                continue;
-                            }
-                        };
-                        self.insert_commit_locally(&putter, verified_meta)
-                            .await
-                            .map_err(IoError::Storage)?;
-                    }
-
-                    for (signed_fragment, blob) in missing_fragments {
-                        let verified = match signed_fragment.try_verify() {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::warn!("sync fragment signature verification failed: {e}");
-                                continue;
-                            }
-                        };
-                        let verified_meta = match VerifiedMeta::new(verified, blob) {
-                            Ok(vm) => vm,
-                            Err(e) => {
-                                tracing::warn!("sync fragment blob mismatch: {e}");
-                                continue;
-                            }
-                        };
-                        self.insert_fragment_locally(&putter, verified_meta)
-                            .await
-                            .map_err(IoError::Storage)?;
-                    }
-
-                    // Update received stats (count what was offered, not verified)
-                    stats.commits_received += commits_to_receive;
-                    stats.fragments_received += fragments_to_receive;
-
-                    tracing::debug!(
-                        "Received response for {:?}: {} commits received, peer requesting {} commits and {} fragments",
-                        id,
-                        commits_to_receive,
-                        requesting.commit_fingerprints.len(),
-                        requesting.fragment_fingerprints.len()
-                    );
-
-                    // Return the requested data for caller to send in background
-                    if !requesting.is_empty() {
-                        pending_send = Some((conn.clone(), seed, requesting));
-                    }
-
-                    // Mutual subscription: we subscribed to them, so also add them
-                    // to our subscriptions so our commits get pushed to them
-                    if subscribe {
-                        self.track_outgoing_subscription(*to_ask, id).await;
-                        self.add_subscription(*to_ask, id).await;
-                        tracing::debug!(
-                            "mutual subscription: added peer {to_ask} to our subscriptions for {id:?}"
-                        );
-                    }
-
-                    had_success = true;
-
-                    // Cleanup pending blob requests for this tree since sync completed
-                    self.pending_blob_requests
-                        .lock()
-                        .await
-                        .remove_for_sedimentree(id);
-
-                    break;
-                }
-            }
-        }
-
-        Ok((had_success, stats, pending_send, conn_errs))
-    }
-
-    /// Sync a single sedimentree using a provided connection.
-    ///
-    /// This is a lower-level method that skips the connection lookup, making it
-    /// suitable for batch operations where the same connection is used for many
-    /// sedimentrees concurrently.
-    ///
-    /// Returns:
-    /// - `bool`: whether the sync succeeded
-    /// - `SyncStats`: statistics about the sync
-    /// - `Option<(FingerprintSeed, RequestedData)>`: seed + data the peer requested from us (caller should send)
-    /// - `Option<C::CallError>`: error if the call failed
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IoError`] if storage operations fail.
-    #[allow(clippy::too_many_lines, clippy::type_complexity)]
-    pub async fn sync_sedimentree_with_conn(
-        &self,
-        conn: &Authenticated<C, F>,
-        id: SedimentreeId,
-        subscribe: bool,
-        timeout: Option<Duration>,
-    ) -> Result<
-        (
-            bool,
-            SyncStats,
-            Option<(FingerprintSeed, RequestedData)>,
-            Option<C::CallError>,
-        ),
-        IoError<F, S, C>,
-    > {
-        let peer_id = conn.peer_id();
-        tracing::debug!(
-            "sync_sedimentree_with_conn for {:?} with peer {:?}",
-            id,
-            peer_id
-        );
-
-        let mut stats = SyncStats::new();
-
-        let seed = FingerprintSeed::random();
-        let fp_summary = self.sedimentrees.get_cloned(&id).await.map_or_else(
-            || FingerprintSummary::new(seed, BTreeSet::new(), BTreeSet::new()),
-            |t| t.fingerprint_summarize(&seed),
-        );
-
-        tracing::debug!(
-            "Sending fingerprint summary for {:?}: {} commit fps, {} fragment fps",
-            id,
-            fp_summary.commit_fingerprints().len(),
-            fp_summary.fragment_fingerprints().len()
-        );
-
-        let req_id = conn.next_request_id().await;
-
-        let result = conn
-            .call(
-                BatchSyncRequest {
-                    id,
-                    req_id,
-                    fingerprint_summary: fp_summary,
-                    subscribe,
-                },
-                timeout,
-            )
-            .await;
-
-        match result {
-            Err(e) => Ok((false, stats, None, Some(e))),
-            Ok(BatchSyncResponse { result, .. }) => {
-                let SyncDiff {
-                    missing_commits,
-                    missing_fragments,
-                    requesting,
-                } = match result {
-                    SyncResult::Ok(diff) => diff,
-                    SyncResult::NotFound => {
-                        tracing::debug!("peer {peer_id:?} reports sedimentree {id:?} not found");
-                        return Ok((false, stats, None, None));
-                    }
-                    SyncResult::Unauthorized => {
-                        tracing::debug!(
-                            "peer {peer_id:?} reports we are unauthorized for sedimentree {id:?}"
-                        );
-                        return Ok((false, stats, None, None));
-                    }
-                };
-
-                let putter = match self.storage.get_putter::<F>(peer_id, peer_id, id).await {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::warn!(
-                            "policy rejected sync from peer {:?} for sedimentree {:?}: {e}",
-                            peer_id,
-                            id
-                        );
-                        return Ok((false, stats, None, None));
-                    }
-                };
-
-                // Track counts for stats
-                let commits_to_receive = missing_commits.len();
-                let fragments_to_receive = missing_fragments.len();
-
-                for (signed_commit, blob) in missing_commits {
-                    let verified = match signed_commit.try_verify() {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::warn!("sync commit signature verification failed: {e}");
-                            continue;
-                        }
-                    };
-                    let verified_meta = match VerifiedMeta::new(verified, blob) {
-                        Ok(vm) => vm,
-                        Err(e) => {
-                            tracing::warn!("sync commit blob mismatch: {e}");
-                            continue;
-                        }
-                    };
-                    self.insert_commit_locally(&putter, verified_meta)
-                        .await
-                        .map_err(IoError::Storage)?;
-                }
-
-                for (signed_fragment, blob) in missing_fragments {
-                    let verified = match signed_fragment.try_verify() {
-                        Ok(v) => v,
-                        Err(e) => {
-                            tracing::warn!("sync fragment signature verification failed: {e}");
-                            continue;
-                        }
-                    };
-                    let verified_meta = match VerifiedMeta::new(verified, blob) {
-                        Ok(vm) => vm,
-                        Err(e) => {
-                            tracing::warn!("sync fragment blob mismatch: {e}");
-                            continue;
-                        }
-                    };
-                    self.insert_fragment_locally(&putter, verified_meta)
-                        .await
-                        .map_err(IoError::Storage)?;
-                }
-
-                // Update received stats
-                stats.commits_received += commits_to_receive;
-                stats.fragments_received += fragments_to_receive;
-
-                tracing::debug!(
-                    "Received response for {:?}: {} commits received, peer requesting {} commits and {} fragments",
-                    id,
-                    commits_to_receive,
-                    requesting.commit_fingerprints.len(),
-                    requesting.fragment_fingerprints.len()
-                );
-
-                // Return the requested data for caller to send
-                let pending_send = if requesting.is_empty() {
-                    None
-                } else {
-                    Some((seed, requesting))
-                };
-
-                // Mutual subscription
-                if subscribe {
-                    self.track_outgoing_subscription(peer_id, id).await;
-                    self.add_subscription(peer_id, id).await;
-                    tracing::debug!(
-                        "mutual subscription: added peer {peer_id} to our subscriptions for {id:?}"
-                    );
-                }
-
-                // Cleanup pending blob requests for this tree since sync completed
-                self.pending_blob_requests
-                    .lock()
-                    .await
-                    .remove_for_sedimentree(id);
-
-                Ok((true, stats, pending_send, None))
-            }
-        }
     }
 
     /// Request a batch sync from all connected peers for a given sedimentree ID.
@@ -2687,7 +2264,7 @@ impl<
                                 );
 
                                 for (signed_commit, blob) in missing_commits {
-                                    let verified = match signed_commit.try_verify() {
+                                    let verified = match signed_commit.try_verify(&id) {
                                         Ok(v) => v,
                                         Err(e) => {
                                             tracing::warn!(
@@ -2709,7 +2286,7 @@ impl<
                                 }
 
                                 for (signed_fragment, blob) in missing_fragments {
-                                    let verified = match signed_fragment.try_verify() {
+                                    let verified = match signed_fragment.try_verify(&id) {
                                         Ok(v) => v,
                                         Err(e) => {
                                             tracing::warn!(
@@ -3064,7 +2641,7 @@ impl<
 
                 for commit_digest in &requested_commit_digests {
                     if let Some(signed_commit) = commit_by_digest.get(commit_digest)
-                        && let Ok(payload) = signed_commit.decode_payload()
+                        && let Ok(payload) = signed_commit.decode_payload(&id)
                     {
                         blob_digests.push(payload.blob_meta().digest());
                     }
@@ -3072,7 +2649,7 @@ impl<
 
                 for fragment_digest in &requested_fragment_digests {
                     if let Some(signed_fragment) = fragment_by_digest.get(fragment_digest)
-                        && let Ok(payload) = signed_fragment.decode_payload()
+                        && let Ok(payload) = signed_fragment.decode_payload(&id)
                     {
                         blob_digests.push(payload.summary().blob_meta().digest());
                     }
@@ -3090,7 +2667,7 @@ impl<
                 .iter()
                 .filter_map(|commit_digest| {
                     let signed_commit = commit_by_digest.get(commit_digest)?;
-                    let payload = signed_commit.decode_payload().ok()?;
+                    let payload = signed_commit.decode_payload(&id).ok()?;
                     let blob = blob_by_digest.get(&payload.blob_meta().digest())?;
                     Some(Message::LooseCommit {
                         id,
@@ -3104,7 +2681,7 @@ impl<
                 .iter()
                 .filter_map(|fragment_digest| {
                     let signed_fragment = fragment_by_digest.get(fragment_digest)?;
-                    let payload = signed_fragment.decode_payload().ok()?;
+                    let payload = signed_fragment.decode_payload(&id).ok()?;
                     let blob = blob_by_digest.get(&payload.summary().blob_meta().digest())?;
                     Some(Message::Fragment {
                         id,

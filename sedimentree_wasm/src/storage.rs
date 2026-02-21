@@ -205,26 +205,41 @@ impl core::fmt::Debug for JsSedimentreeStorage {
 }
 
 /// Compute digest from a signed commit by decoding the payload.
-fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest<LooseCommit>> {
-    signed.decode_payload().ok().map(|c| c.digest())
+fn commit_digest(
+    signed: &Signed<LooseCommit>,
+    sedimentree_id: &SedimentreeId,
+) -> Option<Digest<LooseCommit>> {
+    signed
+        .decode_payload(sedimentree_id)
+        .ok()
+        .map(|c| c.digest())
 }
 
 /// Compute digest from a signed fragment by decoding the payload.
-fn fragment_digest(signed: &Signed<Fragment>) -> Option<Digest<Fragment>> {
-    signed.decode_payload().ok().map(|f| f.digest())
+fn fragment_digest(
+    signed: &Signed<Fragment>,
+    sedimentree_id: &SedimentreeId,
+) -> Option<Digest<Fragment>> {
+    signed
+        .decode_payload(sedimentree_id)
+        .ok()
+        .map(|f| f.digest())
 }
 
 /// Compute blob digest from a signed fragment by decoding the payload.
-fn fragment_blob_digest(signed: &Signed<Fragment>) -> Option<Digest<Blob>> {
+fn fragment_blob_digest(
+    signed: &Signed<Fragment>,
+    sedimentree_id: &SedimentreeId,
+) -> Option<Digest<Blob>> {
     signed
-        .decode_payload()
+        .decode_payload(sedimentree_id)
         .ok()
         .map(|f| f.summary().blob_meta().digest())
 }
 
 /// Parse a JS array of {digest, signed} objects into Rust tuples.
 #[allow(clippy::type_complexity)]
-fn parse_digest_signed_array<T: for<'a> minicbor::Decode<'a, ()>>(
+fn parse_digest_signed_array<T: sedimentree_core::codec::Codec>(
     js_value: &JsValue,
 ) -> Result<Vec<(Digest<T>, Signed<T>)>, JsSedimentreeStorageError> {
     let array = js_sys::Array::from(js_value);
@@ -330,11 +345,11 @@ impl Storage<Local> for JsSedimentreeStorage {
         loose_commit: Signed<LooseCommit>,
     ) -> LocalBoxFuture<'_, Result<Digest<LooseCommit>, Self::Error>> {
         Local::from_future(async move {
-            let digest = commit_digest(&loose_commit)
+            let digest = commit_digest(&loose_commit, &sedimentree_id)
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
             // Get the blob digest from the commit's blob metadata
             let blob_digest = loose_commit
-                .decode_payload()
+                .decode_payload(&sedimentree_id)
                 .ok()
                 .map(|commit| commit.blob_meta().digest())
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
@@ -469,9 +484,9 @@ impl Storage<Local> for JsSedimentreeStorage {
         fragment: Signed<Fragment>,
     ) -> LocalBoxFuture<'_, Result<Digest<Fragment>, Self::Error>> {
         Local::from_future(async move {
-            let digest = fragment_digest(&fragment)
+            let digest = fragment_digest(&fragment, &sedimentree_id)
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
-            let blob_digest = fragment_blob_digest(&fragment)
+            let blob_digest = fragment_blob_digest(&fragment, &sedimentree_id)
                 .ok_or(JsSedimentreeStorageError::DigestComputationFailed)?;
             tracing::debug!(
                 ?sedimentree_id,

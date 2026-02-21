@@ -347,16 +347,17 @@ mod tests {
         #[tokio::test]
         async fn test_loose_commit_has_no_request_id() {
             let signer = test_signer();
+            let id = SedimentreeId::new([1u8; 32]);
             let commit = LooseCommit::new(
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit, &id)
                 .await
                 .into_signed();
             let msg = Message::LooseCommit {
-                id: SedimentreeId::new([1u8; 32]),
+                id,
                 commit: signed_commit,
                 blob: Blob::new(Vec::from([3u8; 16])),
             };
@@ -366,17 +367,18 @@ mod tests {
         #[tokio::test]
         async fn test_fragment_has_no_request_id() {
             let signer = test_signer();
+            let id = SedimentreeId::new([1u8; 32]);
             let fragment = Fragment::new(
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment, &id)
                 .await
                 .into_signed();
             let msg = Message::Fragment {
-                id: SedimentreeId::new([1u8; 32]),
+                id,
                 fragment: signed_fragment,
                 blob: Blob::new(Vec::from([3u8; 16])),
             };
@@ -447,13 +449,14 @@ mod tests {
         #[tokio::test]
         async fn test_sync_diff_with_commits() {
             let signer = test_signer();
+            let id = SedimentreeId::new([0u8; 32]);
             let commit = LooseCommit::new(
                 Digest::from_bytes([1u8; 32]),
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([2u8; 16]));
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit, &id)
                 .await
                 .into_signed();
 
@@ -474,6 +477,7 @@ mod tests {
         #[tokio::test]
         async fn test_sync_diff_with_fragments() {
             let signer = test_signer();
+            let id = SedimentreeId::new([0u8; 32]);
             let fragment = Fragment::new(
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
@@ -481,7 +485,7 @@ mod tests {
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([3u8; 16]));
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment, &id)
                 .await
                 .into_signed();
 

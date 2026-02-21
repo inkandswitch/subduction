@@ -33,11 +33,11 @@ fn make_commit_parts() -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, B
     (digest, BTreeSet::new(), blob)
 }
 
-async fn make_signed_test_commit() -> (Signed<LooseCommit>, Blob) {
+async fn make_signed_test_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blob) {
     let (digest, parents, blob) = make_commit_parts();
     let blob_meta = BlobMeta::new(blob.as_slice());
     let commit = LooseCommit::new(digest, parents, blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit, id).await;
     (verified.into_signed(), blob)
 }
 
@@ -56,11 +56,11 @@ fn make_fragment_parts() -> (
     (head, boundary, checkpoints, blob)
 }
 
-async fn make_signed_test_fragment() -> (Signed<Fragment>, Blob) {
+async fn make_signed_test_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob) {
     let (head, boundary, checkpoints, blob) = make_fragment_parts();
     let blob_meta = BlobMeta::new(blob.as_slice());
     let fragment = Fragment::new(head, boundary, &checkpoints, blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment, id).await;
     (verified.into_signed(), blob)
 }
 
@@ -176,7 +176,7 @@ async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult
     subduction.add_subscription(other_peer_id, id).await;
 
     // Receive a commit from a different peer - the propagation send will fail
-    let (signed_commit, blob) = make_signed_test_commit().await;
+    let (signed_commit, blob) = make_signed_test_commit(&id).await;
 
     let _ = subduction
         .recv_commit(&sender_peer_id, id, &signed_commit, blob)
@@ -222,7 +222,7 @@ async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResu
     subduction.add_subscription(other_peer_id, id).await;
 
     // Receive a fragment from a different peer - the propagation send will fail
-    let (signed_fragment, blob) = make_signed_test_fragment().await;
+    let (signed_fragment, blob) = make_signed_test_fragment(&id).await;
 
     let _ = subduction
         .recv_fragment(&sender_peer_id, id, &signed_fragment, blob)

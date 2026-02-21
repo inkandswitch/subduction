@@ -35,6 +35,7 @@ extern crate std;
 
 extern crate alloc;
 
+pub mod codec;
 pub mod connection;
 pub mod peer;
 pub mod policy;

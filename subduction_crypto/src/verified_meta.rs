@@ -1,7 +1,10 @@
 //! A payload whose signature is valid AND whose blob matches the claimed metadata.
 
 use future_form::FutureForm;
-use sedimentree_core::blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta};
+use sedimentree_core::{
+    blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta},
+    codec::Codec,
+};
 use thiserror::Error;
 
 use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};
@@ -15,7 +18,7 @@ use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignatur
 /// # Usage
 ///
 /// ```ignore
-/// let verified_sig = signed_commit.try_verify()?;
+/// let verified_sig = signed_commit.try_verify(&sedimentree_id)?;
 /// let verified_meta = VerifiedMeta::new(verified_sig, blob)?;
 /// putter.save_commit(verified_meta).await?;
 /// ```
@@ -25,7 +28,7 @@ use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignatur
 ///
 /// [`Putter`]: subduction_core::storage::putter::Putter
 #[derive(Clone, Debug)]
-pub struct VerifiedMeta<T: for<'a> minicbor::Decode<'a, ()>> {
+pub struct VerifiedMeta<T: Codec> {
     verified: VerifiedSignature<T>,
     blob: Blob,
 }
@@ -41,7 +44,7 @@ pub struct BlobMismatch {
     pub actual: BlobMeta,
 }
 
-impl<T: HasBlobMeta + minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>> VerifiedMeta<T> {
+impl<T: HasBlobMeta + Codec> VerifiedMeta<T> {
     /// Create a `VerifiedMeta<T>` after verifying the blob matches the claimed metadata.
     ///
     /// # Errors
@@ -105,6 +108,13 @@ impl<T: HasBlobMeta + minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>> V
     /// Infallible because [`VerifiedBlobMeta`] guarantees the blob metadata
     /// matches by construction, and `T` is constructed from that metadata.
     ///
+    /// # Arguments
+    ///
+    /// * `signer` - The signer to use
+    /// * `args` - Type-specific arguments (besides `BlobMeta`)
+    /// * `verified_blob` - The verified blob with its metadata
+    /// * `ctx` - Encoding context (e.g., `SedimentreeId` for commits/fragments)
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -113,16 +123,18 @@ impl<T: HasBlobMeta + minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>> V
     ///     &signer,
     ///     (digest, parents),
     ///     verified_blob,
+    ///     &sedimentree_id,
     /// ).await;
     /// ```
     pub async fn seal<K: FutureForm, S: Signer<K>>(
         signer: &S,
         args: T::Args,
         verified_blob: VerifiedBlobMeta,
+        ctx: &T::Context,
     ) -> Self {
         let (blob_meta, blob) = verified_blob.into_parts();
         let meta = T::from_args(args, blob_meta);
-        let verified = Signed::seal::<K, _>(signer, meta).await;
+        let verified = Signed::seal::<K, _>(signer, meta, ctx).await;
         Self { verified, blob }
     }
 }

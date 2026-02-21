@@ -29,24 +29,24 @@ use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
 /// Create a commit with matching blob metadata.
-async fn make_valid_commit(data: &[u8]) -> (Signed<LooseCommit>, Blob) {
+async fn make_valid_commit(id: &SedimentreeId, data: &[u8]) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit, id).await;
     (verified.into_signed(), blob)
 }
 
 /// Create a commit with mismatched blob metadata.
 /// The commit claims the blob has one digest, but the actual blob has different content.
-async fn make_mismatched_commit() -> (Signed<LooseCommit>, Blob) {
+async fn make_mismatched_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blob) {
     // Commit claims blob contains "claimed data"
     let claimed_data = b"claimed data";
     let blob_meta = BlobMeta::new(claimed_data);
     let digest = Digest::<LooseCommit>::hash_bytes(claimed_data);
     let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit, id).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different data";
@@ -56,25 +56,25 @@ async fn make_mismatched_commit() -> (Signed<LooseCommit>, Blob) {
 }
 
 /// Create a fragment with matching blob metadata.
-async fn make_valid_fragment(data: &[u8]) -> (Signed<Fragment>, Blob) {
+async fn make_valid_fragment(id: &SedimentreeId, data: &[u8]) -> (Signed<Fragment>, Blob) {
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let head = Digest::<LooseCommit>::hash_bytes(b"head");
     let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
     let fragment = Fragment::new(head, boundary, &[], blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment, id).await;
     (verified.into_signed(), blob)
 }
 
 /// Create a fragment with mismatched blob metadata.
-async fn make_mismatched_fragment() -> (Signed<Fragment>, Blob) {
+async fn make_mismatched_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob) {
     // Fragment claims blob contains "claimed fragment data"
     let claimed_data = b"claimed fragment data";
     let blob_meta = BlobMeta::new(claimed_data);
     let head = Digest::<LooseCommit>::hash_bytes(b"head");
     let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
     let fragment = Fragment::new(head, boundary, &[], blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment, id).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different fragment data";
@@ -108,7 +108,7 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
-    let (commit, blob) = make_mismatched_commit().await;
+    let (commit, blob) = make_mismatched_commit(&sedimentree_id).await;
 
     // Send the mismatched commit
     handle
@@ -166,7 +166,7 @@ async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
-    let (fragment, blob) = make_mismatched_fragment().await;
+    let (fragment, blob) = make_mismatched_fragment(&sedimentree_id).await;
 
     // Send the mismatched fragment
     handle
@@ -217,7 +217,7 @@ async fn recv_commit_accepts_valid_blob() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
-    let (commit, blob) = make_valid_commit(b"valid commit data").await;
+    let (commit, blob) = make_valid_commit(&sedimentree_id, b"valid commit data").await;
 
     // Send the valid commit
     handle
@@ -276,7 +276,7 @@ async fn recv_fragment_accepts_valid_blob() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
-    let (fragment, blob) = make_valid_fragment(b"valid fragment data").await;
+    let (fragment, blob) = make_valid_fragment(&sedimentree_id, b"valid fragment data").await;
 
     // Send the valid fragment
     handle
@@ -329,7 +329,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
 
     // First: send a mismatched commit (should be rejected)
-    let (bad_commit, bad_blob) = make_mismatched_commit().await;
+    let (bad_commit, bad_blob) = make_mismatched_commit(&sedimentree_id).await;
     handle
         .inbound_tx
         .send(Message::LooseCommit {
@@ -342,7 +342,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
     tokio::time::sleep(Duration::from_millis(30)).await;
 
     // Second: send a valid commit (should be accepted)
-    let (good_commit, good_blob) = make_valid_commit(b"good commit").await;
+    let (good_commit, good_blob) = make_valid_commit(&sedimentree_id, b"good commit").await;
     handle
         .inbound_tx
         .send(Message::LooseCommit {
