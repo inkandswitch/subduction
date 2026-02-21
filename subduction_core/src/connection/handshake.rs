@@ -1385,4 +1385,181 @@ mod tests {
             assert_eq!(*id.as_bytes(), raw_bytes);
         }
     }
+
+    mod codec_tests {
+        use super::*;
+
+        fn sample_challenge() -> Challenge {
+            Challenge {
+                audience: Audience::Known(PeerId::new([0x42; 32])),
+                timestamp: TimestampSeconds::new(1234567890),
+                nonce: Nonce::from_u128(0xDEAD_BEEF_CAFE_BABE_1234_5678_9ABC_DEF0),
+            }
+        }
+
+        fn sample_response() -> Response {
+            Response {
+                challenge_digest: Digest::from_bytes([0xAB; 32]),
+                server_timestamp: TimestampSeconds::new(1234567890),
+            }
+        }
+
+        #[test]
+        fn challenge_fields_roundtrip() {
+            let challenge = sample_challenge();
+            let mut buf = Vec::new();
+            challenge.encode_fields(&(), &mut buf);
+
+            assert_eq!(buf.len(), CHALLENGE_FIELDS_SIZE);
+
+            let decoded = Challenge::decode_fields(&buf, &()).expect("decode should succeed");
+            assert_eq!(decoded, challenge);
+        }
+
+        #[test]
+        fn challenge_known_audience_tag() {
+            let challenge = Challenge {
+                audience: Audience::Known(PeerId::new([0x00; 32])),
+                timestamp: TimestampSeconds::new(0),
+                nonce: Nonce::from_u128(0),
+            };
+
+            let mut buf = Vec::new();
+            challenge.encode_fields(&(), &mut buf);
+
+            assert_eq!(buf[0], 0x00); // Known tag
+        }
+
+        #[test]
+        fn challenge_discover_audience_tag() {
+            let challenge = Challenge {
+                audience: Audience::Discover(DiscoveryId::from_raw([0xFF; 32])),
+                timestamp: TimestampSeconds::new(0),
+                nonce: Nonce::from_u128(0),
+            };
+
+            let mut buf = Vec::new();
+            challenge.encode_fields(&(), &mut buf);
+
+            assert_eq!(buf[0], 0x01); // Discover tag
+        }
+
+        #[test]
+        fn challenge_invalid_audience_tag_rejected() {
+            let mut buf = vec![0u8; CHALLENGE_FIELDS_SIZE];
+            buf[0] = 0x02; // Invalid tag
+
+            let result = Challenge::decode_fields(&buf, &());
+            assert!(matches!(
+                result,
+                Err(CodecError::InvalidEnumTag {
+                    tag: 0x02,
+                    type_name: "Audience"
+                })
+            ));
+        }
+
+        #[test]
+        fn challenge_buffer_too_short() {
+            let buf = vec![0u8; CHALLENGE_FIELDS_SIZE - 1];
+            let result = Challenge::decode_fields(&buf, &());
+            assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
+        }
+
+        #[test]
+        fn challenge_timestamp_big_endian() {
+            let challenge = Challenge {
+                audience: Audience::Known(PeerId::new([0x00; 32])),
+                timestamp: TimestampSeconds::new(0x0102030405060708),
+                nonce: Nonce::from_u128(0),
+            };
+
+            let mut buf = Vec::new();
+            challenge.encode_fields(&(), &mut buf);
+
+            // Timestamp is at offset 33 (1 + 32)
+            let timestamp_bytes = &buf[33..41];
+            assert_eq!(
+                timestamp_bytes,
+                &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+            );
+        }
+
+        #[test]
+        fn challenge_fields_size_constant() {
+            let challenge = sample_challenge();
+            assert_eq!(challenge.fields_size(&()), CHALLENGE_FIELDS_SIZE);
+        }
+
+        #[test]
+        fn challenge_signed_size_correct() {
+            let challenge = sample_challenge();
+            assert_eq!(challenge.signed_size(&()), CHALLENGE_MIN_SIZE);
+        }
+
+        #[test]
+        fn response_fields_roundtrip() {
+            let response = sample_response();
+            let mut buf = Vec::new();
+            response.encode_fields(&(), &mut buf);
+
+            assert_eq!(buf.len(), RESPONSE_FIELDS_SIZE);
+
+            let decoded = Response::decode_fields(&buf, &()).expect("decode should succeed");
+            assert_eq!(decoded.challenge_digest, response.challenge_digest);
+            assert_eq!(decoded.server_timestamp, response.server_timestamp);
+        }
+
+        #[test]
+        fn response_challenge_digest_preserved() {
+            let digest_bytes = [0x42; 32];
+            let response = Response {
+                challenge_digest: Digest::from_bytes(digest_bytes),
+                server_timestamp: TimestampSeconds::new(0),
+            };
+
+            let mut buf = Vec::new();
+            response.encode_fields(&(), &mut buf);
+
+            // Digest is at offset 0
+            assert_eq!(&buf[0..32], &digest_bytes);
+        }
+
+        #[test]
+        fn response_timestamp_big_endian() {
+            let response = Response {
+                challenge_digest: Digest::from_bytes([0x00; 32]),
+                server_timestamp: TimestampSeconds::new(0x0102030405060708),
+            };
+
+            let mut buf = Vec::new();
+            response.encode_fields(&(), &mut buf);
+
+            // Timestamp is at offset 32
+            let timestamp_bytes = &buf[32..40];
+            assert_eq!(
+                timestamp_bytes,
+                &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+            );
+        }
+
+        #[test]
+        fn response_buffer_too_short() {
+            let buf = vec![0u8; RESPONSE_FIELDS_SIZE - 1];
+            let result = Response::decode_fields(&buf, &());
+            assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
+        }
+
+        #[test]
+        fn response_fields_size_constant() {
+            let response = sample_response();
+            assert_eq!(response.fields_size(&()), RESPONSE_FIELDS_SIZE);
+        }
+
+        #[test]
+        fn response_signed_size_correct() {
+            let response = sample_response();
+            assert_eq!(response.signed_size(&()), RESPONSE_MIN_SIZE);
+        }
+    }
 }
