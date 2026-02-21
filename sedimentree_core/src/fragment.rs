@@ -15,7 +15,7 @@ use crate::{
         decode::Decode,
         encode,
         encode::Encode,
-        error::{DecodeError, ReadingType},
+        error::{BufferTooShort, DecodeError, ReadingType},
         schema,
         schema::Schema,
     },
@@ -408,14 +408,15 @@ impl Decode for Fragment {
         let total_variable_size = boundary_size + checkpoints_size;
 
         if buf.len() < offset + total_variable_size {
-            return Err(DecodeError::BufferTooShort {
+            return Err(BufferTooShort {
                 reading: ReadingType::Slice {
                     len: total_variable_size,
                 },
                 offset,
                 need: total_variable_size,
                 have: buf.len().saturating_sub(offset),
-            });
+            }
+            .into());
         }
 
         let mut boundary_arrays: Vec<[u8; 32]> = Vec::with_capacity(boundary_count);
@@ -532,14 +533,15 @@ impl Fragment {
         let total_variable_size = boundary_size + checkpoints_size;
 
         if buf.len() < offset + total_variable_size {
-            return Err(DecodeError::BufferTooShort {
+            return Err(BufferTooShort {
                 reading: ReadingType::Slice {
                     len: total_variable_size,
                 },
                 offset,
                 need: total_variable_size,
                 have: buf.len().saturating_sub(offset),
-            });
+            }
+            .into());
         }
 
         let mut boundary_arrays: Vec<[u8; 32]> = Vec::with_capacity(boundary_count);

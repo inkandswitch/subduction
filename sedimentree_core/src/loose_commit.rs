@@ -13,7 +13,7 @@ use crate::{
         decode::Decode,
         encode,
         encode::Encode,
-        error::{DecodeError, ReadingType},
+        error::{BufferTooShort, DecodeError, ReadingType},
         schema,
         schema::Schema,
     },
@@ -149,12 +149,13 @@ impl LooseCommit {
 
         let parents_size = parent_count * 32;
         if buf.len() < offset + parents_size {
-            return Err(DecodeError::BufferTooShort {
+            return Err(BufferTooShort {
                 reading: ReadingType::Slice { len: parents_size },
                 offset,
                 need: parents_size,
                 have: buf.len().saturating_sub(offset),
-            });
+            }
+            .into());
         }
 
         let mut parent_arrays: Vec<[u8; 32]> = Vec::with_capacity(parent_count);
@@ -253,12 +254,13 @@ impl Decode for LooseCommit {
 
         let parents_size = parent_count * 32;
         if buf.len() < offset + parents_size {
-            return Err(DecodeError::BufferTooShort {
+            return Err(BufferTooShort {
                 reading: ReadingType::Slice { len: parents_size },
                 offset,
                 need: parents_size,
                 have: buf.len().saturating_sub(offset),
-            });
+            }
+            .into());
         }
 
         let mut parent_arrays: Vec<[u8; 32]> = Vec::with_capacity(parent_count);

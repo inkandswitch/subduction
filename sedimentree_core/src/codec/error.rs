@@ -38,23 +38,29 @@ impl core::fmt::Display for ReadingType {
     }
 }
 
+/// Buffer underflow when reading a primitive type.
+///
+/// This is a standalone error type for the primitive decode functions (`u8`, `u16`, etc.)
+/// that can only fail due to insufficient bytes. It converts into [`DecodeError`] via `?`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("buffer too short reading {reading} at offset {offset}: need {need} bytes, have {have}")]
+pub struct BufferTooShort {
+    /// What type was being read.
+    pub reading: ReadingType,
+    /// Offset where the read was attempted.
+    pub offset: usize,
+    /// Minimum bytes needed from offset.
+    pub need: usize,
+    /// Actual bytes available from offset.
+    pub have: usize,
+}
+
 /// Errors that can occur during decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DecodeError {
     /// Buffer is too short when reading a specific primitive type.
-    #[error(
-        "buffer too short reading {reading} at offset {offset}: need {need} bytes, have {have}"
-    )]
-    BufferTooShort {
-        /// What type was being read.
-        reading: ReadingType,
-        /// Offset where the read was attempted.
-        offset: usize,
-        /// Minimum bytes needed from offset.
-        need: usize,
-        /// Actual bytes available from offset.
-        have: usize,
-    },
+    #[error(transparent)]
+    BufferTooShort(#[from] BufferTooShort),
 
     /// Message is smaller than minimum required size for its type.
     #[error("{type_name} too short: need {need} bytes, have {have}")]

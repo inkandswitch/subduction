@@ -1,7 +1,7 @@
 //! Decoding for the canonical binary codec.
 
 use super::{
-    error::{DecodeError, ReadingType},
+    error::{BufferTooShort, DecodeError, ReadingType},
     schema::Schema,
 };
 
@@ -29,8 +29,8 @@ pub trait Decode: Schema + Sized {
 
 /// Decode a u8.
 #[inline]
-pub fn u8(buf: &[u8], offset: usize) -> Result<u8, DecodeError> {
-    buf.get(offset).copied().ok_or(DecodeError::BufferTooShort {
+pub fn u8(buf: &[u8], offset: usize) -> Result<u8, BufferTooShort> {
+    buf.get(offset).copied().ok_or(BufferTooShort {
         reading: ReadingType::U8,
         offset,
         need: 1,
@@ -40,11 +40,11 @@ pub fn u8(buf: &[u8], offset: usize) -> Result<u8, DecodeError> {
 
 /// Decode a u16 from big-endian bytes.
 #[inline]
-pub fn u16(buf: &[u8], offset: usize) -> Result<u16, DecodeError> {
+pub fn u16(buf: &[u8], offset: usize) -> Result<u16, BufferTooShort> {
     let bytes: [u8; 2] = buf
         .get(offset..offset + 2)
         .and_then(|s| s.try_into().ok())
-        .ok_or(DecodeError::BufferTooShort {
+        .ok_or(BufferTooShort {
             reading: ReadingType::U16,
             offset,
             need: 2,
@@ -55,11 +55,11 @@ pub fn u16(buf: &[u8], offset: usize) -> Result<u16, DecodeError> {
 
 /// Decode a u32 from big-endian bytes.
 #[inline]
-pub fn u32(buf: &[u8], offset: usize) -> Result<u32, DecodeError> {
+pub fn u32(buf: &[u8], offset: usize) -> Result<u32, BufferTooShort> {
     let bytes: [u8; 4] = buf
         .get(offset..offset + 4)
         .and_then(|s| s.try_into().ok())
-        .ok_or(DecodeError::BufferTooShort {
+        .ok_or(BufferTooShort {
             reading: ReadingType::U32,
             offset,
             need: 4,
@@ -70,11 +70,11 @@ pub fn u32(buf: &[u8], offset: usize) -> Result<u32, DecodeError> {
 
 /// Decode a u64 from big-endian bytes.
 #[inline]
-pub fn u64(buf: &[u8], offset: usize) -> Result<u64, DecodeError> {
+pub fn u64(buf: &[u8], offset: usize) -> Result<u64, BufferTooShort> {
     let bytes: [u8; 8] = buf
         .get(offset..offset + 8)
         .and_then(|s| s.try_into().ok())
-        .ok_or(DecodeError::BufferTooShort {
+        .ok_or(BufferTooShort {
             reading: ReadingType::U64,
             offset,
             need: 8,
@@ -85,10 +85,10 @@ pub fn u64(buf: &[u8], offset: usize) -> Result<u64, DecodeError> {
 
 /// Decode a fixed-size array.
 #[inline]
-pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], DecodeError> {
+pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], BufferTooShort> {
     buf.get(offset..offset + N)
         .and_then(|s| s.try_into().ok())
-        .ok_or(DecodeError::BufferTooShort {
+        .ok_or(BufferTooShort {
             reading: ReadingType::Array { size: N },
             offset,
             need: N,
@@ -98,14 +98,13 @@ pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], Decod
 
 /// Get a slice of bytes.
 #[inline]
-pub fn slice(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], DecodeError> {
-    buf.get(offset..offset + len)
-        .ok_or(DecodeError::BufferTooShort {
-            reading: ReadingType::Slice { len },
-            offset,
-            need: len,
-            have: buf.len().saturating_sub(offset),
-        })
+pub fn slice(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], BufferTooShort> {
+    buf.get(offset..offset + len).ok_or(BufferTooShort {
+        reading: ReadingType::Slice { len },
+        offset,
+        need: len,
+        have: buf.len().saturating_sub(offset),
+    })
 }
 
 /// Verify that a slice of fixed-size elements is sorted ascending.
