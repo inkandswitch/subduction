@@ -20,10 +20,11 @@ use core::{fmt, time::Duration};
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
-    blob::{Blob, BlobMeta},
+    blob::Blob,
     commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     id::SedimentreeId,
+    loose_commit::LooseCommit,
     sedimentree::{FingerprintSummary, Sedimentree},
 };
 use testresult::TestResult;
@@ -144,16 +145,10 @@ fn make_test_blob(data: &[u8]) -> Blob {
     Blob::new(data.to_vec())
 }
 
-fn make_loose_commit(data: &[u8]) -> (sedimentree_core::loose_commit::LooseCommit, Blob) {
+fn make_commit_parts(data: &[u8]) -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, Blob) {
     let blob = make_test_blob(data);
-    let blob_meta = BlobMeta::new(blob.as_slice());
-    let content_digest = Digest::<sedimentree_core::loose_commit::LooseCommit>::hash_bytes(data);
-    let commit = sedimentree_core::loose_commit::LooseCommit::new(
-        content_digest,
-        BTreeSet::new(),
-        blob_meta,
-    );
-    (commit, blob)
+    let digest = Digest::<LooseCommit>::hash_bytes(data);
+    (digest, BTreeSet::new(), blob)
 }
 
 #[tokio::test]
@@ -210,9 +205,9 @@ async fn add_commit_rejected_by_policy() {
         );
 
     let id = SedimentreeId::new([1u8; 32]);
-    let (commit, blob) = make_loose_commit(b"test data");
+    let (digest, parents, blob) = make_commit_parts(b"test data");
 
-    let result = subduction.add_commit(id, &commit, blob).await;
+    let result = subduction.add_commit(id, digest, parents, blob).await;
 
     // Should fail with PutDisallowed
     assert!(result.is_err());

@@ -116,7 +116,7 @@ use futures::{
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::{
-    blob::Blob,
+    blob::{Blob, with_blob::WithBlob},
     collections::{
         Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
@@ -1302,6 +1302,9 @@ impl<
 
     /// Add a new (incremental) commit locally and propagate it to all connected peers.
     ///
+    /// The commit is constructed internally from the provided parts, ensuring
+    /// that the blob metadata is computed correctly from the blob.
+    ///
     /// # Returns
     ///
     /// * `Ok(None)` if the commit is not on a fragment boundary.
@@ -1315,14 +1318,11 @@ impl<
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
-        commit: &LooseCommit,
+        digest: Digest<LooseCommit>,
+        parents: BTreeSet<Digest<LooseCommit>>,
         blob: Blob,
     ) -> Result<Option<FragmentRequested>, WriteError<F, S, C, P::PutDisallowed>> {
-        tracing::debug!(
-            "adding commit {:?} to sedimentree {:?}",
-            commit.digest(),
-            id
-        );
+        tracing::debug!("adding commit {:?} to sedimentree {:?}", digest, id);
 
         let self_id = self.peer_id();
         let putter = self
@@ -1331,12 +1331,10 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
-        let signed_for_wire = verified.signed().clone();
-
-        // For locally created commits, blob always matches (we just created it)
-        let verified_meta = VerifiedMeta::new(verified, blob.clone())
-            .expect("locally created commit should have matching blob");
+        let with_blob = WithBlob::new(blob, |meta| LooseCommit::new(digest, parents.clone(), meta));
+        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, with_blob).await;
+        let signed_for_wire = verified_meta.signed().clone();
+        let blob = verified_meta.blob().clone();
 
         self.insert_commit_locally(&putter, verified_meta)
             .await
@@ -1380,15 +1378,18 @@ impl<
 
         let mut maybe_requested_fragment = None;
 
-        let depth = self.depth_metric.to_depth(commit.digest());
+        let depth = self.depth_metric.to_depth(digest);
         if depth != Depth(0) {
-            maybe_requested_fragment = Some(FragmentRequested::new(commit.digest(), depth));
+            maybe_requested_fragment = Some(FragmentRequested::new(digest, depth));
         }
 
         Ok(maybe_requested_fragment)
     }
 
     /// Add a new (incremental) fragment locally and propagate it to all connected peers.
+    ///
+    /// The fragment is constructed internally from the provided parts, ensuring
+    /// that the blob metadata is computed correctly from the blob.
     ///
     /// NOTE this performs no integrity checks;
     /// we assume this is a good fragment at the right depth
@@ -1399,12 +1400,19 @@ impl<
     pub async fn add_fragment(
         &self,
         id: SedimentreeId,
-        fragment: &Fragment,
+        head: Digest<LooseCommit>,
+        boundary: BTreeSet<Digest<LooseCommit>>,
+        checkpoints: &[Digest<LooseCommit>],
         blob: Blob,
     ) -> Result<(), WriteError<F, S, C, P::PutDisallowed>> {
+        let with_blob = WithBlob::new(blob, |meta| {
+            Fragment::new(head, boundary.clone(), checkpoints, meta)
+        });
+        let fragment_digest = with_blob.metadata().digest();
+
         tracing::debug!(
             "Adding fragment {:?} to sedimentree {:?}",
-            fragment.digest(),
+            fragment_digest,
             id
         );
 
@@ -1415,12 +1423,9 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
-        let signed_for_wire = verified.signed().clone();
-
-        // For locally created fragments, blob always matches (we just created it)
-        let verified_meta = VerifiedMeta::new(verified, blob.clone())
-            .expect("locally created fragment should have matching blob");
+        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, with_blob).await;
+        let signed_for_wire = verified_meta.signed().clone();
+        let blob = verified_meta.blob().clone();
 
         self.insert_fragment_locally(&putter, verified_meta)
             .await
@@ -1449,7 +1454,7 @@ impl<
             let peer_id = conn.peer_id();
             tracing::debug!(
                 "Propagating fragment {:?} for sedimentree {:?} to {}",
-                fragment.digest(),
+                fragment_digest,
                 id,
                 peer_id
             );

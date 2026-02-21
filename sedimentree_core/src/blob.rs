@@ -1,5 +1,7 @@
 //! Binary objects.
 
+pub mod with_blob;
+
 use core::cmp::min;
 
 use alloc::vec::Vec;

@@ -1,9 +1,10 @@
 //! A payload whose signature is valid AND whose blob matches the claimed metadata.
 
-use sedimentree_core::blob::{Blob, BlobMeta, HasBlobMeta};
+use future_form::FutureForm;
+use sedimentree_core::blob::{Blob, BlobMeta, HasBlobMeta, with_blob::WithBlob};
 use thiserror::Error;
 
-use crate::{signed::Signed, verified_signature::VerifiedSignature};
+use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};
 
 /// A commit or fragment whose signature is valid AND whose blob matches the claimed metadata.
 ///
@@ -100,5 +101,28 @@ where
     pub fn into_full_parts(self) -> (Signed<T>, T, Blob) {
         let (signed, payload) = self.verified.into_parts();
         (signed, payload, self.blob)
+    }
+
+    /// Seal a locally-created payload+blob, producing a verified meta.
+    ///
+    /// Infallible because [`WithBlob`] guarantees the blob matches by construction.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let with_blob = WithBlob::new(blob, |meta| {
+    ///     LooseCommit::new(digest, parents, meta)
+    /// });
+    /// let verified_meta = VerifiedMeta::seal::<Sendable, _>(&signer, with_blob).await;
+    /// ```
+    pub async fn seal<K, S>(signer: &S, with_blob: WithBlob<T>) -> Self
+    where
+        T: minicbor::Encode<()>,
+        K: FutureForm,
+        S: Signer<K>,
+    {
+        let (metadata, blob) = with_blob.into_parts();
+        let verified = Signed::seal::<K, _>(signer, metadata).await;
+        Self { verified, blob }
     }
 }

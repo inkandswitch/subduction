@@ -4,10 +4,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
-    id::SedimentreeId,
+    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
@@ -58,11 +55,10 @@ fn random_digest() -> Digest<LooseCommit> {
     Digest::arbitrary(&mut Unstructured::new(&bytes)).expect("arbitrary digest")
 }
 
-fn random_commit() -> (LooseCommit, Blob) {
+fn random_commit() -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, Blob) {
     let blob = random_blob();
     let digest = random_digest();
-    let commit = LooseCommit::new(digest, BTreeSet::new(), BlobMeta::new(blob.as_slice()));
-    (commit, blob)
+    (digest, BTreeSet::new(), blob)
 }
 
 #[tokio::test]
@@ -272,9 +268,9 @@ async fn multiple_concurrent_clients() -> TestResult {
     });
 
     // Add initial commit to server
-    let (commit1, blob1) = random_commit();
+    let (digest1, parents1, blob1) = random_commit();
     server_subduction
-        .add_commit(sed_id, &commit1, blob1)
+        .add_commit(sed_id, digest1, parents1, blob1)
         .await?;
 
     let server = TokioWebSocketServer::new(
@@ -368,8 +364,8 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Now each client adds its own commit (after subscribing)
     for client in &clients {
-        let (commit, blob) = random_commit();
-        client.add_commit(sed_id, &commit, blob).await?;
+        let (digest, parents, blob) = random_commit();
+        client.add_commit(sed_id, digest, parents, blob).await?;
     }
 
     // Give time for commits to propagate
@@ -447,8 +443,10 @@ async fn request_with_delayed_response() -> TestResult {
     });
 
     // Add a commit so there's something to sync
-    let (commit, blob) = random_commit();
-    server_subduction.add_commit(sed_id, &commit, blob).await?;
+    let (digest, parents, blob) = random_commit();
+    server_subduction
+        .add_commit(sed_id, digest, parents, blob)
+        .await?;
 
     let server = TokioWebSocketServer::new(
         addr,
@@ -654,14 +652,11 @@ async fn large_message_handling() -> TestResult {
     let large_data = vec![42u8; 1024 * 1024];
     let large_blob = Blob::new(large_data);
     let digest = random_digest();
-    let commit = LooseCommit::new(
-        digest,
-        BTreeSet::new(),
-        BlobMeta::new(large_blob.as_slice()),
-    );
 
     // Add large commit
-    client.add_commit(sed_id, &commit, large_blob).await?;
+    client
+        .add_commit(sed_id, digest, BTreeSet::new(), large_blob)
+        .await?;
 
     // Sync with server
     client.full_sync(Some(Duration::from_secs(5))).await;
@@ -674,7 +669,7 @@ async fn large_message_handling() -> TestResult {
         .await
         .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 1);
-    assert!(server_commits.contains(&commit));
+    assert!(server_commits.iter().any(|c| c.digest() == digest));
 
     Ok(())
 }
@@ -779,11 +774,11 @@ async fn message_ordering() -> TestResult {
     });
 
     // Add multiple commits in order
-    let mut commits = Vec::new();
+    let mut digests = Vec::new();
     for _ in 0..5 {
-        let (commit, blob) = random_commit();
-        client.add_commit(sed_id, &commit, blob).await?;
-        commits.push(commit);
+        let (digest, parents, blob) = random_commit();
+        client.add_commit(sed_id, digest, parents, blob).await?;
+        digests.push(digest);
     }
 
     // Sync all at once
@@ -798,8 +793,12 @@ async fn message_ordering() -> TestResult {
         .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 5);
 
-    for commit in &commits {
-        assert!(server_commits.contains(commit), "Server should have commit");
+    for digest in &digests {
+        assert!(
+            server_commits.iter().any(|c| c.digest() == *digest),
+            "Server should have commit with digest {:?}",
+            digest
+        );
     }
 
     Ok(())
