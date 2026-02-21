@@ -130,11 +130,11 @@ impl<T: HasBlobMeta + Encode + Decode> VerifiedMeta<T> {
         signer: &S,
         args: T::Args,
         verified_blob: VerifiedBlobMeta,
-        ctx: &T::Context,
+        binding: &T::Binding,
     ) -> Self {
         let (blob_meta, blob) = verified_blob.into_parts();
         let meta = T::from_args(args, blob_meta);
-        let verified = Signed::seal::<K, _>(signer, meta, ctx).await;
+        let verified = Signed::seal::<K, _>(signer, meta, binding).await;
         Self { verified, blob }
     }
 }

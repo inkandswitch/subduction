@@ -70,7 +70,7 @@ pub const MIN_SIGNED_SIZE: usize = SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_
 /// To access the payload, verify first:
 ///
 /// ```ignore
-/// let verified = signed.try_verify(&ctx)?;
+/// let verified = signed.try_verify(&binding)?;
 /// let payload: &T = verified.payload();
 /// ```
 #[derive(Debug)]
@@ -133,14 +133,17 @@ impl<T: Encode + Decode> Signed<T> {
     /// # Errors
     ///
     /// Returns an error if the signature is invalid or the payload cannot be decoded.
-    pub fn try_verify(&self, ctx: &T::Context) -> Result<VerifiedSignature<T>, VerificationError> {
+    pub fn try_verify(
+        &self,
+        binding: &T::Binding,
+    ) -> Result<VerifiedSignature<T>, VerificationError> {
         // Verify signature over payload bytes
         self.issuer
             .verify_strict(self.payload_bytes(), &self.signature)
             .map_err(|_| VerificationError::InvalidSignature)?;
 
         // Decode payload from fields bytes
-        let payload = T::try_decode_fields(self.fields_bytes(), ctx)?;
+        let payload = T::try_decode_fields(self.fields_bytes(), binding)?;
 
         Ok(VerifiedSignature::new(self.clone(), payload))
     }
@@ -155,8 +158,8 @@ impl<T: Encode + Decode> Signed<T> {
     /// # Errors
     ///
     /// Returns an error if the payload cannot be decoded.
-    pub fn try_decode_payload(&self, ctx: &T::Context) -> Result<T, DecodeError> {
-        T::try_decode_fields(self.fields_bytes(), ctx)
+    pub fn try_decode_payload(&self, binding: &T::Binding) -> Result<T, DecodeError> {
+        T::try_decode_fields(self.fields_bytes(), binding)
     }
 
     /// Decode from wire bytes.
@@ -235,12 +238,12 @@ impl<T: Encode + Decode> Signed<T> {
     pub async fn seal<K: future_form::FutureForm, S: crate::signer::Signer<K>>(
         signer: &S,
         payload: T,
-        ctx: &T::Context,
+        binding: &T::Binding,
     ) -> VerifiedSignature<T> {
         let issuer = signer.verifying_key();
 
         // Calculate size and pre-allocate
-        let fields_size = payload.fields_size(ctx);
+        let fields_size = payload.fields_size(binding);
         let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
         let mut bytes = Vec::with_capacity(total_size);
 
@@ -251,7 +254,7 @@ impl<T: Encode + Decode> Signed<T> {
         bytes.extend_from_slice(issuer.as_bytes());
 
         // Write fields
-        payload.encode_fields(ctx, &mut bytes);
+        payload.encode_fields(binding, &mut bytes);
 
         // Sign the payload (everything so far)
         let signature = signer.sign(&bytes).await;
@@ -282,21 +285,21 @@ impl<T: Encode + Decode> Signed<T> {
     /// * `issuer` - The verifying key of the signer
     /// * `signature` - The Ed25519 signature
     /// * `payload` - The payload
-    /// * `ctx` - Context for encoding
+    /// * `binding` - Value to bind the signature to
     #[must_use]
     pub fn from_parts(
         issuer: VerifyingKey,
         signature: Signature,
         payload: &T,
-        ctx: &T::Context,
+        binding: &T::Binding,
     ) -> Self {
-        let fields_size = payload.fields_size(ctx);
+        let fields_size = payload.fields_size(binding);
         let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
         let mut bytes = Vec::with_capacity(total_size);
 
         bytes.extend_from_slice(&T::SCHEMA);
         bytes.extend_from_slice(issuer.as_bytes());
-        payload.encode_fields(ctx, &mut bytes);
+        payload.encode_fields(binding, &mut bytes);
         bytes.extend_from_slice(&signature.to_bytes());
 
         Self {
@@ -349,14 +352,14 @@ pub enum VerificationError {
 #[cfg(feature = "arbitrary")]
 impl<'a, T: Encode + Decode + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Signed<T>
 where
-    T::Context: arbitrary::Arbitrary<'a>,
+    T::Binding: arbitrary::Arbitrary<'a>,
 {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use ed25519_dalek::{Signer as _, SigningKey};
 
-        // Generate arbitrary payload and context
+        // Generate arbitrary payload and binding
         let payload: T = u.arbitrary()?;
-        let ctx: T::Context = u.arbitrary()?;
+        let binding: T::Binding = u.arbitrary()?;
 
         // Generate a random signing key from arbitrary bytes
         let key_bytes: [u8; 32] = u.arbitrary()?;
@@ -364,13 +367,13 @@ where
         let issuer = signing_key.verifying_key();
 
         // Encode the payload
-        let fields_size = payload.fields_size(&ctx);
+        let fields_size = payload.fields_size(&binding);
         let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
         let mut bytes = Vec::with_capacity(total_size);
 
         bytes.extend_from_slice(&T::SCHEMA);
         bytes.extend_from_slice(issuer.as_bytes());
-        payload.encode_fields(&ctx, &mut bytes);
+        payload.encode_fields(&binding, &mut bytes);
 
         // Sign the payload
         let signature = signing_key.sign(&bytes);

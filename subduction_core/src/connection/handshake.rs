@@ -282,14 +282,14 @@ const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
 pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 157 bytes
 
 impl Schema for Challenge {
-    type Context = ();
+    type Binding = ();
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
     const TYPE_BYTE: u8 = b'H'; // Handshake
     const VERSION: u8 = 0;
 }
 
 impl Encode for Challenge {
-    fn encode_fields(&self, _ctx: &Self::Context, buf: &mut Vec<u8>) {
+    fn encode_fields(&self, _binding: &Self::Binding, buf: &mut Vec<u8>) {
         // AudienceTag (1 byte)
         match &self.audience {
             Audience::Known(_) => encode::u8(0x00, buf),
@@ -309,7 +309,7 @@ impl Encode for Challenge {
         encode::array(self.nonce.as_bytes(), buf);
     }
 
-    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+    fn fields_size(&self, _binding: &Self::Binding) -> usize {
         CHALLENGE_FIELDS_SIZE
     }
 }
@@ -317,7 +317,7 @@ impl Encode for Challenge {
 impl Decode for Challenge {
     const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8], _binding: &Self::Binding) -> Result<Self, DecodeError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Challenge",
@@ -367,14 +367,14 @@ const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
 pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 bytes
 
 impl Schema for Response {
-    type Context = ();
+    type Binding = ();
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
     const TYPE_BYTE: u8 = b'R'; // Response
     const VERSION: u8 = 0;
 }
 
 impl Encode for Response {
-    fn encode_fields(&self, _ctx: &Self::Context, buf: &mut Vec<u8>) {
+    fn encode_fields(&self, _binding: &Self::Binding, buf: &mut Vec<u8>) {
         // ChallengeDigest (32 bytes)
         encode::array(self.challenge_digest.as_bytes(), buf);
 
@@ -382,7 +382,7 @@ impl Encode for Response {
         encode::u64(self.server_timestamp.as_secs(), buf);
     }
 
-    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+    fn fields_size(&self, _binding: &Self::Binding) -> usize {
         RESPONSE_FIELDS_SIZE
     }
 }
@@ -390,7 +390,7 @@ impl Encode for Response {
 impl Decode for Response {
     const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8], _binding: &Self::Binding) -> Result<Self, DecodeError> {
         if buf.len() < RESPONSE_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Response",

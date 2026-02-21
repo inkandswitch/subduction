@@ -24,7 +24,7 @@ pub trait Decode: Schema + Sized {
     ///
     /// Returns [`DecodeError`] if the buffer is malformed, too short,
     /// contains invalid values, or fails validation (e.g., unsorted arrays).
-    fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, DecodeError>;
+    fn try_decode_fields(buf: &[u8], binding: &Self::Binding) -> Result<Self, DecodeError>;
 }
 
 /// Decode a u8.

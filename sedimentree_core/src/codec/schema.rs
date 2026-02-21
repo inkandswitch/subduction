@@ -11,12 +11,12 @@ pub const SUBDUCTION_PREFIX: [u8; 2] = *b"SU";
 /// This trait provides the schema header that identifies a type
 /// in the wire format. It's shared between encoding and decoding.
 pub trait Schema {
-    /// Context required for encoding/decoding.
+    /// Value to which the signature is cryptographically bound.
     ///
-    /// Use `()` for types that don't need additional context.
-    /// Some types (e.g., `LooseCommit`) require a `SedimentreeId` to bind
-    /// the signature to a specific document.
-    type Context;
+    /// Use `()` for types that are self-contained.
+    /// Types like `LooseCommit` bind to a `SedimentreeId` so the same
+    /// commit bytes cannot be replayed under a different document.
+    type Binding;
 
     /// 2-byte crate prefix (e.g., [`SEDIMENTREE_PREFIX`] or [`SUBDUCTION_PREFIX`]).
     const PREFIX: [u8; 2];

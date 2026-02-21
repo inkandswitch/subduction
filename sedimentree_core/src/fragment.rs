@@ -326,15 +326,15 @@ const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
 const CHECKPOINT_BYTES: usize = 12;
 
 impl Schema for Fragment {
-    type Context = SedimentreeId;
+    type Binding = SedimentreeId;
     const PREFIX: [u8; 2] = schema::SEDIMENTREE_PREFIX;
     const TYPE_BYTE: u8 = b'F';
     const VERSION: u8 = 0;
 }
 
 impl Encode for Fragment {
-    fn encode_fields(&self, ctx: &Self::Context, buf: &mut Vec<u8>) {
-        encode::array(ctx.as_bytes(), buf);
+    fn encode_fields(&self, binding: &Self::Binding, buf: &mut Vec<u8>) {
+        encode::array(binding.as_bytes(), buf);
         encode::array(self.head().as_bytes(), buf);
         encode::array(self.summary().blob_meta().digest().as_bytes(), buf);
 
@@ -356,7 +356,7 @@ impl Encode for Fragment {
         }
     }
 
-    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+    fn fields_size(&self, _binding: &Self::Binding) -> usize {
         CODEC_FIXED_FIELDS_SIZE
             + (self.boundary().len() * 32)
             + (self.checkpoints().len() * CHECKPOINT_BYTES)
@@ -366,7 +366,7 @@ impl Encode for Fragment {
 impl Decode for Fragment {
     const MIN_SIZE: usize = CODEC_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8], binding: &Self::Binding) -> Result<Self, DecodeError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Fragment",
@@ -380,7 +380,7 @@ impl Decode for Fragment {
         let sedimentree_id_bytes: [u8; 32] = decode::array(buf, offset)?;
         offset += 32;
 
-        if sedimentree_id_bytes != *ctx.as_bytes() {
+        if sedimentree_id_bytes != *binding.as_bytes() {
             return Err(ContextMismatch {
                 field: "SedimentreeId",
             }

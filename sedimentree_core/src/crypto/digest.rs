@@ -64,7 +64,7 @@ impl<T> Digest<T> {
     }
 }
 
-impl<T: Encode + Decode<Context = ()>> Digest<T> {
+impl<T: Encode + Decode<Binding = ()>> Digest<T> {
     /// Encode and hash a value to create a digest.
     ///
     /// The value is encoded using its [`Encode`] implementation

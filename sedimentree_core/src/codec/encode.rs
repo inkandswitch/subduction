@@ -13,16 +13,16 @@ pub trait Encode: Schema {
     ///
     /// This is called after the schema and issuer have been written.
     /// The implementation should append its fields to `buf`.
-    fn encode_fields(&self, ctx: &Self::Context, buf: &mut Vec<u8>);
+    fn encode_fields(&self, binding: &Self::Binding, buf: &mut Vec<u8>);
 
     /// Size of the encoded fields (for buffer pre-allocation).
-    fn fields_size(&self, ctx: &Self::Context) -> usize;
+    fn fields_size(&self, binding: &Self::Binding) -> usize;
 
     /// Total size of the signed message.
     ///
     /// This is `4 (schema) + 32 (issuer) + fields_size + 64 (signature)`.
-    fn signed_size(&self, ctx: &Self::Context) -> usize {
-        4 + 32 + self.fields_size(ctx) + 64
+    fn signed_size(&self, binding: &Self::Binding) -> usize {
+        4 + 32 + self.fields_size(binding) + 64
     }
 }
 
