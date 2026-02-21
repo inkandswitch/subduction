@@ -1,7 +1,7 @@
 //! In-memory Ed25519 signer for development and testing.
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 
 use super::Signer;
 

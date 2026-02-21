@@ -96,8 +96,8 @@ impl MemoryStorage {
         let id: SedimentreeId = sedimentree_id.clone().into();
         let bytes = signed_commit.to_vec();
         future_to_promise(async move {
-            let signed: Signed<LooseCommit> = minicbor::decode(&bytes)
-                .map_err(|e| JsValue::from_str(&format!("CBOR decode error: {e}")))?;
+            let signed: Signed<LooseCommit> = Signed::try_from_bytes(bytes)
+                .map_err(|e| JsValue::from_str(&format!("Codec decode error: {e}")))?;
             Storage::<Local>::save_loose_commit(&inner, id, signed)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -117,9 +117,8 @@ impl MemoryStorage {
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
                 Some(signed) => {
-                    let bytes = minicbor::to_vec(&signed)
-                        .map_err(|e| JsValue::from_str(&format!("CBOR encode error: {e}")))?;
-                    Ok(Uint8Array::from(bytes.as_slice()).into())
+                    let bytes = signed.as_bytes();
+                    Ok(Uint8Array::from(bytes).into())
                 }
                 None => Ok(JsValue::NULL),
             }
@@ -154,15 +153,14 @@ impl MemoryStorage {
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
             for (digest, signed) in commits {
-                let bytes = minicbor::to_vec(&signed)
-                    .map_err(|e| JsValue::from_str(&format!("CBOR encode error: {e}")))?;
+                let bytes = signed.as_bytes();
                 let obj = js_sys::Object::new();
                 js_sys::Reflect::set(
                     &obj,
                     &"digest".into(),
                     &JsDigest::from(WasmDigest::from(digest)),
                 )?;
-                js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes.as_slice()))?;
+                js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes))?;
                 result.push(&obj);
             }
             Ok(result.into())
@@ -215,8 +213,8 @@ impl MemoryStorage {
         let id: SedimentreeId = sedimentree_id.clone().into();
         let bytes = signed_fragment.to_vec();
         future_to_promise(async move {
-            let signed: Signed<Fragment> = minicbor::decode(&bytes)
-                .map_err(|e| JsValue::from_str(&format!("CBOR decode error: {e}")))?;
+            let signed: Signed<Fragment> = Signed::try_from_bytes(bytes)
+                .map_err(|e| JsValue::from_str(&format!("Codec decode error: {e}")))?;
             Storage::<Local>::save_fragment(&inner, id, signed)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -240,9 +238,8 @@ impl MemoryStorage {
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
                 Some(signed) => {
-                    let bytes = minicbor::to_vec(&signed)
-                        .map_err(|e| JsValue::from_str(&format!("CBOR encode error: {e}")))?;
-                    Ok(Uint8Array::from(bytes.as_slice()).into())
+                    let bytes = signed.as_bytes();
+                    Ok(Uint8Array::from(bytes).into())
                 }
                 None => Ok(JsValue::NULL),
             }
@@ -277,15 +274,14 @@ impl MemoryStorage {
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
             for (digest, signed) in fragments {
-                let bytes = minicbor::to_vec(&signed)
-                    .map_err(|e| JsValue::from_str(&format!("CBOR encode error: {e}")))?;
+                let bytes = signed.as_bytes();
                 let obj = js_sys::Object::new();
                 js_sys::Reflect::set(
                     &obj,
                     &"digest".into(),
                     &JsDigest::from(WasmDigest::from(digest)),
                 )?;
-                js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes.as_slice()))?;
+                js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes))?;
                 result.push(&obj);
             }
             Ok(result.into())

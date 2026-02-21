@@ -18,7 +18,6 @@ async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 blake3 = { workspace = true }
-minicbor = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
 futures-timer = { workspace = true, optional = true }
@@ -50,7 +49,6 @@ std = [
   "async-channel/std",
   "async-lock/std",
   "blake3/std",
-  "minicbor/std",
   "futures/std",
   "futures-util/io",
   "futures-util/std",

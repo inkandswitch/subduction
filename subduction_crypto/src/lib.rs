@@ -18,7 +18,6 @@
 //!
 //! # Crate Organization
 //!
-//! - [`cbor`] — CBOR encoding helpers for Ed25519 types
 //! - [`nonce`] — Random nonces for replay protection
 //! - [`signed`] — The `Signed<T>` envelope and related types
 //! - [`signer`] — The `Signer<K>` trait for signing operations
@@ -31,7 +30,6 @@
 
 extern crate alloc;
 
-pub mod cbor;
 pub mod nonce;
 pub mod signed;
 pub mod signer;

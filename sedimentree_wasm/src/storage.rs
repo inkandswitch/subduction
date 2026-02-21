@@ -256,7 +256,7 @@ fn parse_digest_signed_array<T: sedimentree_core::codec::Codec>(
         let digest: Digest<T> = WasmDigest::from(&js_digest).into();
 
         let signed_bytes = Uint8Array::new(&signed_val).to_vec();
-        let signed: Signed<T> = minicbor::decode(&signed_bytes)
+        let signed: Signed<T> = Signed::try_from_bytes(signed_bytes)
             .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
 
         result.push((digest, signed));
@@ -359,8 +359,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 "JsSedimentreeStorage::save_loose_commit"
             );
 
-            let signed_bytes = minicbor::to_vec(&loose_commit)
-                .map_err(|e| JsSedimentreeStorageError::CborEncodeError(e.to_string()))?;
+            let signed_bytes = loose_commit.as_bytes().to_vec();
 
             let js_promise = self.js_save_commit(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
@@ -399,7 +398,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             }
 
             let bytes = Uint8Array::new(&js_value).to_vec();
-            let signed: Signed<LooseCommit> = minicbor::decode(&bytes)
+            let signed = Signed::try_from_bytes(bytes)
                 .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
             Ok(Some(signed))
         })
@@ -495,8 +494,7 @@ impl Storage<Local> for JsSedimentreeStorage {
                 "JsSedimentreeStorage::save_fragment"
             );
 
-            let signed_bytes = minicbor::to_vec(&fragment)
-                .map_err(|e| JsSedimentreeStorageError::CborEncodeError(e.to_string()))?;
+            let signed_bytes = fragment.as_bytes().to_vec();
 
             let js_promise = self.js_save_fragment(
                 &WasmSedimentreeId::from(sedimentree_id).into(),
@@ -535,7 +533,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             }
 
             let bytes = Uint8Array::new(&js_value).to_vec();
-            let signed: Signed<Fragment> = minicbor::decode(&bytes)
+            let signed = Signed::try_from_bytes(bytes)
                 .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
             Ok(Some(signed))
         })

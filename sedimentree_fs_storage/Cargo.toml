@@ -17,7 +17,6 @@ rust-version.workspace = true
 async-lock = { workspace = true }
 future_form = { workspace = true }
 hex = { workspace = true }
-minicbor = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 subduction_core = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true, features = ["std"] }

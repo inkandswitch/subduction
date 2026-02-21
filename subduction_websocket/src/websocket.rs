@@ -12,16 +12,16 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
+    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -521,9 +521,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            #[allow(clippy::expect_used)]
-            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
-                .expect("serialization should be infallible");
+            let msg_bytes = Message::BatchSyncRequest(req).encode();
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))

@@ -2,7 +2,7 @@
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta},
+    blob::{has_meta::HasBlobMeta, verified::VerifiedBlobMeta, Blob, BlobMeta},
     codec::Codec,
 };
 use thiserror::Error;
