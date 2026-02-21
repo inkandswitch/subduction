@@ -1,18 +1,36 @@
 //! The API contact messages to be sent over a [`Connection`].
+//!
+//! # Wire Layout
+//!
+//! ```text
+//! ╔════════╦═══════════╦═════╦═════════════════════════════╗
+//! ║ Schema ║ TotalSize ║ Tag ║         Payload             ║
+//! ║   4B   ║    4B     ║ 1B  ║         variable            ║
+//! ╚════════╩═══════════╩═════╩═════════════════════════════╝
+//! ```
+//!
+//! - **Schema**: `SUM\x00` (4 bytes)
+//! - **TotalSize**: Total message size in bytes (big-endian u32)
+//! - **Tag**: Variant discriminant (u8)
+//! - **Payload**: Variant-specific data
 
 use alloc::vec::Vec;
 
 use sedimentree_core::{
     blob::Blob,
-    crypto::{digest::Digest, fingerprint::Fingerprint},
+    codec::error::CodecError,
+    crypto::{
+        digest::Digest,
+        fingerprint::{Fingerprint, FingerprintSeed},
+    },
     fragment::{Fragment, id::FragmentId},
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
+use subduction_crypto::signed::Signed;
 
 use crate::peer::id::PeerId;
-use subduction_crypto::signed::Signed;
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
