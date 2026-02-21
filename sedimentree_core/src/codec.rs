@@ -40,14 +40,7 @@
 //! | `ST` | `sedimentree_core` | `LooseCommit`, `Fragment` |
 //! | `SU` | `subduction_core` | `Challenge`, `Response`, `Message` |
 
-mod dec;
-mod enc;
-mod schema;
-
 pub mod decode;
 pub mod encode;
 pub mod error;
-
-pub use dec::Decode;
-pub use enc::Encode;
-pub use schema::Schema;
+pub mod schema;

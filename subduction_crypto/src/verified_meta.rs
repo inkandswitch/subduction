@@ -3,7 +3,7 @@
 use future_form::FutureForm;
 use sedimentree_core::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta},
-    codec::{Decode, Encode},
+    codec::{decode::Decode, encode::Encode},
 };
 use thiserror::Error;
 

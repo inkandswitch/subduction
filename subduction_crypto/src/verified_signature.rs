@@ -2,7 +2,7 @@
 
 use core::cmp::Ordering;
 
-use sedimentree_core::codec::{Decode, Encode};
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use crate::signed::Signed;
 

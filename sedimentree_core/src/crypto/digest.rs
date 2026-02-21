@@ -3,7 +3,7 @@
 use core::marker::PhantomData;
 
 use crate::{
-    codec::{Decode, Encode},
+    codec::{decode::Decode, encode::Encode},
     hex::decode_hex,
 };
 

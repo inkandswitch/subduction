@@ -10,7 +10,7 @@ use id::FragmentId;
 
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
-    codec::{Decode, Encode, Schema, decode, encode, error::CodecError},
+    codec::{decode, decode::Decode, encode, encode::Encode, error::CodecError, schema::Schema},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
@@ -319,7 +319,9 @@ const CHECKPOINT_BYTES: usize = 12;
 
 impl Schema for Fragment {
     type Context = SedimentreeId;
-    const SCHEMA: [u8; 4] = *b"STF\x00";
+    const PREFIX: [u8; 2] = schema::SEDIMENTREE_PREFIX;
+    const TYPE_BYTE: u8 = b'F';
+    const VERSION: u8 = 0;
 }
 
 impl Encode for Fragment {

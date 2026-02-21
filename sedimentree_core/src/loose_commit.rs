@@ -8,7 +8,7 @@ use id::CommitId;
 
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
-    codec::{Decode, Encode, Schema, decode, encode, error::CodecError},
+    codec::{decode, decode::Decode, encode, encode::Encode, error::CodecError, schema::Schema},
     crypto::digest::Digest,
     id::SedimentreeId,
 };
@@ -176,7 +176,9 @@ const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
 
 impl Schema for LooseCommit {
     type Context = SedimentreeId;
-    const SCHEMA: [u8; 4] = *b"STC\x00";
+    const PREFIX: [u8; 2] = schema::SEDIMENTREE_PREFIX;
+    const TYPE_BYTE: u8 = b'C';
+    const VERSION: u8 = 0;
 }
 
 impl Encode for LooseCommit {

@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use core::{cmp::Ordering, marker::PhantomData};
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use sedimentree_core::codec::{Decode, Encode, error::CodecError};
+use sedimentree_core::codec::{decode::Decode, encode::Encode, error::CodecError};
 use thiserror::Error;
 
 use crate::verified_signature::VerifiedSignature;

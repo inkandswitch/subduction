@@ -265,10 +265,9 @@ impl Response {
 // Codec implementations for Challenge and Response
 // ============================================================================
 
-use sedimentree_core::codec::{Decode, Encode, Schema, decode, encode, error::CodecError};
-
-/// Schema header for `Signed<Challenge>`.
-pub const CHALLENGE_SCHEMA: [u8; 4] = *b"SUH\x00";
+use sedimentree_core::codec::{
+    decode, decode::Decode, encode, encode::Encode, error::CodecError, schema, schema::Schema,
+};
 
 /// Size of Challenge fields (after schema + issuer, before signature).
 const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
@@ -278,7 +277,9 @@ pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 15
 
 impl Schema for Challenge {
     type Context = ();
-    const SCHEMA: [u8; 4] = CHALLENGE_SCHEMA;
+    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+    const TYPE_BYTE: u8 = b'H'; // Handshake
+    const VERSION: u8 = 0;
 }
 
 impl Encode for Challenge {
