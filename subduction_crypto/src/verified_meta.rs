@@ -1,7 +1,7 @@
 //! A payload whose signature is valid AND whose blob matches the claimed metadata.
 
 use future_form::FutureForm;
-use sedimentree_core::blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta};
+use sedimentree_core::blob::{has_meta::HasBlobMeta, verified::VerifiedBlobMeta, Blob, BlobMeta};
 use thiserror::Error;
 
 use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};
@@ -14,7 +14,7 @@ use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignatur
 ///
 /// # Usage
 ///
-/// ```text
+/// ```ignore
 /// let verified_sig = signed_commit.try_verify()?;
 /// let verified_meta = VerifiedMeta::new(verified_sig, blob)?;
 /// putter.save_commit(verified_meta).await?;
