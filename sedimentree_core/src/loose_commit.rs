@@ -26,6 +26,7 @@ use crate::{
 /// It includes the digest of the data, plus pointers to any (causal) parents.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct LooseCommit {
     digest: Digest<LooseCommit>,

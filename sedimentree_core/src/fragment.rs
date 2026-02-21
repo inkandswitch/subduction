@@ -37,6 +37,7 @@ use crate::{
 /// metadata about the the content to aid in deduplication and synchronization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fragment {
     summary: FragmentSummary,
@@ -698,8 +699,6 @@ mod codec_tests {
 #[cfg(test)]
 mod tests {
     use alloc::collections::BTreeSet;
-
-    use testresult::TestResult;
 
     use crate::{
         blob::BlobMeta,

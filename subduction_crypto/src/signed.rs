@@ -390,5 +390,117 @@ where
 
 #[cfg(test)]
 mod tests {
-    // Tests will be added after we implement Codec for test types
+    use alloc::vec::Vec;
+
+    use sedimentree_core::codec::{
+        decode::{self, Decode},
+        encode::{self, Encode},
+        error::DecodeError,
+        schema::{self, Schema},
+    };
+
+    use crate::signer::memory::MemorySigner;
+
+    use super::*;
+
+    /// Minimal test payload for testing Signed round-trips.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct TestPayload {
+        value: u64,
+    }
+
+    impl Schema for TestPayload {
+        type Binding = ();
+        const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+        const TYPE_BYTE: u8 = b'T';
+        const VERSION: u8 = 0;
+    }
+
+    impl Encode for TestPayload {
+        fn encode_fields(&self, _binding: &Self::Binding, buf: &mut Vec<u8>) {
+            encode::u64(self.value, buf);
+        }
+
+        fn fields_size(&self, _binding: &Self::Binding) -> usize {
+            8
+        }
+    }
+
+    impl Decode for TestPayload {
+        const MIN_SIZE: usize = 4 + 32 + 8 + 64; // schema + issuer + value + signature
+
+        fn try_decode_fields(buf: &[u8], _binding: &Self::Binding) -> Result<Self, DecodeError> {
+            let value = decode::u64(buf, 0)?;
+            Ok(Self { value })
+        }
+    }
+
+    fn test_signer(seed: u8) -> MemorySigner {
+        MemorySigner::from_bytes(&[seed; 32])
+    }
+
+    #[tokio::test]
+    async fn seal_produces_verifiable_bytes() {
+        let signer = test_signer(1);
+        let payload = TestPayload { value: 42 };
+
+        // Seal the payload
+        let verified = Signed::seal::<future_form::Sendable, _>(&signer, payload, &()).await;
+        let signed = verified.into_signed();
+
+        // Get the wire bytes
+        let bytes = signed.as_bytes().to_vec();
+
+        // Parse from wire bytes
+        let parsed = Signed::<TestPayload>::try_from_bytes(bytes).expect("should parse");
+
+        // Verify the signature and decode
+        let verified = parsed.try_verify(&()).expect("should verify");
+
+        assert_eq!(verified.payload(), &payload);
+        assert_eq!(verified.issuer(), signer.verifying_key());
+    }
+
+    #[tokio::test]
+    async fn seal_wire_format_is_correct() {
+        let signer = test_signer(1);
+        let payload = TestPayload {
+            value: 0x1234_5678_9ABC_DEF0,
+        };
+
+        let verified = Signed::seal::<future_form::Sendable, _>(&signer, payload, &()).await;
+        let bytes = verified.signed().as_bytes();
+
+        // Check total size: 4 (schema) + 32 (issuer) + 8 (value) + 64 (signature) = 108
+        assert_eq!(bytes.len(), 108);
+
+        // Check schema header
+        assert_eq!(&bytes[0..4], &TestPayload::SCHEMA);
+
+        // Check issuer
+        assert_eq!(&bytes[4..36], signer.verifying_key().as_bytes());
+
+        // Check value (big-endian u64)
+        assert_eq!(&bytes[36..44], &0x1234_5678_9ABC_DEF0_u64.to_be_bytes());
+
+        // Signature is at bytes[44..108]
+        assert_eq!(bytes.len() - 44, 64);
+    }
+
+    #[tokio::test]
+    async fn tampered_bytes_fail_verification() {
+        let signer = test_signer(1);
+        let payload = TestPayload { value: 42 };
+
+        let verified = Signed::seal::<future_form::Sendable, _>(&signer, payload, &()).await;
+        let mut bytes = verified.signed().as_bytes().to_vec();
+
+        // Tamper with the payload (change the value)
+        bytes[36] ^= 0xFF;
+
+        let parsed = Signed::<TestPayload>::try_from_bytes(bytes).expect("should parse");
+        let result = parsed.try_verify(&());
+
+        assert!(result.is_err(), "tampered bytes should fail verification");
+    }
 }
