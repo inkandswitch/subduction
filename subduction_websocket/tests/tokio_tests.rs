@@ -675,6 +675,7 @@ async fn large_message_handling() -> TestResult {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn message_ordering() -> TestResult {
     init_tracing();
 
@@ -796,8 +797,7 @@ async fn message_ordering() -> TestResult {
     for digest in &digests {
         assert!(
             server_commits.iter().any(|c| c.digest() == *digest),
-            "Server should have commit with digest {:?}",
-            digest
+            "Server should have commit with digest {digest:?}"
         );
     }
 

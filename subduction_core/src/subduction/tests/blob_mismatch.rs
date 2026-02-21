@@ -125,7 +125,7 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
     // The commit should NOT be stored
     let commits = subduction.get_commits(sedimentree_id).await;
     assert!(
-        commits.as_ref().map_or(true, Vec::is_empty),
+        commits.as_ref().is_none_or(Vec::is_empty),
         "Mismatched commit should not be stored, found: {commits:?}"
     );
 
