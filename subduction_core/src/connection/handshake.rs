@@ -266,7 +266,7 @@ impl Response {
 // ============================================================================
 
 use sedimentree_core::codec::{
-    decode, decode::Decode, encode, encode::Encode, error::CodecError, schema, schema::Schema,
+    decode, decode::Decode, encode, encode::Encode, error::DecodeError, schema, schema::Schema,
 };
 
 /// Size of Challenge fields (after schema + issuer, before signature).
@@ -311,9 +311,9 @@ impl Encode for Challenge {
 impl Decode for Challenge {
     const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, CodecError> {
+    fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, DecodeError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: CHALLENGE_FIELDS_SIZE,
                 have: buf.len(),
             });
@@ -329,7 +329,7 @@ impl Decode for Challenge {
             0x00 => Audience::Known(PeerId::new(audience_value)),
             0x01 => Audience::Discover(DiscoveryId::from_raw(audience_value)),
             tag => {
-                return Err(CodecError::InvalidEnumTag {
+                return Err(DecodeError::InvalidEnumTag {
                     tag,
                     type_name: "Audience",
                 });
@@ -382,9 +382,9 @@ impl Encode for Response {
 impl Decode for Response {
     const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, CodecError> {
+    fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, DecodeError> {
         if buf.len() < RESPONSE_FIELDS_SIZE {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: RESPONSE_FIELDS_SIZE,
                 have: buf.len(),
             });
@@ -644,9 +644,9 @@ impl HandshakeMessage {
     /// # Errors
     ///
     /// Returns an error if the message is malformed.
-    pub fn try_decode(bytes: &[u8]) -> Result<Self, CodecError> {
+    pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.is_empty() {
-            return Err(CodecError::BufferTooShort { need: 1, have: 0 });
+            return Err(DecodeError::BufferTooShort { need: 1, have: 0 });
         }
 
         let tag = bytes[0];
@@ -663,7 +663,7 @@ impl HandshakeMessage {
             }
             handshake_tags::REJECTION => {
                 if payload.len() < 9 {
-                    return Err(CodecError::BufferTooShort {
+                    return Err(DecodeError::BufferTooShort {
                         need: 10,
                         have: bytes.len(),
                     });
@@ -674,7 +674,7 @@ impl HandshakeMessage {
                     rejection_tags::REPLAYED_NONCE => RejectionReason::ReplayedNonce,
                     rejection_tags::INVALID_SIGNATURE => RejectionReason::InvalidSignature,
                     other => {
-                        return Err(CodecError::InvalidEnumTag {
+                        return Err(DecodeError::InvalidEnumTag {
                             tag: other,
                             type_name: "RejectionReason",
                         });
@@ -687,7 +687,7 @@ impl HandshakeMessage {
                     server_timestamp,
                 }))
             }
-            _ => Err(CodecError::InvalidEnumTag {
+            _ => Err(DecodeError::InvalidEnumTag {
                 tag,
                 type_name: "HandshakeMessage",
             }),
@@ -704,7 +704,7 @@ pub enum AuthenticateError<E> {
 
     /// Message decoding error.
     #[error("decode error: {0}")]
-    Decode(#[from] CodecError),
+    Decode(#[from] DecodeError),
 
     /// Handshake protocol error (signature or validation failure).
     #[error("handshake error: {0}")]
@@ -1572,7 +1572,7 @@ mod tests {
             let result = Challenge::try_decode_fields(&buf, &());
             assert!(matches!(
                 result,
-                Err(CodecError::InvalidEnumTag {
+                Err(DecodeError::InvalidEnumTag {
                     tag: 0x02,
                     type_name: "Audience"
                 })
@@ -1583,7 +1583,7 @@ mod tests {
         fn challenge_buffer_too_short() {
             let buf = vec![0u8; CHALLENGE_FIELDS_SIZE - 1];
             let result = Challenge::try_decode_fields(&buf, &());
-            assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
+            assert!(matches!(result, Err(DecodeError::BufferTooShort { .. })));
         }
 
         #[test]
@@ -1667,7 +1667,7 @@ mod tests {
         fn response_buffer_too_short() {
             let buf = vec![0u8; RESPONSE_FIELDS_SIZE - 1];
             let result = Response::try_decode_fields(&buf, &());
-            assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
+            assert!(matches!(result, Err(DecodeError::BufferTooShort { .. })));
         }
 
         #[test]

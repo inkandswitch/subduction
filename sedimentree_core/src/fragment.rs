@@ -11,7 +11,7 @@ use id::FragmentId;
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
     codec::{
-        decode, decode::Decode, encode, encode::Encode, error::CodecError, schema, schema::Schema,
+        decode, decode::Decode, encode, encode::Encode, error::DecodeError, schema, schema::Schema,
     },
     crypto::{
         digest::Digest,
@@ -360,9 +360,9 @@ impl Encode for Fragment {
 impl Decode for Fragment {
     const MIN_SIZE: usize = CODEC_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
+    fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, DecodeError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: CODEC_FIXED_FIELDS_SIZE,
                 have: buf.len(),
             });
@@ -374,7 +374,7 @@ impl Decode for Fragment {
         offset += 32;
 
         if sedimentree_id_bytes != *ctx.as_bytes() {
-            return Err(CodecError::ContextMismatch {
+            return Err(DecodeError::ContextMismatch {
                 field: "SedimentreeId",
             });
         }
@@ -400,7 +400,7 @@ impl Decode for Fragment {
         let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
 
         if buf.len() < offset + boundary_size + checkpoints_size {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: offset + boundary_size + checkpoints_size,
                 have: buf.len(),
             });
@@ -486,10 +486,10 @@ impl Fragment {
     ///
     /// # Errors
     ///
-    /// Returns [`CodecError`] if the buffer is malformed.
-    pub fn try_from_bytes(buf: &[u8]) -> Result<Self, CodecError> {
+    /// Returns [`DecodeError`] if the buffer is malformed.
+    pub fn try_from_bytes(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < LOCAL_FIXED_SIZE {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: LOCAL_FIXED_SIZE,
                 have: buf.len(),
             });
@@ -518,7 +518,7 @@ impl Fragment {
         let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
 
         if buf.len() < offset + boundary_size + checkpoints_size {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: offset + boundary_size + checkpoints_size,
                 have: buf.len(),
             });
@@ -633,7 +633,7 @@ mod codec_tests {
         fragment.encode_fields(&ctx, &mut buf);
 
         let result = Fragment::try_decode_fields(&buf, &wrong_ctx);
-        assert!(matches!(result, Err(CodecError::ContextMismatch { .. })));
+        assert!(matches!(result, Err(DecodeError::ContextMismatch { .. })));
     }
 
     #[test]
@@ -651,7 +651,7 @@ mod codec_tests {
         encode::array(&[0x30; 32], &mut buf);
 
         let result = Fragment::try_decode_fields(&buf, &ctx);
-        assert!(matches!(result, Err(CodecError::UnsortedArray { .. })));
+        assert!(matches!(result, Err(DecodeError::UnsortedArray { .. })));
     }
 
     #[test]
@@ -660,7 +660,7 @@ mod codec_tests {
         let buf = vec![0u8; 50];
 
         let result = Fragment::try_decode_fields(&buf, &ctx);
-        assert!(matches!(result, Err(CodecError::BufferTooShort { .. })));
+        assert!(matches!(result, Err(DecodeError::BufferTooShort { .. })));
     }
 
     #[test]

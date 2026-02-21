@@ -5,7 +5,7 @@ use alloc::{
     vec::Vec,
 };
 use js_sys::Uint8Array;
-use sedimentree_core::{blob::Blob, codec::error::CodecError};
+use sedimentree_core::{blob::Blob, codec::error::DecodeError};
 use subduction_core::connection::message::Message;
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -241,7 +241,7 @@ impl From<WasmMessage> for Message {
 /// An error indicating a failure to deserialize a [`Message`].
 #[derive(Debug, Error)]
 #[error("failed to deserialize Message: {0}")]
-pub struct JsMessageDeserializationError(CodecError);
+pub struct JsMessageDeserializationError(DecodeError);
 
 impl From<JsMessageDeserializationError> for JsValue {
     fn from(err: JsMessageDeserializationError) -> Self {

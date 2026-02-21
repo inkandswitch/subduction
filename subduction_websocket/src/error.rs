@@ -1,7 +1,7 @@
 //! Error types.
 
 use futures::channel::oneshot;
-use sedimentree_core::codec::error::CodecError;
+use sedimentree_core::codec::error::DecodeError;
 use subduction_core::connection::message::Message;
 use thiserror::Error;
 
@@ -50,5 +50,5 @@ pub enum RunError {
 
     /// Message deserialization error.
     #[error("deserialize error: {0}")]
-    Deserialize(CodecError),
+    Deserialize(DecodeError),
 }

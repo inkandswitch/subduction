@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 use sedimentree_core::{
     blob::Blob,
-    codec::error::CodecError,
+    codec::error::DecodeError,
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
@@ -399,9 +399,9 @@ impl Message {
     /// # Errors
     ///
     /// Returns an error if the message is malformed.
-    pub fn try_decode(bytes: &[u8]) -> Result<Self, CodecError> {
+    pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < ENVELOPE_HEADER_SIZE {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: ENVELOPE_HEADER_SIZE,
                 have: bytes.len(),
             });
@@ -409,7 +409,7 @@ impl Message {
 
         let schema: [u8; 4] = bytes[0..4].try_into().expect("length checked");
         if schema != MESSAGE_SCHEMA {
-            return Err(CodecError::InvalidSchema {
+            return Err(DecodeError::InvalidSchema {
                 expected: MESSAGE_SCHEMA,
                 got: schema,
             });
@@ -418,7 +418,7 @@ impl Message {
         let total_size =
             u32::from_be_bytes(bytes[4..8].try_into().expect("length checked")) as usize;
         if bytes.len() != total_size {
-            return Err(CodecError::SizeMismatch {
+            return Err(DecodeError::SizeMismatch {
                 declared: total_size,
                 actual: bytes.len(),
             });
@@ -437,7 +437,7 @@ impl Message {
             tags::REMOVE_SUBSCRIPTIONS => min_sizes::REMOVE_SUBSCRIPTIONS,
             tags::DATA_REQUEST_REJECTED => min_sizes::DATA_REQUEST_REJECTED,
             _ => {
-                return Err(CodecError::InvalidEnumTag {
+                return Err(DecodeError::InvalidEnumTag {
                     tag,
                     type_name: "Message",
                 });
@@ -445,7 +445,7 @@ impl Message {
         };
 
         if payload.len() < min_payload_size {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: ENVELOPE_HEADER_SIZE + min_payload_size,
                 have: bytes.len(),
             });
@@ -656,7 +656,7 @@ fn encode_data_request_rejected(buf: &mut Vec<u8>, rejected: &DataRequestRejecte
     buf.extend_from_slice(rejected.id.as_bytes());
 }
 
-fn decode_loose_commit(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_loose_commit(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -667,7 +667,7 @@ fn decode_loose_commit(payload: &[u8]) -> Result<Message, CodecError> {
     let blob_size = read_u32(payload, &mut offset)? as usize;
 
     if payload.len() < offset + blob_size {
-        return Err(CodecError::BufferTooShort {
+        return Err(DecodeError::BufferTooShort {
             need: offset + blob_size,
             have: payload.len(),
         });
@@ -677,7 +677,7 @@ fn decode_loose_commit(payload: &[u8]) -> Result<Message, CodecError> {
     Ok(Message::LooseCommit { id, commit, blob })
 }
 
-fn decode_fragment(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_fragment(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -688,7 +688,7 @@ fn decode_fragment(payload: &[u8]) -> Result<Message, CodecError> {
     let blob_size = read_u32(payload, &mut offset)? as usize;
 
     if payload.len() < offset + blob_size {
-        return Err(CodecError::BufferTooShort {
+        return Err(DecodeError::BufferTooShort {
             need: offset + blob_size,
             have: payload.len(),
         });
@@ -698,7 +698,7 @@ fn decode_fragment(payload: &[u8]) -> Result<Message, CodecError> {
     Ok(Message::Fragment { id, fragment, blob })
 }
 
-fn decode_blobs_request(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_blobs_request(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -712,7 +712,7 @@ fn decode_blobs_request(payload: &[u8]) -> Result<Message, CodecError> {
     Ok(Message::BlobsRequest { id, digests })
 }
 
-fn decode_blobs_response(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_blobs_response(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -722,7 +722,7 @@ fn decode_blobs_response(payload: &[u8]) -> Result<Message, CodecError> {
     for _ in 0..count {
         let blob_size = read_u32(payload, &mut offset)? as usize;
         if payload.len() < offset + blob_size {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: offset + blob_size,
                 have: payload.len(),
             });
@@ -734,7 +734,7 @@ fn decode_blobs_response(payload: &[u8]) -> Result<Message, CodecError> {
     Ok(Message::BlobsResponse { id, blobs })
 }
 
-fn decode_batch_sync_request(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_batch_sync_request(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -748,7 +748,7 @@ fn decode_batch_sync_request(payload: &[u8]) -> Result<Message, CodecError> {
         0x00 => false,
         0x01 => true,
         _ => {
-            return Err(CodecError::InvalidEnumTag {
+            return Err(DecodeError::InvalidEnumTag {
                 tag: subscribe_byte,
                 type_name: "Subscribe",
             });
@@ -781,7 +781,7 @@ fn decode_batch_sync_request(payload: &[u8]) -> Result<Message, CodecError> {
     }))
 }
 
-fn decode_batch_sync_response(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_batch_sync_response(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let requestor = PeerId::new(read_array::<32>(payload, &mut offset)?);
@@ -796,7 +796,7 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<Message, CodecError> {
         result_tags::NOT_FOUND => SyncResult::NotFound,
         result_tags::UNAUTHORIZED => SyncResult::Unauthorized,
         _ => {
-            return Err(CodecError::InvalidEnumTag {
+            return Err(DecodeError::InvalidEnumTag {
                 tag: result_tag,
                 type_name: "SyncResult",
             });
@@ -810,7 +810,7 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<Message, CodecError> {
     }))
 }
 
-fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, CodecError> {
+fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, DecodeError> {
     let commit_count = read_u16(payload, offset)? as usize;
     let fragment_count = read_u16(payload, offset)? as usize;
     let requested_commit_count = read_u16(payload, offset)? as usize;
@@ -823,7 +823,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Code
 
         let blob_size = read_u32(payload, offset)? as usize;
         if payload.len() < *offset + blob_size {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: *offset + blob_size,
                 have: payload.len(),
             });
@@ -841,7 +841,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Code
 
         let blob_size = read_u32(payload, offset)? as usize;
         if payload.len() < *offset + blob_size {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: *offset + blob_size,
                 have: payload.len(),
             });
@@ -871,7 +871,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Code
     })
 }
 
-fn decode_remove_subscriptions(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_remove_subscriptions(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let count = read_u16(payload, &mut offset)? as usize;
@@ -884,7 +884,7 @@ fn decode_remove_subscriptions(payload: &[u8]) -> Result<Message, CodecError> {
     Ok(Message::RemoveSubscriptions(RemoveSubscriptions { ids }))
 }
 
-fn decode_data_request_rejected(payload: &[u8]) -> Result<Message, CodecError> {
+fn decode_data_request_rejected(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut offset = 0;
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
@@ -892,9 +892,9 @@ fn decode_data_request_rejected(payload: &[u8]) -> Result<Message, CodecError> {
     Ok(Message::DataRequestRejected(DataRequestRejected { id }))
 }
 
-fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, CodecError> {
+fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, DecodeError> {
     if buf.len() < *offset + 1 {
-        return Err(CodecError::BufferTooShort {
+        return Err(DecodeError::BufferTooShort {
             need: *offset + 1,
             have: buf.len(),
         });
@@ -904,9 +904,9 @@ fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, CodecError> {
     Ok(val)
 }
 
-fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, CodecError> {
+fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, DecodeError> {
     if buf.len() < *offset + 2 {
-        return Err(CodecError::BufferTooShort {
+        return Err(DecodeError::BufferTooShort {
             need: *offset + 2,
             have: buf.len(),
         });
@@ -920,9 +920,9 @@ fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, CodecError> {
     Ok(val)
 }
 
-fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, CodecError> {
+fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, DecodeError> {
     if buf.len() < *offset + 4 {
-        return Err(CodecError::BufferTooShort {
+        return Err(DecodeError::BufferTooShort {
             need: *offset + 4,
             have: buf.len(),
         });
@@ -936,9 +936,9 @@ fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, CodecError> {
     Ok(val)
 }
 
-fn read_u64(buf: &[u8], offset: &mut usize) -> Result<u64, CodecError> {
+fn read_u64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
     if buf.len() < *offset + 8 {
-        return Err(CodecError::BufferTooShort {
+        return Err(DecodeError::BufferTooShort {
             need: *offset + 8,
             have: buf.len(),
         });
@@ -952,9 +952,9 @@ fn read_u64(buf: &[u8], offset: &mut usize) -> Result<u64, CodecError> {
     Ok(val)
 }
 
-fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N], CodecError> {
+fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N], DecodeError> {
     if buf.len() < *offset + N {
-        return Err(CodecError::BufferTooShort {
+        return Err(DecodeError::BufferTooShort {
             need: *offset + N,
             have: buf.len(),
         });
@@ -1280,7 +1280,7 @@ mod tests {
             bad_bytes[4..8].copy_from_slice(&20u32.to_be_bytes());
 
             let result = Message::try_decode(&bad_bytes);
-            assert!(matches!(result, Err(CodecError::InvalidSchema { .. })));
+            assert!(matches!(result, Err(DecodeError::InvalidSchema { .. })));
         }
 
         #[test]
@@ -1292,7 +1292,7 @@ mod tests {
             encoded.truncate(encoded.len() - 5);
 
             let result = Message::try_decode(&encoded);
-            assert!(matches!(result, Err(CodecError::SizeMismatch { .. })));
+            assert!(matches!(result, Err(DecodeError::SizeMismatch { .. })));
         }
 
         #[test]
@@ -1303,7 +1303,7 @@ mod tests {
             bad_bytes[8] = 0xFF;
 
             let result = Message::try_decode(&bad_bytes);
-            assert!(matches!(result, Err(CodecError::InvalidEnumTag { .. })));
+            assert!(matches!(result, Err(DecodeError::InvalidEnumTag { .. })));
         }
     }
 }

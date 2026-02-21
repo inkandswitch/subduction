@@ -24,7 +24,7 @@ use alloc::vec::Vec;
 use core::{cmp::Ordering, marker::PhantomData};
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use sedimentree_core::codec::{decode::Decode, encode::Encode, error::CodecError};
+use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 use thiserror::Error;
 
 use crate::verified_signature::VerifiedSignature;
@@ -151,7 +151,7 @@ impl<T: Encode + Decode> Signed<T> {
     /// # Errors
     ///
     /// Returns an error if the payload cannot be decoded.
-    pub fn try_decode_payload(&self, ctx: &T::Context) -> Result<T, CodecError> {
+    pub fn try_decode_payload(&self, ctx: &T::Context) -> Result<T, DecodeError> {
         T::try_decode_fields(self.fields_bytes(), ctx)
     }
 
@@ -167,10 +167,10 @@ impl<T: Encode + Decode> Signed<T> {
     /// - The buffer is too short
     /// - The schema header doesn't match `T::SCHEMA`
     /// - The verifying key is invalid
-    pub fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, CodecError> {
+    pub fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIZE {
-            return Err(CodecError::BufferTooShort {
+            return Err(DecodeError::BufferTooShort {
                 need: T::MIN_SIZE,
                 have: bytes.len(),
             });
@@ -181,7 +181,7 @@ impl<T: Encode + Decode> Signed<T> {
             .try_into()
             .expect("length checked above");
         if schema != T::SCHEMA {
-            return Err(CodecError::InvalidSchema {
+            return Err(DecodeError::InvalidSchema {
                 expected: T::SCHEMA,
                 got: schema,
             });
@@ -192,8 +192,8 @@ impl<T: Encode + Decode> Signed<T> {
             [SCHEMA_SIZE..SCHEMA_SIZE + VERIFYING_KEY_SIZE]
             .try_into()
             .expect("length checked above");
-        let issuer =
-            VerifyingKey::from_bytes(&issuer_bytes).map_err(|_| CodecError::InvalidVerifyingKey)?;
+        let issuer = VerifyingKey::from_bytes(&issuer_bytes)
+            .map_err(|_| DecodeError::InvalidVerifyingKey)?;
 
         // Extract signature
         let sig_start = bytes.len() - SIGNATURE_SIZE;
@@ -337,7 +337,7 @@ pub enum VerificationError {
 
     /// Codec error (decoding failed).
     #[error("codec error: {0}")]
-    Codec(#[from] CodecError),
+    Codec(#[from] DecodeError),
 }
 
 #[cfg(feature = "arbitrary")]
