@@ -2,13 +2,66 @@
 
 use thiserror::Error;
 
+/// What type of data was being read when a buffer underflow occurred.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReadingType {
+    /// Reading a u8.
+    U8,
+    /// Reading a u16.
+    U16,
+    /// Reading a u32.
+    U32,
+    /// Reading a u64.
+    U64,
+    /// Reading a fixed-size array.
+    Array {
+        /// Size of the array.
+        size: usize,
+    },
+    /// Reading a byte slice.
+    Slice {
+        /// Length of the slice.
+        len: usize,
+    },
+}
+
+impl core::fmt::Display for ReadingType {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::U8 => write!(f, "u8"),
+            Self::U16 => write!(f, "u16"),
+            Self::U32 => write!(f, "u32"),
+            Self::U64 => write!(f, "u64"),
+            Self::Array { size } => write!(f, "[u8; {size}]"),
+            Self::Slice { len } => write!(f, "&[u8] (len {len})"),
+        }
+    }
+}
+
 /// Errors that can occur during decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DecodeError {
-    /// Buffer is too short to contain the expected data.
-    #[error("buffer too short: need {need} bytes, have {have}")]
+    /// Buffer is too short when reading a specific primitive type.
+    #[error(
+        "buffer too short reading {reading} at offset {offset}: need {need} bytes, have {have}"
+    )]
     BufferTooShort {
-        /// Minimum bytes needed.
+        /// What type was being read.
+        reading: ReadingType,
+        /// Offset where the read was attempted.
+        offset: usize,
+        /// Minimum bytes needed from offset.
+        need: usize,
+        /// Actual bytes available from offset.
+        have: usize,
+    },
+
+    /// Message is smaller than minimum required size for its type.
+    #[error("{type_name} too short: need {need} bytes, have {have}")]
+    MessageTooShort {
+        /// Name of the message/payload type.
+        type_name: &'static str,
+        /// Minimum bytes required.
         need: usize,
         /// Actual bytes available.
         have: usize,

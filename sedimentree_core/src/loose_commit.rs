@@ -9,7 +9,13 @@ use id::CommitId;
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
     codec::{
-        decode, decode::Decode, encode, encode::Encode, error::DecodeError, schema, schema::Schema,
+        decode,
+        decode::Decode,
+        encode,
+        encode::Encode,
+        error::{DecodeError, ReadingType},
+        schema,
+        schema::Schema,
     },
     crypto::digest::Digest,
     id::SedimentreeId,
@@ -118,7 +124,8 @@ impl LooseCommit {
     /// Returns [`DecodeError`] if the buffer is malformed.
     pub fn try_from_bytes(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < LOCAL_FIXED_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "LooseCommit (local)",
                 need: LOCAL_FIXED_SIZE,
                 have: buf.len(),
             });
@@ -143,8 +150,10 @@ impl LooseCommit {
         let parents_size = parent_count * 32;
         if buf.len() < offset + parents_size {
             return Err(DecodeError::BufferTooShort {
-                need: offset + parents_size,
-                have: buf.len(),
+                reading: ReadingType::Slice { len: parents_size },
+                offset,
+                need: parents_size,
+                have: buf.len().saturating_sub(offset),
             });
         }
 
@@ -210,7 +219,8 @@ impl Decode for LooseCommit {
 
     fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, DecodeError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "LooseCommit",
                 need: CODEC_FIXED_FIELDS_SIZE,
                 have: buf.len(),
             });
@@ -244,8 +254,10 @@ impl Decode for LooseCommit {
         let parents_size = parent_count * 32;
         if buf.len() < offset + parents_size {
             return Err(DecodeError::BufferTooShort {
-                need: offset + parents_size,
-                have: buf.len(),
+                reading: ReadingType::Slice { len: parents_size },
+                offset,
+                need: parents_size,
+                have: buf.len().saturating_sub(offset),
             });
         }
 
@@ -355,7 +367,7 @@ mod codec_tests {
         let buf = vec![0u8; 50];
 
         let result = LooseCommit::try_decode_fields(&buf, &ctx);
-        assert!(matches!(result, Err(DecodeError::BufferTooShort { .. })));
+        assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
     }
 
     #[test]

@@ -1,6 +1,9 @@
 //! Decoding for the canonical binary codec.
 
-use super::{error::DecodeError, schema::Schema};
+use super::{
+    error::{DecodeError, ReadingType},
+    schema::Schema,
+};
 
 /// Decode a type from its canonical binary representation.
 ///
@@ -28,8 +31,10 @@ pub trait Decode: Schema + Sized {
 #[inline]
 pub fn u8(buf: &[u8], offset: usize) -> Result<u8, DecodeError> {
     buf.get(offset).copied().ok_or(DecodeError::BufferTooShort {
-        need: offset + 1,
-        have: buf.len(),
+        reading: ReadingType::U8,
+        offset,
+        need: 1,
+        have: buf.len().saturating_sub(offset),
     })
 }
 
@@ -40,8 +45,10 @@ pub fn u16(buf: &[u8], offset: usize) -> Result<u16, DecodeError> {
         .get(offset..offset + 2)
         .and_then(|s| s.try_into().ok())
         .ok_or(DecodeError::BufferTooShort {
-            need: offset + 2,
-            have: buf.len(),
+            reading: ReadingType::U16,
+            offset,
+            need: 2,
+            have: buf.len().saturating_sub(offset),
         })?;
     Ok(u16::from_be_bytes(bytes))
 }
@@ -53,8 +60,10 @@ pub fn u32(buf: &[u8], offset: usize) -> Result<u32, DecodeError> {
         .get(offset..offset + 4)
         .and_then(|s| s.try_into().ok())
         .ok_or(DecodeError::BufferTooShort {
-            need: offset + 4,
-            have: buf.len(),
+            reading: ReadingType::U32,
+            offset,
+            need: 4,
+            have: buf.len().saturating_sub(offset),
         })?;
     Ok(u32::from_be_bytes(bytes))
 }
@@ -66,8 +75,10 @@ pub fn u64(buf: &[u8], offset: usize) -> Result<u64, DecodeError> {
         .get(offset..offset + 8)
         .and_then(|s| s.try_into().ok())
         .ok_or(DecodeError::BufferTooShort {
-            need: offset + 8,
-            have: buf.len(),
+            reading: ReadingType::U64,
+            offset,
+            need: 8,
+            have: buf.len().saturating_sub(offset),
         })?;
     Ok(u64::from_be_bytes(bytes))
 }
@@ -78,8 +89,10 @@ pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], Decod
     buf.get(offset..offset + N)
         .and_then(|s| s.try_into().ok())
         .ok_or(DecodeError::BufferTooShort {
-            need: offset + N,
-            have: buf.len(),
+            reading: ReadingType::Array { size: N },
+            offset,
+            need: N,
+            have: buf.len().saturating_sub(offset),
         })
 }
 
@@ -88,8 +101,10 @@ pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], Decod
 pub fn slice(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], DecodeError> {
     buf.get(offset..offset + len)
         .ok_or(DecodeError::BufferTooShort {
-            need: offset + len,
-            have: buf.len(),
+            reading: ReadingType::Slice { len },
+            offset,
+            need: len,
+            have: buf.len().saturating_sub(offset),
         })
 }
 

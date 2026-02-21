@@ -11,7 +11,13 @@ use id::FragmentId;
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
     codec::{
-        decode, decode::Decode, encode, encode::Encode, error::DecodeError, schema, schema::Schema,
+        decode,
+        decode::Decode,
+        encode,
+        encode::Encode,
+        error::{DecodeError, ReadingType},
+        schema,
+        schema::Schema,
     },
     crypto::{
         digest::Digest,
@@ -362,7 +368,8 @@ impl Decode for Fragment {
 
     fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, DecodeError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "Fragment",
                 need: CODEC_FIXED_FIELDS_SIZE,
                 have: buf.len(),
             });
@@ -398,11 +405,16 @@ impl Decode for Fragment {
 
         let boundary_size = boundary_count * 32;
         let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
+        let total_variable_size = boundary_size + checkpoints_size;
 
-        if buf.len() < offset + boundary_size + checkpoints_size {
+        if buf.len() < offset + total_variable_size {
             return Err(DecodeError::BufferTooShort {
-                need: offset + boundary_size + checkpoints_size,
-                have: buf.len(),
+                reading: ReadingType::Slice {
+                    len: total_variable_size,
+                },
+                offset,
+                need: total_variable_size,
+                have: buf.len().saturating_sub(offset),
             });
         }
 
@@ -489,7 +501,8 @@ impl Fragment {
     /// Returns [`DecodeError`] if the buffer is malformed.
     pub fn try_from_bytes(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < LOCAL_FIXED_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "Fragment (local)",
                 need: LOCAL_FIXED_SIZE,
                 have: buf.len(),
             });
@@ -516,11 +529,16 @@ impl Fragment {
 
         let boundary_size = boundary_count * 32;
         let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
+        let total_variable_size = boundary_size + checkpoints_size;
 
-        if buf.len() < offset + boundary_size + checkpoints_size {
+        if buf.len() < offset + total_variable_size {
             return Err(DecodeError::BufferTooShort {
-                need: offset + boundary_size + checkpoints_size,
-                have: buf.len(),
+                reading: ReadingType::Slice {
+                    len: total_variable_size,
+                },
+                offset,
+                need: total_variable_size,
+                have: buf.len().saturating_sub(offset),
             });
         }
 
@@ -660,7 +678,7 @@ mod codec_tests {
         let buf = vec![0u8; 50];
 
         let result = Fragment::try_decode_fields(&buf, &ctx);
-        assert!(matches!(result, Err(DecodeError::BufferTooShort { .. })));
+        assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
     }
 
     #[test]

@@ -18,7 +18,7 @@ use alloc::vec::Vec;
 
 use sedimentree_core::{
     blob::Blob,
-    codec::error::DecodeError,
+    codec::error::{DecodeError, ReadingType},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
@@ -401,7 +401,8 @@ impl Message {
     /// Returns an error if the message is malformed.
     pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < ENVELOPE_HEADER_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "Message envelope",
                 need: ENVELOPE_HEADER_SIZE,
                 have: bytes.len(),
             });
@@ -427,15 +428,17 @@ impl Message {
         let tag = bytes[8];
         let payload = &bytes[ENVELOPE_HEADER_SIZE..];
 
-        let min_payload_size = match tag {
-            tags::LOOSE_COMMIT => min_sizes::LOOSE_COMMIT,
-            tags::FRAGMENT => min_sizes::FRAGMENT,
-            tags::BLOBS_REQUEST => min_sizes::BLOBS_REQUEST,
-            tags::BLOBS_RESPONSE => min_sizes::BLOBS_RESPONSE,
-            tags::BATCH_SYNC_REQUEST => min_sizes::BATCH_SYNC_REQUEST,
-            tags::BATCH_SYNC_RESPONSE => min_sizes::BATCH_SYNC_RESPONSE,
-            tags::REMOVE_SUBSCRIPTIONS => min_sizes::REMOVE_SUBSCRIPTIONS,
-            tags::DATA_REQUEST_REJECTED => min_sizes::DATA_REQUEST_REJECTED,
+        let (min_payload_size, type_name) = match tag {
+            tags::LOOSE_COMMIT => (min_sizes::LOOSE_COMMIT, "LooseCommit"),
+            tags::FRAGMENT => (min_sizes::FRAGMENT, "Fragment"),
+            tags::BLOBS_REQUEST => (min_sizes::BLOBS_REQUEST, "BlobsRequest"),
+            tags::BLOBS_RESPONSE => (min_sizes::BLOBS_RESPONSE, "BlobsResponse"),
+            tags::BATCH_SYNC_REQUEST => (min_sizes::BATCH_SYNC_REQUEST, "BatchSyncRequest"),
+            tags::BATCH_SYNC_RESPONSE => (min_sizes::BATCH_SYNC_RESPONSE, "BatchSyncResponse"),
+            tags::REMOVE_SUBSCRIPTIONS => (min_sizes::REMOVE_SUBSCRIPTIONS, "RemoveSubscriptions"),
+            tags::DATA_REQUEST_REJECTED => {
+                (min_sizes::DATA_REQUEST_REJECTED, "DataRequestRejected")
+            }
             _ => {
                 return Err(DecodeError::InvalidEnumTag {
                     tag,
@@ -445,7 +448,8 @@ impl Message {
         };
 
         if payload.len() < min_payload_size {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name,
                 need: ENVELOPE_HEADER_SIZE + min_payload_size,
                 have: bytes.len(),
             });
@@ -668,8 +672,10 @@ fn decode_loose_commit(payload: &[u8]) -> Result<Message, DecodeError> {
 
     if payload.len() < offset + blob_size {
         return Err(DecodeError::BufferTooShort {
-            need: offset + blob_size,
-            have: payload.len(),
+            reading: ReadingType::Slice { len: blob_size },
+            offset,
+            need: blob_size,
+            have: payload.len().saturating_sub(offset),
         });
     }
     let blob = Blob::new(payload[offset..offset + blob_size].to_vec());
@@ -689,8 +695,10 @@ fn decode_fragment(payload: &[u8]) -> Result<Message, DecodeError> {
 
     if payload.len() < offset + blob_size {
         return Err(DecodeError::BufferTooShort {
-            need: offset + blob_size,
-            have: payload.len(),
+            reading: ReadingType::Slice { len: blob_size },
+            offset,
+            need: blob_size,
+            have: payload.len().saturating_sub(offset),
         });
     }
     let blob = Blob::new(payload[offset..offset + blob_size].to_vec());
@@ -723,8 +731,10 @@ fn decode_blobs_response(payload: &[u8]) -> Result<Message, DecodeError> {
         let blob_size = read_u32(payload, &mut offset)? as usize;
         if payload.len() < offset + blob_size {
             return Err(DecodeError::BufferTooShort {
-                need: offset + blob_size,
-                have: payload.len(),
+                reading: ReadingType::Slice { len: blob_size },
+                offset,
+                need: blob_size,
+                have: payload.len().saturating_sub(offset),
             });
         }
         blobs.push(Blob::new(payload[offset..offset + blob_size].to_vec()));
@@ -824,8 +834,10 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
         let blob_size = read_u32(payload, offset)? as usize;
         if payload.len() < *offset + blob_size {
             return Err(DecodeError::BufferTooShort {
-                need: *offset + blob_size,
-                have: payload.len(),
+                reading: ReadingType::Slice { len: blob_size },
+                offset: *offset,
+                need: blob_size,
+                have: payload.len().saturating_sub(*offset),
             });
         }
         let blob = Blob::new(payload[*offset..*offset + blob_size].to_vec());
@@ -842,8 +854,10 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
         let blob_size = read_u32(payload, offset)? as usize;
         if payload.len() < *offset + blob_size {
             return Err(DecodeError::BufferTooShort {
-                need: *offset + blob_size,
-                have: payload.len(),
+                reading: ReadingType::Slice { len: blob_size },
+                offset: *offset,
+                need: blob_size,
+                have: payload.len().saturating_sub(*offset),
             });
         }
         let blob = Blob::new(payload[*offset..*offset + blob_size].to_vec());
@@ -895,8 +909,10 @@ fn decode_data_request_rejected(payload: &[u8]) -> Result<Message, DecodeError> 
 fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, DecodeError> {
     if buf.len() < *offset + 1 {
         return Err(DecodeError::BufferTooShort {
-            need: *offset + 1,
-            have: buf.len(),
+            reading: ReadingType::U8,
+            offset: *offset,
+            need: 1,
+            have: buf.len().saturating_sub(*offset),
         });
     }
     let val = buf[*offset];
@@ -907,8 +923,10 @@ fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, DecodeError> {
 fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, DecodeError> {
     if buf.len() < *offset + 2 {
         return Err(DecodeError::BufferTooShort {
-            need: *offset + 2,
-            have: buf.len(),
+            reading: ReadingType::U16,
+            offset: *offset,
+            need: 2,
+            have: buf.len().saturating_sub(*offset),
         });
     }
     let val = u16::from_be_bytes(
@@ -923,8 +941,10 @@ fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, DecodeError> {
 fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, DecodeError> {
     if buf.len() < *offset + 4 {
         return Err(DecodeError::BufferTooShort {
-            need: *offset + 4,
-            have: buf.len(),
+            reading: ReadingType::U32,
+            offset: *offset,
+            need: 4,
+            have: buf.len().saturating_sub(*offset),
         });
     }
     let val = u32::from_be_bytes(
@@ -939,8 +959,10 @@ fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, DecodeError> {
 fn read_u64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
     if buf.len() < *offset + 8 {
         return Err(DecodeError::BufferTooShort {
-            need: *offset + 8,
-            have: buf.len(),
+            reading: ReadingType::U64,
+            offset: *offset,
+            need: 8,
+            have: buf.len().saturating_sub(*offset),
         });
     }
     let val = u64::from_be_bytes(
@@ -955,8 +977,10 @@ fn read_u64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
 fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N], DecodeError> {
     if buf.len() < *offset + N {
         return Err(DecodeError::BufferTooShort {
-            need: *offset + N,
-            have: buf.len(),
+            reading: ReadingType::Array { size: N },
+            offset: *offset,
+            need: N,
+            have: buf.len().saturating_sub(*offset),
         });
     }
     let arr: [u8; N] = buf[*offset..*offset + N]

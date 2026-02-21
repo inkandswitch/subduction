@@ -375,7 +375,7 @@ impl Connection<Local> for ChannelMockConnection {
     }
 }
 
-/// A connection wrapper that fires callbacks during `recv()`, mimicking WASM behavior.
+/// A connection wrapper that fires callbacks during `recv()`, mimicking Wasm behavior.
 ///
 /// This wrapper demonstrates the "one behind" bug: callbacks fire BEFORE the message
 /// is dispatched and stored, so any data queries in the callback see stale state.
@@ -463,7 +463,7 @@ where
     }
 
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
-        // Note: This mimics WASM behavior where callbacks would fire here,
+        // Note: This mimics Wasm behavior where callbacks would fire here,
         // but we can't actually fire callbacks here without access to Subduction.
         // The test will inject a callback-like check separately.
         self.inner.recv()

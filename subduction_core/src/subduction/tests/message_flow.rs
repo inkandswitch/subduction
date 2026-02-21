@@ -5,7 +5,7 @@
 //! to observe timing and storage behavior.
 //!
 //! Tests run for both `Sendable` and `Local` future kinds to ensure
-//! behavior is consistent across native and WASM-like environments.
+//! behavior is consistent across native and Wasm-like environments.
 
 use alloc::collections::BTreeSet;
 

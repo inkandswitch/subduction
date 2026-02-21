@@ -313,7 +313,8 @@ impl Decode for Challenge {
 
     fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, DecodeError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "Challenge",
                 need: CHALLENGE_FIELDS_SIZE,
                 have: buf.len(),
             });
@@ -384,7 +385,8 @@ impl Decode for Response {
 
     fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, DecodeError> {
         if buf.len() < RESPONSE_FIELDS_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "Response",
                 need: RESPONSE_FIELDS_SIZE,
                 have: buf.len(),
             });
@@ -646,7 +648,11 @@ impl HandshakeMessage {
     /// Returns an error if the message is malformed.
     pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.is_empty() {
-            return Err(DecodeError::BufferTooShort { need: 1, have: 0 });
+            return Err(DecodeError::MessageTooShort {
+                type_name: "HandshakeMessage",
+                need: 1,
+                have: 0,
+            });
         }
 
         let tag = bytes[0];
@@ -663,7 +669,8 @@ impl HandshakeMessage {
             }
             handshake_tags::REJECTION => {
                 if payload.len() < 9 {
-                    return Err(DecodeError::BufferTooShort {
+                    return Err(DecodeError::MessageTooShort {
+                        type_name: "Rejection",
                         need: 10,
                         have: bytes.len(),
                     });
@@ -1583,7 +1590,7 @@ mod tests {
         fn challenge_buffer_too_short() {
             let buf = vec![0u8; CHALLENGE_FIELDS_SIZE - 1];
             let result = Challenge::try_decode_fields(&buf, &());
-            assert!(matches!(result, Err(DecodeError::BufferTooShort { .. })));
+            assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
         }
 
         #[test]
@@ -1667,7 +1674,7 @@ mod tests {
         fn response_buffer_too_short() {
             let buf = vec![0u8; RESPONSE_FIELDS_SIZE - 1];
             let result = Response::try_decode_fields(&buf, &());
-            assert!(matches!(result, Err(DecodeError::BufferTooShort { .. })));
+            assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
         }
 
         #[test]

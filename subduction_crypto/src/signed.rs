@@ -170,7 +170,8 @@ impl<T: Encode + Decode> Signed<T> {
     pub fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIZE {
-            return Err(DecodeError::BufferTooShort {
+            return Err(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
                 need: T::MIN_SIZE,
                 have: bytes.len(),
             });
