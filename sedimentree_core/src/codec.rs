@@ -34,13 +34,12 @@
 //! | `ST` | `sedimentree_core` | `LooseCommit`, `Fragment` |
 //! | `SU` | `subduction_core` | `Challenge`, `Response`, `Message` |
 
+pub mod decode;
+pub mod encode;
+
 use alloc::vec::Vec;
 
 use thiserror::Error;
-
-// ============================================================================
-// Error Type
-// ============================================================================
 
 /// Errors that can occur during encoding or decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -137,10 +136,6 @@ pub enum CodecError {
     },
 }
 
-// ============================================================================
-// Codec Trait
-// ============================================================================
-
 /// A type with a canonical binary codec for signing and serialization.
 ///
 /// Types implementing this trait can be wrapped in `Signed<T>` for
@@ -207,141 +202,5 @@ pub trait Codec: Sized {
     /// This is `4 (schema) + 32 (issuer) + fields_size + 64 (signature)`.
     fn signed_size(&self, ctx: &Self::Context) -> usize {
         4 + 32 + self.fields_size(ctx) + 64
-    }
-}
-
-// ============================================================================
-// Encoding Helpers
-// ============================================================================
-
-/// Helper functions for encoding primitives.
-pub mod encode {
-    use alloc::vec::Vec;
-
-    /// Encode a u8.
-    #[inline]
-    pub fn u8(value: u8, buf: &mut Vec<u8>) {
-        buf.push(value);
-    }
-
-    /// Encode a u16 as big-endian.
-    #[inline]
-    pub fn u16(value: u16, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&value.to_be_bytes());
-    }
-
-    /// Encode a u32 as big-endian.
-    #[inline]
-    pub fn u32(value: u32, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&value.to_be_bytes());
-    }
-
-    /// Encode a u64 as big-endian.
-    #[inline]
-    pub fn u64(value: u64, buf: &mut Vec<u8>) {
-        buf.extend_from_slice(&value.to_be_bytes());
-    }
-
-    /// Encode raw bytes.
-    #[inline]
-    pub fn bytes(value: &[u8], buf: &mut Vec<u8>) {
-        buf.extend_from_slice(value);
-    }
-
-    /// Encode a fixed-size array.
-    #[inline]
-    pub fn array<const N: usize>(value: &[u8; N], buf: &mut Vec<u8>) {
-        buf.extend_from_slice(value);
-    }
-}
-
-// ============================================================================
-// Decoding Helpers
-// ============================================================================
-
-/// Helper functions for decoding primitives.
-pub mod decode {
-    use super::CodecError;
-
-    /// Decode a u8.
-    #[inline]
-    pub fn u8(buf: &[u8], offset: usize) -> Result<u8, CodecError> {
-        buf.get(offset).copied().ok_or(CodecError::BufferTooShort {
-            need: offset + 1,
-            have: buf.len(),
-        })
-    }
-
-    /// Decode a u16 from big-endian bytes.
-    #[inline]
-    pub fn u16(buf: &[u8], offset: usize) -> Result<u16, CodecError> {
-        let bytes: [u8; 2] = buf
-            .get(offset..offset + 2)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(CodecError::BufferTooShort {
-                need: offset + 2,
-                have: buf.len(),
-            })?;
-        Ok(u16::from_be_bytes(bytes))
-    }
-
-    /// Decode a u32 from big-endian bytes.
-    #[inline]
-    pub fn u32(buf: &[u8], offset: usize) -> Result<u32, CodecError> {
-        let bytes: [u8; 4] = buf
-            .get(offset..offset + 4)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(CodecError::BufferTooShort {
-                need: offset + 4,
-                have: buf.len(),
-            })?;
-        Ok(u32::from_be_bytes(bytes))
-    }
-
-    /// Decode a u64 from big-endian bytes.
-    #[inline]
-    pub fn u64(buf: &[u8], offset: usize) -> Result<u64, CodecError> {
-        let bytes: [u8; 8] = buf
-            .get(offset..offset + 8)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(CodecError::BufferTooShort {
-                need: offset + 8,
-                have: buf.len(),
-            })?;
-        Ok(u64::from_be_bytes(bytes))
-    }
-
-    /// Decode a fixed-size array.
-    #[inline]
-    pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], CodecError> {
-        buf.get(offset..offset + N)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(CodecError::BufferTooShort {
-                need: offset + N,
-                have: buf.len(),
-            })
-    }
-
-    /// Get a slice of bytes.
-    #[inline]
-    pub fn slice(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], CodecError> {
-        buf.get(offset..offset + len)
-            .ok_or(CodecError::BufferTooShort {
-                need: offset + len,
-                have: buf.len(),
-            })
-    }
-
-    /// Verify that a slice of fixed-size elements is sorted ascending.
-    ///
-    /// Returns `Ok(())` if sorted, or `Err(CodecError::UnsortedArray)` with
-    /// the index of the first out-of-order element.
-    pub fn verify_sorted<const N: usize>(elements: &[[u8; N]]) -> Result<(), CodecError> {
-        for i in 1..elements.len() {
-            if elements[i - 1] >= elements[i] {
-                return Err(CodecError::UnsortedArray { index: i });
-            }
-        }
-        Ok(())
     }
 }
