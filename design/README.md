@@ -8,7 +8,7 @@ This directory contains protocol design documents for Subduction.
 |-----------------------------------|----------------------------------------------|
 | [`assumptions`](./assumptions.md) | Protocol assumptions and invariants          |
 | [`handshake`](./handshake.md)     | Mutual authentication via Ed25519 signatures |
-| [`protocol`](./protocol.md)       | Wire format, versioning, cryptographic choices |
+| [`protocol`](./protocol.md)       | Binary format, serialization, cryptographic choices |
 | [`security/`](./security/)        | Threat model and security rationale          |
 | [`sedimentree`](./sedimentree.md) | Depth-based data partitioning scheme         |
 | [`sync/`](./sync/)                | Sync protocol overview and comparison        |
@@ -50,7 +50,7 @@ sequenceDiagram
 ## Design Principles
 
 - **no_std compatible** — Core protocol logic works without std
-- **Transport agnostic** — Protocol messages are CBOR, transport is pluggable
+- **Transport agnostic** — Signed payloads use canonical binary, sync messages use CBOR
 - **Policy separation** — Authentication (handshake) is separate from authorization (policy)
 - **Subscription-based** — Updates forwarded only to subscribed and authorized peers
 - **Content addressed** — All data identified by BLAKE3 hash
