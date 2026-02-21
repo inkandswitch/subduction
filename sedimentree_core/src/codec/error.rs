@@ -2,9 +2,9 @@
 
 use thiserror::Error;
 
-/// Errors that can occur during encoding or decoding.
+/// Errors that can occur during decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-pub enum CodecError {
+pub enum DecodeError {
     /// Buffer is too short to contain the expected data.
     #[error("buffer too short: need {need} bytes, have {have}")]
     BufferTooShort {
