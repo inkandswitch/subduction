@@ -181,21 +181,15 @@ impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
         issuer: ed25519_dalek::VerifyingKey,
         signature: ed25519_dalek::Signature,
         payload: T,
-    ) -> (Self, T) {
+    ) -> Self {
         let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
         let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
 
-        // Decode payload back from encoded bytes (avoids Clone bound)
-        let decoded_envelope =
-            minicbor::decode::<Envelope<T>>(&encoded).expect("just-encoded envelope should decode");
-
-        let signed = Self {
+        Self {
             issuer,
             signature,
             encoded_payload: EncodedPayload::new(encoded),
-        };
-
-        (signed, decoded_envelope.into_payload())
+        }
     }
 }
 
