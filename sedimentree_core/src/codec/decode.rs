@@ -1,6 +1,6 @@
 //! Decoding helpers for the canonical binary codec.
 
-use super::CodecError;
+use super::error::CodecError;
 
 /// Decode a u8.
 #[inline]
