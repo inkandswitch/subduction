@@ -1,8 +1,8 @@
-//! A payload bundled with its blob, guaranteeing metadata matches by construction.
+//! A blob bundled with its metadata, guaranteeing they match by construction.
 
-use super::{Blob, BlobMeta, HasBlobMeta};
+use super::{has_meta::HasBlobMeta, Blob, BlobMeta};
 
-/// A payload bundled with its blob, guaranteeing metadata matches by construction.
+/// A blob bundled with metadata, guaranteeing they match by construction.
 ///
 /// This provides compile-time assurance that `T` was created from this blob's
 /// metadata, avoiding runtime checks when the relationship is known statically.
@@ -10,19 +10,19 @@ use super::{Blob, BlobMeta, HasBlobMeta};
 /// # Example
 ///
 /// ```ignore
-/// let with_blob = WithBlob::new(blob, |meta| {
+/// let blob_with_meta = BlobWithMeta::new(blob, |meta| {
 ///     LooseCommit::new(digest, parents, meta)
 /// });
-/// let verified_meta = VerifiedMeta::seal(&signer, with_blob).await;
+/// let verified_meta = VerifiedMeta::seal(&signer, blob_with_meta).await;
 /// ```
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub struct WithBlob<T: HasBlobMeta> {
-    inner: T,
+pub struct BlobWithMeta<T: HasBlobMeta> {
+    meta: T,
     blob: Blob,
 }
 
-impl<T: HasBlobMeta> WithBlob<T> {
-    /// Create a `WithBlob` from a constructor function.
+impl<T: HasBlobMeta> BlobWithMeta<T> {
+    /// Create a `BlobWithMeta` from a constructor function.
     ///
     /// The constructor receives [`BlobMeta`] computed from the blob and must
     /// return a `T` that incorporates that metadata.
@@ -30,17 +30,17 @@ impl<T: HasBlobMeta> WithBlob<T> {
     where
         F: FnOnce(BlobMeta) -> T,
     {
-        let meta = blob.meta();
+        let blob_meta = blob.meta();
         Self {
-            inner: f(meta),
+            meta: f(blob_meta),
             blob,
         }
     }
 
     /// Get the metadata (commit or fragment).
     #[must_use]
-    pub fn metadata(&self) -> &T {
-        &self.inner
+    pub fn meta(&self) -> &T {
+        &self.meta
     }
 
     /// Get the blob content.
@@ -52,6 +52,6 @@ impl<T: HasBlobMeta> WithBlob<T> {
     /// Consume and return parts.
     #[must_use]
     pub fn into_parts(self) -> (T, Blob) {
-        (self.inner, self.blob)
+        (self.meta, self.blob)
     }
 }

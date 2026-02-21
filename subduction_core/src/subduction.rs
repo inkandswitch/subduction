@@ -116,7 +116,7 @@ use futures::{
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::{
-    blob::{Blob, with_blob::WithBlob},
+    blob::{Blob, with_meta::BlobWithMeta},
     collections::{
         Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
@@ -1331,8 +1331,9 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let with_blob = WithBlob::new(blob, |meta| LooseCommit::new(digest, parents.clone(), meta));
-        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, with_blob).await;
+        let blob_with_meta =
+            BlobWithMeta::new(blob, |meta| LooseCommit::new(digest, parents.clone(), meta));
+        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, blob_with_meta).await;
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 
@@ -1405,10 +1406,10 @@ impl<
         checkpoints: &[Digest<LooseCommit>],
         blob: Blob,
     ) -> Result<(), WriteError<F, S, C, P::PutDisallowed>> {
-        let with_blob = WithBlob::new(blob, |meta| {
+        let blob_with_meta = BlobWithMeta::new(blob, |meta| {
             Fragment::new(head, boundary.clone(), checkpoints, meta)
         });
-        let fragment_digest = with_blob.metadata().digest();
+        let fragment_digest = blob_with_meta.meta().digest();
 
         tracing::debug!(
             "Adding fragment {:?} to sedimentree {:?}",
@@ -1423,7 +1424,7 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, with_blob).await;
+        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, blob_with_meta).await;
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 
