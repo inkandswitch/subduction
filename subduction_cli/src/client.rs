@@ -1,6 +1,6 @@
 //! WebSocket client for Subduction.
 
-use anyhow::Result;
+use eyre::Result;
 use sedimentree_fs_storage::FsStorage;
 use std::{path::PathBuf, time::Duration};
 use subduction_core::{connection::handshake::Audience, peer::id::PeerId};

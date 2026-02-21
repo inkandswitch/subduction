@@ -21,7 +21,7 @@ use tracing_subscriber::{EnvFilter, prelude::*, util::SubscriberInitExt};
 use url::Url;
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> eyre::Result<()> {
     let args = Arguments::parse();
 
     setup_tracing();
@@ -88,9 +88,7 @@ fn setup_tracing() {
 }
 
 #[cfg(feature = "native-tls")]
-fn setup_loki(
-    loki_url: &str,
-) -> anyhow::Result<(tracing_loki::Layer, tracing_loki::BackgroundTask)> {
+fn setup_loki(loki_url: &str) -> eyre::Result<(tracing_loki::Layer, tracing_loki::BackgroundTask)> {
     let url = Url::parse(loki_url)?;
 
     let service_name = std::env::var("LOKI_SERVICE_NAME").unwrap_or_else(|_| "subduction".into());
@@ -147,15 +145,15 @@ fn setup_signal_handlers() -> CancellationToken {
     token
 }
 
-pub(crate) fn parse_peer_id(s: &str) -> anyhow::Result<PeerId> {
+pub(crate) fn parse_peer_id(s: &str) -> eyre::Result<PeerId> {
     let arr = parse_32_bytes(s, "Peer ID")?;
     Ok(PeerId::new(arr))
 }
 
-pub(crate) fn parse_32_bytes(s: &str, name: &str) -> anyhow::Result<[u8; 32]> {
+pub(crate) fn parse_32_bytes(s: &str, name: &str) -> eyre::Result<[u8; 32]> {
     let bytes = hex::decode(s)?;
     if bytes.len() != 32 {
-        anyhow::bail!("{name} must be 32 bytes (64 hex characters)");
+        eyre::bail!("{name} must be 32 bytes (64 hex characters)");
     }
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&bytes);

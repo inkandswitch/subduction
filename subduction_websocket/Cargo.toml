@@ -34,7 +34,7 @@ tracing = { workspace = true }
 tungstenite = { workspace = true }
 
 [dev-dependencies]
-anyhow = "1.0"
+eyre = { workspace = true }
 arbitrary = { workspace = true }
 sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
 subduction_core = { workspace = true, features = ["test_utils"] }
