@@ -9,15 +9,15 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
-    codec::{Codec, CodecError, decode, encode},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
+    codec::{decode, encode, error::CodecError, Codec},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.

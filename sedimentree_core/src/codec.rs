@@ -36,11 +36,11 @@
 
 pub mod decode;
 pub mod encode;
-mod error;
-
-pub use error::CodecError;
+pub mod error;
 
 use alloc::vec::Vec;
+
+use error::CodecError;
 
 /// A type with a canonical binary codec for signing and serialization.
 ///

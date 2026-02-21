@@ -281,7 +281,7 @@ impl Response {
 // Codec implementations for Challenge and Response
 // ============================================================================
 
-use sedimentree_core::codec::{decode, encode, Codec, CodecError};
+use sedimentree_core::codec::{decode, encode, error::CodecError, Codec};
 
 /// Schema header for `Signed<Challenge>`.
 pub const CHALLENGE_SCHEMA: [u8; 4] = *b"SUH\x00";
