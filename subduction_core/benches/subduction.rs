@@ -42,10 +42,10 @@ mod generators {
         connection::message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncResult,
         },
-        crypto::{signed::Signed, signer::MemorySigner},
         peer::id::PeerId,
         storage::key::StorageKey,
     };
+    use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
     /// Generate a deterministic commit digest from a seed.
     pub(super) fn digest_from_seed(seed: u64) -> Digest<LooseCommit> {

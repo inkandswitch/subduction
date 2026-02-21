@@ -88,7 +88,6 @@ use crate::{
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
     },
-    crypto::{signed::Signed, signer::Signer, verified::Verified},
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -117,7 +116,7 @@ use futures::{
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::{
-    blob::Blob,
+    blob::{Blob, verified::VerifiedBlobMeta},
     collections::{
         Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
@@ -132,6 +131,10 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::{FingerprintSummary, Sedimentree},
+};
+use subduction_crypto::{
+    signed::Signed, signer::Signer, verified_meta::VerifiedMeta,
+    verified_signature::VerifiedSignature,
 };
 
 use pending_blob_requests::PendingBlobRequests;
@@ -363,7 +366,7 @@ impl<
     /// Get this instance's peer ID (derived from the signer's verifying key).
     #[must_use]
     pub fn peer_id(&self) -> PeerId {
-        self.signer.peer_id()
+        PeerId::from(self.signer.verifying_key())
     }
 
     /// Returns a reference to the nonce cache for replay protection.
@@ -1299,6 +1302,9 @@ impl<
 
     /// Add a new (incremental) commit locally and propagate it to all connected peers.
     ///
+    /// The commit is constructed internally from the provided parts, ensuring
+    /// that the blob metadata is computed correctly from the blob.
+    ///
     /// # Returns
     ///
     /// * `Ok(None)` if the commit is not on a fragment boundary.
@@ -1312,14 +1318,11 @@ impl<
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
-        commit: &LooseCommit,
+        digest: Digest<LooseCommit>,
+        parents: BTreeSet<Digest<LooseCommit>>,
         blob: Blob,
     ) -> Result<Option<FragmentRequested>, WriteError<F, S, C, P::PutDisallowed>> {
-        tracing::debug!(
-            "adding commit {:?} to sedimentree {:?}",
-            commit.digest(),
-            id
-        );
+        tracing::debug!("adding commit {:?} to sedimentree {:?}", digest, id);
 
         let self_id = self.peer_id();
         let putter = self
@@ -1328,10 +1331,13 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
-        let signed_for_wire = verified.signed().clone();
+        let verified_blob = VerifiedBlobMeta::new(blob);
+        let verified_meta: VerifiedMeta<LooseCommit> =
+            VerifiedMeta::seal::<F, _>(&self.signer, (digest, parents), verified_blob).await;
+        let signed_for_wire = verified_meta.signed().clone();
+        let blob = verified_meta.blob().clone();
 
-        self.insert_commit_locally(&putter, verified, blob.clone())
+        self.insert_commit_locally(&putter, verified_meta)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
@@ -1373,15 +1379,18 @@ impl<
 
         let mut maybe_requested_fragment = None;
 
-        let depth = self.depth_metric.to_depth(commit.digest());
+        let depth = self.depth_metric.to_depth(digest);
         if depth != Depth(0) {
-            maybe_requested_fragment = Some(FragmentRequested::new(commit.digest(), depth));
+            maybe_requested_fragment = Some(FragmentRequested::new(digest, depth));
         }
 
         Ok(maybe_requested_fragment)
     }
 
     /// Add a new (incremental) fragment locally and propagate it to all connected peers.
+    ///
+    /// The fragment is constructed internally from the provided parts, ensuring
+    /// that the blob metadata is computed correctly from the blob.
     ///
     /// NOTE this performs no integrity checks;
     /// we assume this is a good fragment at the right depth
@@ -1392,14 +1401,12 @@ impl<
     pub async fn add_fragment(
         &self,
         id: SedimentreeId,
-        fragment: &Fragment,
+        head: Digest<LooseCommit>,
+        boundary: BTreeSet<Digest<LooseCommit>>,
+        checkpoints: &[Digest<LooseCommit>],
         blob: Blob,
     ) -> Result<(), WriteError<F, S, C, P::PutDisallowed>> {
-        tracing::debug!(
-            "Adding fragment {:?} to sedimentree {:?}",
-            fragment.digest(),
-            id
-        );
+        let verified_blob = VerifiedBlobMeta::new(blob);
 
         let self_id = self.peer_id();
         let putter = self
@@ -1408,10 +1415,23 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
-        let signed_for_wire = verified.signed().clone();
+        let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<F, _>(
+            &self.signer,
+            (head, boundary, checkpoints.to_vec()),
+            verified_blob,
+        )
+        .await;
+        let fragment_digest = verified_meta.payload().digest();
 
-        self.insert_fragment_locally(&putter, verified, blob.clone())
+        tracing::debug!(
+            "Adding fragment {:?} to sedimentree {:?}",
+            fragment_digest,
+            id
+        );
+        let signed_for_wire = verified_meta.signed().clone();
+        let blob = verified_meta.blob().clone();
+
+        self.insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
@@ -1438,7 +1458,7 @@ impl<
             let peer_id = conn.peer_id();
             tracing::debug!(
                 "Propagating fragment {:?} for sedimentree {:?} to {}",
-                fragment.digest(),
+                fragment_digest,
                 id,
                 peer_id
             );
@@ -1505,8 +1525,17 @@ impl<
 
         let signed_for_wire = verified.signed().clone();
 
+        // Verify blob matches claimed metadata
+        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
+            Ok(vm) => vm,
+            Err(e) => {
+                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
+                return Err(IoError::BlobMismatch(e));
+            }
+        };
+
         let was_new = self
-            .insert_commit_locally(&putter, verified, blob.clone())
+            .insert_commit_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
 
@@ -1583,8 +1612,17 @@ impl<
         // Clone signed for forwarding before consuming verified
         let signed_for_wire = verified.signed().clone();
 
+        // Verify blob matches claimed metadata
+        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
+            Ok(vm) => vm,
+            Err(e) => {
+                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
+                return Err(IoError::BlobMismatch(e));
+            }
+        };
+
         let was_new = self
-            .insert_fragment_locally(&putter, verified, blob.clone())
+            .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
 
@@ -1832,7 +1870,14 @@ impl<
                     continue;
                 }
             };
-            self.insert_commit_locally(&putter, verified, blob)
+            let verified_meta = match VerifiedMeta::new(verified, blob) {
+                Ok(vm) => vm,
+                Err(e) => {
+                    tracing::warn!("batch sync commit blob mismatch: {e}");
+                    continue;
+                }
+            };
+            self.insert_commit_locally(&putter, verified_meta)
                 .await
                 .map_err(IoError::Storage)?;
         }
@@ -1845,7 +1890,14 @@ impl<
                     continue;
                 }
             };
-            self.insert_fragment_locally(&putter, verified, blob)
+            let verified_meta = match VerifiedMeta::new(verified, blob) {
+                Ok(vm) => vm,
+                Err(e) => {
+                    tracing::warn!("batch sync fragment blob mismatch: {e}");
+                    continue;
+                }
+            };
+            self.insert_fragment_locally(&putter, verified_meta)
                 .await
                 .map_err(IoError::Storage)?;
         }
@@ -1991,7 +2043,14 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_commit_locally(&putter, verified, blob)
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync commit blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_commit_locally(&putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
                     }
@@ -2004,7 +2063,14 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_fragment_locally(&putter, verified, blob)
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync fragment blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_fragment_locally(&putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
                     }
@@ -2231,7 +2297,14 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_commit_locally(&putter, verified, blob)
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync commit blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_commit_locally(&putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
                     }
@@ -2244,7 +2317,14 @@ impl<
                                 continue;
                             }
                         };
-                        self.insert_fragment_locally(&putter, verified, blob)
+                        let verified_meta = match VerifiedMeta::new(verified, blob) {
+                            Ok(vm) => vm,
+                            Err(e) => {
+                                tracing::warn!("sync fragment blob mismatch: {e}");
+                                continue;
+                            }
+                        };
+                        self.insert_fragment_locally(&putter, verified_meta)
                             .await
                             .map_err(IoError::Storage)?;
                     }
@@ -2404,7 +2484,14 @@ impl<
                             continue;
                         }
                     };
-                    self.insert_commit_locally(&putter, verified, blob)
+                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                        Ok(vm) => vm,
+                        Err(e) => {
+                            tracing::warn!("sync commit blob mismatch: {e}");
+                            continue;
+                        }
+                    };
+                    self.insert_commit_locally(&putter, verified_meta)
                         .await
                         .map_err(IoError::Storage)?;
                 }
@@ -2417,7 +2504,14 @@ impl<
                             continue;
                         }
                     };
-                    self.insert_fragment_locally(&putter, verified, blob)
+                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                        Ok(vm) => vm,
+                        Err(e) => {
+                            tracing::warn!("sync fragment blob mismatch: {e}");
+                            continue;
+                        }
+                    };
+                    self.insert_fragment_locally(&putter, verified_meta)
                         .await
                         .map_err(IoError::Storage)?;
                 }
@@ -2602,9 +2696,16 @@ impl<
                                             continue;
                                         }
                                     };
-                                    self.insert_commit_locally(&putter, verified, blob)
+                                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                                        Ok(vm) => vm,
+                                        Err(e) => {
+                                            tracing::warn!("full sync commit blob mismatch: {e}");
+                                            continue;
+                                        }
+                                    };
+                                    self.insert_commit_locally(&putter, verified_meta)
                                         .await
-                                        .map_err(IoError::<F, S, C>::Storage)?;
+                                        .map_err(IoError::Storage)?;
                                 }
 
                                 for (signed_fragment, blob) in missing_fragments {
@@ -2617,9 +2718,16 @@ impl<
                                             continue;
                                         }
                                     };
-                                    self.insert_fragment_locally(&putter, verified, blob)
+                                    let verified_meta = match VerifiedMeta::new(verified, blob) {
+                                        Ok(vm) => vm,
+                                        Err(e) => {
+                                            tracing::warn!("full sync fragment blob mismatch: {e}");
+                                            continue;
+                                        }
+                                    };
+                                    self.insert_fragment_locally(&putter, verified_meta)
                                         .await
-                                        .map_err(IoError::<F, S, C>::Storage)?;
+                                        .map_err(IoError::Storage)?;
                                 }
 
                                 // Update received stats
@@ -2799,8 +2907,8 @@ impl<
     async fn insert_sedimentree_locally(
         &self,
         putter: &Putter<F, S>,
-        verified_commits: Vec<Verified<LooseCommit>>,
-        verified_fragments: Vec<Verified<Fragment>>,
+        verified_commits: Vec<VerifiedSignature<LooseCommit>>,
+        verified_fragments: Vec<VerifiedSignature<Fragment>>,
         blobs: Vec<Blob>,
     ) -> Result<(), S::Error> {
         let id = putter.sedimentree_id();
@@ -3053,21 +3161,24 @@ impl<
     /// [`hydrate`](Self::hydrate) will rebuild correctly from storage.
     /// Content-addressed storage makes the writes idempotent, so
     /// duplicates are harmless (just a redundant I/O round-trip).
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error if persistence fails.
     async fn insert_commit_locally(
         &self,
         putter: &Putter<F, S>,
-        verified: Verified<LooseCommit>,
-        blob: Blob,
+        verified_meta: VerifiedMeta<LooseCommit>,
     ) -> Result<bool, S::Error> {
         let id = putter.sedimentree_id();
-        let commit = verified.payload().clone();
+        let commit = verified_meta.payload().clone();
 
         tracing::debug!("inserting commit {:?} locally", commit.digest());
 
         // Persist to storage first (cancel-safe: idempotent CAS writes)
-        putter.save_blob(blob).await?;
+        // VerifiedMeta guarantees blob matches claimed metadata at construction
         putter.save_sedimentree_id().await?;
-        putter.save_loose_commit(verified).await?;
+        putter.save_commit(verified_meta).await?;
 
         // Update in-memory tree last (returns false if already present)
         let was_added = self
@@ -3081,19 +3192,22 @@ impl<
     /// Insert a fragment locally, persisting to storage before updating in-memory state.
     ///
     /// See [`insert_commit_locally`](Self::insert_commit_locally) for cancel safety rationale.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error if persistence fails.
     async fn insert_fragment_locally(
         &self,
         putter: &Putter<F, S>,
-        verified: Verified<Fragment>,
-        blob: Blob,
+        verified_meta: VerifiedMeta<Fragment>,
     ) -> Result<bool, S::Error> {
         let id = putter.sedimentree_id();
-        let fragment = verified.payload().clone();
+        let fragment = verified_meta.payload().clone();
 
         // Persist to storage first (cancel-safe: idempotent CAS writes)
-        putter.save_blob(blob).await?;
+        // VerifiedMeta guarantees blob matches claimed metadata at construction
         putter.save_sedimentree_id().await?;
-        putter.save_fragment(verified).await?;
+        putter.save_fragment_with_blob(verified_meta).await?;
 
         // Update in-memory tree last
         let was_added = self

@@ -30,6 +30,7 @@ Subduction is organized as a Rust workspace with multiple crates:
 graph TD
     subgraph Core
         sedimentree_core
+        subduction_crypto
         subduction_core
     end
 
@@ -44,6 +45,8 @@ graph TD
         automerge_subduction_wasm
     end
 
+    sedimentree_core --> subduction_crypto
+    subduction_crypto --> subduction_core
     sedimentree_core --> subduction_core
     sedimentree_core --> automerge_sedimentree
 
@@ -63,6 +66,7 @@ graph TD
 | Crate                  | Description                                                                             |
 |------------------------|-----------------------------------------------------------------------------------------|
 | `sedimentree_core`     | The core data partitioning scheme that enables efficient metadata-based synchronization |
+| `subduction_crypto`    | Cryptographic types: signed payloads and verification witnesses                         |
 | `subduction_core`      | The main synchronization protocol implementation                                        |
 | `subduction_websocket` | WebSocket transport layer for peer-to-peer connections                                  |
 

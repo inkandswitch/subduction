@@ -148,10 +148,7 @@ mod generators {
 
 use generators::{overlapping_sedimentrees, synthetic_sedimentree};
 
-fn measure_allocs<F, R>(f: F) -> (u64, u64, R)
-where
-    F: FnOnce() -> R,
-{
+fn measure_allocs<F: FnOnce() -> R, R>(f: F) -> (u64, u64, R) {
     let before = dhat::HeapStats::get();
     let result = f();
     let after = dhat::HeapStats::get();

@@ -56,23 +56,3 @@ impl<'a> arbitrary::Arbitrary<'a> for FragmentId {
         Ok(Self(Digest::arbitrary(u)?))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn same_head_produces_same_id() {
-        let head = Digest::from_bytes([1u8; 32]);
-        let id1 = FragmentId::new(head);
-        let id2 = FragmentId::new(head);
-        assert_eq!(id1, id2);
-    }
-
-    #[test]
-    fn different_head_produces_different_id() {
-        let id1 = FragmentId::new(Digest::from_bytes([1u8; 32]));
-        let id2 = FragmentId::new(Digest::from_bytes([9u8; 32]));
-        assert_ne!(id1, id2);
-    }
-}

@@ -3,13 +3,13 @@
 pub mod checkpoint;
 pub mod id;
 
-use alloc::collections::BTreeSet;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::BlobMeta,
+    blob::{BlobMeta, has_meta::HasBlobMeta},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
@@ -166,6 +166,22 @@ impl Fragment {
     #[must_use]
     pub const fn fragment_id(&self) -> FragmentId {
         FragmentId::new(self.summary.head)
+    }
+}
+
+impl HasBlobMeta for Fragment {
+    type Args = (
+        Digest<LooseCommit>,
+        BTreeSet<Digest<LooseCommit>>,
+        Vec<Digest<LooseCommit>>,
+    );
+
+    fn blob_meta(&self) -> BlobMeta {
+        self.summary().blob_meta()
+    }
+
+    fn from_args((head, boundary, checkpoints): Self::Args, blob_meta: BlobMeta) -> Self {
+        Self::new(head, boundary, &checkpoints, blob_meta)
     }
 }
 

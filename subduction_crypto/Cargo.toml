@@ -1,0 +1,48 @@
+[package]
+name = "subduction_crypto"
+version = "0.1.0"
+description = "Cryptographic types for Subduction: signed payloads, verification witnesses"
+
+authors.workspace = true
+categories = ["cryptography"]
+edition.workspace = true
+keywords = ["cryptography", "signatures", "ed25519"]
+license.workspace = true
+readme = "./README.md"
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arbitrary = { workspace = true, optional = true, features = ["derive"] }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
+ed25519-dalek = { workspace = true }
+future_form = { workspace = true }
+futures = { workspace = true }
+getrandom = { workspace = true }
+minicbor = { workspace = true }
+sedimentree_core = { workspace = true }
+serde = { workspace = true, optional = true, features = ["derive"] }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+arbitrary = { workspace = true, optional = false, features = ["derive"] }
+bolero = { workspace = true, features = ["arbitrary"] }
+subduction_crypto = { path = ".", features = ["bolero"] }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
+[features]
+default = []
+arbitrary = ["dep:arbitrary", "std"]
+bolero = ["dep:bolero", "arbitrary", "std"]
+serde = ["dep:serde", "ed25519-dalek/serde"]
+std = [
+  "ed25519-dalek/std",
+  "minicbor/std",
+  "sedimentree_core/std",
+  "serde/std",
+  "thiserror/std"
+]
+
+[lints]
+workspace = true

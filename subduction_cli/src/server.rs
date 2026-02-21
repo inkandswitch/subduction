@@ -7,10 +7,11 @@ use sedimentree_fs_storage::FsStorage;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 use subduction_core::{
     connection::nonce_cache::NonceCache,
-    crypto::signer::MemorySigner,
+    peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
@@ -119,7 +120,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         }
         None => MemorySigner::generate(),
     };
-    let peer_id = signer.peer_id();
+    let peer_id = PeerId::from(signer.verifying_key());
 
     // Default service name to socket address if not specified
     let service_name = args

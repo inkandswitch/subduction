@@ -12,7 +12,6 @@ use alloc::collections::BTreeSet;
 use super::common::{TokioSpawn, test_signer};
 use crate::{
     connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
-    crypto::signed::Signed,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -28,6 +27,7 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
 async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) {

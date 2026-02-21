@@ -15,10 +15,10 @@ use sedimentree_core::{
 };
 
 use crate::{
-    crypto::signed::Signed,
     metrics,
-    storage::traits::{BatchResult, Storage},
+    storage::{batch_result::BatchResult, traits::Storage},
 };
+use subduction_crypto::signed::Signed;
 
 /// A storage wrapper that records metrics for all operations.
 ///
@@ -85,10 +85,7 @@ pub trait RefreshMetrics {
     fn refresh_metrics(&self) -> impl Future<Output = Result<(), Self::Error>> + Send;
 }
 
-impl<S> RefreshMetrics for MetricsStorage<S>
-where
-    S: Storage<Sendable> + Send + Sync,
-{
+impl<S: Storage<Sendable> + Send + Sync> RefreshMetrics for MetricsStorage<S> {
     type Error = S::Error;
 
     async fn refresh_metrics(&self) -> Result<(), Self::Error> {

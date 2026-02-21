@@ -20,7 +20,6 @@ use crate::{
         nonce_cache::NonceCache,
         test_utils::ChannelMockConnection,
     },
-    crypto::signed::Signed,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -43,6 +42,7 @@ use sedimentree_core::{
     loose_commit::{LooseCommit, id::CommitId},
     sedimentree::FingerprintSummary,
 };
+use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
 /// A deterministic seed for tests (not security-sensitive).

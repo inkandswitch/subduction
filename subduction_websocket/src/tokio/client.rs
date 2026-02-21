@@ -17,10 +17,10 @@ use subduction_core::{
         handshake::{self, Audience, AuthenticateError},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
-    crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
+use subduction_crypto::{nonce::Nonce, signer::Signer};
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
 
 /// Error type for client connection.

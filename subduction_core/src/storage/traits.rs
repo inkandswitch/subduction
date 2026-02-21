@@ -26,7 +26,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 
-use crate::crypto::signed::Signed;
+use subduction_crypto::signed::Signed;
 
 /// Abstraction over storage for `Sedimentree` data.
 ///
@@ -213,15 +213,5 @@ pub trait Storage<K: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
         commits: Vec<(Signed<LooseCommit>, Blob)>,
         fragments: Vec<(Signed<Fragment>, Blob)>,
-    ) -> K::Future<'_, Result<BatchResult, Self::Error>>;
-}
-
-/// Result of a batch save operation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct BatchResult {
-    /// Digests of saved commits.
-    pub commit_digests: Vec<Digest<LooseCommit>>,
-
-    /// Digests of saved fragments.
-    pub fragment_digests: Vec<Digest<Fragment>>,
+    ) -> K::Future<'_, Result<super::batch_result::BatchResult, Self::Error>>;
 }

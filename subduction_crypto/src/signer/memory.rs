@@ -1,35 +1,9 @@
-//! Signing trait for cryptographic key management abstraction.
-//!
-//! This module provides the [`Signer`] trait which abstracts over signing
-//! operations, allowing different key management strategies (in-memory keys,
-//! hardware security modules, remote signing services, etc.).
+//! In-memory Ed25519 signer for development and testing.
 
 use ed25519_dalek::{Signature, SigningKey, VerifyingKey};
 use future_form::{FutureForm, Local, Sendable, future_form};
 
-use crate::peer::id::PeerId;
-
-/// A trait for signing data with an ed25519 key.
-///
-/// This abstraction allows different key management strategies:
-/// - In-memory keys via [`MemorySigner`]
-/// - Hardware security modules
-/// - Remote signing services
-/// - Key derivation schemes
-///
-/// For synchronous signers like [`MemorySigner`], the async overhead is negligible.
-pub trait Signer<K: FutureForm> {
-    /// Sign the given message bytes.
-    fn sign(&self, message: &[u8]) -> K::Future<'_, Signature>;
-
-    /// Get the verifying (public) key corresponding to this signer.
-    fn verifying_key(&self) -> VerifyingKey;
-
-    /// Get the peer ID derived from the verifying key.
-    fn peer_id(&self) -> PeerId {
-        PeerId::from(self.verifying_key())
-    }
-}
+use super::Signer;
 
 /// An in-memory signer that holds an ed25519 signing key.
 #[derive(Clone)]
@@ -68,12 +42,6 @@ impl MemorySigner {
     pub fn verifying_key(&self) -> VerifyingKey {
         self.signing_key.verifying_key()
     }
-
-    /// Get the peer ID derived from the verifying key.
-    #[must_use]
-    pub fn peer_id(&self) -> PeerId {
-        PeerId::from(self.verifying_key())
-    }
 }
 
 #[future_form(Sendable, Local)]
@@ -92,7 +60,7 @@ impl<K: FutureForm> Signer<K> for MemorySigner {
 impl core::fmt::Debug for MemorySigner {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("MemorySigner")
-            .field("peer_id", &self.peer_id())
+            .field("verifying_key", &self.verifying_key())
             .finish_non_exhaustive()
     }
 }
@@ -105,7 +73,7 @@ mod tests {
     use future_form::Sendable;
 
     #[tokio::test]
-    async fn local_signer_sign_and_verify() {
+    async fn sign_and_verify() {
         let key_bytes = [42u8; 32];
         let signer = MemorySigner::from_bytes(&key_bytes);
 
@@ -116,24 +84,15 @@ mod tests {
     }
 
     #[test]
-    fn peer_id_matches_verifying_key() {
-        let key_bytes = [42u8; 32];
-        let signer = MemorySigner::from_bytes(&key_bytes);
-
-        let expected_peer_id = PeerId::from(signer.verifying_key());
-        assert_eq!(signer.peer_id(), expected_peer_id);
-    }
-
-    #[test]
     fn debug_does_not_leak_private_key() {
         let key_bytes = [42u8; 32];
         let signer = MemorySigner::from_bytes(&key_bytes);
 
         let debug_str = format!("{signer:?}");
 
-        // Should contain peer_id but not the raw key bytes
+        // Should contain verifying_key but not the raw signing key bytes
         assert!(debug_str.contains("MemorySigner"));
-        assert!(debug_str.contains("peer_id"));
+        assert!(debug_str.contains("verifying_key"));
         // Raw key bytes as hex would be "2a2a2a..." - should not appear
         assert!(!debug_str.contains("2a2a2a"));
     }

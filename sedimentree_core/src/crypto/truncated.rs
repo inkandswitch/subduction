@@ -221,55 +221,6 @@ mod tests {
     use crate::loose_commit::LooseCommit;
 
     #[test]
-    fn truncation_preserves_first_n_bytes() {
-        let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
-
-        // Default (12 bytes)
-        let truncated: Truncated<Digest<LooseCommit>> = Truncated::new(digest);
-        assert_eq!(truncated.as_bytes(), &[42u8; 12]);
-
-        // Explicit 8 bytes
-        let truncated_8: Truncated<Digest<LooseCommit>, 8> = Truncated::new(digest);
-        assert_eq!(truncated_8.as_bytes(), &[42u8; 8]);
-    }
-
-    #[test]
-    fn same_digest_produces_same_truncation() {
-        let digest = Digest::<LooseCommit>::from_bytes([1u8; 32]);
-        let a: Truncated<Digest<LooseCommit>> = Truncated::new(digest);
-        let b: Truncated<Digest<LooseCommit>> = Truncated::new(digest);
-        assert_eq!(a, b);
-    }
-
-    #[test]
-    fn different_first_n_bytes_produce_different_truncation() {
-        let mut bytes_a = [0u8; 32];
-        bytes_a[0] = 1;
-        let mut bytes_b = [0u8; 32];
-        bytes_b[0] = 2;
-
-        let a: Truncated<Digest<LooseCommit>> =
-            Truncated::new(Digest::<LooseCommit>::from_bytes(bytes_a));
-        let b: Truncated<Digest<LooseCommit>> =
-            Truncated::new(Digest::<LooseCommit>::from_bytes(bytes_b));
-        assert_ne!(a, b);
-    }
-
-    #[test]
-    fn different_bytes_after_n_produce_same_truncation() {
-        let mut bytes_a = [0u8; 32];
-        bytes_a[31] = 1; // After first 12 bytes
-        let mut bytes_b = [0u8; 32];
-        bytes_b[31] = 2;
-
-        let a: Truncated<Digest<LooseCommit>> =
-            Truncated::new(Digest::<LooseCommit>::from_bytes(bytes_a));
-        let b: Truncated<Digest<LooseCommit>> =
-            Truncated::new(Digest::<LooseCommit>::from_bytes(bytes_b));
-        assert_eq!(a, b);
-    }
-
-    #[test]
     fn different_truncation_sizes_are_distinct_types() {
         let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
 
@@ -282,5 +233,66 @@ mod tests {
         assert_eq!(t8.as_bytes().len(), 8);
         assert_eq!(t12.as_bytes().len(), 12);
         assert_eq!(t16.as_bytes().len(), 16);
+    }
+
+    #[cfg(feature = "bolero")]
+    mod proptests {
+        use super::*;
+
+        #[test]
+        fn truncation_preserves_first_n_bytes() {
+            bolero::check!()
+                .with_arbitrary::<[u8; 32]>()
+                .for_each(|bytes| {
+                    let digest = Digest::<LooseCommit>::from_bytes(*bytes);
+                    let truncated: Truncated<Digest<LooseCommit>> = Truncated::new(digest);
+                    assert_eq!(truncated.as_bytes(), &bytes[..12]);
+                });
+        }
+
+        #[test]
+        fn truncation_ignores_suffix() {
+            bolero::check!()
+                .with_arbitrary::<([u8; 12], [u8; 20], [u8; 20])>()
+                .for_each(|(prefix, suffix_a, suffix_b)| {
+                    let mut bytes_a = [0u8; 32];
+                    let mut bytes_b = [0u8; 32];
+
+                    bytes_a[..12].copy_from_slice(prefix);
+                    bytes_a[12..].copy_from_slice(suffix_a);
+
+                    bytes_b[..12].copy_from_slice(prefix);
+                    bytes_b[12..].copy_from_slice(suffix_b);
+
+                    let a: Truncated<Digest<LooseCommit>> =
+                        Truncated::new(Digest::from_bytes(bytes_a));
+                    let b: Truncated<Digest<LooseCommit>> =
+                        Truncated::new(Digest::from_bytes(bytes_b));
+
+                    assert_eq!(a, b, "same prefix should produce equal truncations");
+                });
+        }
+
+        #[test]
+        fn different_prefixes_produce_different_truncations() {
+            bolero::check!()
+                .with_arbitrary::<([u8; 32], [u8; 32])>()
+                .for_each(|(bytes_a, bytes_b)| {
+                    // Only test when prefixes actually differ
+                    if bytes_a[..12] == bytes_b[..12] {
+                        return;
+                    }
+
+                    let a: Truncated<Digest<LooseCommit>> =
+                        Truncated::new(Digest::from_bytes(*bytes_a));
+                    let b: Truncated<Digest<LooseCommit>> =
+                        Truncated::new(Digest::from_bytes(*bytes_b));
+
+                    assert_ne!(
+                        a, b,
+                        "different prefixes should produce different truncations"
+                    );
+                });
+        }
     }
 }

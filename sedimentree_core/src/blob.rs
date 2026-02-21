@@ -1,5 +1,8 @@
 //! Binary objects.
 
+pub mod has_meta;
+pub mod verified;
+
 use core::cmp::min;
 
 use alloc::vec::Vec;

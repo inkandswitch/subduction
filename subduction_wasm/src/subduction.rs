@@ -284,8 +284,6 @@ impl WasmSubduction {
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
     ) -> Result<WasmPeerId, WasmConnectError> {
-        use crate::connection::websocket::WasmWebSocket;
-
         // Perform handshake and get Authenticated<WasmWebSocket, Local>
         let authenticated = WasmWebSocket::connect_authenticated(
             address,
@@ -328,8 +326,6 @@ impl WasmSubduction {
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmConnectError> {
-        use crate::connection::websocket::WasmWebSocket;
-
         // Perform discovery handshake and get Authenticated<WasmWebSocket, Local>
         let authenticated = WasmWebSocket::connect_discover_authenticated(
             address,
@@ -464,42 +460,68 @@ impl WasmSubduction {
 
     /// Add a commit with its associated blob to the storage.
     ///
+    /// The commit metadata (including `BlobMeta`) is computed internally from
+    /// the provided blob, ensuring consistency by construction.
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmWriteError`] if storage, networking, or policy fail.
     #[wasm_bindgen(js_name = addCommit)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub async fn add_commit(
         &self,
         id: &WasmSedimentreeId,
-        commit: &WasmLooseCommit,
+        digest: &WasmDigest,
+        parents: Vec<JsDigest>,
         blob: &Uint8Array,
     ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
-        let core_id = id.clone().into();
-        let core_commit = commit.clone().into();
+        let core_id: SedimentreeId = id.clone().into();
+        let core_digest: Digest<LooseCommit> = digest.clone().into();
+        let core_parents = parents.iter().map(|d| WasmDigest::from(d).into()).collect();
         let blob: Blob = blob.clone().to_vec().into();
-        let maybe_fragment_requested = self.core.add_commit(core_id, &core_commit, blob).await?;
+
+        let maybe_fragment_requested = self
+            .core
+            .add_commit(core_id, core_digest, core_parents, blob)
+            .await?;
 
         Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
     }
 
     /// Add a fragment with its associated blob to the storage.
     ///
+    /// The fragment metadata (including `BlobMeta`) is computed internally from
+    /// the provided blob, ensuring consistency by construction.
+    ///
     /// # Errors
     ///
     /// Returns a [`WasmWriteError`] if storage, networking, or policy fail.
     #[wasm_bindgen(js_name = addFragment)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub async fn add_fragment(
         &self,
         id: &WasmSedimentreeId,
-        fragment: &WasmFragment,
+        head: &WasmDigest,
+        boundary: Vec<JsDigest>,
+        checkpoints: Vec<JsDigest>,
         blob: &Uint8Array,
     ) -> Result<(), WasmWriteError> {
-        let owned_id = id.clone().into();
-        let owned_fragment = fragment.clone().into();
+        let core_id: SedimentreeId = id.clone().into();
+        let core_head: Digest<LooseCommit> = head.clone().into();
+        let core_boundary = boundary
+            .iter()
+            .map(|d| WasmDigest::from(d).into())
+            .collect();
+        let core_checkpoints: Vec<Digest<LooseCommit>> = checkpoints
+            .iter()
+            .map(|d| WasmDigest::from(d).into())
+            .collect();
         let blob: Blob = blob.clone().to_vec().into();
+
         self.core
-            .add_fragment(owned_id, &owned_fragment, blob)
+            .add_fragment(core_id, core_head, core_boundary, &core_checkpoints, blob)
             .await?;
+
         Ok(())
     }
 

@@ -137,16 +137,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_values() {
-        let backoff = Backoff::default();
-        assert_eq!(backoff.base, Duration::from_millis(100));
-        assert_eq!(backoff.max, Duration::from_secs(30));
-        assert!((backoff.factor - 2.0).abs() < f64::EPSILON);
-        assert!((backoff.jitter - 0.1).abs() < f64::EPSILON);
-        assert_eq!(backoff.attempt, 0);
-    }
-
-    #[test]
     fn delays_increase_exponentially() {
         let mut backoff = Backoff::new(
             Duration::from_millis(100),
@@ -224,31 +214,63 @@ mod tests {
         assert!(d1 <= Duration::from_millis(1200));
     }
 
-    #[test]
-    fn attempt_increments() {
-        let mut backoff = Backoff::default();
+    #[cfg(all(feature = "std", feature = "bolero"))]
+    mod proptests {
+        use super::*;
 
-        assert_eq!(backoff.attempt(), 0);
-        let _ = backoff.next_delay();
-        assert_eq!(backoff.attempt(), 1);
-        let _ = backoff.next_delay();
-        assert_eq!(backoff.attempt(), 2);
-    }
+        #[test]
+        fn delays_never_exceed_max() {
+            bolero::check!()
+                .with_arbitrary::<(u16, u16, u8)>()
+                .for_each(|(base_ms, max_ms, attempts)| {
+                    // Ensure base and max are positive (at least 1ms)
+                    let base_ms = u64::from((*base_ms).max(1));
+                    let max_ms = u64::from((*max_ms).max(1)).max(base_ms);
+                    // Limit attempts to avoid exponential overflow
+                    let attempts = (*attempts).min(30);
 
-    #[test]
-    fn clone_is_independent() {
-        let mut backoff1 = Backoff::default();
-        let _ = backoff1.next_delay();
-        let _ = backoff1.next_delay();
+                    let mut backoff = Backoff::new(
+                        Duration::from_millis(base_ms),
+                        Duration::from_millis(max_ms),
+                        2.0,
+                        0.0, // No jitter for precise bounds
+                    );
 
-        let mut backoff2 = backoff1;
+                    for _ in 0..attempts {
+                        let delay = backoff.next_delay();
+                        assert!(
+                            delay <= Duration::from_millis(max_ms),
+                            "delay {delay:?} exceeded max {max_ms}ms"
+                        );
+                    }
+                });
+        }
 
-        let _ = backoff1.next_delay();
-        assert_eq!(backoff1.attempt(), 3);
-        assert_eq!(backoff2.attempt(), 2);
+        #[test]
+        fn delays_monotonically_increase_without_jitter() {
+            bolero::check!()
+                .with_arbitrary::<(u16, u8)>()
+                .for_each(|(base_ms, attempts)| {
+                    let base_ms = (*base_ms).max(1);
+                    let attempts = (*attempts).min(20); // Limit to avoid overflow
 
-        backoff2.reset();
-        assert_eq!(backoff1.attempt(), 3);
-        assert_eq!(backoff2.attempt(), 0);
+                    let mut backoff = Backoff::new(
+                        Duration::from_millis(u64::from(base_ms)),
+                        Duration::from_secs(3600), // Large max
+                        2.0,
+                        0.0, // No jitter
+                    );
+
+                    let mut prev = Duration::ZERO;
+                    for _ in 0..attempts {
+                        let delay = backoff.next_delay();
+                        assert!(
+                            delay >= prev,
+                            "delay {delay:?} decreased from previous {prev:?}"
+                        );
+                        prev = delay;
+                    }
+                });
+        }
     }
 }

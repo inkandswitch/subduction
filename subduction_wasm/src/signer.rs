@@ -12,7 +12,8 @@ use alloc::vec::Vec;
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
 use js_sys::{Promise, Uint8Array};
-use subduction_core::crypto::signer::Signer;
+use subduction_core::peer::id::PeerId;
+use subduction_crypto::signer::Signer;
 use wasm_bindgen::{JsCast, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 
@@ -41,7 +42,7 @@ impl JsSigner {
     /// Get the peer ID derived from this signer's verifying key.
     #[must_use]
     pub fn peer_id(&self) -> WasmPeerId {
-        WasmPeerId::from(<Self as Signer<Local>>::peer_id(self))
+        WasmPeerId::from(PeerId::from(Signer::<Local>::verifying_key(self)))
     }
 }
 

@@ -1,4 +1,4 @@
-//! A simple wrapper around a String to represent a Peer ID.
+//! Peer identity types.
 
 use alloc::string::String;
 use core::fmt::Write;

@@ -1,45 +1,48 @@
-//! A payload that has been verified.
+//! A payload whose signature has been verified.
 
 use core::cmp::Ordering;
 
-use super::signed::Signed;
+use crate::signed::Signed;
 
 /// A payload whose signature has been verified.
 ///
 /// This type is a **witness** that the signature is valid, either because:
-/// - [`Signed::try_verify`](super::signed::Signed::try_verify) succeeded (remote data)
-/// - [`Signed::seal`](super::signed::Signed::seal) created it (local data, self-signed)
+/// - [`Signed::try_verify`] succeeded (remote data)
+/// - `seal()` created it (local data, self-signed)
 ///
-/// It provides access to the payload that [`Signed<T>`](super::signed::Signed)
-/// intentionally withholds, ensuring callers cannot skip verification.
+/// It provides access to the payload that [`Signed<T>`] intentionally withholds,
+/// ensuring callers cannot skip verification.
 ///
 /// ```text
-/// Local:    T  ──seal──►  Verified<T>  ──putter──►  Storage
-/// Remote:   Signed<T>  ──try_verify──►  Verified<T>  ──putter──►  Storage
+/// Local:    T  ──seal──►  VerifiedSignature<T>  ──putter──►  Storage
+/// Remote:   Signed<T>  ──try_verify──►  VerifiedSignature<T>  ──putter──►  Storage
 /// ```
 ///
 /// # Storage Pattern
 ///
-/// `Verified<T>` retains the original [`Signed<T>`] so you can store the signed
-/// version after verification. The [`Putter`] accepts `Verified<T>` to enforce
-/// that only verified data enters storage.
-///
-/// For loading from storage, use [`Signed::decode_payload`](super::signed::Signed::decode_payload)
-/// to extract the payload directly (storage is trusted).
+/// `VerifiedSignature<T>` retains the original [`Signed<T>`] so you can store the
+/// signed version after verification. For loading from storage, use
+/// [`Signed::decode_payload`] to extract the payload directly (storage is trusted).
 ///
 /// # Wire Format
 ///
 /// This type should NEVER be sent over the wire directly. Always transmit
-/// [`Signed<T>`](super::signed::Signed) and have the recipient verify.
-///
-/// [`Putter`]: crate::storage::putter::Putter
+/// [`Signed<T>`] and have the recipient verify.
 #[derive(Clone, Debug)]
-pub struct Verified<T: for<'a> minicbor::Decode<'a, ()>> {
-    pub(super) signed: Signed<T>,
-    pub(super) payload: T,
+pub struct VerifiedSignature<T: for<'a> minicbor::Decode<'a, ()>> {
+    signed: Signed<T>,
+    payload: T,
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()>> Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()>> VerifiedSignature<T> {
+    /// Create a new `VerifiedSignature`.
+    ///
+    /// This is `pub(crate)` because it should only be constructed by
+    /// `Signed::try_verify` or `seal()`.
+    pub(crate) const fn new(signed: Signed<T>, payload: T) -> Self {
+        Self { signed, payload }
+    }
+
     /// Returns the verifying key of the issuer who signed this payload.
     #[must_use]
     pub const fn issuer(&self) -> ed25519_dalek::VerifyingKey {
@@ -52,7 +55,7 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Verified<T> {
         &self.payload
     }
 
-    /// Consumes the `Verified` and returns the payload.
+    /// Consumes the `VerifiedSignature` and returns the payload.
     #[must_use]
     pub fn into_payload(self) -> T {
         self.payload
@@ -66,30 +69,38 @@ impl<T: for<'a> minicbor::Decode<'a, ()>> Verified<T> {
         &self.signed
     }
 
-    /// Consumes the `Verified` and returns the original signed value.
+    /// Consumes the `VerifiedSignature` and returns the original signed value.
     #[must_use]
     pub fn into_signed(self) -> Signed<T> {
         self.signed
     }
+
+    /// Consumes the `VerifiedSignature` and returns both the signed value and payload.
+    #[must_use]
+    pub fn into_parts(self) -> (Signed<T>, T) {
+        (self.signed, self.payload)
+    }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()> + PartialEq> PartialEq for Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()> + PartialEq> PartialEq for VerifiedSignature<T> {
     fn eq(&self, other: &Self) -> bool {
         // Compare by signed value (includes issuer, signature, encoded payload)
         self.signed == other.signed
     }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()> + Eq> Eq for Verified<T> {}
+impl<T: for<'a> minicbor::Decode<'a, ()> + Eq> Eq for VerifiedSignature<T> {}
 
-impl<T: for<'a> minicbor::Decode<'a, ()> + core::hash::Hash> core::hash::Hash for Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()> + core::hash::Hash> core::hash::Hash
+    for VerifiedSignature<T>
+{
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.signed.issuer().as_bytes().hash(state);
         self.signed.encoded_payload().as_slice().hash(state);
     }
 }
 
-impl<T: for<'a> minicbor::Decode<'a, ()> + PartialOrd> PartialOrd for Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()> + PartialOrd> PartialOrd for VerifiedSignature<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.payload.partial_cmp(&other.payload) {
             Some(Ordering::Equal) => self
@@ -103,7 +114,7 @@ impl<T: for<'a> minicbor::Decode<'a, ()> + PartialOrd> PartialOrd for Verified<T
 }
 
 #[allow(clippy::non_canonical_partial_ord_impl)]
-impl<T: for<'a> minicbor::Decode<'a, ()> + Ord> Ord for Verified<T> {
+impl<T: for<'a> minicbor::Decode<'a, ()> + Ord> Ord for VerifiedSignature<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.payload.cmp(&other.payload) {
             Ordering::Equal => self

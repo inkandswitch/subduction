@@ -7,7 +7,7 @@
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
 use js_sys::Uint8Array;
-use subduction_core::crypto::signer::Signer;
+use subduction_crypto::signer::Signer;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 

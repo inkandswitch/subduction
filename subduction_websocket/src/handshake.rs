@@ -146,9 +146,9 @@ mod tests {
         connection::handshake::{
             Audience, Challenge, HandshakeMessage, Rejection, RejectionReason,
         },
-        crypto::{nonce::Nonce, signed::Signed, signer::MemorySigner},
         timestamp::TimestampSeconds,
     };
+    use subduction_crypto::{nonce::Nonce, signed::Signed, signer::memory::MemorySigner};
 
     fn test_signer(seed: u8) -> MemorySigner {
         MemorySigner::from_bytes(&[seed; 32])

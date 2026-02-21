@@ -44,8 +44,9 @@
 //!
 //! [`Subduction`]: crate::subduction::Subduction
 //! [`Destroyer`]: destroyer::Destroyer
-//! [`Signed`]: crate::crypto::signed::Signed
+//! [`Signed`]: subduction_crypto::signed::Signed
 
+pub mod batch_result;
 pub mod blob_access;
 pub mod destroyer;
 pub mod fetcher;

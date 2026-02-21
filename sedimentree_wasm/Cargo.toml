@@ -27,6 +27,7 @@ js-sys = { workspace = true }
 minicbor = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
+subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -67,6 +68,7 @@ std = [
   "minicbor/std",
   "sedimentree_core/std",
   "subduction_core/std",
+  "subduction_crypto/std",
   "thiserror/std",
   "wasm-bindgen/std",
   "wasm-bindgen-futures/std"

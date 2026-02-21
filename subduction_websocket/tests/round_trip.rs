@@ -7,10 +7,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
-    id::SedimentreeId,
+    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 use subduction_core::{
@@ -18,12 +15,13 @@ use subduction_core::{
         Connection, authenticated::Authenticated, handshake::Audience, message::Message,
         nonce_cache::NonceCache,
     },
-    crypto::signer::MemorySigner,
+    peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };
@@ -48,7 +46,7 @@ async fn rend_receive() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let memory_storage = MemoryStorage::default();
@@ -127,7 +125,7 @@ async fn batch_sync() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
 
@@ -149,29 +147,9 @@ async fn batch_sync() -> TestResult {
     let blob2 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes2))?;
     let blob3 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes3))?;
 
-    let commit_digest1: Digest<LooseCommit> =
-        Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
-    let commit1 = LooseCommit::new(
-        commit_digest1,
-        BTreeSet::new(),
-        BlobMeta::new(blob1.as_slice()),
-    );
-
-    let commit_digest2: Digest<LooseCommit> =
-        Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
-    let commit2 = LooseCommit::new(
-        commit_digest2,
-        BTreeSet::new(),
-        BlobMeta::new(blob2.as_slice()),
-    );
-
-    let commit_digest3: Digest<LooseCommit> =
-        Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
-    let commit3 = LooseCommit::new(
-        commit_digest3,
-        BTreeSet::new(),
-        BlobMeta::new(blob3.as_slice()),
-    );
+    let digest1: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
+    let digest2: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
+    let digest3: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
 
     ///////////////////
     // SERVER SETUP //
@@ -202,7 +180,7 @@ async fn batch_sync() -> TestResult {
     });
 
     server_subduction
-        .add_commit(sed_id, &commit1, blob1)
+        .add_commit(sed_id, digest1, BTreeSet::new(), blob1)
         .await?;
 
     let inserted = server_subduction
@@ -274,8 +252,12 @@ async fn batch_sync() -> TestResult {
         .await?;
     assert_eq!(client.connected_peer_ids().await.len(), 1);
 
-    client.add_commit(sed_id, &commit2, blob2).await?;
-    client.add_commit(sed_id, &commit3, blob3).await?;
+    client
+        .add_commit(sed_id, digest2, BTreeSet::new(), blob2)
+        .await?;
+    client
+        .add_commit(sed_id, digest3, BTreeSet::new(), blob3)
+        .await?;
 
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
@@ -302,9 +284,9 @@ async fn batch_sync() -> TestResult {
         .ok_or("sedimentree exists")?;
 
     assert_eq!(server_updated.len(), 3);
-    assert!(server_updated.contains(&commit1));
-    assert!(server_updated.contains(&commit2));
-    assert!(server_updated.contains(&commit3));
+    assert!(server_updated.iter().any(|c| c.digest() == digest1));
+    assert!(server_updated.iter().any(|c| c.digest() == digest2));
+    assert!(server_updated.iter().any(|c| c.digest() == digest3));
 
     let client_updated = client
         .get_commits(sed_id)
@@ -312,9 +294,9 @@ async fn batch_sync() -> TestResult {
         .ok_or("sedimentree exists")?;
 
     assert_eq!(client_updated.len(), 3);
-    assert!(client_updated.contains(&commit1));
-    assert!(client_updated.contains(&commit2));
-    assert!(client_updated.contains(&commit3));
+    assert!(client_updated.iter().any(|c| c.digest() == digest1));
+    assert!(client_updated.iter().any(|c| c.digest() == digest2));
+    assert!(client_updated.iter().any(|c| c.digest() == digest3));
 
     Ok(())
 }

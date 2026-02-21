@@ -7,6 +7,7 @@ use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
 use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
+use subduction_crypto::verified_meta::BlobMismatch;
 
 /// The peer is not authorized to perform the requested operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Error)]
@@ -55,6 +56,10 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     /// An error occurred during a roundtrip call on the connection.
     #[error(transparent)]
     ConnCall(C::CallError),
+
+    /// The blob content doesn't match the claimed metadata.
+    #[error(transparent)]
+    BlobMismatch(#[from] BlobMismatch),
 }
 
 /// An error that can occur while handling a blob request.

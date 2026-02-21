@@ -21,7 +21,6 @@ use subduction_core::{
         handshake::{self, Audience, AuthenticateError, DiscoveryId},
         nonce_cache::NonceCache,
     },
-    crypto::{nonce::Nonce, signer::Signer},
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -32,6 +31,7 @@ use subduction_core::{
     },
     timestamp::TimestampSeconds,
 };
+use subduction_crypto::{nonce::Nonce, signer::Signer};
 
 use crate::tokio::TokioSpawn;
 use tokio::{

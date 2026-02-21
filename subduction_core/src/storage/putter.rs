@@ -11,7 +11,9 @@ use sedimentree_core::{
 };
 
 use super::{fetcher::Fetcher, traits::Storage};
-use crate::crypto::{signed::Signed, verified::Verified};
+use subduction_crypto::{
+    signed::Signed, verified_meta::VerifiedMeta, verified_signature::VerifiedSignature,
+};
 
 /// A capability granting put access to a specific sedimentree's data.
 ///
@@ -56,14 +58,39 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
 
     // ==================== Commits ====================
 
-    /// Save a verified loose commit, returning its digest.
+    /// Save a commit with verified blob metadata.
     ///
-    /// Takes [`Verified<LooseCommit>`] to enforce that only verified data is stored.
-    /// The underlying [`Signed`] is extracted and persisted.
+    /// Takes [`VerifiedMeta<LooseCommit>`] to enforce at compile time that:
+    /// 1. The signature has been verified
+    /// 2. The blob content matches the claimed metadata
+    ///
+    /// Blob is saved first, then the commit metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails.
+    pub async fn save_commit(
+        &self,
+        verified_meta: VerifiedMeta<LooseCommit>,
+    ) -> Result<Digest<LooseCommit>, S::Error> {
+        let (verified_sig, blob) = verified_meta.into_parts();
+        self.storage.save_blob(self.sedimentree_id, blob).await?;
+        self.storage
+            .save_loose_commit(self.sedimentree_id, verified_sig.into_signed())
+            .await
+    }
+
+    /// Save a verified loose commit (signature only), returning its digest.
+    ///
+    /// This is a lower-level method that only verifies the signature, not the blob.
+    /// Prefer [`save_commit`](Self::save_commit) which takes `VerifiedMeta` and
+    /// enforces blob verification at compile time.
+    ///
+    /// Use this only when you've already saved the blob separately.
     #[must_use]
     pub fn save_loose_commit(
         &self,
-        verified: Verified<LooseCommit>,
+        verified: VerifiedSignature<LooseCommit>,
     ) -> K::Future<'_, Result<Digest<LooseCommit>, S::Error>> {
         self.storage
             .save_loose_commit(self.sedimentree_id, verified.into_signed())
@@ -97,14 +124,39 @@ impl<K: FutureForm, S: Storage<K>> Putter<K, S> {
 
     // ==================== Fragments ====================
 
-    /// Save a verified fragment, returning its digest.
+    /// Save a fragment with verified blob metadata.
     ///
-    /// Takes [`Verified<Fragment>`] to enforce that only verified data is stored.
-    /// The underlying [`Signed`] is extracted and persisted.
+    /// Takes [`VerifiedMeta<Fragment>`] to enforce at compile time that:
+    /// 1. The signature has been verified
+    /// 2. The blob content matches the claimed metadata
+    ///
+    /// Blob is saved first, then the fragment metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if storage fails.
+    pub async fn save_fragment_with_blob(
+        &self,
+        verified_meta: VerifiedMeta<Fragment>,
+    ) -> Result<Digest<Fragment>, S::Error> {
+        let (verified_sig, blob) = verified_meta.into_parts();
+        self.storage.save_blob(self.sedimentree_id, blob).await?;
+        self.storage
+            .save_fragment(self.sedimentree_id, verified_sig.into_signed())
+            .await
+    }
+
+    /// Save a verified fragment (signature only), returning its digest.
+    ///
+    /// This is a lower-level method that only verifies the signature, not the blob.
+    /// Prefer [`save_fragment_with_blob`](Self::save_fragment_with_blob) which takes
+    /// `VerifiedMeta` and enforces blob verification at compile time.
+    ///
+    /// Use this only when you've already saved the blob separately.
     #[must_use]
     pub fn save_fragment(
         &self,
-        verified: Verified<Fragment>,
+        verified: VerifiedSignature<Fragment>,
     ) -> K::Future<'_, Result<Digest<Fragment>, S::Error>> {
         self.storage
             .save_fragment(self.sedimentree_id, verified.into_signed())

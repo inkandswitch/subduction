@@ -1,6 +1,7 @@
 //! Tests for the Subduction module.
 
 mod bidirectional_sync;
+mod blob_mismatch;
 mod blob_operations;
 mod common;
 mod connection_cleanup;

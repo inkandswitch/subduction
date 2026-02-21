@@ -26,6 +26,7 @@ nonempty = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }
 serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
+subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -44,10 +45,10 @@ harness = false
 
 [features]
 default = []
-arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
-bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero"]
+arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary", "subduction_crypto/arbitrary"]
+bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero", "subduction_crypto/bolero"]
 metrics = ["dep:metrics", "std"]
-serde = ["dep:serde", "ed25519-dalek/serde"]
+serde = ["dep:serde", "ed25519-dalek/serde", "subduction_crypto/serde"]
 serde-std = ["serde/std"]
 std = [
   "async-channel/std",
@@ -56,6 +57,7 @@ std = [
   "futures/std",
   "nonempty/std",
   "sedimentree_core/std",
+  "subduction_crypto/std",
   "thiserror/std"
 ]
 test_utils = ["std"]

@@ -11,7 +11,8 @@ use sedimentree_core::{
     sedimentree::FingerprintSummary,
 };
 
-use crate::{crypto::signed::Signed, peer::id::PeerId};
+use crate::peer::id::PeerId;
+use subduction_crypto::signed::Signed;
 
 /// The API contact messages to be sent over a [`Connection`].
 #[derive(Debug, Clone, PartialEq, Eq, minicbor::Encode, minicbor::Decode)]
@@ -336,8 +337,8 @@ mod tests {
 
     mod message_request_id {
         use super::*;
-        use crate::crypto::{signed::Signed, signer::MemorySigner};
         use future_form::Sendable;
+        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
         fn test_signer() -> MemorySigner {
             MemorySigner::from_bytes(&[42u8; 32])
@@ -436,8 +437,8 @@ mod tests {
 
     mod sync_diff {
         use super::*;
-        use crate::crypto::{signed::Signed, signer::MemorySigner};
         use future_form::Sendable;
+        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
 
         fn test_signer() -> MemorySigner {
             MemorySigner::from_bytes(&[42u8; 32])

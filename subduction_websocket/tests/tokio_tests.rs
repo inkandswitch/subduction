@@ -4,10 +4,7 @@ use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
-    id::SedimentreeId,
+    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
@@ -16,12 +13,13 @@ use subduction_core::{
         Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
         nonce_cache::NonceCache,
     },
-    crypto::signer::MemorySigner,
+    peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
+use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::tokio::{
     TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
 };
@@ -57,11 +55,10 @@ fn random_digest() -> Digest<LooseCommit> {
     Digest::arbitrary(&mut Unstructured::new(&bytes)).expect("arbitrary digest")
 }
 
-fn random_commit() -> (LooseCommit, Blob) {
+fn random_commit() -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, Blob) {
     let blob = random_blob();
     let digest = random_digest();
-    let commit = LooseCommit::new(digest, BTreeSet::new(), BlobMeta::new(blob.as_slice()));
-    (commit, blob)
+    (digest, BTreeSet::new(), blob)
 }
 
 #[tokio::test]
@@ -70,7 +67,7 @@ async fn client_reconnect() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -154,7 +151,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -242,7 +239,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     init_tracing();
 
     let server_signer = test_signer(0);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -271,9 +268,9 @@ async fn multiple_concurrent_clients() -> TestResult {
     });
 
     // Add initial commit to server
-    let (commit1, blob1) = random_commit();
+    let (digest1, parents1, blob1) = random_commit();
     server_subduction
-        .add_commit(sed_id, &commit1, blob1)
+        .add_commit(sed_id, digest1, parents1, blob1)
         .await?;
 
     let server = TokioWebSocketServer::new(
@@ -367,8 +364,8 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Now each client adds its own commit (after subscribing)
     for client in &clients {
-        let (commit, blob) = random_commit();
-        client.add_commit(sed_id, &commit, blob).await?;
+        let (digest, parents, blob) = random_commit();
+        client.add_commit(sed_id, digest, parents, blob).await?;
     }
 
     // Give time for commits to propagate
@@ -417,7 +414,7 @@ async fn request_with_delayed_response() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -446,8 +443,10 @@ async fn request_with_delayed_response() -> TestResult {
     });
 
     // Add a commit so there's something to sync
-    let (commit, blob) = random_commit();
-    server_subduction.add_commit(sed_id, &commit, blob).await?;
+    let (digest, parents, blob) = random_commit();
+    server_subduction
+        .add_commit(sed_id, digest, parents, blob)
+        .await?;
 
     let server = TokioWebSocketServer::new(
         addr,
@@ -530,7 +529,7 @@ async fn connection_to_invalid_address() -> TestResult {
     init_tracing();
 
     let client_signer = test_signer(1);
-    let fake_server_peer_id = test_signer(0).peer_id();
+    let fake_server_peer_id = PeerId::from(test_signer(0).verifying_key());
 
     // Try to connect to an address that's not listening
     let uri = "ws://127.0.0.1:9".parse()?; // Port 9 is discard protocol, unlikely to have WS server
@@ -556,7 +555,7 @@ async fn large_message_handling() -> TestResult {
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -653,14 +652,11 @@ async fn large_message_handling() -> TestResult {
     let large_data = vec![42u8; 1024 * 1024];
     let large_blob = Blob::new(large_data);
     let digest = random_digest();
-    let commit = LooseCommit::new(
-        digest,
-        BTreeSet::new(),
-        BlobMeta::new(large_blob.as_slice()),
-    );
 
     // Add large commit
-    client.add_commit(sed_id, &commit, large_blob).await?;
+    client
+        .add_commit(sed_id, digest, BTreeSet::new(), large_blob)
+        .await?;
 
     // Sync with server
     client.full_sync(Some(Duration::from_secs(5))).await;
@@ -673,18 +669,19 @@ async fn large_message_handling() -> TestResult {
         .await
         .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 1);
-    assert!(server_commits.contains(&commit));
+    assert!(server_commits.iter().any(|c| c.digest() == digest));
 
     Ok(())
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn message_ordering() -> TestResult {
     init_tracing();
 
     let server_signer = test_signer(0);
     let client_signer = test_signer(1);
-    let server_peer_id = server_signer.peer_id();
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
 
     let addr: SocketAddr = "127.0.0.1:0".parse()?;
     let server_storage = MemoryStorage::default();
@@ -778,11 +775,11 @@ async fn message_ordering() -> TestResult {
     });
 
     // Add multiple commits in order
-    let mut commits = Vec::new();
+    let mut digests = Vec::new();
     for _ in 0..5 {
-        let (commit, blob) = random_commit();
-        client.add_commit(sed_id, &commit, blob).await?;
-        commits.push(commit);
+        let (digest, parents, blob) = random_commit();
+        client.add_commit(sed_id, digest, parents, blob).await?;
+        digests.push(digest);
     }
 
     // Sync all at once
@@ -797,8 +794,11 @@ async fn message_ordering() -> TestResult {
         .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 5);
 
-    for commit in &commits {
-        assert!(server_commits.contains(commit), "Server should have commit");
+    for digest in &digests {
+        assert!(
+            server_commits.iter().any(|c| c.digest() == *digest),
+            "Server should have commit with digest {digest:?}"
+        );
     }
 
     Ok(())
@@ -810,7 +810,7 @@ async fn server_try_connect_known_peer() -> TestResult {
 
     let server1_signer = test_signer(0);
     let server2_signer = test_signer(1);
-    let server2_peer_id = server2_signer.peer_id();
+    let server2_peer_id = PeerId::from(server2_signer.verifying_key());
 
     let addr1: SocketAddr = "127.0.0.1:0".parse()?;
     let server1 = TokioWebSocketServer::setup(
@@ -863,7 +863,7 @@ async fn server_try_connect_discover() -> TestResult {
 
     let server1_signer = test_signer(0);
     let server2_signer = test_signer(1);
-    let server2_peer_id = server2_signer.peer_id();
+    let server2_peer_id = PeerId::from(server2_signer.verifying_key());
 
     let service_name = "test.subduction.local";
 
