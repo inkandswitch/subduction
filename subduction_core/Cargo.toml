@@ -45,8 +45,8 @@ harness = false
 
 [features]
 default = []
-arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary"]
-bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero"]
+arbitrary = ["dep:arbitrary", "sedimentree_core/arbitrary", "subduction_crypto/arbitrary"]
+bolero = ["dep:bolero", "arbitrary", "sedimentree_core/bolero", "subduction_crypto/bolero"]
 metrics = ["dep:metrics", "std"]
 serde = ["dep:serde", "ed25519-dalek/serde", "subduction_crypto/serde"]
 serde-std = ["serde/std"]

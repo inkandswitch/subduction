@@ -1,7 +1,7 @@
 //! A payload whose signature is valid AND whose blob matches the claimed metadata.
 
 use future_form::FutureForm;
-use sedimentree_core::blob::{has_meta::HasBlobMeta, verified::VerifiedBlobMeta, Blob, BlobMeta};
+use sedimentree_core::blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta};
 use thiserror::Error;
 
 use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};

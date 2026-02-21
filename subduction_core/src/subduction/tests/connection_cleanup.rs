@@ -41,6 +41,7 @@ async fn make_signed_test_commit() -> (Signed<LooseCommit>, Blob) {
     (verified.into_signed(), blob)
 }
 
+#[allow(clippy::type_complexity)]
 fn make_fragment_parts() -> (
     Digest<LooseCommit>,
     BTreeSet<Digest<LooseCommit>>,
