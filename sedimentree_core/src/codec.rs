@@ -9,7 +9,6 @@
 //! - [`Schema`] — Type identity (4-byte header)
 //! - [`Encode`] — Serialize to bytes
 //! - [`Decode`] — Deserialize from bytes
-//! - [`Codec`] — Convenience alias for `Encode + Decode`
 //!
 //! # Format Overview
 //!
@@ -41,7 +40,6 @@
 //! | `ST` | `sedimentree_core` | `LooseCommit`, `Fragment` |
 //! | `SU` | `subduction_core` | `Challenge`, `Response`, `Message` |
 
-mod codec;
 mod dec;
 mod enc;
 mod schema;
@@ -50,7 +48,6 @@ pub mod decode;
 pub mod encode;
 pub mod error;
 
-pub use codec::Codec;
 pub use dec::Decode;
 pub use enc::Encode;
 pub use schema::Schema;

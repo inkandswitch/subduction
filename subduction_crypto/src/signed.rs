@@ -17,14 +17,14 @@
 //!
 //! - **Schema**: 4-byte header identifying type and version
 //! - **IssuerVK**: Ed25519 verifying key of the signer (32 bytes)
-//! - **Fields**: Type-specific data encoded by the [`Codec`] implementation
+//! - **Fields**: Type-specific data encoded by the [`Encode`] implementation
 //! - **Signature**: Ed25519 signature over bytes `[0..len-64]`
 
 use alloc::vec::Vec;
 use core::{cmp::Ordering, marker::PhantomData};
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use sedimentree_core::codec::{Codec, error::CodecError};
+use sedimentree_core::codec::{Decode, Encode, error::CodecError};
 use thiserror::Error;
 
 use crate::verified_signature::VerifiedSignature;
@@ -71,7 +71,7 @@ pub const MIN_SIGNED_SIZE: usize = SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_
 /// ```
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Signed<T: Codec> {
+pub struct Signed<T: Encode + Decode> {
     /// Cached issuer verifying key (also at bytes[4..36]).
     issuer: VerifyingKey,
 
@@ -84,7 +84,7 @@ pub struct Signed<T: Codec> {
     _marker: PhantomData<T>,
 }
 
-impl<T: Codec> Clone for Signed<T> {
+impl<T: Encode + Decode> Clone for Signed<T> {
     fn clone(&self) -> Self {
         Self {
             issuer: self.issuer,
@@ -95,7 +95,7 @@ impl<T: Codec> Clone for Signed<T> {
     }
 }
 
-impl<T: Codec> Signed<T> {
+impl<T: Encode + Decode> Signed<T> {
     /// Get the issuer's verifying key.
     #[must_use]
     pub const fn issuer(&self) -> VerifyingKey {
@@ -302,27 +302,27 @@ impl<T: Codec> Signed<T> {
     }
 }
 
-impl<T: Codec> PartialEq for Signed<T> {
+impl<T: Encode + Decode> PartialEq for Signed<T> {
     fn eq(&self, other: &Self) -> bool {
         self.bytes == other.bytes
     }
 }
 
-impl<T: Codec> Eq for Signed<T> {}
+impl<T: Encode + Decode> Eq for Signed<T> {}
 
-impl<T: Codec> core::hash::Hash for Signed<T> {
+impl<T: Encode + Decode> core::hash::Hash for Signed<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.bytes.hash(state);
     }
 }
 
-impl<T: Codec> PartialOrd for Signed<T> {
+impl<T: Encode + Decode> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: Codec> Ord for Signed<T> {
+impl<T: Encode + Decode> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.bytes.cmp(&other.bytes)
     }
@@ -341,7 +341,7 @@ pub enum VerificationError {
 }
 
 #[cfg(feature = "arbitrary")]
-impl<'a, T: Codec + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Signed<T>
+impl<'a, T: Encode + Decode + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Signed<T>
 where
     T::Context: arbitrary::Arbitrary<'a>,
 {

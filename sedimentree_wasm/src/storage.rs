@@ -14,6 +14,7 @@ use futures::future::LocalBoxFuture;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
+    codec::{Decode, Encode},
     crypto::digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
@@ -239,7 +240,7 @@ fn fragment_blob_digest(
 
 /// Parse a JS array of {digest, signed} objects into Rust tuples.
 #[allow(clippy::type_complexity)]
-fn parse_digest_signed_array<T: sedimentree_core::codec::Codec>(
+fn parse_digest_signed_array<T: Encode + Decode>(
     js_value: &JsValue,
 ) -> Result<Vec<(Digest<T>, Signed<T>)>, JsSedimentreeStorageError> {
     let array = js_sys::Array::from(js_value);

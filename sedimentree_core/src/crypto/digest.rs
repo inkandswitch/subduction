@@ -2,7 +2,10 @@
 
 use core::marker::PhantomData;
 
-use crate::hex::decode_hex;
+use crate::{
+    codec::{Decode, Encode},
+    hex::decode_hex,
+};
 
 /// A 32-byte digest with phantom type tracking what was digested.
 ///
@@ -61,10 +64,10 @@ impl<T> Digest<T> {
     }
 }
 
-impl<T: crate::codec::Codec<Context = ()>> Digest<T> {
+impl<T: Encode + Decode<Context = ()>> Digest<T> {
     /// Encode and hash a value to create a digest.
     ///
-    /// The value is encoded using its [`Codec`](crate::codec::Codec) implementation
+    /// The value is encoded using its [`Encode`] implementation
     /// and then hashed with BLAKE3.
     #[must_use]
     pub fn hash(value: &T) -> Self {
