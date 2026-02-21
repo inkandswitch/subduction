@@ -9,15 +9,15 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
-    codec::{Codec, decode, encode, error::CodecError},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
+    codec::{decode, encode, error::CodecError, Decode, Encode, Schema},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -317,12 +317,12 @@ const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
 /// Checkpoint truncation size in bytes.
 const CHECKPOINT_BYTES: usize = 12;
 
-impl Codec for Fragment {
+impl Schema for Fragment {
     type Context = SedimentreeId;
-
     const SCHEMA: [u8; 4] = *b"STF\x00";
-    const MIN_SIZE: usize = CODEC_MIN_SIZE;
+}
 
+impl Encode for Fragment {
     fn encode_fields(&self, ctx: &Self::Context, buf: &mut Vec<u8>) {
         encode::array(ctx.as_bytes(), buf);
         encode::array(self.head().as_bytes(), buf);
@@ -345,6 +345,16 @@ impl Codec for Fragment {
             encode::array(checkpoint.as_bytes(), buf);
         }
     }
+
+    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+        CODEC_FIXED_FIELDS_SIZE
+            + (self.boundary().len() * 32)
+            + (self.checkpoints().len() * CHECKPOINT_BYTES)
+    }
+}
+
+impl Decode for Fragment {
+    const MIN_SIZE: usize = CODEC_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
@@ -424,12 +434,6 @@ impl Codec for Fragment {
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
         Ok(Fragment::from_parts(head, boundary, checkpoints, blob_meta))
-    }
-
-    fn fields_size(&self, _ctx: &Self::Context) -> usize {
-        CODEC_FIXED_FIELDS_SIZE
-            + (self.boundary().len() * 32)
-            + (self.checkpoints().len() * CHECKPOINT_BYTES)
     }
 }
 

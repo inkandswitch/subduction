@@ -7,8 +7,8 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use id::CommitId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
-    codec::{Codec, decode, encode, error::CodecError},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
+    codec::{decode, encode, error::CodecError, Decode, Encode, Schema},
     crypto::digest::Digest,
     id::SedimentreeId,
 };
@@ -174,12 +174,12 @@ const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 4;
 /// Minimum signed message size: Schema(4) + IssuerVK(32) + Fields(101) + Signature(64).
 const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
 
-impl Codec for LooseCommit {
+impl Schema for LooseCommit {
     type Context = SedimentreeId;
-
     const SCHEMA: [u8; 4] = *b"STC\x00";
-    const MIN_SIZE: usize = CODEC_MIN_SIZE;
+}
 
+impl Encode for LooseCommit {
     fn encode_fields(&self, ctx: &Self::Context, buf: &mut Vec<u8>) {
         encode::array(ctx.as_bytes(), buf);
         encode::array(self.digest().as_bytes(), buf);
@@ -195,6 +195,14 @@ impl Codec for LooseCommit {
             encode::array(parent.as_bytes(), buf);
         }
     }
+
+    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+        CODEC_FIXED_FIELDS_SIZE + (self.parents().len() * 32)
+    }
+}
+
+impl Decode for LooseCommit {
+    const MIN_SIZE: usize = CODEC_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
@@ -252,10 +260,6 @@ impl Codec for LooseCommit {
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
         Ok(LooseCommit::new(digest, parents, blob_meta))
-    }
-
-    fn fields_size(&self, _ctx: &Self::Context) -> usize {
-        CODEC_FIXED_FIELDS_SIZE + (self.parents().len() * 32)
     }
 }
 

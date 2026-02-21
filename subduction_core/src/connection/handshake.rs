@@ -65,7 +65,7 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::crypto::digest::Digest;
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
@@ -265,7 +265,7 @@ impl Response {
 // Codec implementations for Challenge and Response
 // ============================================================================
 
-use sedimentree_core::codec::{Codec, decode, encode, error::CodecError};
+use sedimentree_core::codec::{decode, encode, error::CodecError, Decode, Encode, Schema};
 
 /// Schema header for `Signed<Challenge>`.
 pub const CHALLENGE_SCHEMA: [u8; 4] = *b"SUH\x00";
@@ -276,12 +276,12 @@ const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
 /// Minimum size of a signed Challenge message.
 pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 157 bytes
 
-impl Codec for Challenge {
+impl Schema for Challenge {
     type Context = ();
-
     const SCHEMA: [u8; 4] = CHALLENGE_SCHEMA;
-    const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
+}
 
+impl Encode for Challenge {
     fn encode_fields(&self, _ctx: &Self::Context, buf: &mut Vec<u8>) {
         // AudienceTag (1 byte)
         match &self.audience {
@@ -301,6 +301,14 @@ impl Codec for Challenge {
         // Nonce (16 bytes)
         encode::array(self.nonce.as_bytes(), buf);
     }
+
+    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+        CHALLENGE_FIELDS_SIZE
+    }
+}
+
+impl Decode for Challenge {
+    const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, CodecError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
@@ -341,10 +349,6 @@ impl Codec for Challenge {
             nonce,
         })
     }
-
-    fn fields_size(&self, _ctx: &Self::Context) -> usize {
-        CHALLENGE_FIELDS_SIZE
-    }
 }
 
 /// Schema header for `Signed<Response>`.
@@ -356,12 +360,12 @@ const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
 /// Minimum size of a signed Response message.
 pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 bytes
 
-impl Codec for Response {
+impl Schema for Response {
     type Context = ();
-
     const SCHEMA: [u8; 4] = RESPONSE_SCHEMA;
-    const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
+}
 
+impl Encode for Response {
     fn encode_fields(&self, _ctx: &Self::Context, buf: &mut Vec<u8>) {
         // ChallengeDigest (32 bytes)
         encode::array(self.challenge_digest.as_bytes(), buf);
@@ -369,6 +373,14 @@ impl Codec for Response {
         // ServerTimestamp (8 bytes, big-endian)
         encode::u64(self.server_timestamp.as_secs(), buf);
     }
+
+    fn fields_size(&self, _ctx: &Self::Context) -> usize {
+        RESPONSE_FIELDS_SIZE
+    }
+}
+
+impl Decode for Response {
+    const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8], _ctx: &Self::Context) -> Result<Self, CodecError> {
         if buf.len() < RESPONSE_FIELDS_SIZE {
@@ -390,10 +402,6 @@ impl Codec for Response {
             challenge_digest,
             server_timestamp,
         })
-    }
-
-    fn fields_size(&self, _ctx: &Self::Context) -> usize {
-        RESPONSE_FIELDS_SIZE
     }
 }
 
