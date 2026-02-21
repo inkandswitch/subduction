@@ -6,7 +6,7 @@ use alloc::collections::BTreeSet;
 use id::CommitId;
 
 use crate::{
-    blob::{has_meta::HasBlobMeta, BlobMeta},
+    blob::{BlobMeta, has_meta::HasBlobMeta},
     crypto::digest::Digest,
 };
 

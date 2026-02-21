@@ -1,6 +1,6 @@
 //! A blob bundled with its metadata, guaranteeing they match by construction.
 
-use super::{has_meta::HasBlobMeta, Blob, BlobMeta};
+use super::{Blob, BlobMeta, has_meta::HasBlobMeta};
 
 /// A blob bundled with metadata, guaranteeing they match by construction.
 ///
