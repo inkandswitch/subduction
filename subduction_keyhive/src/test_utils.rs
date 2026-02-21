@@ -39,16 +39,6 @@ pub(crate) struct ChannelConnection {
     pub(crate) inbound_rx: Receiver<SignedMessage>,
 }
 
-/// Channel is closed, cannot send.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("channel closed: cannot send")]
-pub(crate) struct ChannelSendError;
-
-/// Channel is closed, cannot receive.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
-#[error("channel closed: cannot receive")]
-pub(crate) struct ChannelRecvError;
-
 impl ChannelConnection {
     /// Create a new channel connection with the given channels.
     pub(crate) const fn new(
@@ -63,6 +53,16 @@ impl ChannelConnection {
         }
     }
 }
+
+/// Channel is closed, cannot send.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("channel closed: cannot send")]
+pub(crate) struct ChannelSendError;
+
+/// Channel is closed, cannot receive.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("channel closed: cannot receive")]
+pub(crate) struct ChannelRecvError;
 
 /// Create a pair of connected channel connections.
 ///

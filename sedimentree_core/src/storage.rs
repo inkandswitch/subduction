@@ -1,6 +1,6 @@
 //! Storage abstraction for `Sedimentree` data.
 
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 
 use crate::collections::{Map, Set};
 
@@ -146,18 +146,6 @@ pub trait Storage<K: FutureForm + ?Sized> {
 pub struct BatchResult {
     /// Digests of saved blobs (commits first, then fragments).
     pub blob_digests: Vec<Digest<Blob>>,
-}
-
-/// Errors that can occur when loading tree data (commits or fragments)
-#[derive(Debug, thiserror::Error)]
-pub enum LoadTreeData {
-    /// An error occurred in the storage subsystem itself.
-    #[error("error from storage: {0}")]
-    Storage(String),
-
-    /// A blob is missing.
-    #[error("missing blob: {0}")]
-    MissingBlob(Digest<Blob>),
 }
 
 /// An in-memory storage backend.
