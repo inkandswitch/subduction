@@ -4,7 +4,7 @@ use alloc::{sync::Arc, vec, vec::Vec};
 
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
-use futures::{future::LocalBoxFuture, FutureExt};
+use futures::{FutureExt, future::LocalBoxFuture};
 use futures_kind::Local;
 use keyhive_core::{
     access::Access,
