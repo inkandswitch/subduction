@@ -14,7 +14,7 @@
 //! - **Tag**: Variant discriminant (u8)
 //! - **Payload**: Variant-specific data
 
-use alloc::vec::Vec;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use sedimentree_core::{
     blob::Blob,
@@ -781,11 +781,11 @@ fn decode_batch_sync_request(payload: &[u8]) -> Result<Message, DecodeError> {
     let commit_count = read_u16(payload, &mut offset)? as usize;
     let fragment_count = read_u16(payload, &mut offset)? as usize;
 
-    let mut commit_fps = alloc::collections::BTreeSet::new();
+    let mut commit_fps = BTreeSet::new();
     for _ in 0..commit_count {
         commit_fps.insert(Fingerprint::from_u64(read_u64(payload, &mut offset)?));
     }
-    let mut fragment_fps = alloc::collections::BTreeSet::new();
+    let mut fragment_fps = BTreeSet::new();
     for _ in 0..fragment_count {
         fragment_fps.insert(Fingerprint::from_u64(read_u64(payload, &mut offset)?));
     }

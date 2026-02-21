@@ -1,4 +1,4 @@
-//! Type identity for signed payloads.
+//! Schema identity for payloads.
 
 /// Prefix for sedimentree types.
 pub const SEDIMENTREE_PREFIX: [u8; 2] = *b"ST";
@@ -6,7 +6,7 @@ pub const SEDIMENTREE_PREFIX: [u8; 2] = *b"ST";
 /// Prefix for subduction types.
 pub const SUBDUCTION_PREFIX: [u8; 2] = *b"SU";
 
-/// Type identity for signed payloads.
+/// Schema identity tag.
 ///
 /// This trait provides the schema header that identifies a type
 /// in the wire format. It's shared between encoding and decoding.
@@ -18,10 +18,10 @@ pub trait Schema {
     /// commit bytes cannot be replayed under a different document.
     type Binding;
 
-    /// 2-byte crate prefix (e.g., [`SEDIMENTREE_PREFIX`] or [`SUBDUCTION_PREFIX`]).
+    /// 2-byte protocol prefix (e.g., [`SEDIMENTREE_PREFIX`] or [`SUBDUCTION_PREFIX`]).
     const PREFIX: [u8; 2];
 
-    /// Type identifier byte within the crate namespace.
+    /// Type identifier byte within the protocol namespace.
     const TYPE_BYTE: u8;
 
     /// Schema version byte for forward compatibility.

@@ -776,7 +776,7 @@ pub enum WebSocketAuthenticatedConnectionError {
 
     /// WebSocket connection failed.
     #[error("connection failed: {0}")]
-    ConnectionFailed(alloc::string::String),
+    ConnectionFailed(String),
 
     /// Connection was canceled.
     #[error("connection canceled")]

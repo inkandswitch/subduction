@@ -1,6 +1,11 @@
 //! Test utilities for the keyhive protocol crate.
 
-use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
+use alloc::{
+    string::{String, ToString},
+    sync::Arc,
+    vec,
+    vec::Vec,
+};
 
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
@@ -41,7 +46,7 @@ pub(crate) struct ChannelConnection {
 
 /// Error type for channel connection operations.
 #[derive(Debug, Clone)]
-pub(crate) struct ChannelError(pub alloc::string::String);
+pub(crate) struct ChannelError(pub String);
 
 impl core::fmt::Display for ChannelError {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {

@@ -9,7 +9,7 @@
 //! * Archives: `["keyhive-db", "/archives/", <hex-hash>]`
 //! * Events: `["keyhive-db", "/ops/", <hex-hash>]`
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{string::String, sync::Arc, vec::Vec};
 
 use async_lock::Mutex;
 use futures::{
@@ -42,8 +42,7 @@ impl StorageHash {
 
     /// Convert to a hex string for display or storage key purposes.
     #[must_use]
-    pub fn to_hex(&self) -> alloc::string::String {
-        use alloc::string::String;
+    pub fn to_hex(&self) -> String {
         let mut s = String::with_capacity(64);
         for byte in &self.0 {
             use core::fmt::Write;
