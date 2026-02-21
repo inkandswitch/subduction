@@ -352,9 +352,6 @@ impl Decode for Challenge {
     }
 }
 
-/// Schema header for `Signed<Response>`.
-pub const RESPONSE_SCHEMA: [u8; 4] = *b"SUR\x00";
-
 /// Size of Response fields (after schema + issuer, before signature).
 const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
 
@@ -363,7 +360,9 @@ pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 
 
 impl Schema for Response {
     type Context = ();
-    const SCHEMA: [u8; 4] = RESPONSE_SCHEMA;
+    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+    const TYPE_BYTE: u8 = b'R'; // Response
+    const VERSION: u8 = 0;
 }
 
 impl Encode for Response {

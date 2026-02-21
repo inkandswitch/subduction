@@ -8,7 +8,9 @@ use id::CommitId;
 
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
-    codec::{decode, decode::Decode, encode, encode::Encode, error::CodecError, schema::Schema},
+    codec::{
+        decode, decode::Decode, encode, encode::Encode, error::CodecError, schema, schema::Schema,
+    },
     crypto::digest::Digest,
     id::SedimentreeId,
 };

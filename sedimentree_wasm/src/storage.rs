@@ -14,7 +14,7 @@ use futures::future::LocalBoxFuture;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
-    codec::{Decode, Encode},
+    codec::{decode::Decode, encode::Encode},
     crypto::digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},

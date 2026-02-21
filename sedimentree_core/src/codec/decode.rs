@@ -2,10 +2,6 @@
 
 use super::{error::CodecError, schema::Schema};
 
-// ============================================================================
-// Decode Trait
-// ============================================================================
-
 /// Decode a type from its canonical binary representation.
 ///
 /// Types implementing this trait can be parsed from received bytes.
@@ -27,10 +23,6 @@ pub trait Decode: Schema + Sized {
     /// contains invalid values, or fails validation (e.g., unsorted arrays).
     fn try_decode_fields(buf: &[u8], ctx: &Self::Context) -> Result<Self, CodecError>;
 }
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
 
 /// Decode a u8.
 #[inline]

@@ -4,10 +4,6 @@ use alloc::vec::Vec;
 
 use super::schema::Schema;
 
-// ============================================================================
-// Encode Trait
-// ============================================================================
-
 /// Encode a type to its canonical binary representation.
 ///
 /// Types implementing this trait can be signed and transmitted.
@@ -29,10 +25,6 @@ pub trait Encode: Schema {
         4 + 32 + self.fields_size(ctx) + 64
     }
 }
-
-// ============================================================================
-// Helper Functions
-// ============================================================================
 
 /// Encode a u8.
 #[inline]
