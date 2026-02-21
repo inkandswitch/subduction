@@ -91,6 +91,7 @@ SPKI
 Scalable
 Sedimentree
 Sedimentrees
+Serde
 Sharded
 ShareSecretKeys
 SipHash
