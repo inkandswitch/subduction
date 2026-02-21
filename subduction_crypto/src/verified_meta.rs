@@ -41,10 +41,7 @@ pub struct BlobMismatch {
     pub actual: BlobMeta,
 }
 
-impl<T> VerifiedMeta<T>
-where
-    T: HasBlobMeta + for<'a> minicbor::Decode<'a, ()>,
-{
+impl<T: HasBlobMeta + minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>> VerifiedMeta<T> {
     /// Create a `VerifiedMeta<T>` after verifying the blob matches the claimed metadata.
     ///
     /// # Errors
@@ -122,10 +119,7 @@ where
         signer: &S,
         args: T::Args,
         verified_blob: VerifiedBlobMeta,
-    ) -> Self
-    where
-        T: minicbor::Encode<()>,
-    {
+    ) -> Self {
         let (blob_meta, blob) = verified_blob.into_parts();
         let meta = T::from_args(args, blob_meta);
         let verified = Signed::seal::<K, _>(signer, meta).await;

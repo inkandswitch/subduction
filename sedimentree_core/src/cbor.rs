@@ -15,15 +15,11 @@ pub mod set {
     ///
     /// Returns an error if encoding any element fails.
     #[allow(clippy::implicit_hasher)]
-    pub fn encode<Ctx, T, W>(
+    pub fn encode<Ctx, T: minicbor::Encode<Ctx>, W: minicbor::encode::Write>(
         set: &Set<T>,
         e: &mut minicbor::Encoder<W>,
         ctx: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>>
-    where
-        T: minicbor::Encode<Ctx>,
-        W: minicbor::encode::Write,
-    {
+    ) -> Result<(), minicbor::encode::Error<W::Error>> {
         #[allow(clippy::cast_possible_truncation)]
         e.array(set.len() as u64)?;
         for item in set {
@@ -39,13 +35,10 @@ pub mod set {
     /// Returns an error if the input is not a definite-length array or if
     /// decoding any element fails.
     #[cfg(feature = "std")]
-    pub fn decode<'b, Ctx, T>(
+    pub fn decode<'b, Ctx, T: minicbor::Decode<'b, Ctx> + Eq + Hash>(
         d: &mut minicbor::Decoder<'b>,
         ctx: &mut Ctx,
-    ) -> Result<Set<T>, minicbor::decode::Error>
-    where
-        T: minicbor::Decode<'b, Ctx> + Eq + Hash,
-    {
+    ) -> Result<Set<T>, minicbor::decode::Error> {
         let len = d.array()?.ok_or_else(|| {
             minicbor::decode::Error::message("expected definite-length array for Set")
         })?;
@@ -64,13 +57,10 @@ pub mod set {
     /// Returns an error if the input is not a definite-length array or if
     /// decoding any element fails.
     #[cfg(not(feature = "std"))]
-    pub fn decode<'b, Ctx, T>(
+    pub fn decode<'b, Ctx, T: minicbor::Decode<'b, Ctx> + Ord>(
         d: &mut minicbor::Decoder<'b>,
         ctx: &mut Ctx,
-    ) -> Result<Set<T>, minicbor::decode::Error>
-    where
-        T: minicbor::Decode<'b, Ctx> + Ord,
-    {
+    ) -> Result<Set<T>, minicbor::decode::Error> {
         let len = d.array()?.ok_or_else(|| {
             minicbor::decode::Error::message("expected definite-length array for Set")
         })?;

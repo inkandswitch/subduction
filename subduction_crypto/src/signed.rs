@@ -276,9 +276,8 @@ impl From<ed25519_dalek::SignatureError> for VerificationError {
 }
 
 #[cfg(feature = "arbitrary")]
-impl<'a, T> arbitrary::Arbitrary<'a> for Signed<T>
-where
-    T: for<'b> minicbor::Decode<'b, ()> + minicbor::Encode<()> + arbitrary::Arbitrary<'a>,
+impl<'a, T: for<'b> minicbor::Decode<'b, ()> + minicbor::Encode<()> + arbitrary::Arbitrary<'a>>
+    arbitrary::Arbitrary<'a> for Signed<T>
 {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use ed25519_dalek::{Signer as _, SigningKey};

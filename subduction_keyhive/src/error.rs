@@ -45,10 +45,7 @@ pub enum VerificationError {
 /// Errors that can occur during protocol operations.
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
-pub enum ProtocolError<SendErr>
-where
-    SendErr: core::error::Error + 'static,
-{
+pub enum ProtocolError<SendErr: core::error::Error + 'static> {
     /// Failed to send a message.
     #[error("send error")]
     Send(#[source] SendErr),
