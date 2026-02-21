@@ -24,7 +24,11 @@ use alloc::vec::Vec;
 use core::{cmp::Ordering, marker::PhantomData};
 
 use ed25519_dalek::{Signature, VerifyingKey};
-use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
+use sedimentree_core::codec::{
+    decode::Decode,
+    encode::Encode,
+    error::{DecodeError, InvalidSchema},
+};
 use thiserror::Error;
 
 use crate::verified_signature::VerifiedSignature;
@@ -182,10 +186,11 @@ impl<T: Encode + Decode> Signed<T> {
             .try_into()
             .expect("length checked above");
         if schema != T::SCHEMA {
-            return Err(DecodeError::InvalidSchema {
+            return Err(InvalidSchema {
                 expected: T::SCHEMA,
                 got: schema,
-            });
+            }
+            .into());
         }
 
         // Extract issuer

@@ -15,7 +15,7 @@ use crate::{
         decode::Decode,
         encode,
         encode::Encode,
-        error::{BufferTooShort, DecodeError, ReadingType},
+        error::{BufferTooShort, ContextMismatch, DecodeError, ReadingType},
         schema,
         schema::Schema,
     },
@@ -381,9 +381,10 @@ impl Decode for Fragment {
         offset += 32;
 
         if sedimentree_id_bytes != *ctx.as_bytes() {
-            return Err(DecodeError::ContextMismatch {
+            return Err(ContextMismatch {
                 field: "SedimentreeId",
-            });
+            }
+            .into());
         }
 
         let head_bytes: [u8; 32] = decode::array(buf, offset)?;
@@ -653,7 +654,7 @@ mod codec_tests {
         fragment.encode_fields(&ctx, &mut buf);
 
         let result = Fragment::try_decode_fields(&buf, &wrong_ctx);
-        assert!(matches!(result, Err(DecodeError::ContextMismatch { .. })));
+        assert!(matches!(result, Err(DecodeError::ContextMismatch(_))));
     }
 
     #[test]
@@ -671,7 +672,7 @@ mod codec_tests {
         encode::array(&[0x30; 32], &mut buf);
 
         let result = Fragment::try_decode_fields(&buf, &ctx);
-        assert!(matches!(result, Err(DecodeError::UnsortedArray { .. })));
+        assert!(matches!(result, Err(DecodeError::UnsortedArray(_))));
     }
 
     #[test]

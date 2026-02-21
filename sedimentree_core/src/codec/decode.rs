@@ -1,7 +1,7 @@
 //! Decoding for the canonical binary codec.
 
 use super::{
-    error::{BufferTooShort, DecodeError, ReadingType},
+    error::{BufferTooShort, DecodeError, ReadingType, UnsortedArray},
     schema::Schema,
 };
 
@@ -109,12 +109,12 @@ pub fn slice(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], BufferTooSh
 
 /// Verify that a slice of fixed-size elements is sorted ascending.
 ///
-/// Returns `Ok(())` if sorted, or `Err(DecodeError::UnsortedArray)` with
+/// Returns `Ok(())` if sorted, or `Err(UnsortedArray)` with
 /// the index of the first out-of-order element.
-pub fn verify_sorted<const N: usize>(elements: &[[u8; N]]) -> Result<(), DecodeError> {
+pub fn verify_sorted<const N: usize>(elements: &[[u8; N]]) -> Result<(), UnsortedArray> {
     for i in 1..elements.len() {
         if elements[i - 1] >= elements[i] {
-            return Err(DecodeError::UnsortedArray { index: i });
+            return Err(UnsortedArray { index: i });
         }
     }
     Ok(())

@@ -40,8 +40,8 @@ impl core::fmt::Display for ReadingType {
 
 /// Buffer underflow when reading a primitive type.
 ///
-/// This is a standalone error type for the primitive decode functions (`u8`, `u16`, etc.)
-/// that can only fail due to insufficient bytes. It converts into [`DecodeError`] via `?`.
+/// Returned by primitive decode functions (`u8`, `u16`, etc.) that can only fail
+/// due to insufficient bytes. Converts into [`DecodeError`] via `?`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("buffer too short reading {reading} at offset {offset}: need {need} bytes, have {have}")]
 pub struct BufferTooShort {
@@ -53,6 +53,84 @@ pub struct BufferTooShort {
     pub need: usize,
     /// Actual bytes available from offset.
     pub have: usize,
+}
+
+/// Schema header doesn't match expected value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("invalid schema: expected {expected:?}, got {got:?}")]
+pub struct InvalidSchema {
+    /// Expected schema bytes.
+    pub expected: [u8; 4],
+    /// Actual schema bytes found.
+    pub got: [u8; 4],
+}
+
+/// Array elements are not in sorted order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("array not sorted at index {index}")]
+pub struct UnsortedArray {
+    /// Index where sort violation was detected.
+    pub index: usize,
+}
+
+/// Enum discriminant/tag is not recognized.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("invalid enum tag {tag:#04x} for {type_name}")]
+pub struct InvalidEnumTag {
+    /// The invalid tag value.
+    pub tag: u8,
+    /// Name of the enum type.
+    pub type_name: &'static str,
+}
+
+/// Declared size doesn't match actual data.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("size mismatch: declared {declared}, actual {actual}")]
+pub struct SizeMismatch {
+    /// Size declared in the message.
+    pub declared: usize,
+    /// Actual size of the data.
+    pub actual: usize,
+}
+
+/// Context value (e.g., SedimentreeId) doesn't match signed payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("context mismatch: {field}")]
+pub struct ContextMismatch {
+    /// Description of what mismatched.
+    pub field: &'static str,
+}
+
+/// BlobMeta size exceeds maximum allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("blob too large: {size} bytes, max {max}")]
+pub struct BlobTooLarge {
+    /// Size of the blob.
+    pub size: u64,
+    /// Maximum allowed size.
+    pub max: u64,
+}
+
+/// Array has too many elements.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("{field} has too many elements: {count}, max {max}")]
+pub struct ArrayTooLarge {
+    /// Number of elements.
+    pub count: usize,
+    /// Maximum allowed.
+    pub max: usize,
+    /// Name of the array field.
+    pub field: &'static str,
+}
+
+/// Duplicate element in array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("duplicate element in {field} at index {index}")]
+pub struct DuplicateElement {
+    /// Index where duplicate was found.
+    pub index: usize,
+    /// Name of the array field.
+    pub field: &'static str,
 }
 
 /// Errors that can occur during decoding.
@@ -74,13 +152,8 @@ pub enum DecodeError {
     },
 
     /// Schema header doesn't match expected value.
-    #[error("invalid schema: expected {expected:?}, got {got:?}")]
-    InvalidSchema {
-        /// Expected schema bytes.
-        expected: [u8; 4],
-        /// Actual schema bytes found.
-        got: [u8; 4],
-    },
+    #[error(transparent)]
+    InvalidSchema(#[from] InvalidSchema),
 
     /// Protocol version is not supported.
     #[error("unsupported protocol version: {0}")]
@@ -95,63 +168,30 @@ pub enum DecodeError {
     InvalidVerifyingKey,
 
     /// Array elements are not in sorted order.
-    #[error("array not sorted at index {index}")]
-    UnsortedArray {
-        /// Index where sort violation was detected.
-        index: usize,
-    },
+    #[error(transparent)]
+    UnsortedArray(#[from] UnsortedArray),
 
     /// Enum discriminant/tag is not recognized.
-    #[error("invalid enum tag {tag:#04x} for {type_name}")]
-    InvalidEnumTag {
-        /// The invalid tag value.
-        tag: u8,
-        /// Name of the enum type.
-        type_name: &'static str,
-    },
+    #[error(transparent)]
+    InvalidEnumTag(#[from] InvalidEnumTag),
 
     /// Declared size doesn't match actual data.
-    #[error("size mismatch: declared {declared}, actual {actual}")]
-    SizeMismatch {
-        /// Size declared in the message.
-        declared: usize,
-        /// Actual size of the data.
-        actual: usize,
-    },
+    #[error(transparent)]
+    SizeMismatch(#[from] SizeMismatch),
 
     /// Context value (e.g., SedimentreeId) doesn't match signed payload.
-    #[error("context mismatch: {field}")]
-    ContextMismatch {
-        /// Description of what mismatched.
-        field: &'static str,
-    },
+    #[error(transparent)]
+    ContextMismatch(#[from] ContextMismatch),
 
     /// BlobMeta size exceeds maximum allowed.
-    #[error("blob too large: {size} bytes, max {max}")]
-    BlobTooLarge {
-        /// Size of the blob.
-        size: u64,
-        /// Maximum allowed size.
-        max: u64,
-    },
+    #[error(transparent)]
+    BlobTooLarge(#[from] BlobTooLarge),
 
     /// Array has too many elements.
-    #[error("{field} has too many elements: {count}, max {max}")]
-    ArrayTooLarge {
-        /// Number of elements.
-        count: usize,
-        /// Maximum allowed.
-        max: usize,
-        /// Name of the array field.
-        field: &'static str,
-    },
+    #[error(transparent)]
+    ArrayTooLarge(#[from] ArrayTooLarge),
 
     /// Duplicate element in array.
-    #[error("duplicate element in {field} at index {index}")]
-    DuplicateElement {
-        /// Index where duplicate was found.
-        index: usize,
-        /// Name of the array field.
-        field: &'static str,
-    },
+    #[error(transparent)]
+    DuplicateElement(#[from] DuplicateElement),
 }

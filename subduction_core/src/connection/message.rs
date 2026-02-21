@@ -18,7 +18,9 @@ use alloc::vec::Vec;
 
 use sedimentree_core::{
     blob::Blob,
-    codec::error::{BufferTooShort, DecodeError, ReadingType},
+    codec::error::{
+        BufferTooShort, DecodeError, InvalidEnumTag, InvalidSchema, ReadingType, SizeMismatch,
+    },
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
@@ -410,19 +412,21 @@ impl Message {
 
         let schema: [u8; 4] = bytes[0..4].try_into().expect("length checked");
         if schema != MESSAGE_SCHEMA {
-            return Err(DecodeError::InvalidSchema {
+            return Err(InvalidSchema {
                 expected: MESSAGE_SCHEMA,
                 got: schema,
-            });
+            }
+            .into());
         }
 
         let total_size =
             u32::from_be_bytes(bytes[4..8].try_into().expect("length checked")) as usize;
         if bytes.len() != total_size {
-            return Err(DecodeError::SizeMismatch {
+            return Err(SizeMismatch {
                 declared: total_size,
                 actual: bytes.len(),
-            });
+            }
+            .into());
         }
 
         let tag = bytes[8];
@@ -440,10 +444,11 @@ impl Message {
                 (min_sizes::DATA_REQUEST_REJECTED, "DataRequestRejected")
             }
             _ => {
-                return Err(DecodeError::InvalidEnumTag {
+                return Err(InvalidEnumTag {
                     tag,
                     type_name: "Message",
-                });
+                }
+                .into());
             }
         };
 
@@ -761,10 +766,11 @@ fn decode_batch_sync_request(payload: &[u8]) -> Result<Message, DecodeError> {
         0x00 => false,
         0x01 => true,
         _ => {
-            return Err(DecodeError::InvalidEnumTag {
+            return Err(InvalidEnumTag {
                 tag: subscribe_byte,
                 type_name: "Subscribe",
-            });
+            }
+            .into());
         }
     };
 
@@ -809,10 +815,11 @@ fn decode_batch_sync_response(payload: &[u8]) -> Result<Message, DecodeError> {
         result_tags::NOT_FOUND => SyncResult::NotFound,
         result_tags::UNAUTHORIZED => SyncResult::Unauthorized,
         _ => {
-            return Err(DecodeError::InvalidEnumTag {
+            return Err(InvalidEnumTag {
                 tag: result_tag,
                 type_name: "SyncResult",
-            });
+            }
+            .into());
         }
     };
 
@@ -1314,7 +1321,7 @@ mod tests {
             bad_bytes[4..8].copy_from_slice(&20u32.to_be_bytes());
 
             let result = Message::try_decode(&bad_bytes);
-            assert!(matches!(result, Err(DecodeError::InvalidSchema { .. })));
+            assert!(matches!(result, Err(DecodeError::InvalidSchema(_))));
         }
 
         #[test]
@@ -1326,7 +1333,7 @@ mod tests {
             encoded.truncate(encoded.len() - 5);
 
             let result = Message::try_decode(&encoded);
-            assert!(matches!(result, Err(DecodeError::SizeMismatch { .. })));
+            assert!(matches!(result, Err(DecodeError::SizeMismatch(_))));
         }
 
         #[test]
@@ -1337,7 +1344,7 @@ mod tests {
             bad_bytes[8] = 0xFF;
 
             let result = Message::try_decode(&bad_bytes);
-            assert!(matches!(result, Err(DecodeError::InvalidEnumTag { .. })));
+            assert!(matches!(result, Err(DecodeError::InvalidEnumTag(_))));
         }
     }
 }

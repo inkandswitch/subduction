@@ -266,7 +266,13 @@ impl Response {
 // ============================================================================
 
 use sedimentree_core::codec::{
-    decode, decode::Decode, encode, encode::Encode, error::DecodeError, schema, schema::Schema,
+    decode,
+    decode::Decode,
+    encode,
+    encode::Encode,
+    error::{DecodeError, InvalidEnumTag},
+    schema,
+    schema::Schema,
 };
 
 /// Size of Challenge fields (after schema + issuer, before signature).
@@ -330,10 +336,11 @@ impl Decode for Challenge {
             0x00 => Audience::Known(PeerId::new(audience_value)),
             0x01 => Audience::Discover(DiscoveryId::from_raw(audience_value)),
             tag => {
-                return Err(DecodeError::InvalidEnumTag {
+                return Err(InvalidEnumTag {
                     tag,
                     type_name: "Audience",
-                });
+                }
+                .into());
             }
         };
 
@@ -681,10 +688,11 @@ impl HandshakeMessage {
                     rejection_tags::REPLAYED_NONCE => RejectionReason::ReplayedNonce,
                     rejection_tags::INVALID_SIGNATURE => RejectionReason::InvalidSignature,
                     other => {
-                        return Err(DecodeError::InvalidEnumTag {
+                        return Err(InvalidEnumTag {
                             tag: other,
                             type_name: "RejectionReason",
-                        });
+                        }
+                        .into());
                     }
                 };
                 let timestamp_bytes: [u8; 8] = payload[1..9].try_into().expect("length checked");
@@ -694,10 +702,11 @@ impl HandshakeMessage {
                     server_timestamp,
                 }))
             }
-            _ => Err(DecodeError::InvalidEnumTag {
+            _ => Err(InvalidEnumTag {
                 tag,
                 type_name: "HandshakeMessage",
-            }),
+            }
+            .into()),
         }
     }
 }
@@ -1579,10 +1588,10 @@ mod tests {
             let result = Challenge::try_decode_fields(&buf, &());
             assert!(matches!(
                 result,
-                Err(DecodeError::InvalidEnumTag {
+                Err(DecodeError::InvalidEnumTag(InvalidEnumTag {
                     tag: 0x02,
                     type_name: "Audience"
-                })
+                }))
             ));
         }
 
