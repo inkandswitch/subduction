@@ -65,7 +65,7 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{authenticated::Authenticated, Connection};
+use super::{Connection, authenticated::Authenticated};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::crypto::digest::Digest;
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
@@ -265,7 +265,7 @@ impl Response {
 // Codec implementations for Challenge and Response
 // ============================================================================
 
-use sedimentree_core::codec::{decode, encode, error::CodecError, Decode, Encode, Schema};
+use sedimentree_core::codec::{Decode, Encode, Schema, decode, encode, error::CodecError};
 
 /// Schema header for `Signed<Challenge>`.
 pub const CHALLENGE_SCHEMA: [u8; 4] = *b"SUH\x00";

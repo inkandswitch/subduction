@@ -1,6 +1,6 @@
 //! Decoding trait for signed payloads.
 
-use super::{error::CodecError, Schema};
+use super::{Schema, error::CodecError};
 
 /// Decode a type from its canonical binary representation.
 ///

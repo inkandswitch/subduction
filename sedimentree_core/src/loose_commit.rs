@@ -7,8 +7,8 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use id::CommitId;
 
 use crate::{
-    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
-    codec::{decode, encode, error::CodecError, Decode, Encode, Schema},
+    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    codec::{Decode, Encode, Schema, decode, encode, error::CodecError},
     crypto::digest::Digest,
     id::SedimentreeId,
 };
