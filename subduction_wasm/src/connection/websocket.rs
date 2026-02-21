@@ -390,20 +390,20 @@ impl WasmWebSocket {
     async fn wait_for_open(
         ws: WebSocket,
     ) -> Result<WebSocket, WebSocketAuthenticatedConnectionError> {
-        let (open_tx, open_rx) = oneshot::channel::<Result<(), String>>();
+        let (open_tx, open_rx) = oneshot::channel::<Result<(), WebSocketConnectionFailed>>();
         let open_tx_cell = Rc::new(RefCell::new(Some(open_tx)));
         let open_tx_clone = open_tx_cell.clone();
 
         let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             if let Some(tx) = open_tx_clone.borrow_mut().take() {
-                drop(tx.send(Ok(())));
+                let _ = tx.send(Ok(()));
             }
         });
 
         let onerror_tx = open_tx_cell.clone();
         let onerror = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             if let Some(tx) = onerror_tx.borrow_mut().take() {
-                drop(tx.send(Err("WebSocket connection failed".into())));
+                let _ = tx.send(Err(WebSocketConnectionFailed));
             }
         });
 
@@ -414,14 +414,13 @@ impl WasmWebSocket {
         if ws.ready_state() == WebSocket::OPEN
             && let Some(tx) = open_tx_cell.borrow_mut().take()
         {
-            drop(tx.send(Ok(())));
+            let _ = tx.send(Ok(()));
         }
 
         // Wait for open or error
         open_rx
             .await
-            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)?
-            .map_err(WebSocketAuthenticatedConnectionError::ConnectionFailed)?;
+            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)??;
 
         // Clear temporary handlers
         ws.set_onopen(None);
@@ -775,8 +774,8 @@ pub enum WebSocketAuthenticatedConnectionError {
     SocketCreationFailed(JsValue),
 
     /// WebSocket connection failed.
-    #[error("connection failed: {0}")]
-    ConnectionFailed(String),
+    #[error(transparent)]
+    ConnectionFailed(#[from] WebSocketConnectionFailed),
 
     /// Connection was canceled.
     #[error("connection canceled")]
@@ -798,6 +797,11 @@ impl From<WebSocketAuthenticatedConnectionError> for JsValue {
         js_err.into()
     }
 }
+
+/// WebSocket connection failed during open.
+#[derive(Debug, Clone, Copy, Error)]
+#[error("WebSocket connection failed")]
+pub struct WebSocketConnectionFailed;
 
 /// WebSocket setup was canceled.
 #[derive(Debug, Clone, Error)]
