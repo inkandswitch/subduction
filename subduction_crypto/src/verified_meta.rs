@@ -118,11 +118,13 @@ where
     ///     verified_blob,
     /// ).await;
     /// ```
-    pub async fn seal<K, S>(signer: &S, args: T::Args, verified_blob: VerifiedBlobMeta) -> Self
+    pub async fn seal<K: FutureForm, S: Signer<K>>(
+        signer: &S,
+        args: T::Args,
+        verified_blob: VerifiedBlobMeta,
+    ) -> Self
     where
         T: minicbor::Encode<()>,
-        K: FutureForm,
-        S: Signer<K>,
     {
         let (blob_meta, blob) = verified_blob.into_parts();
         let meta = T::from_args(args, blob_meta);

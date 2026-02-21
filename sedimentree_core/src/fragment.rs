@@ -3,7 +3,7 @@
 pub mod checkpoint;
 pub mod id;
 
-use alloc::collections::BTreeSet;
+use alloc::{collections::BTreeSet, vec::Vec};
 
 use checkpoint::Checkpoint;
 use id::FragmentId;
@@ -302,7 +302,7 @@ impl FragmentSpec {
 
 #[cfg(test)]
 mod tests {
-    use alloc::collections::BTreeSet;
+    use alloc::{collections::BTreeSet, vec::Vec};
 
     use testresult::TestResult;
 

@@ -145,11 +145,10 @@ impl<T: for<'a> minicbor::Decode<'a, ()> + minicbor::Encode<()>> Signed<T> {
     ///
     /// Panics if CBOR encoding fails (should never happen for well-formed types).
     #[allow(clippy::expect_used)]
-    pub async fn seal<K, S>(signer: &S, payload: T) -> VerifiedSignature<T>
-    where
-        K: future_form::FutureForm,
-        S: crate::signer::Signer<K>,
-    {
+    pub async fn seal<K: future_form::FutureForm, S: crate::signer::Signer<K>>(
+        signer: &S,
+        payload: T,
+    ) -> VerifiedSignature<T> {
         let envelope = Envelope::new(Magic, ProtocolVersion::V0_1, payload);
         let encoded = minicbor::to_vec(&envelope).expect("envelope encoding should not fail");
         let signature = signer.sign(&encoded).await;
