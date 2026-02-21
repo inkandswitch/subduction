@@ -30,10 +30,7 @@ pub fn init_metrics() -> PrometheusHandle {
 /// # Errors
 ///
 /// Returns an error if the server fails to bind to the address.
-pub async fn start_metrics_server(
-    addr: SocketAddr,
-    handle: PrometheusHandle,
-) -> anyhow::Result<()> {
+pub async fn start_metrics_server(addr: SocketAddr, handle: PrometheusHandle) -> eyre::Result<()> {
     let app = Router::new().route(
         "/metrics",
         get(move || {

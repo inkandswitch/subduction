@@ -85,12 +85,12 @@ async fn client_reconnect() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let server = TokioWebSocketServer::new(
@@ -116,12 +116,12 @@ async fn client_reconnect() -> TestResult {
 
     tokio::spawn(async {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async {
         sender_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let initial_peer_id = client_ws.peer_id();
@@ -169,12 +169,12 @@ async fn server_graceful_shutdown() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let mut server = TokioWebSocketServer::new(
@@ -201,12 +201,12 @@ async fn server_graceful_shutdown() -> TestResult {
 
     tokio::spawn(async {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async {
         sender_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     // Stop the server
@@ -259,12 +259,12 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     // Add initial commit to server
@@ -325,12 +325,12 @@ async fn multiple_concurrent_clients() -> TestResult {
 
         tokio::spawn(async {
             listener_fut.await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), eyre::Report>(())
         });
 
         tokio::spawn(async {
             sender_fut.await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), eyre::Report>(())
         });
 
         client
@@ -344,7 +344,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             let inner_client = clients.get(i).expect("client should exist").clone();
             async move {
                 inner_client.listen().await?;
-                Ok::<(), anyhow::Error>(())
+                Ok::<(), eyre::Report>(())
             }
         });
     }
@@ -434,12 +434,12 @@ async fn request_with_delayed_response() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     // Add a commit so there's something to sync
@@ -493,12 +493,12 @@ async fn request_with_delayed_response() -> TestResult {
 
     tokio::spawn(async {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async {
         sender_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     client
@@ -509,7 +509,7 @@ async fn request_with_delayed_response() -> TestResult {
         let inner_client = client.clone();
         async move {
             inner_client.listen().await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), eyre::Report>(())
         }
     });
 
@@ -575,12 +575,12 @@ async fn large_message_handling() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let server = TokioWebSocketServer::new(
@@ -628,12 +628,12 @@ async fn large_message_handling() -> TestResult {
 
     tokio::spawn(async {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async {
         sender_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     client
@@ -644,7 +644,7 @@ async fn large_message_handling() -> TestResult {
         let inner_client = client.clone();
         async move {
             inner_client.listen().await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), eyre::Report>(())
         }
     });
 
@@ -701,12 +701,12 @@ async fn message_ordering() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let server = TokioWebSocketServer::new(
@@ -754,12 +754,12 @@ async fn message_ordering() -> TestResult {
 
     tokio::spawn(async {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async {
         sender_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     client
@@ -770,7 +770,7 @@ async fn message_ordering() -> TestResult {
         let inner_client = client.clone();
         async move {
             inner_client.listen().await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), eyre::Report>(())
         }
     });
 

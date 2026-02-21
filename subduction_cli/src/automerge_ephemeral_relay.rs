@@ -17,11 +17,11 @@
 //! `SipHash` in practice on short inputs; not used as a cryptographic primitive.
 
 use ahash::RandomState;
-use anyhow::Result;
 use async_tungstenite::{
     tokio::accept_async_with_config,
     tungstenite::{Message as WsMessage, protocol::WebSocketConfig},
 };
+use eyre::Result;
 use futures_util::StreamExt;
 use std::{
     collections::{HashSet, VecDeque},
@@ -460,7 +460,7 @@ async fn handle_connection(
                 };
 
                 let response = minicbor::to_vec(&peer_msg)
-                    .map_err(|e| anyhow::anyhow!("failed to encode peer message: {e}"))?;
+                    .map_err(|e| eyre::eyre!("failed to encode peer message: {e}"))?;
                 ws_sender.send(WsMessage::Binary(response.into())).await?;
 
                 peer_id

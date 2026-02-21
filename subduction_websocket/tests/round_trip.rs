@@ -64,12 +64,12 @@ async fn rend_receive() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let task_subduction = suduction.clone();
@@ -95,18 +95,18 @@ async fn rend_receive() -> TestResult {
 
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         sender_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let ws = client_ws.clone();
     tokio::spawn(async move {
         ws.listen().await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     let expected = Message::BlobsRequest {
@@ -171,12 +171,12 @@ async fn batch_sync() -> TestResult {
     );
     tokio::spawn(async move {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async move {
         manager_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     server_subduction
@@ -238,12 +238,12 @@ async fn batch_sync() -> TestResult {
 
     tokio::spawn(async {
         listener_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     tokio::spawn(async {
         sender_fut.await?;
-        Ok::<(), anyhow::Error>(())
+        Ok::<(), eyre::Report>(())
     });
 
     assert_eq!(client.connected_peer_ids().await.len(), 0);
@@ -265,7 +265,7 @@ async fn batch_sync() -> TestResult {
         let inner_client = client.clone();
         async move {
             inner_client.listen().await?;
-            Ok::<(), anyhow::Error>(())
+            Ok::<(), eyre::Report>(())
         }
     });
 

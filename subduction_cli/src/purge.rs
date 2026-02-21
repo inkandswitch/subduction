@@ -2,7 +2,7 @@
 
 use std::{io::Write, path::PathBuf};
 
-use anyhow::Result;
+use eyre::Result;
 
 /// Arguments for the purge command.
 #[derive(Debug, clap::Parser)]
