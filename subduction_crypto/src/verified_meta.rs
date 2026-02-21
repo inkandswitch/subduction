@@ -1,7 +1,7 @@
 //! A payload whose signature is valid AND whose blob matches the claimed metadata.
 
 use future_form::FutureForm;
-use sedimentree_core::blob::{Blob, BlobMeta, has_meta::HasBlobMeta, with_meta::BlobWithMeta};
+use sedimentree_core::blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta};
 use thiserror::Error;
 
 use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};
@@ -105,23 +105,27 @@ where
 
     /// Seal a locally-created payload+blob, producing a verified meta.
     ///
-    /// Infallible because [`BlobWithMeta`] guarantees the blob matches by construction.
+    /// Infallible because [`VerifiedBlobMeta`] guarantees the blob metadata
+    /// matches by construction, and `T` is constructed from that metadata.
     ///
     /// # Example
     ///
     /// ```ignore
-    /// let blob_with_meta = BlobWithMeta::new(blob, |meta| {
-    ///     LooseCommit::new(digest, parents, meta)
-    /// });
-    /// let verified_meta = VerifiedMeta::seal::<Sendable, _>(&signer, blob_with_meta).await;
+    /// let verified_blob = VerifiedBlobMeta::new(blob);
+    /// let verified_meta = VerifiedMeta::seal::<Sendable, _, LooseCommit>(
+    ///     &signer,
+    ///     (digest, parents),
+    ///     verified_blob,
+    /// ).await;
     /// ```
-    pub async fn seal<K, S>(signer: &S, blob_with_meta: BlobWithMeta<T>) -> Self
+    pub async fn seal<K, S>(signer: &S, args: T::Args, verified_blob: VerifiedBlobMeta) -> Self
     where
         T: minicbor::Encode<()>,
         K: FutureForm,
         S: Signer<K>,
     {
-        let (meta, blob) = blob_with_meta.into_parts();
+        let (blob_meta, blob) = verified_blob.into_parts();
+        let meta = T::from_args(args, blob_meta);
         let verified = Signed::seal::<K, _>(signer, meta).await;
         Self { verified, blob }
     }

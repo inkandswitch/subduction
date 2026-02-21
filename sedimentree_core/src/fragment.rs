@@ -170,8 +170,18 @@ impl Fragment {
 }
 
 impl HasBlobMeta for Fragment {
+    type Args = (
+        Digest<LooseCommit>,
+        BTreeSet<Digest<LooseCommit>>,
+        Vec<Digest<LooseCommit>>,
+    );
+
     fn blob_meta(&self) -> BlobMeta {
         self.summary().blob_meta()
+    }
+
+    fn from_args((head, boundary, checkpoints): Self::Args, blob_meta: BlobMeta) -> Self {
+        Self::new(head, boundary, &checkpoints, blob_meta)
     }
 }
 
@@ -292,7 +302,7 @@ impl FragmentSpec {
 
 #[cfg(test)]
 mod tests {
-    use alloc::collections::BTreeSet;
+    use alloc::{collections::BTreeSet, vec::Vec};
 
     use testresult::TestResult;
 

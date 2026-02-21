@@ -116,7 +116,7 @@ use futures::{
 use nonempty::NonEmpty;
 use request::FragmentRequested;
 use sedimentree_core::{
-    blob::{Blob, with_meta::BlobWithMeta},
+    blob::{Blob, verified::VerifiedBlobMeta},
     collections::{
         Entry, Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
@@ -1331,9 +1331,9 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let blob_with_meta =
-            BlobWithMeta::new(blob, |meta| LooseCommit::new(digest, parents.clone(), meta));
-        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, blob_with_meta).await;
+        let verified_blob = VerifiedBlobMeta::new(blob);
+        let verified_meta: VerifiedMeta<LooseCommit> =
+            VerifiedMeta::seal::<F, _>(&self.signer, (digest, parents), verified_blob).await;
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 
@@ -1406,16 +1406,7 @@ impl<
         checkpoints: &[Digest<LooseCommit>],
         blob: Blob,
     ) -> Result<(), WriteError<F, S, C, P::PutDisallowed>> {
-        let blob_with_meta = BlobWithMeta::new(blob, |meta| {
-            Fragment::new(head, boundary.clone(), checkpoints, meta)
-        });
-        let fragment_digest = blob_with_meta.meta().digest();
-
-        tracing::debug!(
-            "Adding fragment {:?} to sedimentree {:?}",
-            fragment_digest,
-            id
-        );
+        let verified_blob = VerifiedBlobMeta::new(blob);
 
         let self_id = self.peer_id();
         let putter = self
@@ -1424,7 +1415,19 @@ impl<
             .await
             .map_err(WriteError::PutDisallowed)?;
 
-        let verified_meta = VerifiedMeta::seal::<F, _>(&self.signer, blob_with_meta).await;
+        let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<F, _>(
+            &self.signer,
+            (head, boundary, checkpoints.to_vec()),
+            verified_blob,
+        )
+        .await;
+        let fragment_digest = verified_meta.payload().digest();
+
+        tracing::debug!(
+            "Adding fragment {:?} to sedimentree {:?}",
+            fragment_digest,
+            id
+        );
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 

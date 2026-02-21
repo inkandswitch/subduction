@@ -70,7 +70,13 @@ impl LooseCommit {
 }
 
 impl HasBlobMeta for LooseCommit {
+    type Args = (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>);
+
     fn blob_meta(&self) -> BlobMeta {
         self.blob_meta
+    }
+
+    fn from_args((digest, parents): Self::Args, blob_meta: BlobMeta) -> Self {
+        Self::new(digest, parents, blob_meta)
     }
 }

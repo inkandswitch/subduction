@@ -1,7 +1,7 @@
 //! Binary objects.
 
 pub mod has_meta;
-pub mod with_meta;
+pub mod verified;
 
 use core::cmp::min;
 
