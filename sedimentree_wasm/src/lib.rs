@@ -11,7 +11,6 @@ extern crate std;
 
 extern crate alloc;
 
-pub mod blob;
 pub mod depth;
 pub mod digest;
 pub mod fragment;
