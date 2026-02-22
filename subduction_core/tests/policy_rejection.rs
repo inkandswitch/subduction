@@ -2,7 +2,6 @@
 
 #![allow(clippy::panic)]
 
-use std::{collections::BTreeSet, vec::Vec};
 use core::{convert::Infallible, fmt, time::Duration};
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
@@ -14,6 +13,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
     sedimentree::{FingerprintSummary, Sedimentree},
 };
+use std::{collections::BTreeSet, vec::Vec};
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, Message, SyncResult},

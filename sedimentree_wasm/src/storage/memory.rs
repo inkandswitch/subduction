@@ -1,6 +1,6 @@
 //! In-memory storage for testing and development.
 
-use alloc::{format, string::ToString};
+use alloc::string::ToString;
 use future_form::Local;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
@@ -8,13 +8,16 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_core::storage::{memory::MemoryStorage as CoreMemoryStorage, traits::Storage};
-use subduction_crypto::signed::Signed;
+use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::future_to_promise;
 
 use crate::{
     digest::{JsDigest, WasmDigest},
+    fragment::WasmFragmentWithBlob,
+    loose_commit::WasmCommitWithBlob,
     sedimentree_id::{JsSedimentreeId, WasmSedimentreeId},
+    signed::{WasmSignedFragment, WasmSignedLooseCommit},
 };
 
 /// An in-memory storage implementation for use in tests and development.
@@ -81,31 +84,32 @@ impl MemoryStorage {
         })
     }
 
-    // ==================== Commits ====================
+    // ==================== Commits (compound with blob) ====================
 
-    /// Save a commit.
+    /// Save a commit with its blob.
     #[wasm_bindgen(js_name = saveCommit)]
     pub fn save_commit(
         &self,
         sedimentree_id: &WasmSedimentreeId,
         _digest: &WasmDigest,
-        signed_commit: &Uint8Array,
-        _blob_digest: &WasmDigest,
+        signed_commit: &WasmSignedLooseCommit,
+        blob: &Uint8Array,
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let bytes = signed_commit.to_vec();
+        let signed: Signed<LooseCommit> = signed_commit.clone().into();
+        let blob = Blob::new(blob.to_vec());
         future_to_promise(async move {
-            let signed: Signed<LooseCommit> = Signed::try_decode(bytes)
-                .map_err(|e| JsValue::from_str(&format!("Codec decode error: {e}")))?;
-            Storage::<Local>::save_loose_commit(&inner, id, signed)
+            // Reconstruct from trusted JS storage without re-verification
+            let verified = VerifiedMeta::from_trusted(signed, blob);
+            Storage::<Local>::save_loose_commit(&inner, id, verified)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)
         })
     }
 
-    /// Load a commit by digest.
+    /// Load a commit by digest, returning `CommitWithBlob` or null.
     #[wasm_bindgen(js_name = loadCommit)]
     pub fn load_commit(&self, sedimentree_id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
         let inner = self.inner.clone();
@@ -116,9 +120,10 @@ impl MemoryStorage {
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
-                Some(signed) => {
-                    let bytes = signed.as_bytes();
-                    Ok(Uint8Array::from(bytes).into())
+                Some(verified) => {
+                    let signed = WasmSignedLooseCommit::from(verified.signed().clone());
+                    let blob = Uint8Array::from(verified.blob().contents().as_slice());
+                    Ok(WasmCommitWithBlob::new(signed, blob).into())
                 }
                 None => Ok(JsValue::NULL),
             }
@@ -142,7 +147,7 @@ impl MemoryStorage {
         })
     }
 
-    /// Load all commits for a sedimentree.
+    /// Load all commits for a sedimentree, returning `CommitWithBlob[]`.
     #[wasm_bindgen(js_name = loadAllCommits)]
     pub fn load_all_commits(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
         let inner = self.inner.clone();
@@ -152,16 +157,10 @@ impl MemoryStorage {
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
-            for (digest, signed) in commits {
-                let bytes = signed.as_bytes();
-                let obj = js_sys::Object::new();
-                js_sys::Reflect::set(
-                    &obj,
-                    &"digest".into(),
-                    &JsDigest::from(WasmDigest::from(digest)),
-                )?;
-                js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes))?;
-                result.push(&obj);
+            for verified in commits {
+                let signed = WasmSignedLooseCommit::from(verified.signed().clone());
+                let blob = Uint8Array::from(verified.blob().contents().as_slice());
+                result.push(&WasmCommitWithBlob::new(signed, blob).into());
             }
             Ok(result.into())
         })
@@ -198,31 +197,32 @@ impl MemoryStorage {
         })
     }
 
-    // ==================== Fragments ====================
+    // ==================== Fragments (compound with blob) ====================
 
-    /// Save a fragment.
+    /// Save a fragment with its blob.
     #[wasm_bindgen(js_name = saveFragment)]
     pub fn save_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
         _digest: &WasmDigest,
-        signed_fragment: &Uint8Array,
-        _blob_digest: &WasmDigest,
+        signed_fragment: &WasmSignedFragment,
+        blob: &Uint8Array,
     ) -> Promise {
         let inner = self.inner.clone();
         let id: SedimentreeId = sedimentree_id.clone().into();
-        let bytes = signed_fragment.to_vec();
+        let signed: Signed<Fragment> = signed_fragment.clone().into();
+        let blob = Blob::new(blob.to_vec());
         future_to_promise(async move {
-            let signed: Signed<Fragment> = Signed::try_decode(bytes)
-                .map_err(|e| JsValue::from_str(&format!("Codec decode error: {e}")))?;
-            Storage::<Local>::save_fragment(&inner, id, signed)
+            // Reconstruct from trusted JS storage without re-verification
+            let verified = VerifiedMeta::from_trusted(signed, blob);
+            Storage::<Local>::save_fragment(&inner, id, verified)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)
         })
     }
 
-    /// Load a fragment by digest.
+    /// Load a fragment by digest, returning `FragmentWithBlob` or null.
     #[wasm_bindgen(js_name = loadFragment)]
     pub fn load_fragment(
         &self,
@@ -237,9 +237,10 @@ impl MemoryStorage {
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             match result {
-                Some(signed) => {
-                    let bytes = signed.as_bytes();
-                    Ok(Uint8Array::from(bytes).into())
+                Some(verified) => {
+                    let signed = WasmSignedFragment::from(verified.signed().clone());
+                    let blob = Uint8Array::from(verified.blob().contents().as_slice());
+                    Ok(WasmFragmentWithBlob::new(signed, blob).into())
                 }
                 None => Ok(JsValue::NULL),
             }
@@ -263,7 +264,7 @@ impl MemoryStorage {
         })
     }
 
-    /// Load all fragments for a sedimentree.
+    /// Load all fragments for a sedimentree, returning `FragmentWithBlob[]`.
     #[wasm_bindgen(js_name = loadAllFragments)]
     pub fn load_all_fragments(&self, sedimentree_id: &WasmSedimentreeId) -> Promise {
         let inner = self.inner.clone();
@@ -273,16 +274,10 @@ impl MemoryStorage {
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             let result = js_sys::Array::new();
-            for (digest, signed) in fragments {
-                let bytes = signed.as_bytes();
-                let obj = js_sys::Object::new();
-                js_sys::Reflect::set(
-                    &obj,
-                    &"digest".into(),
-                    &JsDigest::from(WasmDigest::from(digest)),
-                )?;
-                js_sys::Reflect::set(&obj, &"signed".into(), &Uint8Array::from(bytes))?;
-                result.push(&obj);
+            for verified in fragments {
+                let signed = WasmSignedFragment::from(verified.signed().clone());
+                let blob = Uint8Array::from(verified.blob().contents().as_slice());
+                result.push(&WasmFragmentWithBlob::new(signed, blob).into());
             }
             Ok(result.into())
         })
@@ -313,54 +308,6 @@ impl MemoryStorage {
         let id: SedimentreeId = sedimentree_id.clone().into();
         future_to_promise(async move {
             Storage::<Local>::delete_fragments(&inner, id)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            Ok(JsValue::UNDEFINED)
-        })
-    }
-
-    // ==================== Blobs ====================
-
-    /// Save a blob and return its digest.
-    #[wasm_bindgen(js_name = saveBlob)]
-    pub fn save_blob(&self, id: &WasmSedimentreeId, data: &Uint8Array) -> Promise {
-        let inner = self.inner.clone();
-        let id: SedimentreeId = id.clone().into();
-        let bytes = data.to_vec();
-        future_to_promise(async move {
-            let blob = Blob::from(bytes);
-            let digest = Storage::<Local>::save_blob(&inner, id, blob)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            Ok(JsDigest::from(WasmDigest::from(digest)).into())
-        })
-    }
-
-    /// Load a blob by digest within a sedimentree.
-    #[wasm_bindgen(js_name = loadBlob)]
-    pub fn load_blob(&self, id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
-        let inner = self.inner.clone();
-        let id: SedimentreeId = id.clone().into();
-        let digest: Digest<Blob> = digest.clone().into();
-        future_to_promise(async move {
-            let result = Storage::<Local>::load_blob(&inner, id, digest)
-                .await
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
-            match result {
-                Some(blob) => Ok(Uint8Array::from(blob.as_slice()).into()),
-                None => Ok(JsValue::NULL),
-            }
-        })
-    }
-
-    /// Delete a blob by digest within a sedimentree.
-    #[wasm_bindgen(js_name = deleteBlob)]
-    pub fn delete_blob(&self, id: &WasmSedimentreeId, digest: &WasmDigest) -> Promise {
-        let inner = self.inner.clone();
-        let id: SedimentreeId = id.clone().into();
-        let digest: Digest<Blob> = digest.clone().into();
-        future_to_promise(async move {
-            Storage::<Local>::delete_blob(&inner, id, digest)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Ok(JsValue::UNDEFINED)

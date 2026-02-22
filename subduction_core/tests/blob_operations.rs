@@ -1,13 +1,17 @@
-//! Tests for blob operations (`get`, `get_blobs`, `BlobsRequest`/`BlobsResponse` flow).
+//! Tests for blob operations (`get`, `get_blobs`).
+//!
+//! With compound storage, blobs are stored together with their commits/fragments.
+//! The `BlobsRequest`/`BlobsResponse` protocol is maintained for protocol compatibility
+//! but no longer stores blobs independently - blobs come with `BatchSyncResponse`.
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use std::sync::Arc;
 use core::time::Duration;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
+use std::sync::Arc;
 use subduction_core::{
     connection::{
         message::Message,
@@ -76,8 +80,12 @@ fn new_dispatch_subduction() -> (
     )
 }
 
+/// With compound storage, `BlobsResponse` no longer stores blobs independently.
+/// Blobs are stored together with commits/fragments via `BatchSyncResponse`.
+/// This test verifies that `BlobsResponse` clears pending requests but does NOT
+/// store blobs (since blobs must come with their associated metadata).
 #[tokio::test]
-async fn requested_blobs_are_saved_and_removed_from_pending() -> TestResult {
+async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
@@ -115,27 +123,16 @@ async fn requested_blobs_are_saved_and_removed_from_pending() -> TestResult {
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Verify blob was saved to storage
+    // With compound storage, BlobsResponse does NOT store blobs independently.
+    // Blobs must come with commits/fragments to be stored.
     let loaded = subduction
         .get_blob(TEST_TREE, digest)
         .await
         .expect("storage error");
-    assert_eq!(
-        loaded.as_ref(),
-        Some(&blob),
-        "requested blob should be persisted"
+    assert!(
+        loaded.is_none(),
+        "BlobsResponse should not store blobs independently with compound storage"
     );
-
-    // Verify digest was removed from pending (send a second BlobsResponse with
-    // the same blob — it should now be rejected as unsolicited)
-    handle
-        .inbound_tx
-        .send(Message::BlobsResponse {
-            id: TEST_TREE,
-            blobs: vec![blob],
-        })
-        .await?;
-    tokio::time::sleep(Duration::from_millis(50)).await;
 
     actor_task.abort();
     listener_task.abort();
@@ -181,8 +178,11 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
     Ok(())
 }
 
+/// With compound storage, `BlobsResponse` does not store any blobs.
+/// Both requested and unsolicited blobs are ignored - blobs must come
+/// with commits/fragments via `BatchSyncResponse`.
 #[tokio::test]
-async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
+async fn blobs_response_does_not_store_any_blobs() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([3u8; 32]);
@@ -222,18 +222,16 @@ async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Verify: requested blob was saved
+    // With compound storage, neither blob should be stored via BlobsResponse
     let loaded_requested = subduction
         .get_blob(TEST_TREE, requested_digest)
         .await
         .expect("storage error");
-    assert_eq!(
-        loaded_requested.as_ref(),
-        Some(&requested_blob),
-        "requested blob should be persisted"
+    assert!(
+        loaded_requested.is_none(),
+        "BlobsResponse should not store blobs with compound storage"
     );
 
-    // Verify: unsolicited blob was NOT saved
     let loaded_unsolicited = subduction
         .get_blob(TEST_TREE, unsolicited_digest)
         .await
@@ -248,8 +246,11 @@ async fn mixed_batch_only_requested_blobs_saved() -> TestResult {
     Ok(())
 }
 
+/// With compound storage, blobs from `BlobsResponse` are not stored.
+/// This test verifies that even with a valid request, `BlobsResponse` does not
+/// persist blobs (they must come with commits/fragments).
 #[tokio::test]
-async fn blobs_from_different_sedimentrees_are_isolated() -> TestResult {
+async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([4u8; 32]);
@@ -283,18 +284,17 @@ async fn blobs_from_different_sedimentrees_are_isolated() -> TestResult {
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Blob is visible under tree A
+    // With compound storage, blob is NOT stored via BlobsResponse
     let loaded_a = subduction
         .get_blob(tree_a, digest)
         .await
         .expect("storage error");
-    assert_eq!(
-        loaded_a.as_ref(),
-        Some(&blob),
-        "blob should exist under tree A"
+    assert!(
+        loaded_a.is_none(),
+        "BlobsResponse should not store blobs with compound storage"
     );
 
-    // Blob is NOT visible under tree B
+    // Blob is also NOT visible under tree B (never was stored)
     let loaded_b = subduction
         .get_blob(tree_b, digest)
         .await

@@ -10,7 +10,9 @@ use core::marker::PhantomData;
 use alloc::sync::Arc;
 
 use future_form::FutureForm;
-use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
+use sedimentree_core::{
+    crypto::digest::Digest, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
+};
 
 use super::traits::Storage;
 
@@ -47,22 +49,32 @@ impl<K: FutureForm, S: Storage<K>> Destroyer<K, S> {
         self.sedimentree_id
     }
 
-    /// Delete all loose commits for this sedimentree.
+    /// Delete a loose commit and its blob by digest.
+    #[must_use]
+    pub fn delete_loose_commit(
+        &self,
+        digest: Digest<LooseCommit>,
+    ) -> K::Future<'_, Result<(), S::Error>> {
+        self.storage
+            .delete_loose_commit(self.sedimentree_id, digest)
+    }
+
+    /// Delete all loose commits and their blobs for this sedimentree.
     #[must_use]
     pub fn delete_loose_commits(&self) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.delete_loose_commits(self.sedimentree_id)
     }
 
-    /// Delete all fragments for this sedimentree.
+    /// Delete a fragment and its blob by digest.
+    #[must_use]
+    pub fn delete_fragment(&self, digest: Digest<Fragment>) -> K::Future<'_, Result<(), S::Error>> {
+        self.storage.delete_fragment(self.sedimentree_id, digest)
+    }
+
+    /// Delete all fragments and their blobs for this sedimentree.
     #[must_use]
     pub fn delete_fragments(&self) -> K::Future<'_, Result<(), S::Error>> {
         self.storage.delete_fragments(self.sedimentree_id)
-    }
-
-    /// Delete a blob by its digest within this sedimentree.
-    #[must_use]
-    pub fn delete_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<(), S::Error>> {
-        self.storage.delete_blob(self.sedimentree_id, digest)
     }
 }
 

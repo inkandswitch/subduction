@@ -4,13 +4,13 @@ use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         nonce_cache::NonceCache,
-        test_utils::{test_signer, FailingSendMockConnection, MockConnection, TestSpawn},
+        test_utils::{FailingSendMockConnection, MockConnection, TestSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 
 use future_form::Sendable;

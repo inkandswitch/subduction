@@ -6,12 +6,12 @@ use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob, collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
+    collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+use subduction_crypto::verified_meta::VerifiedMeta;
 
 use super::traits::Storage;
-use subduction_crypto::signed::Signed;
 
 /// A capability granting fetch access to a specific sedimentree's data.
 ///
@@ -46,12 +46,14 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
 
     // ==================== Commits ====================
 
-    /// Load a loose commit by its digest.
+    /// Load a loose commit with its blob by digest.
+    ///
+    /// Returns `None` if no commit exists with the given digest.
     #[must_use]
     pub fn load_loose_commit(
         &self,
         digest: Digest<LooseCommit>,
-    ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, S::Error>> {
+    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, S::Error>> {
         self.storage.load_loose_commit(self.sedimentree_id, digest)
     }
 
@@ -61,25 +63,24 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
         self.storage.list_commit_digests(self.sedimentree_id)
     }
 
-    /// Load all loose commits for this sedimentree.
-    ///
-    /// Returns digests alongside signed data for efficient indexing.
+    /// Load all loose commits with their blobs for this sedimentree.
     #[must_use]
-    #[allow(clippy::type_complexity)]
     pub fn load_loose_commits(
         &self,
-    ) -> K::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, S::Error>> {
+    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, S::Error>> {
         self.storage.load_loose_commits(self.sedimentree_id)
     }
 
     // ==================== Fragments ====================
 
-    /// Load a fragment by its digest.
+    /// Load a fragment with its blob by digest.
+    ///
+    /// Returns `None` if no fragment exists with the given digest.
     #[must_use]
     pub fn load_fragment(
         &self,
         digest: Digest<Fragment>,
-    ) -> K::Future<'_, Result<Option<Signed<Fragment>>, S::Error>> {
+    ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, S::Error>> {
         self.storage.load_fragment(self.sedimentree_id, digest)
     }
 
@@ -89,37 +90,10 @@ impl<K: FutureForm, S: Storage<K>> Fetcher<K, S> {
         self.storage.list_fragment_digests(self.sedimentree_id)
     }
 
-    /// Load all fragments for this sedimentree.
-    ///
-    /// Returns digests alongside signed data for efficient indexing.
+    /// Load all fragments with their blobs for this sedimentree.
     #[must_use]
-    #[allow(clippy::type_complexity)]
-    pub fn load_fragments(
-        &self,
-    ) -> K::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, S::Error>> {
+    pub fn load_fragments(&self) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, S::Error>> {
         self.storage.load_fragments(self.sedimentree_id)
-    }
-
-    // ==================== Blobs ====================
-
-    /// Load a blob by its digest.
-    ///
-    /// Load a blob by its digest within this sedimentree.
-    #[must_use]
-    pub fn load_blob(&self, digest: Digest<Blob>) -> K::Future<'_, Result<Option<Blob>, S::Error>> {
-        self.storage.load_blob(self.sedimentree_id, digest)
-    }
-
-    /// Load multiple blobs by their digests within this sedimentree.
-    ///
-    /// Returns only the blobs that were found. Missing digests are silently skipped.
-    #[must_use]
-    #[allow(clippy::type_complexity)]
-    pub fn load_blobs(
-        &self,
-        digests: &[Digest<Blob>],
-    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, S::Error>> {
-        self.storage.load_blobs(self.sedimentree_id, digests)
     }
 }
 

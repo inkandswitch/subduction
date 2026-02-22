@@ -6,7 +6,9 @@ use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 use super::digest::{JsDigest, WasmDigest};
-use crate::sedimentree_id::WasmSedimentreeId;
+use js_sys::Uint8Array;
+
+use crate::{sedimentree_id::WasmSedimentreeId, signed::WasmSignedLooseCommit};
 
 /// A Wasm wrapper around the [`LooseCommit`] type.
 #[wasm_bindgen(js_name = LooseCommit)]
@@ -121,6 +123,40 @@ impl From<BlobMeta> for WasmBlobMeta {
 impl From<WasmBlobMeta> for BlobMeta {
     fn from(meta: WasmBlobMeta) -> Self {
         meta.0
+    }
+}
+
+/// A commit stored with its associated blob.
+#[derive(Debug, Clone)]
+#[wasm_bindgen(js_name = CommitWithBlob)]
+pub struct WasmCommitWithBlob {
+    signed: WasmSignedLooseCommit,
+    blob: Vec<u8>,
+}
+
+#[wasm_refgen(js_ref = JsCommitWithBlob)]
+#[wasm_bindgen(js_class = CommitWithBlob)]
+impl WasmCommitWithBlob {
+    /// Create a new commit with blob.
+    #[wasm_bindgen(constructor)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen requires owned Uint8Array
+    pub fn new(signed: WasmSignedLooseCommit, blob: Uint8Array) -> Self {
+        Self {
+            signed,
+            blob: blob.to_vec(),
+        }
+    }
+
+    /// Get the signed commit.
+    #[wasm_bindgen(getter)]
+    pub fn signed(&self) -> WasmSignedLooseCommit {
+        self.signed.clone()
+    }
+
+    /// Get the blob.
+    #[wasm_bindgen(getter)]
+    pub fn blob(&self) -> Uint8Array {
+        Uint8Array::from(self.blob.as_slice())
     }
 }
 

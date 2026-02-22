@@ -81,10 +81,6 @@ pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
 
-    /// Missing blobs associated with local fragments or commits.
-    #[error("Missing blobs associated to local fragments & commits: {0:?}")]
-    MissingBlobs(Vec<Digest<Blob>>),
-
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
     TrySendError,
@@ -126,6 +122,10 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, Put
     /// The storage policy rejected the write.
     #[error("put disallowed: {0}")]
     PutDisallowed(PutErr),
+
+    /// A required blob was not provided.
+    #[error("missing blob: {0}")]
+    MissingBlob(Digest<Blob>),
 }
 
 /// An error that can occur when sending requested data to a peer.

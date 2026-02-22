@@ -135,4 +135,19 @@ impl<T: HasBlobMeta + Encode + Decode> VerifiedMeta<T> {
         let verified = Signed::seal::<K, _>(signer, meta).await;
         Self { verified, blob }
     }
+
+    /// Reconstruct from trusted storage without any verification.
+    ///
+    /// Use this only for data loaded from trusted storage that was
+    /// previously verified (signature + blob match) before being stored.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the payload cannot be decoded. This should never happen
+    /// for data from trusted storage.
+    #[must_use]
+    pub fn from_trusted(signed: Signed<T>, blob: Blob) -> Self {
+        let verified = VerifiedSignature::from_trusted(signed);
+        Self { verified, blob }
+    }
 }

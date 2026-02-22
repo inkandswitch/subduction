@@ -7,7 +7,7 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use id::CommitId;
 
 use crate::{
-    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
+    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, Encode},

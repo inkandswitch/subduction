@@ -11,18 +11,18 @@ use sedimentree_core::commit::CountLeadingZeroBytes;
 use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{
+    Connection,
     authenticated::Authenticated,
     manager::Spawn,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     nonce_cache::NonceCache,
-    Connection,
 };
 use crate::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 
 /// A minimal mock connection for testing.

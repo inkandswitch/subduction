@@ -2,11 +2,11 @@
 
 #![allow(clippy::expect_used)]
 
-use std::vec::Vec;
 use core::{convert::Infallible, fmt};
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
+use std::vec::Vec;
 use subduction_core::{
     connection::{
         nonce_cache::NonceCache,

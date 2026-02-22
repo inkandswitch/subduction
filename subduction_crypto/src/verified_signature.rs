@@ -82,6 +82,23 @@ impl<T: Encode + Decode> VerifiedSignature<T> {
     pub fn into_parts(self) -> (Signed<T>, T) {
         (self.signed, self.payload)
     }
+
+    /// Reconstruct from trusted storage without signature verification.
+    ///
+    /// Use this only for data loaded from trusted storage that was
+    /// previously verified before being stored.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the payload cannot be decoded. This should never happen
+    /// for data from trusted storage.
+    #[must_use]
+    pub fn from_trusted(signed: Signed<T>) -> Self {
+        let payload = signed
+            .try_decode_payload()
+            .expect("trusted storage should contain valid payloads");
+        Self { signed, payload }
+    }
 }
 
 impl<T: Encode + Decode + PartialEq> PartialEq for VerifiedSignature<T> {

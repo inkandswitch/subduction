@@ -31,7 +31,6 @@ pub mod hex;
 pub mod id;
 pub mod loose_commit;
 pub mod sedimentree;
-pub mod storage;
 
 #[cfg(any(test, feature = "test_utils"))]
 #[cfg_attr(docsrs, doc(cfg(feature = "test_utils")))]

@@ -13,9 +13,9 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use std::collections::BTreeSet;
 use core::time::Duration;
 use future_form::Sendable;
+use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},

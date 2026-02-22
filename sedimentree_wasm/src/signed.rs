@@ -4,6 +4,7 @@ use js_sys::Uint8Array;
 use sedimentree_core::{fragment::Fragment, loose_commit::LooseCommit};
 use subduction_crypto::signed::Signed;
 use wasm_bindgen::prelude::*;
+use wasm_refgen::wasm_refgen;
 
 use crate::{fragment::WasmFragment, loose_commit::WasmLooseCommit};
 
@@ -12,6 +13,7 @@ use crate::{fragment::WasmFragment, loose_commit::WasmLooseCommit};
 #[derive(Debug, Clone)]
 pub struct WasmSignedLooseCommit(Signed<LooseCommit>);
 
+#[wasm_refgen(js_ref = JsSignedLooseCommit)]
 #[wasm_bindgen(js_class = SignedLooseCommit)]
 impl WasmSignedLooseCommit {
     /// Decode a `SignedLooseCommit` from raw bytes.
@@ -67,11 +69,30 @@ impl AsRef<Signed<LooseCommit>> for WasmSignedLooseCommit {
     }
 }
 
+impl WasmSignedLooseCommit {
+    /// Create a `WasmSignedLooseCommit` from raw bytes (non-wasm-bindgen).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the bytes are not a valid signed loose commit.
+    #[must_use]
+    pub fn from_vec(bytes: Vec<u8>) -> Self {
+        Self(Signed::<LooseCommit>::try_decode(bytes).expect("valid signed loose commit bytes"))
+    }
+
+    /// Get the raw bytes of the signed loose commit.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
 /// A Wasm wrapper around `Signed<Fragment>`.
 #[wasm_bindgen(js_name = SignedFragment)]
 #[derive(Debug, Clone)]
 pub struct WasmSignedFragment(Signed<Fragment>);
 
+#[wasm_refgen(js_ref = JsSignedFragment)]
 #[wasm_bindgen(js_class = SignedFragment)]
 impl WasmSignedFragment {
     /// Decode a `SignedFragment` from raw bytes.
@@ -124,5 +145,23 @@ impl From<WasmSignedFragment> for Signed<Fragment> {
 impl AsRef<Signed<Fragment>> for WasmSignedFragment {
     fn as_ref(&self) -> &Signed<Fragment> {
         &self.0
+    }
+}
+
+impl WasmSignedFragment {
+    /// Create a `WasmSignedFragment` from raw bytes (non-wasm-bindgen).
+    ///
+    /// # Panics
+    ///
+    /// Panics if the bytes are not a valid signed fragment.
+    #[must_use]
+    pub fn from_vec(bytes: Vec<u8>) -> Self {
+        Self(Signed::<Fragment>::try_decode(bytes).expect("valid signed fragment bytes"))
+    }
+
+    /// Get the raw bytes of the signed fragment.
+    #[must_use]
+    pub fn as_bytes(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
