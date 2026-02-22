@@ -500,11 +500,11 @@ All sync messages use the envelope format with schema `SUM\x00`:
 **Result Tags:**
 | Tag | Result |
 |-----|--------|
-| `0x00` | Ok (includes SyncDiff) |
+| `0x00` | OK (includes `SyncDiff`) |
 | `0x01` | NotFound |
 | `0x02` | Unauthorized |
 
-**SyncDiff (for Ok result):**
+**`SyncDiff` (for OK result):**
 
 ```
 ╔═══════════╦═════════╦════════════╦══════════╦═══════════════════════════════════════════════════════════════════╗

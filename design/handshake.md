@@ -353,7 +353,7 @@ let challenge: &Challenge = verified.payload();
 let initiator_id = PeerId::from(verified.issuer());
 ```
 
-If `try_verify()` returns `Ok`, the `Verified<T>` value is _proof_ that verification succeeded. The type system prevents accessing unverified data.
+If `try_verify()` succeeds, the `Verified<T>` value is _proof_ that verification succeeded. The type system prevents accessing unverified data.
 
 ### Why This Matters
 
