@@ -42,7 +42,7 @@ export interface SedimentreeStorage {
     loadAllSedimentreeIds(): Promise<SedimentreeId[]>;
 
     // Compound storage for commits (signed data + blob stored together)
-    saveCommit(sedimentreeId: SedimentreeId, digest: Digest, signedCommit: SignedLooseCommit, blob: Blob): Promise<void>;
+    saveCommit(sedimentreeId: SedimentreeId, digest: Digest, signedCommit: SignedLooseCommit, blob: Uint8Array): Promise<void>;
     loadCommit(sedimentreeId: SedimentreeId, digest: Digest): Promise<CommitWithBlob | null>;
     listCommitDigests(sedimentreeId: SedimentreeId): Promise<Digest[]>;
     loadAllCommits(sedimentreeId: SedimentreeId): Promise<CommitWithBlob[]>;
@@ -50,7 +50,7 @@ export interface SedimentreeStorage {
     deleteAllCommits(sedimentreeId: SedimentreeId): Promise<void>;
 
     // Compound storage for fragments (signed data + blob stored together)
-    saveFragment(sedimentreeId: SedimentreeId, digest: Digest, signedFragment: SignedFragment, blob: Blob): Promise<void>;
+    saveFragment(sedimentreeId: SedimentreeId, digest: Digest, signedFragment: SignedFragment, blob: Uint8Array): Promise<void>;
     loadFragment(sedimentreeId: SedimentreeId, digest: Digest): Promise<FragmentWithBlob | null>;
     listFragmentDigests(sedimentreeId: SedimentreeId): Promise<Digest[]>;
     loadAllFragments(sedimentreeId: SedimentreeId): Promise<FragmentWithBlob[]>;
