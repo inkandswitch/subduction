@@ -31,7 +31,10 @@ big-endian
 BigCo
 blake
 BlobDigest
+BlobLen
 BlobSize
+BlobsRequest
+BlobsResponse
 BndryCnt
 Caddy
 CAS
@@ -50,6 +53,8 @@ codebase
 Codec
 codec
 commit's
+CommitFPCount
+CommitFPs
 composable
 concap
 CPUs
@@ -61,6 +66,7 @@ cryptographic
 cryptographically
 Cryptree
 data's
+DataRequestRejected
 DCGKA
 DCGKA's
 decrypt
@@ -92,6 +98,8 @@ Filesystem
 filesystem
 FingerprintSummary
 FIXME
+FragFPCount
+FragFPs
 fs
 fsync
 FutureForm
@@ -156,11 +164,13 @@ non-extractable
 NonceCache
 Nonces
 nonces
+NotFound
 npm
 ns
 OCap
 ocap
 OCAP's
+Ok
 OpenPGP
 OpenPolicy
 Parallelizable
@@ -192,9 +202,11 @@ README
 Reconnection
 reconnection
 recurse
+RemoveSubscriptions
 repo
 reproducibility
 requester's
+RequestId
 Responder
 responder
 responder's
@@ -213,6 +225,7 @@ SedimentreeId
 Sedimentrees
 sedimentrees
 Serde
+ServerTimestamp
 sexualized
 SHA
 Sharded
@@ -236,6 +249,7 @@ subsumptions
 subtype
 subtyping
 symlink
+SyncDiff
 systemd
 targetId
 TCP
