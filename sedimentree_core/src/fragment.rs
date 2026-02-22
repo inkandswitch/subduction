@@ -219,6 +219,24 @@ impl HasBlobMeta for Fragment {
     }
 }
 
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Fragment {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let sedimentree_id: SedimentreeId = u.arbitrary()?;
+        let head: Digest<LooseCommit> = u.arbitrary()?;
+        let boundary: BTreeSet<Digest<LooseCommit>> = u.arbitrary()?;
+        let checkpoints: BTreeSet<Checkpoint> = u.arbitrary()?;
+        let blob_meta: BlobMeta = u.arbitrary()?;
+        Ok(Self::from_parts(
+            sedimentree_id,
+            head,
+            boundary,
+            checkpoints,
+            blob_meta,
+        ))
+    }
+}
+
 /// The minimal data for a [`Fragment`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -806,15 +824,17 @@ mod tests {
 
         /// Round-trip property: encode then decode yields the original value.
         #[test]
+        #[allow(clippy::panic)]
         fn codec_round_trip() {
             bolero::check!()
                 .with_arbitrary::<Fragment>()
                 .for_each(|fragment| {
                     let mut buf = alloc::vec::Vec::new();
                     fragment.encode_fields(&mut buf);
-                    let decoded = Fragment::try_decode_fields(&buf)
-                        .expect("decode should succeed for valid encoded data");
-                    assert_eq!(&decoded, fragment);
+                    match Fragment::try_decode_fields(&buf) {
+                        Ok(decoded) => assert_eq!(&decoded, fragment),
+                        Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
+                    }
                 });
         }
 
@@ -825,7 +845,7 @@ mod tests {
                 .with_arbitrary::<alloc::vec::Vec<u8>>()
                 .for_each(|bytes| {
                     // We don't care about the result, just that it doesn't panic
-                    let _ = Fragment::try_decode_fields(bytes);
+                    let _result = Fragment::try_decode_fields(bytes);
                 });
         }
 
@@ -841,7 +861,7 @@ mod tests {
                 });
         }
 
-        /// Full encode (with schema) size matches encoded_size().
+        /// Full encode (with schema) size matches `encoded_size()`.
         #[test]
         fn encoded_size_matches_actual() {
             bolero::check!()

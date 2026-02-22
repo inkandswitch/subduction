@@ -273,6 +273,7 @@ mod tests {
 }
 
 #[cfg(all(test, feature = "bolero"))]
+#[allow(clippy::panic)]
 mod proptests {
     use super::*;
     use crate::codec::encode::Encode;
@@ -285,9 +286,10 @@ mod proptests {
             .for_each(|commit| {
                 let mut buf = Vec::new();
                 commit.encode_fields(&mut buf);
-                let decoded = LooseCommit::try_decode_fields(&buf)
-                    .expect("decode should succeed for valid encoded data");
-                assert_eq!(&decoded, commit);
+                match LooseCommit::try_decode_fields(&buf) {
+                    Ok(decoded) => assert_eq!(&decoded, commit),
+                    Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
+                }
             });
     }
 
@@ -298,7 +300,7 @@ mod proptests {
             .with_arbitrary::<Vec<u8>>()
             .for_each(|bytes| {
                 // We don't care about the result, just that it doesn't panic
-                let _ = LooseCommit::try_decode_fields(bytes);
+                let _result = LooseCommit::try_decode_fields(bytes);
             });
     }
 
@@ -314,7 +316,7 @@ mod proptests {
             });
     }
 
-    /// Full encode (with schema) size matches encoded_size().
+    /// Full encode (with schema) size matches `encoded_size()`.
     #[test]
     fn encoded_size_matches_actual() {
         bolero::check!()
