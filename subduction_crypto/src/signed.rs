@@ -135,21 +135,22 @@ impl<T: Schema + EncodeFields + Decode> Signed<T> {
         self.bytes.get(start..end).unwrap_or(&[])
     }
 
+    /// Get the signature.
+    #[must_use]
+    pub const fn signature(&self) -> &Signature {
+        &self.signature
+    }
+
     /// Verify the signature and decode the payload.
+    ///
+    /// This delegates to [`VerifiedSignature::try_from_signed`], which is the
+    /// canonical way to verify signatures.
     ///
     /// # Errors
     ///
     /// Returns an error if the signature is invalid or the payload cannot be decoded.
     pub fn try_verify(&self) -> Result<VerifiedSignature<T>, VerificationError> {
-        // Verify signature over payload bytes
-        self.issuer
-            .verify_strict(self.payload_bytes(), &self.signature)
-            .map_err(|_| VerificationError::InvalidSignature)?;
-
-        // Decode payload from fields bytes
-        let payload = T::try_decode_fields(self.fields_bytes())?;
-
-        Ok(VerifiedSignature::new(self.clone(), payload))
+        VerifiedSignature::try_from_signed(self)
     }
 
     /// Decode the payload from trusted storage without signature verification.
@@ -320,7 +321,7 @@ impl<T: Schema + EncodeFields + Decode> Signed<T> {
         };
 
         // We just signed it, so we know it's valid — no need to verify
-        VerifiedSignature::new(result, payload)
+        VerifiedSignature::from_parts(result, payload)
     }
 
     /// Create a signed payload from raw components.

@@ -195,11 +195,20 @@ trait Schema {
     const SCHEMA: [u8; 4];
 }
 
-/// Encode to canonical bytes.
-trait Encode: Schema {
+/// Encode to canonical bytes (any serializable type).
+trait Encode {
+    fn encode(&self) -> Vec<u8>;
+    fn encoded_size(&self) -> usize;
+}
+
+/// Encode fields for schema-prefixed signed messages.
+trait EncodeFields: Schema {
     fn encode_fields(&self, buf: &mut Vec<u8>);
     fn fields_size(&self) -> usize;
 }
+
+// Blanket impl: Schema + EncodeFields → Encode
+impl<T: Schema + EncodeFields> Encode for T { /* schema + fields */ }
 
 /// Decode from canonical bytes.
 trait Decode: Schema + Sized {
@@ -207,6 +216,12 @@ trait Decode: Schema + Sized {
     fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError>;
 }
 ```
+
+**Trait design:**
+- `Encode` is the simple trait for any serializable type (e.g., `Blob`)
+- `EncodeFields` is for signed messages that need a schema prefix
+- The blanket impl gives `Encode` to all `Schema + EncodeFields` types automatically
+- `Signed<T>` requires `T: Schema + EncodeFields + Decode`
 
 ### Scope Binding
 
@@ -329,7 +344,7 @@ Implementations include:
 
 Signed payloads use a custom codec (not CBOR) to guarantee determinism:
 
-- Fixed field order defined by `Encode` implementation
+- Fixed field order defined by `EncodeFields` implementation
 - Big-endian integers (no smallest-encoding ambiguity)
 - Sorted arrays with no duplicates
 - No optional fields or default values

@@ -6,32 +6,36 @@ use sedimentree_core::codec::{
     decode::Decode, encode::EncodeFields, error::DecodeError, schema::Schema,
 };
 
-use crate::signed::Signed;
+use crate::signed::{Signed, VerificationError};
 
 /// A payload whose signature has been verified.
 ///
-/// This type is a **witness** that the signature is valid, either because:
-/// - [`Signed::try_verify`] succeeded (remote data)
-/// - `seal()` created it (local data, self-signed)
+/// This type is a **witness** that the signature is valid. It can only be
+/// created through controlled entry points:
+///
+/// - [`try_from_signed`](Self::try_from_signed) — verify untrusted data from the wire
+/// - [`Signed::seal`] — sign new data (we know our own signature is valid)
+/// - [`try_from_trusted`](Self::try_from_trusted) — load from trusted storage
 ///
 /// It provides access to the payload that [`Signed<T>`] intentionally withholds,
 /// ensuring callers cannot skip verification.
 ///
 /// ```text
 /// Local:    T  ──seal──►  VerifiedSignature<T>  ──putter──►  Storage
-/// Remote:   Signed<T>  ──try_verify──►  VerifiedSignature<T>  ──putter──►  Storage
+/// Remote:   Signed<T>  ──try_from_signed──►  VerifiedSignature<T>  ──putter──►  Storage
+/// Reload:   Signed<T>  ──try_from_trusted──►  VerifiedSignature<T>  (no re-verify)
 /// ```
 ///
 /// # Storage Pattern
 ///
 /// `VerifiedSignature<T>` retains the original [`Signed<T>`] so you can store the
 /// signed version after verification. For loading from storage, use
-/// [`Signed::decode_payload`] to extract the payload directly (storage is trusted).
+/// [`try_from_trusted`](Self::try_from_trusted) which skips re-verification.
 ///
 /// # Wire Format
 ///
 /// This type should NEVER be sent over the wire directly. Always transmit
-/// [`Signed<T>`] and have the recipient verify.
+/// [`Signed<T>`] and have the recipient verify via [`try_from_signed`](Self::try_from_signed).
 #[derive(Clone, Debug)]
 pub struct VerifiedSignature<T: Schema + EncodeFields + Decode> {
     signed: Signed<T>,
@@ -39,11 +43,35 @@ pub struct VerifiedSignature<T: Schema + EncodeFields + Decode> {
 }
 
 impl<T: Schema + EncodeFields + Decode> VerifiedSignature<T> {
-    /// Create a new `VerifiedSignature`.
+    /// Verify the signature and decode the payload.
     ///
-    /// This is `pub(crate)` because it should only be constructed by
-    /// `Signed::try_verify` or `seal()`.
-    pub(crate) const fn new(signed: Signed<T>, payload: T) -> Self {
+    /// This is the primary way to create a `VerifiedSignature` from untrusted data.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the signature is invalid or the payload cannot be decoded.
+    pub fn try_from_signed(signed: &Signed<T>) -> Result<Self, VerificationError> {
+        // Verify signature over payload bytes
+        signed
+            .issuer()
+            .verify_strict(signed.payload_bytes(), signed.signature())
+            .map_err(|_| VerificationError::InvalidSignature)?;
+
+        // Decode payload from fields bytes
+        let payload = T::try_decode_fields(signed.fields_bytes())?;
+
+        Ok(Self {
+            signed: signed.clone(),
+            payload,
+        })
+    }
+
+    /// Create a new `VerifiedSignature` from parts.
+    ///
+    /// This is `pub(crate)` because it bypasses verification. Only use for:
+    /// - `Signed::seal()` where we just created the signature ourselves
+    /// - Internal construction after verification has already happened
+    pub(crate) const fn from_parts(signed: Signed<T>, payload: T) -> Self {
         Self { signed, payload }
     }
 
