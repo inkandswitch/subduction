@@ -14,7 +14,6 @@ use future_form::{Local, Sendable};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
@@ -38,9 +37,8 @@ async fn make_test_commit_with_data(
     data: &[u8],
 ) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
-    let blob_meta = BlobMeta::new(data);
-    let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(*id, digest, BTreeSet::new(), blob_meta);
+    let blob_meta = BlobMeta::new(&blob);
+    let commit = LooseCommit::new(*id, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }

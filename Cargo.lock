@@ -3166,6 +3166,7 @@ dependencies = [
  "arbitrary",
  "async-channel",
  "async-lock",
+ "blake3",
  "bolero",
  "criterion",
  "ed25519-dalek",

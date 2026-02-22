@@ -15,6 +15,7 @@ repository.workspace = true
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
+blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures = { workspace = true }

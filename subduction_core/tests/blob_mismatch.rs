@@ -20,13 +20,13 @@ use subduction_core::{
     connection::{
         message::Message,
         nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        test_utils::{test_signer, ChannelMockConnection, TokioSpawn},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;
@@ -34,9 +34,8 @@ use testresult::TestResult;
 /// Create a commit with matching blob metadata.
 async fn make_valid_commit(id: &SedimentreeId, data: &[u8]) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
-    let blob_meta = BlobMeta::new(data);
-    let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(*id, digest, BTreeSet::new(), blob_meta);
+    let blob_meta = BlobMeta::new(&blob);
+    let commit = LooseCommit::new(*id, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
@@ -46,24 +45,25 @@ async fn make_valid_commit(id: &SedimentreeId, data: &[u8]) -> (Signed<LooseComm
 async fn make_mismatched_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blob) {
     // Commit claims blob contains "claimed data"
     let claimed_data = b"claimed data";
-    let blob_meta = BlobMeta::new(claimed_data);
-    let digest = Digest::<LooseCommit>::hash_bytes(claimed_data);
-    let commit = LooseCommit::new(*id, digest, BTreeSet::new(), blob_meta);
+    let claimed_blob = Blob::new(claimed_data.to_vec());
+    let blob_meta = BlobMeta::new(&claimed_blob);
+    let commit = LooseCommit::new(*id, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different data";
-    let blob = Blob::new(actual_data.to_vec());
+    let actual_blob = Blob::new(actual_data.to_vec());
 
-    (verified.into_signed(), blob)
+    (verified.into_signed(), actual_blob)
 }
 
 /// Create a fragment with matching blob metadata.
 async fn make_valid_fragment(id: &SedimentreeId, data: &[u8]) -> (Signed<Fragment>, Blob) {
     let blob = Blob::new(data.to_vec());
-    let blob_meta = BlobMeta::new(data);
-    let head = Digest::<LooseCommit>::hash_bytes(b"head");
-    let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
+    let blob_meta = BlobMeta::new(&blob);
+    // Use arbitrary bytes for test fixture digests
+    let head = Digest::force_from_bytes([1u8; 32]);
+    let boundary = BTreeSet::from([Digest::force_from_bytes([2u8; 32])]);
     let fragment = Fragment::new(*id, head, boundary, &[], blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob)
@@ -73,17 +73,19 @@ async fn make_valid_fragment(id: &SedimentreeId, data: &[u8]) -> (Signed<Fragmen
 async fn make_mismatched_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob) {
     // Fragment claims blob contains "claimed fragment data"
     let claimed_data = b"claimed fragment data";
-    let blob_meta = BlobMeta::new(claimed_data);
-    let head = Digest::<LooseCommit>::hash_bytes(b"head");
-    let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
+    let claimed_blob = Blob::new(claimed_data.to_vec());
+    let blob_meta = BlobMeta::new(&claimed_blob);
+    // Use arbitrary bytes for test fixture digests
+    let head = Digest::force_from_bytes([1u8; 32]);
+    let boundary = BTreeSet::from([Digest::force_from_bytes([2u8; 32])]);
     let fragment = Fragment::new(*id, head, boundary, &[], blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different fragment data";
-    let blob = Blob::new(actual_data.to_vec());
+    let actual_blob = Blob::new(actual_data.to_vec());
 
-    (verified.into_signed(), blob)
+    (verified.into_signed(), actual_blob)
 }
 
 #[tokio::test]

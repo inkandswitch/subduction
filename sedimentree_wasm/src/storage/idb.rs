@@ -30,7 +30,7 @@ use crate::{
 };
 
 /// The version number of the [`IndexedDB`] database schema.
-pub const DB_VERSION: u32 = 2;
+pub const DB_VERSION: u32 = 1;
 
 /// The name of the [`IndexedDB`] database.
 pub const DB_NAME: &str = "@automerge/subduction/db";

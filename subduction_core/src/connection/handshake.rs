@@ -62,17 +62,16 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use future_form::FutureForm;
-use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::{
     codec::{
         decode,
         decode::Decode,
         encode,
-        encode::Encode,
+        encode::EncodeFields,
         error::{DecodeError, InvalidEnumTag},
         schema,
         schema::Schema,
@@ -100,8 +99,8 @@ impl DiscoveryId {
     /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
     #[must_use]
     pub fn new(service_identifier: &[u8]) -> Self {
-        let digest = RawDigest::<()>::hash_bytes(service_identifier);
-        Self(*digest.as_bytes())
+        let hash = blake3::hash(service_identifier);
+        Self(*hash.as_bytes())
     }
 
     /// Create a discovery ID from a pre-hashed value.
@@ -284,7 +283,7 @@ impl Schema for Challenge {
     const VERSION: u8 = 0;
 }
 
-impl Encode for Challenge {
+impl EncodeFields for Challenge {
     fn encode_fields(&self, buf: &mut Vec<u8>) {
         // AudienceTag (1 byte)
         match &self.audience {
@@ -368,7 +367,7 @@ impl Schema for Response {
     const VERSION: u8 = 0;
 }
 
-impl Encode for Response {
+impl EncodeFields for Response {
     fn encode_fields(&self, buf: &mut Vec<u8>) {
         // ChallengeDigest (32 bytes)
         encode::array(self.challenge_digest.as_bytes(), buf);
@@ -396,7 +395,7 @@ impl Decode for Response {
 
         // ChallengeDigest (32 bytes)
         let challenge_digest_bytes: [u8; 32] = decode::array(buf, 0)?;
-        let challenge_digest = Digest::from_bytes(challenge_digest_bytes);
+        let challenge_digest = Digest::force_from_bytes(challenge_digest_bytes);
 
         // ServerTimestamp (8 bytes)
         let server_timestamp_secs = decode::u64(buf, 32)?;
@@ -1536,7 +1535,7 @@ mod tests {
 
         fn sample_response() -> Response {
             Response {
-                challenge_digest: Digest::from_bytes([0xAB; 32]),
+                challenge_digest: Digest::force_from_bytes([0xAB; 32]),
                 server_timestamp: TimestampSeconds::new(1_234_567_890),
             }
         }
@@ -1657,7 +1656,7 @@ mod tests {
         fn response_challenge_digest_preserved() -> TestResult {
             let digest_bytes = [0x42; 32];
             let response = Response {
-                challenge_digest: Digest::from_bytes(digest_bytes),
+                challenge_digest: Digest::force_from_bytes(digest_bytes),
                 server_timestamp: TimestampSeconds::new(0),
             };
 
@@ -1672,7 +1671,7 @@ mod tests {
         #[test]
         fn response_timestamp_big_endian() -> TestResult {
             let response = Response {
-                challenge_digest: Digest::from_bytes([0x00; 32]),
+                challenge_digest: Digest::force_from_bytes([0x00; 32]),
                 server_timestamp: TimestampSeconds::new(0x0102_0304_0506_0708),
             };
 

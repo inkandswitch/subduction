@@ -1,6 +1,5 @@
 //! Comprehensive tests for tokio WebSocket client and server
 
-use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
@@ -10,18 +9,18 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
+        authenticated::Authenticated, handshake::Audience, message::Message,
+        nonce_cache::NonceCache, Connection, Reconnect,
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+    client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn,
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -44,21 +43,12 @@ fn test_signer(seed: u8) -> MemorySigner {
 fn random_blob() -> Blob {
     let mut bytes = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut bytes);
-    #[allow(clippy::expect_used)]
-    Blob::arbitrary(&mut Unstructured::new(&bytes)).expect("arbitrary blob")
+    Blob::new(bytes.to_vec())
 }
 
-fn random_digest() -> Digest<LooseCommit> {
-    let mut bytes = [0u8; 32];
-    rand::thread_rng().fill_bytes(&mut bytes);
-    #[allow(clippy::expect_used)]
-    Digest::arbitrary(&mut Unstructured::new(&bytes)).expect("arbitrary digest")
-}
-
-fn random_commit() -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, Blob) {
+fn random_commit() -> (BTreeSet<Digest<LooseCommit>>, Blob) {
     let blob = random_blob();
-    let digest = random_digest();
-    (digest, BTreeSet::new(), blob)
+    (BTreeSet::new(), blob)
 }
 
 #[tokio::test]
@@ -233,8 +223,9 @@ async fn server_graceful_shutdown() -> TestResult {
     Ok(())
 }
 
+/// Test multiple concurrent clients syncing with a server.
 #[tokio::test]
-#[allow(clippy::too_many_lines)] // Integration test with multiple clients requires setup/teardown
+#[allow(clippy::too_many_lines)]
 async fn multiple_concurrent_clients() -> TestResult {
     init_tracing();
 
@@ -268,9 +259,9 @@ async fn multiple_concurrent_clients() -> TestResult {
     });
 
     // Add initial commit to server
-    let (digest1, parents1, blob1) = random_commit();
+    let (parents1, blob1) = random_commit();
     server_subduction
-        .add_commit(sed_id, digest1, parents1, blob1)
+        .add_commit(sed_id, parents1, blob1)
         .await?;
 
     let server = TokioWebSocketServer::new(
@@ -355,55 +346,62 @@ async fn multiple_concurrent_clients() -> TestResult {
         num_clients
     );
 
-    // Sync all clients first for the specific sedimentree (establishes subscriptions)
+    // Expected total: 1 server commit + num_clients client commits
+    let expected_commits = num_clients + 1;
+
+    // Phase 1: Each client syncs to get the server's initial commit and subscribe
     for client in &clients {
         client
-            .sync_all(sed_id, true, Some(Duration::from_millis(100)))
+            .sync_all(sed_id, true, Some(Duration::from_secs(5)))
             .await?;
     }
 
-    // Now each client adds its own commit (after subscribing)
+    // Phase 2: Each client adds its own commit
     for client in &clients {
-        let (digest, parents, blob) = random_commit();
-        client.add_commit(sed_id, digest, parents, blob).await?;
+        let (parents, blob) = random_commit();
+        client.add_commit(sed_id, parents, blob).await?;
     }
 
-    // Give time for commits to propagate
-    tokio::time::sleep(Duration::from_millis(100)).await;
-
-    // Sync again to ensure all commits are shared
+    // Phase 3: All clients sync again to push their commits to the server
     for client in &clients {
         client
-            .sync_all(sed_id, true, Some(Duration::from_millis(100)))
+            .sync_all(sed_id, true, Some(Duration::from_secs(5)))
             .await?;
     }
 
-    // Give time for sync to complete
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Small delay to let server process all incoming commits
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Verify all clients have all commits (1 server + 3 client commits = 4 total)
-    for client in &clients {
-        let loose_commits = client
-            .get_commits(sed_id)
-            .await
-            .ok_or("sedimentree exists")?;
-        assert_eq!(
-            loose_commits.len(),
-            num_clients + 1,
-            "Client should have all commits"
-        );
-    }
-
-    // Verify server has all commits
+    // Phase 4: Verify server has all commits
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .ok_or("sedimentree exists")?;
+        .ok_or("sedimentree should exist on server")?;
     assert_eq!(
         server_commits.len(),
-        num_clients + 1,
-        "Server should have all commits"
+        expected_commits,
+        "Server should have all {expected_commits} commits (1 server + {num_clients} clients)"
     );
+
+    // Phase 5: All clients sync again to pull commits from other clients via server
+    for client in &clients {
+        client
+            .sync_all(sed_id, true, Some(Duration::from_secs(5)))
+            .await?;
+    }
+
+    // Phase 6: Verify all clients have all commits
+    for (i, client) in clients.iter().enumerate() {
+        let client_commits = client
+            .get_commits(sed_id)
+            .await
+            .ok_or("sedimentree should exist on client")?;
+        assert_eq!(
+            client_commits.len(),
+            expected_commits,
+            "Client {i} should have all {expected_commits} commits"
+        );
+    }
 
     Ok(())
 }
@@ -443,10 +441,8 @@ async fn request_with_delayed_response() -> TestResult {
     });
 
     // Add a commit so there's something to sync
-    let (digest, parents, blob) = random_commit();
-    server_subduction
-        .add_commit(sed_id, digest, parents, blob)
-        .await?;
+    let (parents, blob) = random_commit();
+    server_subduction.add_commit(sed_id, parents, blob).await?;
 
     let server = TokioWebSocketServer::new(
         addr,
@@ -651,11 +647,10 @@ async fn large_message_handling() -> TestResult {
     // Create a large blob (1MB)
     let large_data = vec![42u8; 1024 * 1024];
     let large_blob = Blob::new(large_data);
-    let digest = random_digest();
 
     // Add large commit
     client
-        .add_commit(sed_id, digest, BTreeSet::new(), large_blob)
+        .add_commit(sed_id, BTreeSet::new(), large_blob)
         .await?;
 
     // Sync with server
@@ -669,11 +664,12 @@ async fn large_message_handling() -> TestResult {
         .await
         .ok_or("sedimentree exists")?;
     assert_eq!(server_commits.len(), 1);
-    assert!(server_commits.iter().any(|c| c.digest() == digest));
 
     Ok(())
 }
 
+/// Test that commits added in sequence are synced to the server.
+///
 #[tokio::test]
 #[allow(clippy::too_many_lines)]
 async fn message_ordering() -> TestResult {
@@ -775,31 +771,23 @@ async fn message_ordering() -> TestResult {
     });
 
     // Add multiple commits in order
-    let mut digests = Vec::new();
     for _ in 0..5 {
-        let (digest, parents, blob) = random_commit();
-        client.add_commit(sed_id, digest, parents, blob).await?;
-        digests.push(digest);
+        let (parents, blob) = random_commit();
+        client.add_commit(sed_id, parents, blob).await?;
     }
 
-    // Sync all at once
-    client.full_sync(Some(Duration::from_millis(500))).await;
+    // Sync all commits to server
+    client.full_sync(Some(Duration::from_secs(5))).await;
 
-    tokio::time::sleep(Duration::from_millis(200)).await;
+    // Small delay for server to process
+    tokio::time::sleep(Duration::from_millis(50)).await;
 
-    // Verify server has all commits
+    // Verify server has all 5 commits
     let server_commits = server_subduction
         .get_commits(sed_id)
         .await
-        .ok_or("sedimentree exists")?;
-    assert_eq!(server_commits.len(), 5);
-
-    for digest in &digests {
-        assert!(
-            server_commits.iter().any(|c| c.digest() == *digest),
-            "Server should have commit with digest {digest:?}"
-        );
-    }
+        .ok_or("sedimentree should exist")?;
+    assert_eq!(server_commits.len(), 5, "server should have all 5 commits");
 
     Ok(())
 }

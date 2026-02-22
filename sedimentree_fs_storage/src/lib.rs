@@ -160,7 +160,7 @@ impl FsStorage {
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
-            Some(Digest::from_bytes(arr))
+            Some(Digest::force_from_bytes(arr))
         } else {
             None
         }
@@ -172,7 +172,7 @@ impl FsStorage {
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
             arr.copy_from_slice(&bytes);
-            Some(Digest::from_bytes(arr))
+            Some(Digest::force_from_bytes(arr))
         } else {
             None
         }
@@ -239,7 +239,7 @@ impl Storage<Sendable> for FsStorage {
         verified: VerifiedMeta<LooseCommit>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            let digest = verified.payload().digest();
+            let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "FsStorage::save_loose_commit");
 
             let signed_path = self.commit_signed_path(sedimentree_id, digest);
@@ -418,7 +418,7 @@ impl Storage<Sendable> for FsStorage {
         verified: VerifiedMeta<Fragment>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::Error>> {
         Sendable::from_future(async move {
-            let digest = verified.payload().digest();
+            let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "FsStorage::save_fragment");
 
             let signed_path = self.fragment_signed_path(sedimentree_id, digest);

@@ -95,7 +95,7 @@ impl Parents for SedimentreeChangeMetadata<'_> {
         self.0
             .deps
             .iter()
-            .map(|change_hash| Digest::from_bytes(change_hash.0))
+            .map(|change_hash| Digest::force_from_bytes(change_hash.0))
             .collect()
     }
 }

@@ -30,14 +30,14 @@ mod generators {
         let mut bytes = [0u8; 32];
         let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     fn blob_digest_from_seed(seed: u64) -> Digest<Blob> {
         let mut bytes = [0u8; 32];
         let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     fn digest_with_leading_zeros(zeros: usize, seed: u64) -> Digest<LooseCommit> {
@@ -49,7 +49,7 @@ mod generators {
         if zeros < 32 && bytes[zeros] == 0 {
             bytes[zeros] = 1;
         }
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     fn synthetic_blob_meta(seed: u64, size: u64) -> BlobMeta {
@@ -65,9 +65,8 @@ mod generators {
 
     fn synthetic_commit(seed: u64, parents: BTreeSet<Digest<LooseCommit>>) -> LooseCommit {
         let sedimentree_id = make_sedimentree_id(seed);
-        let digest = digest_from_seed(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
-        LooseCommit::new(sedimentree_id, digest, parents, blob_meta)
+        LooseCommit::new(sedimentree_id, parents, blob_meta)
     }
 
     fn synthetic_fragment(
@@ -95,7 +94,7 @@ mod generators {
         for i in 0..count {
             let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
             let commit = synthetic_commit(base_seed + i as u64, parents);
-            prev_digest = Some(commit.digest());
+            prev_digest = Some(Digest::hash(&commit));
             commits.push(commit);
         }
         commits

@@ -227,7 +227,7 @@ impl Storage<Local> for JsStorage {
         verified: VerifiedMeta<LooseCommit>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            let digest = verified.payload().digest();
+            let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "JsStorage::save_loose_commit");
 
             let signed: WasmSignedLooseCommit = verified.signed().clone().into();
@@ -359,7 +359,7 @@ impl Storage<Local> for JsStorage {
         verified: VerifiedMeta<Fragment>,
     ) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
         Local::from_future(async move {
-            let digest = verified.payload().digest();
+            let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "JsStorage::save_fragment");
 
             let signed: WasmSignedFragment = verified.signed().clone().into();

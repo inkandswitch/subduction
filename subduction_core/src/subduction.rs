@@ -372,6 +372,15 @@ impl<
         &self.nonce_tracker
     }
 
+    /// Returns a reference to the sedimentrees map.
+    ///
+    /// This is only available with the `test_utils` feature or in tests.
+    #[cfg(any(feature = "test_utils", test))]
+    #[must_use]
+    pub fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, N>> {
+        &self.sedimentrees
+    }
+
     /// Get a connection to a peer, if one exists.
     ///
     /// Returns the first available connection to the peer. Use this to get a
@@ -651,7 +660,7 @@ impl<
                     let mut pending = self.pending_blob_requests.lock().await;
                     let mut count = 0usize;
                     for blob in &blobs {
-                        let digest = Digest::hash_bytes(blob.as_slice());
+                        let digest = Digest::hash(blob);
                         if pending.remove(id, digest) {
                             count += 1;
                         }
@@ -1231,7 +1240,7 @@ impl<
         // Index blobs by digest for matching with commits/fragments
         let blobs_by_digest: Map<Digest<Blob>, Blob> = blobs
             .into_iter()
-            .map(|b| (Digest::hash_bytes(b.contents()), b))
+            .map(|b| (Digest::hash(&b), b))
             .collect();
 
         // Sign commits and pair with their blobs
@@ -1318,12 +1327,9 @@ impl<
     pub async fn add_commit(
         &self,
         id: SedimentreeId,
-        digest: Digest<LooseCommit>,
         parents: BTreeSet<Digest<LooseCommit>>,
         blob: Blob,
     ) -> Result<Option<FragmentRequested>, WriteError<F, S, C, P::PutDisallowed>> {
-        tracing::debug!("adding commit {:?} to sedimentree {:?}", digest, id);
-
         let self_id = self.peer_id();
         let putter = self
             .storage
@@ -1333,7 +1339,11 @@ impl<
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<F, _>(&self.signer, (id, digest, parents), verified_blob).await;
+            VerifiedMeta::seal::<F, _>(&self.signer, (id, parents), verified_blob).await;
+
+        let commit_digest = Digest::hash(verified_meta.payload());
+        tracing::debug!("adding commit {:?} to sedimentree {:?}", commit_digest, id);
+
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 
@@ -1378,10 +1388,9 @@ impl<
         }
 
         let mut maybe_requested_fragment = None;
-
-        let depth = self.depth_metric.to_depth(digest);
+        let depth = self.depth_metric.to_depth(commit_digest);
         if depth != Depth(0) {
-            maybe_requested_fragment = Some(FragmentRequested::new(digest, depth));
+            maybe_requested_fragment = Some(FragmentRequested::new(commit_digest, depth));
         }
 
         Ok(maybe_requested_fragment)
@@ -1504,7 +1513,7 @@ impl<
         let author = PeerId::from(verified.issuer());
         tracing::debug!(
             "receiving commit {:?} for sedimentree {:?} from peer {:?} (author {:?})",
-            verified.payload().digest(),
+            Digest::hash(verified.payload()),
             id,
             from,
             author
@@ -1703,7 +1712,7 @@ impl<
         let commit_by_digest: Map<Digest<LooseCommit>, VerifiedMeta<LooseCommit>> =
             verified_commits
                 .into_iter()
-                .map(|vm| (vm.payload().digest(), vm))
+                .map(|vm| (Digest::hash(vm.payload()), vm))
                 .collect();
         let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> = verified_fragments
             .into_iter()
@@ -1750,7 +1759,7 @@ impl<
             (
                 diff.local_only_commits
                     .iter()
-                    .map(|c| c.digest())
+                    .map(|c| Digest::hash(*c))
                     .collect::<Vec<_>>(),
                 diff.local_only_fragments
                     .iter()
@@ -2544,7 +2553,7 @@ impl<
 
             let commit_fp_to_digest: Map<Fingerprint<CommitId>, Digest<LooseCommit>> = sedimentree
                 .loose_commits()
-                .map(|c| (Fingerprint::new(seed, &c.commit_id()), c.digest()))
+                .map(|c| (Fingerprint::new(seed, &c.commit_id()), Digest::hash(c)))
                 .collect();
 
             let fragment_fp_to_digest: Map<Fingerprint<FragmentId>, Digest<Fragment>> = sedimentree
@@ -2591,7 +2600,7 @@ impl<
                         .await
                         .map_err(IoError::Storage)?
                         .into_iter()
-                        .map(|vm| (vm.payload().digest(), vm))
+                        .map(|vm| (Digest::hash(vm.payload()), vm))
                         .collect()
                 };
 
@@ -2691,7 +2700,7 @@ impl<
         let id = putter.sedimentree_id();
         let commit = verified_meta.payload().clone();
 
-        tracing::debug!("inserting commit {:?} locally", commit.digest());
+        tracing::debug!("inserting commit {:?} locally", Digest::hash(&commit));
 
         // Persist to storage first (cancel-safe: idempotent CAS writes)
         // VerifiedMeta guarantees blob matches claimed metadata at construction
@@ -3030,17 +3039,16 @@ mod tests {
     use subduction_crypto::signed::Signed;
     use testresult::TestResult;
 
-    fn make_commit_parts() -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, Blob) {
+    fn make_commit_parts() -> (BTreeSet<Digest<LooseCommit>>, Blob) {
         let contents = vec![0u8; 32];
         let blob = Blob::new(contents);
-        let digest = Digest::<LooseCommit>::from_bytes([0u8; 32]);
-        (digest, BTreeSet::new(), blob)
+        (BTreeSet::new(), blob)
     }
 
     async fn make_signed_test_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blob) {
-        let (digest, parents, blob) = make_commit_parts();
-        let blob_meta = BlobMeta::new(blob.as_slice());
-        let commit = LooseCommit::new(*id, digest, parents, blob_meta);
+        let (parents, blob) = make_commit_parts();
+        let blob_meta = BlobMeta::new(&blob);
+        let commit = LooseCommit::new(*id, parents, blob_meta);
         let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
         (verified.into_signed(), blob)
     }
@@ -3054,15 +3062,15 @@ mod tests {
     ) {
         let contents = vec![0u8; 32];
         let blob = Blob::new(contents);
-        let head = Digest::<LooseCommit>::from_bytes([1u8; 32]);
-        let boundary = BTreeSet::from([Digest::<LooseCommit>::from_bytes([2u8; 32])]);
-        let checkpoints = vec![Digest::<LooseCommit>::from_bytes([3u8; 32])];
+        let head = Digest::<LooseCommit>::force_from_bytes([1u8; 32]);
+        let boundary = BTreeSet::from([Digest::<LooseCommit>::force_from_bytes([2u8; 32])]);
+        let checkpoints = vec![Digest::<LooseCommit>::force_from_bytes([3u8; 32])];
         (head, boundary, checkpoints, blob)
     }
 
     async fn make_signed_test_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob) {
         let (head, boundary, checkpoints, blob) = make_fragment_parts();
-        let blob_meta = BlobMeta::new(blob.as_slice());
+        let blob_meta = BlobMeta::new(&blob);
         let fragment = Fragment::new(*id, head, boundary, &checkpoints, blob_meta);
         let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
         (verified.into_signed(), blob)

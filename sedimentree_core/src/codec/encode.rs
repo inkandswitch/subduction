@@ -6,9 +6,24 @@ use super::schema::Schema;
 
 /// Encode a type to its canonical binary representation.
 ///
-/// Types implementing this trait can be signed and transmitted.
-/// The encoding must be deterministic for signature verification.
-pub trait Encode: Schema {
+/// This is a simple trait for types that can be serialized to bytes.
+/// The encoding must be deterministic.
+pub trait Encode {
+    /// Encode to a new `Vec<u8>`.
+    fn encode(&self) -> Vec<u8>;
+
+    /// Size of the encoded representation (for buffer pre-allocation).
+    fn encoded_size(&self) -> usize;
+}
+
+/// Extension trait for types that have both a schema header and encodable fields.
+///
+/// This is used for signed protocol messages like [`LooseCommit`] and [`Fragment`]
+/// that need a schema prefix for type identification.
+///
+/// [`LooseCommit`]: crate::loose_commit::LooseCommit
+/// [`Fragment`]: crate::fragment::Fragment
+pub trait EncodeFields: Schema {
     /// Encode type-specific fields to the buffer.
     ///
     /// This is called after the schema and issuer have been written.
@@ -18,9 +33,16 @@ pub trait Encode: Schema {
     /// Size of the encoded fields (for buffer pre-allocation).
     fn fields_size(&self) -> usize;
 
-    /// Encode to a new `Vec<u8>` with schema header and fields.
+    /// Total size of the signed message.
     ///
-    /// This is useful for hashing the canonical representation.
+    /// This is `4 (schema) + 32 (issuer) + fields_size + 64 (signature)`.
+    fn signed_size(&self) -> usize {
+        4 + 32 + self.fields_size() + 64
+    }
+}
+
+/// Blanket impl: anything with Schema + EncodeFields gets Encode for free.
+impl<T: Schema + EncodeFields> Encode for T {
     fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(4 + self.fields_size());
         buf.extend_from_slice(&Self::SCHEMA);
@@ -28,11 +50,8 @@ pub trait Encode: Schema {
         buf
     }
 
-    /// Total size of the signed message.
-    ///
-    /// This is `4 (schema) + 32 (issuer) + fields_size + 64 (signature)`.
-    fn signed_size(&self) -> usize {
-        4 + 32 + self.fields_size() + 64
+    fn encoded_size(&self) -> usize {
+        4 + self.fields_size()
     }
 }
 

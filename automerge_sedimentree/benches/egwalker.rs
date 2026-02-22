@@ -82,7 +82,7 @@ fn random_digest_with_depth(rng: &mut SmallRng, depth: u32) -> Digest<LooseCommi
         }
     }
 
-    Digest::from_bytes(bytes)
+    Digest::force_from_bytes(bytes)
 }
 
 /// Generate synthetic fragments matching the expected distribution for a document.
@@ -129,7 +129,7 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
 
         // Blob size: average commit is ~100 bytes, fragment covers ~256 commits
         let blob_size = 256 * 100;
-        let blob_digest = Digest::from_bytes({
+        let blob_digest = Digest::force_from_bytes({
             let mut b = [0u8; 32];
             rng.fill(&mut b);
             b
@@ -240,7 +240,7 @@ fn generate_fragments_for_metric(
 
         // Blob size scales with fragment rate (larger fragments for sparser metrics)
         let blob_size = (fragment_rate * 100) as u64;
-        let blob_digest = Digest::from_bytes({
+        let blob_digest = Digest::force_from_bytes({
             let mut b = [0u8; 32];
             rng.fill(&mut b);
             b
@@ -269,18 +269,17 @@ fn generate_loose_commits(count: usize, seed: u64) -> Vec<LooseCommit> {
 
     (0..count)
         .map(|_| {
-            let digest = random_digest_with_depth(&mut rng, 0);
             let parent_count = rng.gen_range(0..=2);
             let parents: BTreeSet<_> = (0..parent_count)
                 .map(|_| random_digest_with_depth(&mut rng, 0))
                 .collect();
-            let blob_digest = Digest::from_bytes({
+            let blob_digest = Digest::force_from_bytes({
                 let mut b = [0u8; 32];
                 rng.fill(&mut b);
                 b
             });
             let blob_meta = BlobMeta::from_digest_size(blob_digest, 100);
-            LooseCommit::new(sedimentree_id, digest, parents, blob_meta)
+            LooseCommit::new(sedimentree_id, parents, blob_meta)
         })
         .collect()
 }

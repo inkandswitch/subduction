@@ -7,7 +7,8 @@
 //! # Traits
 //!
 //! - [`Schema`] — Type identity (4-byte header)
-//! - [`Encode`] — Serialize to bytes
+//! - [`Encode`] — Serialize to bytes (any type)
+//! - [`EncodeFields`] — Encode fields for schema-prefixed types
 //! - [`Decode`] — Deserialize from bytes
 //!
 //! # Format Overview

@@ -93,7 +93,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         verified: VerifiedMeta<LooseCommit>,
     ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            let digest = verified.payload().digest();
+            let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
 
             let (signed, _payload, blob) = verified.into_full_parts();
@@ -310,7 +310,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             self.ids.lock().await.insert(sedimentree_id);
 
             for verified in commits {
-                let digest = verified.payload().digest();
+                let digest = Digest::hash(verified.payload());
                 let (signed, _payload, blob) = verified.into_full_parts();
                 self.commits
                     .lock()
@@ -321,7 +321,7 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
             }
 
             for verified in fragments {
-                let digest = verified.payload().digest();
+                let digest = Digest::hash(verified.payload());
                 let (signed, _payload, blob) = verified.into_full_parts();
                 self.fragments
                     .lock()

@@ -144,10 +144,9 @@ fn make_test_blob(data: &[u8]) -> Blob {
     Blob::new(data.to_vec())
 }
 
-fn make_commit_parts(data: &[u8]) -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, Blob) {
+fn make_commit_parts(data: &[u8]) -> (BTreeSet<Digest<LooseCommit>>, Blob) {
     let blob = make_test_blob(data);
-    let digest = Digest::<LooseCommit>::hash_bytes(data);
-    (digest, BTreeSet::new(), blob)
+    (BTreeSet::new(), blob)
 }
 
 #[tokio::test]
@@ -204,9 +203,9 @@ async fn add_commit_rejected_by_policy() {
         );
 
     let id = SedimentreeId::new([1u8; 32]);
-    let (digest, parents, blob) = make_commit_parts(b"test data");
+    let (parents, blob) = make_commit_parts(b"test data");
 
-    let result = subduction.add_commit(id, digest, parents, blob).await;
+    let result = subduction.add_commit(id, parents, blob).await;
 
     // Should fail with PutDisallowed
     assert!(result.is_err());

@@ -18,7 +18,7 @@ use criterion::{criterion_group, criterion_main};
 mod generators {
     use std::collections::BTreeSet;
 
-    use rand::{Rng, SeedableRng, rngs::SmallRng};
+    use rand::{rngs::SmallRng, Rng, SeedableRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         crypto::digest::Digest,
@@ -33,7 +33,7 @@ mod generators {
         let mut bytes = [0u8; 32];
         let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     /// Generate a deterministic blob digest from a seed.
@@ -41,7 +41,7 @@ mod generators {
         let mut bytes = [0u8; 32];
         let mut rng = SmallRng::seed_from_u64(seed);
         rng.fill(&mut bytes);
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     /// Generate a commit digest with a specific number of leading zero bytes.
@@ -61,7 +61,7 @@ mod generators {
         if zeros < 32 && bytes[zeros] == 0 {
             bytes[zeros] = 1;
         }
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     /// Generate synthetic blob metadata.
@@ -83,9 +83,8 @@ mod generators {
         parents: BTreeSet<Digest<LooseCommit>>,
     ) -> LooseCommit {
         let sedimentree_id = sedimentree_id_from_seed(seed);
-        let digest = digest_from_seed(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
-        LooseCommit::new(sedimentree_id, digest, parents, blob_meta)
+        LooseCommit::new(sedimentree_id, parents, blob_meta)
     }
 
     /// Generate a synthetic fragment with configurable complexity.
@@ -115,7 +114,7 @@ mod generators {
         for i in 0..count {
             let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
             let commit = synthetic_commit(base_seed + i as u64, parents);
-            prev_digest = Some(commit.digest());
+            prev_digest = Some(Digest::hash(&commit));
             commits.push(commit);
         }
         commits
@@ -146,7 +145,7 @@ mod generators {
             };
 
             let commit = synthetic_commit(base_seed + i as u64, parents);
-            recent_digests.push(commit.digest());
+            recent_digests.push(Digest::hash(&commit));
             if recent_digests.len() > 10 {
                 recent_digests.remove(0);
             }
@@ -170,7 +169,7 @@ mod generators {
             for i in 0..depth_per_branch {
                 let parents = prev_digest.map(|d| BTreeSet::from([d])).unwrap_or_default();
                 let commit = synthetic_commit(branch_seed + i as u64, parents);
-                prev_digest = Some(commit.digest());
+                prev_digest = Some(Digest::hash(&commit));
                 commits.push(commit);
             }
         }
@@ -244,7 +243,6 @@ mod digest {
     use criterion::{BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{
         commit::CountLeadingZeroBytes, crypto::digest::Digest, depth::DepthMetric,
-        loose_commit::LooseCommit,
     };
 
     use super::generators::{digest_from_seed, digest_with_leading_zeros};
@@ -264,7 +262,7 @@ mod digest {
             let data: Vec<u8> = (0..size).map(|i| (i % 256) as u8).collect();
             group.throughput(Throughput::Bytes(size as u64));
             group.bench_with_input(BenchmarkId::from_parameter(size), &data, |b, data| {
-                b.iter(|| Digest::<LooseCommit>::hash_bytes(black_box(data)));
+                b.iter(|| blake3::hash(black_box(data)));
             });
         }
 

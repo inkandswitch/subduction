@@ -116,7 +116,7 @@ mod tests {
 
     #[test]
     fn checkpoint_from_digest() {
-        let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
+        let digest = Digest::<LooseCommit>::force_from_bytes([42u8; 32]);
         let checkpoint = Checkpoint::new(digest);
         assert_eq!(checkpoint.as_bytes(), &[42u8; 12]);
     }
@@ -128,8 +128,8 @@ mod tests {
         let mut bytes_b = [0u8; 32];
         bytes_b[31] = 2;
 
-        let a = Checkpoint::new(Digest::<LooseCommit>::from_bytes(bytes_a));
-        let b = Checkpoint::new(Digest::<LooseCommit>::from_bytes(bytes_b));
+        let a = Checkpoint::new(Digest::<LooseCommit>::force_from_bytes(bytes_a));
+        let b = Checkpoint::new(Digest::<LooseCommit>::force_from_bytes(bytes_b));
         assert_eq!(a, b); // Same first 12 bytes
     }
 }

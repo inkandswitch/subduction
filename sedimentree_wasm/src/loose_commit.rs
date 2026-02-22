@@ -1,7 +1,11 @@
 //! Individual/"loose" commits.
 
 use alloc::{borrow::ToOwned, collections::BTreeSet, vec::Vec};
-use sedimentree_core::{blob::BlobMeta, crypto::digest::Digest, loose_commit::LooseCommit};
+use sedimentree_core::{
+    blob::{Blob, BlobMeta},
+    crypto::digest::Digest,
+    loose_commit::LooseCommit,
+};
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
@@ -18,13 +22,12 @@ pub struct WasmLooseCommit(LooseCommit);
 #[wasm_refgen(js_ref = JsLooseCommit)]
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
-    /// Create a new `LooseCommit` from the given sedimentree ID, digest, parents, and blob metadata.
+    /// Create a new `LooseCommit` from the given sedimentree ID, parents, and blob metadata.
     #[wasm_bindgen(constructor)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
         sedimentree_id: WasmSedimentreeId,
-        digest: &WasmDigest,
         parents: Vec<JsDigest>,
         blob_meta: &WasmBlobMeta,
     ) -> Self {
@@ -33,7 +36,6 @@ impl WasmLooseCommit {
 
         let core_commit = LooseCommit::new(
             sedimentree_id.into(),
-            digest.clone().into(),
             core_parents,
             blob_meta.clone().into(),
         );
@@ -45,7 +47,7 @@ impl WasmLooseCommit {
     #[must_use]
     #[wasm_bindgen(getter)]
     pub fn digest(&self) -> WasmDigest {
-        self.0.digest().into()
+        Digest::hash(&self.0).into()
     }
 
     /// Get the parent digests of the commit.
@@ -86,7 +88,8 @@ impl WasmBlobMeta {
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new(blob: &[u8]) -> Self {
-        BlobMeta::new(blob).into()
+        let blob = Blob::new(blob.into());
+        BlobMeta::new(&blob).into()
     }
 
     /// Create a `BlobMeta` from a digest and size.

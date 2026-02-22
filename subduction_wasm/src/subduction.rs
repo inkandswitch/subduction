@@ -1,6 +1,6 @@
 //! Subduction node.
 
-use alloc::{format, string::String, sync::Arc, vec::Vec};
+use alloc::{collections::BTreeSet, format, string::String, sync::Arc, vec::Vec};
 use core::{fmt::Debug, time::Duration};
 use sedimentree_core::collections::Map;
 
@@ -471,19 +471,15 @@ impl WasmSubduction {
     pub async fn add_commit(
         &self,
         id: &WasmSedimentreeId,
-        digest: &WasmDigest,
         parents: Vec<JsDigest>,
         blob: &Uint8Array,
     ) -> Result<Option<WasmFragmentRequested>, WasmWriteError> {
         let core_id: SedimentreeId = id.clone().into();
-        let core_digest: Digest<LooseCommit> = digest.clone().into();
-        let core_parents = parents.iter().map(|d| WasmDigest::from(d).into()).collect();
+        let core_parents: BTreeSet<Digest<LooseCommit>> =
+            parents.iter().map(|d| WasmDigest::from(d).into()).collect();
         let blob: Blob = blob.clone().to_vec().into();
 
-        let maybe_fragment_requested = self
-            .core
-            .add_commit(core_id, core_digest, core_parents, blob)
-            .await?;
+        let maybe_fragment_requested = self.core.add_commit(core_id, core_parents, blob).await?;
 
         Ok(maybe_fragment_requested.map(WasmFragmentRequested::from))
     }

@@ -16,13 +16,13 @@ use subduction_core::{
     connection::{
         message::Message,
         nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
+        test_utils::{new_test_subduction, test_signer, ChannelMockConnection, TokioSpawn},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use testresult::TestResult;
 
@@ -32,7 +32,7 @@ const TEST_TREE: SedimentreeId = SedimentreeId::new([42u8; 32]);
 async fn test_get_blob_returns_none_for_missing() {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    let digest = Digest::<Blob>::from_bytes([1u8; 32]);
+    let digest = Digest::<Blob>::force_from_bytes([1u8; 32]);
     let blob = subduction
         .get_blob(TEST_TREE, digest)
         .await
@@ -99,7 +99,7 @@ async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
     // Create a blob and compute its content-addressed digest
     let blob_data = b"requested blob content";
     let blob = Blob::new(blob_data.to_vec());
-    let digest = Digest::<Blob>::hash_bytes(blob_data);
+    let digest = Digest::hash(&blob);
 
     // Request this blob — populates pending_blob_requests
     subduction.request_blobs(TEST_TREE, vec![digest]).await;
@@ -154,7 +154,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
     // Create a blob but do NOT call request_blobs — the digest won't be in pending
     let blob_data = b"unsolicited blob content";
     let blob = Blob::new(blob_data.to_vec());
-    let digest = Digest::<Blob>::hash_bytes(blob_data);
+    let digest = Digest::hash(&blob);
 
     // Peer sends an unsolicited BlobsResponse
     handle
@@ -196,11 +196,11 @@ async fn blobs_response_does_not_store_any_blobs() -> TestResult {
     // Create two blobs
     let requested_data = b"blob we asked for";
     let requested_blob = Blob::new(requested_data.to_vec());
-    let requested_digest = Digest::<Blob>::hash_bytes(requested_data);
+    let requested_digest = Digest::hash(&requested_blob);
 
     let unsolicited_data = b"blob we did not ask for";
     let unsolicited_blob = Blob::new(unsolicited_data.to_vec());
-    let unsolicited_digest = Digest::<Blob>::hash_bytes(unsolicited_data);
+    let unsolicited_digest = Digest::hash(&unsolicited_blob);
 
     // Only request the first blob
     subduction
@@ -266,7 +266,7 @@ async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
 
     let blob_data = b"blob for tree A only";
     let blob = Blob::new(blob_data.to_vec());
-    let digest = Digest::<Blob>::hash_bytes(blob_data);
+    let digest = Digest::hash(&blob);
 
     // Request blob for tree A
     subduction.request_blobs(tree_a, vec![digest]).await;
@@ -323,7 +323,7 @@ async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
 
     let blob_data = b"blob requested for tree A";
     let blob = Blob::new(blob_data.to_vec());
-    let digest = Digest::<Blob>::hash_bytes(blob_data);
+    let digest = Digest::hash(&blob);
 
     // Request blob for tree A
     subduction.request_blobs(tree_a, vec![digest]).await;

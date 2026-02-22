@@ -208,7 +208,7 @@ mod tests {
 
     #[test]
     fn different_truncation_sizes_are_distinct_types() {
-        let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
+        let digest = Digest::<LooseCommit>::force_from_bytes([42u8; 32]);
 
         let t8: Truncated<Digest<LooseCommit>, 8> = Truncated::new(digest);
         let t12: Truncated<Digest<LooseCommit>, 12> = Truncated::new(digest);
@@ -230,7 +230,7 @@ mod tests {
             bolero::check!()
                 .with_arbitrary::<[u8; 32]>()
                 .for_each(|bytes| {
-                    let digest = Digest::<LooseCommit>::from_bytes(*bytes);
+                    let digest = Digest::<LooseCommit>::force_from_bytes(*bytes);
                     let truncated: Truncated<Digest<LooseCommit>> = Truncated::new(digest);
                     assert_eq!(truncated.as_bytes(), &bytes[..12]);
                 });
@@ -251,9 +251,9 @@ mod tests {
                     bytes_b[12..].copy_from_slice(suffix_b);
 
                     let a: Truncated<Digest<LooseCommit>> =
-                        Truncated::new(Digest::from_bytes(bytes_a));
+                        Truncated::new(Digest::force_from_bytes(bytes_a));
                     let b: Truncated<Digest<LooseCommit>> =
-                        Truncated::new(Digest::from_bytes(bytes_b));
+                        Truncated::new(Digest::force_from_bytes(bytes_b));
 
                     assert_eq!(a, b, "same prefix should produce equal truncations");
                 });
@@ -270,9 +270,9 @@ mod tests {
                     }
 
                     let a: Truncated<Digest<LooseCommit>> =
-                        Truncated::new(Digest::from_bytes(*bytes_a));
+                        Truncated::new(Digest::force_from_bytes(*bytes_a));
                     let b: Truncated<Digest<LooseCommit>> =
-                        Truncated::new(Digest::from_bytes(*bytes_b));
+                        Truncated::new(Digest::force_from_bytes(*bytes_b));
 
                     assert_ne!(
                         a, b,

@@ -328,7 +328,8 @@ mod tags {
 }
 
 mod min_sizes {
-    pub(super) const LOOSE_COMMIT: usize = 32 + 201 + 4;
+    // sed_id(32) + Signed<LooseCommit>::MIN_SIZE(169) + blob_len_prefix(4)
+    pub(super) const LOOSE_COMMIT: usize = 32 + 169 + 4;
     pub(super) const FRAGMENT: usize = 32 + 203 + 4;
     pub(super) const BLOBS_REQUEST: usize = 32 + 2;
     pub(super) const BLOBS_RESPONSE: usize = 32 + 2;
@@ -765,7 +766,7 @@ fn decode_blobs_request(payload: &[u8]) -> Result<Message, DecodeError> {
 
     let mut digests = Vec::with_capacity(count);
     for _ in 0..count {
-        digests.push(Digest::from_bytes(read_array::<32>(payload, &mut offset)?));
+        digests.push(Digest::force_from_bytes(read_array::<32>(payload, &mut offset)?));
     }
 
     Ok(Message::BlobsRequest { id, digests })
@@ -1077,11 +1078,11 @@ mod tests {
         async fn test_loose_commit_has_no_request_id() {
             let signer = test_signer();
             let id = SedimentreeId::new([1u8; 32]);
+            let blob = Blob::new(Vec::new());
             let commit = LooseCommit::new(
                 id,
-                Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
-                sedimentree_core::blob::BlobMeta::new(&[]),
+                sedimentree_core::blob::BlobMeta::new(&blob),
             );
             let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
                 .await
@@ -1098,12 +1099,13 @@ mod tests {
         async fn test_fragment_has_no_request_id() {
             let signer = test_signer();
             let id = SedimentreeId::new([1u8; 32]);
+            let blob = Blob::new(Vec::new());
             let fragment = Fragment::new(
                 id,
-                Digest::from_bytes([2u8; 32]),
+                Digest::force_from_bytes([2u8; 32]),
                 BTreeSet::new(),
                 &[],
-                sedimentree_core::blob::BlobMeta::new(&[]),
+                sedimentree_core::blob::BlobMeta::new(&blob),
             );
             let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
                 .await
@@ -1120,7 +1122,7 @@ mod tests {
         fn test_blobs_request_has_no_request_id() {
             let msg = Message::BlobsRequest {
                 id: SedimentreeId::new([0u8; 32]),
-                digests: vec![Digest::from_bytes([1u8; 32])],
+                digests: vec![Digest::force_from_bytes([1u8; 32])],
             };
             assert_eq!(msg.request_id(), None);
         }
@@ -1181,13 +1183,12 @@ mod tests {
         async fn test_sync_diff_with_commits() {
             let signer = test_signer();
             let id = SedimentreeId::new([0u8; 32]);
+            let blob = Blob::new(Vec::from([2u8; 16]));
             let commit = LooseCommit::new(
                 id,
-                Digest::from_bytes([1u8; 32]),
                 BTreeSet::new(),
-                sedimentree_core::blob::BlobMeta::new(&[]),
+                sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let blob = Blob::new(Vec::from([2u8; 16]));
             let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
                 .await
                 .into_signed();
@@ -1210,14 +1211,14 @@ mod tests {
         async fn test_sync_diff_with_fragments() {
             let signer = test_signer();
             let id = SedimentreeId::new([0u8; 32]);
+            let blob = Blob::new(Vec::from([3u8; 16]));
             let fragment = Fragment::new(
                 id,
-                Digest::from_bytes([2u8; 32]),
+                Digest::force_from_bytes([2u8; 32]),
                 BTreeSet::new(),
                 &[],
-                sedimentree_core::blob::BlobMeta::new(&[]),
+                sedimentree_core::blob::BlobMeta::new(&blob),
             );
-            let blob = Blob::new(Vec::from([3u8; 16]));
             let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
                 .await
                 .into_signed();
@@ -1266,7 +1267,7 @@ mod tests {
         fn blobs_request_roundtrip() -> TestResult {
             let msg = Message::BlobsRequest {
                 id: SedimentreeId::new([1u8; 32]),
-                digests: vec![Digest::from_bytes([2u8; 32]), Digest::from_bytes([3u8; 32])],
+                digests: vec![Digest::force_from_bytes([2u8; 32]), Digest::force_from_bytes([3u8; 32])],
             };
 
             let encoded = msg.encode();

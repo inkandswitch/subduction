@@ -26,8 +26,9 @@ use core::{cmp::Ordering, marker::PhantomData};
 use ed25519_dalek::{Signature, VerifyingKey};
 use sedimentree_core::codec::{
     decode::Decode,
-    encode::Encode,
+    encode::EncodeFields,
     error::{DecodeError, InvalidSchema},
+    schema::Schema,
 };
 use thiserror::Error;
 
@@ -75,7 +76,7 @@ pub const MIN_SIGNED_SIZE: usize = SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_
 /// ```
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Signed<T: Encode + Decode> {
+pub struct Signed<T: Schema + EncodeFields + Decode> {
     /// Cached issuer verifying key (also at bytes[4..36]).
     issuer: VerifyingKey,
 
@@ -88,7 +89,7 @@ pub struct Signed<T: Encode + Decode> {
     _marker: PhantomData<T>,
 }
 
-impl<T: Encode + Decode> Clone for Signed<T> {
+impl<T: Schema + EncodeFields + Decode> Clone for Signed<T> {
     fn clone(&self) -> Self {
         Self {
             issuer: self.issuer,
@@ -99,7 +100,7 @@ impl<T: Encode + Decode> Clone for Signed<T> {
     }
 }
 
-impl<T: Encode + Decode> Signed<T> {
+impl<T: Schema + EncodeFields + Decode> Signed<T> {
     /// Get the issuer's verifying key.
     #[must_use]
     pub const fn issuer(&self) -> VerifyingKey {
@@ -352,27 +353,27 @@ impl<T: Encode + Decode> Signed<T> {
     }
 }
 
-impl<T: Encode + Decode> PartialEq for Signed<T> {
+impl<T: Schema + EncodeFields + Decode> PartialEq for Signed<T> {
     fn eq(&self, other: &Self) -> bool {
         self.bytes == other.bytes
     }
 }
 
-impl<T: Encode + Decode> Eq for Signed<T> {}
+impl<T: Schema + EncodeFields + Decode> Eq for Signed<T> {}
 
-impl<T: Encode + Decode> core::hash::Hash for Signed<T> {
+impl<T: Schema + EncodeFields + Decode> core::hash::Hash for Signed<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.bytes.hash(state);
     }
 }
 
-impl<T: Encode + Decode> PartialOrd for Signed<T> {
+impl<T: Schema + EncodeFields + Decode> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: Encode + Decode> Ord for Signed<T> {
+impl<T: Schema + EncodeFields + Decode> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.bytes.cmp(&other.bytes)
     }
@@ -391,7 +392,9 @@ pub enum VerificationError {
 }
 
 #[cfg(feature = "arbitrary")]
-impl<'a, T: Encode + Decode + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a> for Signed<T> {
+impl<'a, T: Schema + EncodeFields + Decode + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
+    for Signed<T>
+{
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use ed25519_dalek::{Signer as _, SigningKey};
 
@@ -432,7 +435,7 @@ mod tests {
 
     use sedimentree_core::codec::{
         decode::{self, Decode},
-        encode::{self, Encode},
+        encode::{self, EncodeFields},
         error::DecodeError,
         schema::{self, Schema},
     };
@@ -454,7 +457,7 @@ mod tests {
         const VERSION: u8 = 0;
     }
 
-    impl Encode for TestPayload {
+    impl EncodeFields for TestPayload {
         fn encode_fields(&self, buf: &mut Vec<u8>) {
             encode::u64(self.value, buf);
         }

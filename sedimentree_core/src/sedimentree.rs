@@ -5,7 +5,7 @@ mod commit_dag;
 use alloc::{collections::BTreeSet, vec::Vec};
 
 use crate::{
-    collections::{Map, Set},
+    collections::{Entry, Map, Set},
     crypto::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
@@ -109,10 +109,9 @@ pub struct Diff<'a> {
 /// All of the Sedimentree metadata about all the fragments for a series of payload.
 #[derive(Default, Clone, PartialEq, Eq)]
 #[cfg_attr(not(feature = "std"), derive(PartialOrd, Ord, Hash))]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct Sedimentree {
-    fragments: Set<Fragment>,
-    commits: Set<LooseCommit>,
+    fragments: Map<Digest<Fragment>, Fragment>,
+    commits: Map<Digest<LooseCommit>, LooseCommit>,
 }
 
 impl Sedimentree {
@@ -120,8 +119,11 @@ impl Sedimentree {
     #[must_use]
     pub fn new(fragments: Vec<Fragment>, commits: Vec<LooseCommit>) -> Self {
         Self {
-            fragments: fragments.into_iter().collect(),
-            commits: commits.into_iter().collect(),
+            fragments: fragments
+                .into_iter()
+                .map(|f| (Digest::hash(&f), f))
+                .collect(),
+            commits: commits.into_iter().map(|c| (Digest::hash(&c), c)).collect(),
         }
     }
 
@@ -140,7 +142,7 @@ impl Sedimentree {
         let mut digests: Vec<Digest<LooseCommit>> = minimal
             .fragments()
             .flat_map(|s| core::iter::once(s.head()).chain(s.boundary().iter().copied()))
-            .chain(minimal.commits.iter().map(LooseCommit::digest))
+            .chain(minimal.commits.keys().copied())
             .collect();
         digests.sort();
 
@@ -165,43 +167,74 @@ impl Sedimentree {
     ///
     /// Returns `true` if the commit was not already present
     pub fn add_commit(&mut self, commit: LooseCommit) -> bool {
-        self.commits.insert(commit)
+        let digest = Digest::hash(&commit);
+        match self.commits.entry(digest) {
+            Entry::Vacant(e) => {
+                e.insert(commit);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
     }
 
     /// Add a fragment to the [`Sedimentree`].
     ///
     /// Returns `true` if the stratum was not already present
     pub fn add_fragment(&mut self, fragment: Fragment) -> bool {
-        self.fragments.insert(fragment)
+        let digest = Digest::hash(&fragment);
+        match self.fragments.entry(digest) {
+            Entry::Vacant(e) => {
+                e.insert(fragment);
+                true
+            }
+            Entry::Occupied(_) => false,
+        }
     }
 
     /// Compute the difference between two local [`Sedimentree`]s.
     #[must_use]
     pub fn diff<'a>(&'a self, other: &'a Sedimentree) -> Diff<'a> {
+        let self_commit_keys: Set<_> = self.commits.keys().collect();
+        let other_commit_keys: Set<_> = other.commits.keys().collect();
+        let self_fragment_keys: Set<_> = self.fragments.keys().collect();
+        let other_fragment_keys: Set<_> = other.fragments.keys().collect();
+
         Diff {
             // Items in right but not left = what left is missing
-            left_missing_fragments: other.fragments.difference(&self.fragments).collect(),
-            left_missing_commits: other.commits.difference(&self.commits).collect(),
+            left_missing_fragments: other_fragment_keys
+                .difference(&self_fragment_keys)
+                .filter_map(|k| other.fragments.get(k))
+                .collect(),
+            left_missing_commits: other_commit_keys
+                .difference(&self_commit_keys)
+                .filter_map(|k| other.commits.get(k))
+                .collect(),
             // Items in left but not right = what right is missing
-            right_missing_fragments: self.fragments.difference(&other.fragments).collect(),
-            right_missing_commits: self.commits.difference(&other.commits).collect(),
+            right_missing_fragments: self_fragment_keys
+                .difference(&other_fragment_keys)
+                .filter_map(|k| self.fragments.get(k))
+                .collect(),
+            right_missing_commits: self_commit_keys
+                .difference(&other_commit_keys)
+                .filter_map(|k| self.commits.get(k))
+                .collect(),
         }
     }
 
     /// Iterate over all fragments in this [`Sedimentree`].
     pub fn fragments(&self) -> impl Iterator<Item = &Fragment> {
-        self.fragments.iter()
+        self.fragments.values()
     }
 
     /// Iterate over all loose commits in this [`Sedimentree`].
     pub fn loose_commits(&self) -> impl Iterator<Item = &LooseCommit> {
-        self.commits.iter()
+        self.commits.values()
     }
 
-    /// Returns true if this [`Sedimentree`] has a fragment with the given digest.
+    /// Returns true if this [`Sedimentree`] has a commit with the given digest.
     #[must_use]
     pub fn has_loose_commit(&self, digest: Digest<LooseCommit>) -> bool {
-        self.loose_commits().any(|c| c.digest() == digest)
+        self.commits.contains_key(&digest)
     }
 
     /// Returns true if this [`Sedimentree`] has a fragment starting with the given digest.
@@ -230,7 +263,7 @@ impl Sedimentree {
     pub fn minimize<M: DepthMetric>(&self, depth_metric: &M) -> Sedimentree {
         // 1. Group fragments by depth
         let mut by_depth: Map<Depth, Vec<&Fragment>> = Map::new();
-        for fragment in &self.fragments {
+        for fragment in self.fragments.values() {
             by_depth
                 .entry(fragment.depth(depth_metric))
                 .or_default()
@@ -271,14 +304,14 @@ impl Sedimentree {
         }
 
         // 4. Simplify loose commits relative to minimized fragments
-        let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
+        let dag = commit_dag::CommitDag::from_commits(self.commits.values());
         let simplified_dag = dag.simplify(&minimized_fragments, depth_metric);
 
         let commits = self
             .commits
             .iter()
-            .filter(|&c| simplified_dag.contains_commit(&c.digest()))
-            .cloned()
+            .filter(|(digest, _)| simplified_dag.contains_commit(digest))
+            .map(|(_, c)| c.clone())
             .collect();
 
         Sedimentree::new(minimized_fragments, commits)
@@ -293,13 +326,13 @@ impl Sedimentree {
     pub fn fingerprint_summarize(&self, seed: &FingerprintSeed) -> FingerprintSummary {
         let commit_fingerprints = self
             .commits
-            .iter()
+            .values()
             .map(|c| Fingerprint::new(seed, &c.commit_id()))
             .collect();
 
         let fragment_fingerprints = self
             .fragments
-            .iter()
+            .values()
             .map(|f| Fingerprint::new(seed, &f.fragment_id()))
             .collect();
 
@@ -323,7 +356,7 @@ impl Sedimentree {
         // Find local items the requestor doesn't have
         let local_only_commits: Vec<&LooseCommit> = self
             .commits
-            .iter()
+            .values()
             .filter(|c| {
                 !remote
                     .commit_fingerprints
@@ -333,7 +366,7 @@ impl Sedimentree {
 
         let local_only_fragments: Vec<&Fragment> = self
             .fragments
-            .iter()
+            .values()
             .filter(|f| {
                 !remote
                     .fragment_fingerprints
@@ -344,13 +377,13 @@ impl Sedimentree {
         // Find requestor fingerprints we don't have locally (echo back)
         let local_commit_fps: BTreeSet<Fingerprint<CommitId>> = self
             .commits
-            .iter()
+            .values()
             .map(|c| Fingerprint::new(seed, &c.commit_id()))
             .collect();
 
         let local_fragment_fps: BTreeSet<Fingerprint<FragmentId>> = self
             .fragments
-            .iter()
+            .values()
             .map(|f| Fingerprint::new(seed, &f.fragment_id()))
             .collect();
 
@@ -383,12 +416,12 @@ impl Sedimentree {
     #[must_use]
     pub fn heads<M: DepthMetric>(&self, depth_metric: &M) -> Vec<Digest<LooseCommit>> {
         let minimized = self.minimize(depth_metric);
-        let dag = commit_dag::CommitDag::from_commits(minimized.commits.iter());
+        let dag = commit_dag::CommitDag::from_commits(minimized.commits.values());
         let mut heads = Vec::<Digest<LooseCommit>>::new();
-        for fragment in &minimized.fragments {
+        for fragment in minimized.fragments.values() {
             if !minimized
                 .fragments
-                .iter()
+                .values()
                 .any(|s| s.boundary().contains(&fragment.head()))
                 && fragment
                     .boundary()
@@ -405,9 +438,9 @@ impl Sedimentree {
     /// Consume this [`Sedimentree`] and return an iterator over all its items.
     pub fn into_items(self) -> impl Iterator<Item = CommitOrFragment> {
         self.fragments
-            .into_iter()
+            .into_values()
             .map(CommitOrFragment::Fragment)
-            .chain(self.commits.into_iter().map(CommitOrFragment::Commit))
+            .chain(self.commits.into_values().map(CommitOrFragment::Commit))
     }
 
     /// Given a [`SedimentreeId`], return the [`Fragment`]s that are missing to fill in the gaps.
@@ -418,11 +451,11 @@ impl Sedimentree {
         seed: &FingerprintSeed,
         depth_metric: &M,
     ) -> Vec<FragmentSpec> {
-        let dag = commit_dag::CommitDag::from_commits(self.commits.iter());
+        let dag = commit_dag::CommitDag::from_commits(self.commits.values());
         let mut runs_by_level =
             Map::<crate::depth::Depth, (Digest<LooseCommit>, Vec<Digest<LooseCommit>>)>::new();
         let mut all_bundles = Vec::new();
-        let fragment_refs: Vec<&Fragment> = self.fragments.iter().collect();
+        let fragment_refs: Vec<&Fragment> = self.fragments.values().collect();
         for commit_hash in dag.canonical_sequence(&fragment_refs, depth_metric) {
             let level = depth_metric.to_depth(commit_hash);
             for (run_level, (_start, checkpoints)) in &mut runs_by_level {
@@ -433,7 +466,11 @@ impl Sedimentree {
             if level >= MAX_STRATA_DEPTH
                 && let Some((head, checkpoints)) = runs_by_level.remove(&level)
             {
-                if self.fragments.iter().any(|s| s.supports_block(commit_hash)) {
+                if self
+                    .fragments
+                    .values()
+                    .any(|s| s.supports_block(commit_hash))
+                {
                     runs_by_level.insert(level, (commit_hash, Vec::new()));
                 } else {
                     let checkpoint_fps = checkpoints
@@ -441,7 +478,7 @@ impl Sedimentree {
                         .map(|d| {
                             Fingerprint::new(
                                 seed,
-                                &CommitId::new(Digest::from_bytes(d.into_bytes())),
+                                &CommitId::new(Digest::force_from_bytes(d.into_bytes())),
                             )
                         })
                         .collect();
@@ -475,6 +512,15 @@ impl core::fmt::Debug for Sedimentree {
             .field("fragments", &self.fragments.len())
             .field("commits", &self.commits.len())
             .finish()
+    }
+}
+
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Sedimentree {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let fragments: Vec<Fragment> = u.arbitrary()?;
+        let commits: Vec<LooseCommit> = u.arbitrary()?;
+        Ok(Self::new(fragments, commits))
     }
 }
 
@@ -515,7 +561,7 @@ pub fn has_commit_boundary<
 mod tests {
     use alloc::vec;
 
-    use crate::blob::BlobMeta;
+    use crate::blob::{Blob, BlobMeta};
 
     use super::*;
 
@@ -523,13 +569,16 @@ mod tests {
         SedimentreeId::new([seed; 32])
     }
 
+    fn make_blob_meta(seed: u8) -> BlobMeta {
+        let blob = Blob::new(vec![seed]);
+        BlobMeta::new(&blob)
+    }
+
     fn make_commit(seed: u8) -> LooseCommit {
         let sedimentree_id = make_sedimentree_id(seed);
-        let mut bytes = [0u8; 32];
-        bytes[0] = seed;
-        let digest = Digest::from_bytes(bytes);
-        let blob_meta = BlobMeta::new(&[seed]);
-        LooseCommit::new(sedimentree_id, digest, BTreeSet::new(), blob_meta)
+        let blob = Blob::from(&[seed][..]);
+        let blob_meta = BlobMeta::new(&blob);
+        LooseCommit::new(sedimentree_id, BTreeSet::new(), blob_meta)
     }
 
     fn make_fragment(seed: u8) -> Fragment {
@@ -539,11 +588,12 @@ mod tests {
         let mut boundary_bytes = [0u8; 32];
         boundary_bytes[0] = seed;
         boundary_bytes[1] = 1;
-        let blob_meta = BlobMeta::new(&[seed]);
+        let blob = Blob::from(&[seed][..]);
+        let blob_meta = BlobMeta::new(&blob);
         Fragment::new(
             sedimentree_id,
-            Digest::from_bytes(head_bytes),
-            BTreeSet::from([Digest::from_bytes(boundary_bytes)]),
+            Digest::force_from_bytes(head_bytes),
+            BTreeSet::from([Digest::force_from_bytes(boundary_bytes)]),
             &[],
             blob_meta,
         )
@@ -677,7 +727,7 @@ mod tests {
                     byte_arr[idx] = 1; // Make it non-zero
                 }
             }
-            Digest::from_bytes(byte_arr)
+            Digest::force_from_bytes(byte_arr)
         }
 
         #[test]
@@ -760,8 +810,8 @@ mod tests {
                     let mut result = Vec::with_capacity(num_commits as usize);
                     for _ in 0..num_commits {
                         let contents = Vec::<u8>::arbitrary(u)?;
-                        let blob_meta = BlobMeta::new(&contents);
-                        let hash = Digest::<LooseCommit>::arbitrary(u)?;
+                        let blob = crate::blob::Blob::from(contents);
+                        let blob_meta = BlobMeta::new(&blob);
                         let mut parents = BTreeSet::new();
                         let mut num_parents = u.int_in_range(0..=frontier.len())?;
                         let mut parent_choices = frontier.iter().collect::<Vec<_>>();
@@ -773,9 +823,10 @@ mod tests {
                                 .remove(parent_choices.iter().position(|p| p == parent).unwrap());
                             num_parents -= 1;
                         }
-                        frontier.retain(|p| !parents.contains(p));
-                        frontier.push(hash);
-                        result.push(LooseCommit::new(sedimentree_id, hash, parents, blob_meta));
+                        let commit = LooseCommit::new(sedimentree_id, parents, blob_meta);
+                        frontier.retain(|p| !commit.parents().contains(p));
+                        frontier.push(Digest::hash(&commit));
+                        result.push(commit);
                     }
                     Ok(Scenario { commits: result })
                 }
@@ -939,9 +990,8 @@ mod tests {
     mod minimize_tests {
         use alloc::{collections::BTreeSet, vec, vec::Vec};
 
-        use super::make_sedimentree_id;
+        use super::{make_blob_meta, make_sedimentree_id};
         use crate::{
-            blob::BlobMeta,
             commit::CountLeadingZeroBytes,
             fragment::Fragment,
             sedimentree::Sedimentree,
@@ -1151,7 +1201,7 @@ mod tests {
         fn minimize_fragment_empty_boundary() {
             let sedimentree_id = make_sedimentree_id(1);
             let head = digest_with_depth(2, 1);
-            let blob_meta = BlobMeta::new(&[1]);
+            let blob_meta = make_blob_meta(1);
             let fragment = Fragment::new(sedimentree_id, head, BTreeSet::new(), &[], blob_meta);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
@@ -1165,7 +1215,7 @@ mod tests {
             // Degenerate case: head is also in boundary
             let sedimentree_id = make_sedimentree_id(1);
             let head = digest_with_depth(2, 1);
-            let blob_meta = BlobMeta::new(&[1]);
+            let blob_meta = make_blob_meta(1);
             let fragment =
                 Fragment::new(sedimentree_id, head, BTreeSet::from([head]), &[], blob_meta);
 
@@ -1182,7 +1232,7 @@ mod tests {
             let sedimentree_id = make_sedimentree_id(1);
             let head = digest_with_depth(2, 1);
             let boundary = digest_with_depth(1, 100);
-            let blob_meta = BlobMeta::new(&[1]);
+            let blob_meta = make_blob_meta(1);
             let fragment = Fragment::new(
                 sedimentree_id,
                 head,

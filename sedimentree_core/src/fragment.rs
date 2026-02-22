@@ -9,10 +9,10 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
-        encode::{self, Encode},
+        encode::{self, EncodeFields},
         error::{BufferTooShort, DecodeError, ReadingType},
         schema::{self, Schema},
     },
@@ -22,7 +22,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -92,7 +92,7 @@ impl Fragment {
                 hasher.update(checkpoint.as_bytes());
             }
 
-            Digest::from_bytes(*hasher.finalize().as_bytes())
+            Digest::force_from_bytes(*hasher.finalize().as_bytes())
         };
 
         Self {
@@ -346,7 +346,7 @@ impl Schema for Fragment {
     const VERSION: u8 = 0;
 }
 
-impl Encode for Fragment {
+impl EncodeFields for Fragment {
     fn encode_fields(&self, buf: &mut Vec<u8>) {
         encode::array(self.sedimentree_id.as_bytes(), buf);
         encode::array(self.head().as_bytes(), buf);
@@ -396,11 +396,11 @@ impl Decode for Fragment {
         offset += 32;
 
         let head_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let head = Digest::<LooseCommit>::from_bytes(head_bytes);
+        let head = Digest::<LooseCommit>::force_from_bytes(head_bytes);
         offset += 32;
 
         let blob_digest_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let blob_digest = Digest::<Blob>::from_bytes(blob_digest_bytes);
+        let blob_digest = Digest::<Blob>::force_from_bytes(blob_digest_bytes);
         offset += 32;
 
         let boundary_count = decode::u8(buf, offset)? as usize;
@@ -439,7 +439,7 @@ impl Decode for Fragment {
 
         let boundary: BTreeSet<Digest<LooseCommit>> = boundary_arrays
             .into_iter()
-            .map(Digest::from_bytes)
+            .map(Digest::force_from_bytes)
             .collect();
 
         let mut checkpoint_arrays: Vec<[u8; CHECKPOINT_BYTES]> =
@@ -477,7 +477,7 @@ mod tests {
         use testresult::TestResult;
 
         fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
-            Digest::from_bytes([byte; 32])
+            Digest::force_from_bytes([byte; 32])
         }
 
         fn make_sedimentree_id(byte: u8) -> SedimentreeId {
@@ -575,7 +575,7 @@ mod tests {
     use alloc::collections::BTreeSet;
 
     use crate::{
-        blob::BlobMeta,
+        blob::{Blob, BlobMeta},
         commit::CountLeadingZeroBytes,
         crypto::digest::Digest,
         fragment::{Fragment, FragmentSummary},
@@ -584,13 +584,18 @@ mod tests {
         test_utils::digest_with_depth,
     };
 
+    fn make_blob_meta(seed: u8) -> BlobMeta {
+        let blob = Blob::new(alloc::vec![seed]);
+        BlobMeta::new(&blob)
+    }
+
     fn make_fragment(
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
         checkpoints: &[Digest<LooseCommit>],
     ) -> Fragment {
         let sedimentree_id = SedimentreeId::new([0x42; 32]);
-        let blob_meta = BlobMeta::new(&[1]);
+        let blob_meta = make_blob_meta(1);
         Fragment::new(sedimentree_id, head, boundary, checkpoints, blob_meta)
     }
 
@@ -672,7 +677,7 @@ mod tests {
         let shallow_summary = FragmentSummary::new(
             shallow_head,
             BTreeSet::from([shallow_boundary]),
-            BlobMeta::new(&[2]),
+            make_blob_meta(2),
         );
 
         assert!(deep.supports(&shallow_summary, &CountLeadingZeroBytes));
@@ -691,7 +696,7 @@ mod tests {
         let deep_summary = FragmentSummary::new(
             deep_head,
             BTreeSet::from([deep_boundary]),
-            BlobMeta::new(&[2]),
+            make_blob_meta(2),
         );
 
         // Shallow should never support deeper, regardless of range
@@ -707,8 +712,7 @@ mod tests {
 
         let head2 = digest_with_depth(2, 2);
         let boundary2 = digest_with_depth(1, 101);
-        let summary2 =
-            FragmentSummary::new(head2, BTreeSet::from([boundary2]), BlobMeta::new(&[2]));
+        let summary2 = FragmentSummary::new(head2, BTreeSet::from([boundary2]), make_blob_meta(2));
 
         // Neither should support the other
         assert!(!fragment1.supports(&summary2, &CountLeadingZeroBytes));
@@ -723,7 +727,7 @@ mod tests {
         let fragment = make_fragment(head, BTreeSet::from([boundary_a, boundary_b]), &[]);
 
         // Summary with same head but boundary subset {A}
-        let summary = FragmentSummary::new(head, BTreeSet::from([boundary_a]), BlobMeta::new(&[2]));
+        let summary = FragmentSummary::new(head, BTreeSet::from([boundary_a]), make_blob_meta(2));
 
         // Should support (boundary is subset)
         assert!(fragment.supports(&summary, &CountLeadingZeroBytes));
@@ -747,7 +751,7 @@ mod tests {
         let shallow_summary = FragmentSummary::new(
             checkpoint1,
             BTreeSet::from([checkpoint2]),
-            BlobMeta::new(&[2]),
+            make_blob_meta(2),
         );
 
         assert!(deep.supports(&shallow_summary, &CountLeadingZeroBytes));
@@ -764,7 +768,7 @@ mod tests {
         let shallow_summary = FragmentSummary::new(
             other_head,
             BTreeSet::from([deep_boundary]), // boundary matches, but head doesn't
-            BlobMeta::new(&[2]),
+            make_blob_meta(2),
         );
 
         assert!(!deep.supports(&shallow_summary, &CountLeadingZeroBytes));
@@ -784,7 +788,7 @@ mod tests {
         let shallow_summary = FragmentSummary::new(
             shallow_head,
             BTreeSet::from([other_boundary]),
-            BlobMeta::new(&[2]),
+            make_blob_meta(2),
         );
 
         assert!(!deep.supports(&shallow_summary, &CountLeadingZeroBytes));

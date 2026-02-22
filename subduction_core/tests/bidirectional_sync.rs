@@ -52,9 +52,8 @@ async fn make_test_commit(
     data: &[u8],
 ) -> (Signed<LooseCommit>, Blob, LooseCommit) {
     let blob = Blob::new(data.to_vec());
-    let blob_meta = BlobMeta::new(data);
-    let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(*id, digest, BTreeSet::new(), blob_meta);
+    let blob_meta = BlobMeta::new(&blob);
+    let commit = LooseCommit::new(*id, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit.clone()).await;
     (verified.into_signed(), blob, commit)
 }
@@ -64,9 +63,9 @@ async fn make_test_fragment(
     data: &[u8],
 ) -> (Signed<Fragment>, Blob, FragmentSummary) {
     let blob = Blob::new(data.to_vec());
-    let blob_meta = BlobMeta::new(data);
-    // Fragment head is a LooseCommit digest (the starting point of the fragment)
-    let head = Digest::<LooseCommit>::hash_bytes(data);
+    let blob_meta = BlobMeta::new(&blob);
+    // Fragment head is a LooseCommit digest - use a deterministic value for tests
+    let head = Digest::force_from_bytes([data.first().copied().unwrap_or(0); 32]);
     let fragment = Fragment::new(*id, head, BTreeSet::new(), &[], blob_meta);
     let summary = fragment.summary().clone();
     let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;

@@ -2,8 +2,8 @@
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta},
-    codec::{decode::Decode, encode::Encode},
+    blob::{has_meta::HasBlobMeta, verified::VerifiedBlobMeta, Blob, BlobMeta},
+    codec::{decode::Decode, encode::EncodeFields, schema::Schema},
 };
 use thiserror::Error;
 
@@ -30,7 +30,7 @@ use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignatur
 ///
 /// [`Putter`]: subduction_core::storage::putter::Putter
 #[derive(Clone, Debug)]
-pub struct VerifiedMeta<T: Encode + Decode> {
+pub struct VerifiedMeta<T: Schema + EncodeFields + Decode> {
     verified: VerifiedSignature<T>,
     blob: Blob,
 }
@@ -46,7 +46,7 @@ pub struct BlobMismatch {
     pub actual: BlobMeta,
 }
 
-impl<T: HasBlobMeta + Encode + Decode> VerifiedMeta<T> {
+impl<T: HasBlobMeta + Schema + EncodeFields + Decode> VerifiedMeta<T> {
     /// Create a `VerifiedMeta<T>` after verifying the blob matches the claimed metadata.
     ///
     /// # Errors

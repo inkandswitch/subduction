@@ -2,7 +2,9 @@
 
 use core::cmp::Ordering;
 
-use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
+use sedimentree_core::codec::{
+    decode::Decode, encode::EncodeFields, error::DecodeError, schema::Schema,
+};
 
 use crate::signed::Signed;
 
@@ -31,12 +33,12 @@ use crate::signed::Signed;
 /// This type should NEVER be sent over the wire directly. Always transmit
 /// [`Signed<T>`] and have the recipient verify.
 #[derive(Clone, Debug)]
-pub struct VerifiedSignature<T: Encode + Decode> {
+pub struct VerifiedSignature<T: Schema + EncodeFields + Decode> {
     signed: Signed<T>,
     payload: T,
 }
 
-impl<T: Encode + Decode> VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + Decode> VerifiedSignature<T> {
     /// Create a new `VerifiedSignature`.
     ///
     /// This is `pub(crate)` because it should only be constructed by
@@ -97,22 +99,24 @@ impl<T: Encode + Decode> VerifiedSignature<T> {
     }
 }
 
-impl<T: Encode + Decode + PartialEq> PartialEq for VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + Decode + PartialEq> PartialEq for VerifiedSignature<T> {
     fn eq(&self, other: &Self) -> bool {
         // Compare by signed value (includes issuer, signature, encoded payload)
         self.signed == other.signed
     }
 }
 
-impl<T: Encode + Decode + Eq> Eq for VerifiedSignature<T> {}
+impl<T: Schema + EncodeFields + Decode + Eq> Eq for VerifiedSignature<T> {}
 
-impl<T: Encode + Decode + core::hash::Hash> core::hash::Hash for VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + Decode + core::hash::Hash> core::hash::Hash
+    for VerifiedSignature<T>
+{
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.signed.hash(state);
     }
 }
 
-impl<T: Encode + Decode + PartialOrd> PartialOrd for VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + Decode + PartialOrd> PartialOrd for VerifiedSignature<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.payload.partial_cmp(&other.payload) {
             Some(Ordering::Equal) => self
@@ -126,7 +130,7 @@ impl<T: Encode + Decode + PartialOrd> PartialOrd for VerifiedSignature<T> {
 }
 
 #[allow(clippy::non_canonical_partial_ord_impl)]
-impl<T: Encode + Decode + Ord> Ord for VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + Decode + Ord> Ord for VerifiedSignature<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.payload.cmp(&other.payload) {
             Ordering::Equal => self
