@@ -33,7 +33,6 @@ use crate::{
 /// an arbitrary format or is encrypted), it maintains some basic
 /// metadata about the the content to aid in deduplication and synchronization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fragment {
     sedimentree_id: SedimentreeId,
@@ -220,6 +219,24 @@ impl HasBlobMeta for Fragment {
     }
 }
 
+#[cfg(feature = "arbitrary")]
+impl<'a> arbitrary::Arbitrary<'a> for Fragment {
+    fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+        let sedimentree_id: SedimentreeId = u.arbitrary()?;
+        let head: Digest<LooseCommit> = u.arbitrary()?;
+        let boundary: BTreeSet<Digest<LooseCommit>> = u.arbitrary()?;
+        let checkpoints: BTreeSet<Checkpoint> = u.arbitrary()?;
+        let blob_meta: BlobMeta = u.arbitrary()?;
+        Ok(Self::from_parts(
+            sedimentree_id,
+            head,
+            boundary,
+            checkpoints,
+            blob_meta,
+        ))
+    }
+}
+
 /// The minimal data for a [`Fragment`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
@@ -331,8 +348,8 @@ impl FragmentSpec {
     }
 }
 
-/// Fixed fields size: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(4).
-const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 4;
+/// Fixed fields size: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(8).
+const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 8;
 
 /// Minimum signed message size: Schema(4) + IssuerVK(32) + Fields(103) + Signature(64).
 const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
@@ -358,8 +375,7 @@ impl EncodeFields for Fragment {
         #[allow(clippy::cast_possible_truncation)]
         encode::u16(self.checkpoints().len() as u16, buf);
 
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u32(self.summary().blob_meta().size_bytes() as u32, buf);
+        encode::u64(self.summary().blob_meta().size_bytes(), buf);
 
         for boundary in self.boundary() {
             encode::array(boundary.as_bytes(), buf);
@@ -409,8 +425,8 @@ impl Decode for Fragment {
         let checkpoint_count = decode::u16(buf, offset)? as usize;
         offset += 2;
 
-        let blob_size = u64::from(decode::u32(buf, offset)?);
-        offset += 4;
+        let blob_size = decode::u64(buf, offset)?;
+        offset += 8;
 
         let boundary_size = boundary_count * 32;
         let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
@@ -542,13 +558,13 @@ mod tests {
 
             let mut buf = Vec::new();
             encode::array(sedimentree_id.as_bytes(), &mut buf);
-            encode::array(&[0x10; 32], &mut buf);
-            encode::array(&[0x20; 32], &mut buf);
-            encode::u8(2, &mut buf);
-            encode::u16(0, &mut buf);
-            encode::u32(1024, &mut buf);
-            encode::array(&[0x50; 32], &mut buf);
-            encode::array(&[0x30; 32], &mut buf);
+            encode::array(&[0x10; 32], &mut buf); // head
+            encode::array(&[0x20; 32], &mut buf); // blob digest
+            encode::u8(2, &mut buf); // boundary count
+            encode::u16(0, &mut buf); // checkpoint count
+            encode::u64(1024, &mut buf); // blob size
+            encode::array(&[0x50; 32], &mut buf); // boundary 1 (unsorted - bigger first)
+            encode::array(&[0x30; 32], &mut buf); // boundary 2 (smaller second)
 
             let result = Fragment::try_decode_fields(&buf);
             assert!(matches!(result, Err(DecodeError::UnsortedArray(_))));
@@ -569,7 +585,8 @@ mod tests {
 
         #[test]
         fn min_size_is_correct() {
-            assert_eq!(Fragment::MIN_SIZE, 203);
+            // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + BndryCnt(1) + CkptCnt(2) + BlobSize(8) + Signature(64)
+            assert_eq!(Fragment::MIN_SIZE, 207);
         }
     }
     use alloc::collections::BTreeSet;
@@ -796,7 +813,64 @@ mod tests {
 
     #[cfg(feature = "bolero")]
     mod proptests {
-        use crate::{commit::CountLeadingZeroBytes, fragment::Fragment};
+        use crate::{
+            codec::{
+                decode::Decode,
+                encode::{Encode, EncodeFields},
+            },
+            commit::CountLeadingZeroBytes,
+            fragment::Fragment,
+        };
+
+        /// Round-trip property: encode then decode yields the original value.
+        #[test]
+        #[allow(clippy::panic)]
+        fn codec_round_trip() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    let mut buf = alloc::vec::Vec::new();
+                    fragment.encode_fields(&mut buf);
+                    match Fragment::try_decode_fields(&buf) {
+                        Ok(decoded) => assert_eq!(&decoded, fragment),
+                        Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
+                    }
+                });
+        }
+
+        /// Fuzz the decoder with arbitrary bytes - should never panic.
+        #[test]
+        fn decode_does_not_panic() {
+            bolero::check!()
+                .with_arbitrary::<alloc::vec::Vec<u8>>()
+                .for_each(|bytes| {
+                    // We don't care about the result, just that it doesn't panic
+                    let _result = Fragment::try_decode_fields(bytes);
+                });
+        }
+
+        /// Encoded size matches actual encoded length.
+        #[test]
+        fn fields_size_matches_encoded_length() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    let mut buf = alloc::vec::Vec::new();
+                    fragment.encode_fields(&mut buf);
+                    assert_eq!(buf.len(), fragment.fields_size());
+                });
+        }
+
+        /// Full encode (with schema) size matches `encoded_size()`.
+        #[test]
+        fn encoded_size_matches_actual() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    let encoded = fragment.encode();
+                    assert_eq!(encoded.len(), fragment.encoded_size());
+                });
+        }
 
         #[test]
         fn supports_self() {

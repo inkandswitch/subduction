@@ -44,9 +44,9 @@ Message::LooseCommit {
 A loose commit is a change that hasn't yet been rolled into a fragment. The `Signed<LooseCommit>` envelope includes:
 - Ed25519 signature from the author
 - Author's verifying key (used for authorization)
-- CBOR-encoded commit payload (content digest, parent references, blob metadata)
+- Binary-encoded commit payload (content digest, parent references, blob metadata)
 
-See [protocol.md](../protocol.md) for the `Signed<T>` envelope format.
+See [protocol.md](../protocol.md#serialization) for the `Signed<T>` envelope format and encoding rules.
 
 ### Fragment (Sender → Receivers)
 
@@ -96,7 +96,7 @@ Peers deduplicate by content digest — receiving the same commit twice is idemp
 
 ## Wire Format
 
-Messages are CBOR-encoded and wrapped in the `Message` enum:
+Messages use the canonical binary codec (see [protocol.md](../protocol.md#serialization)) and are wrapped in the `Message` enum:
 
 ```rust
 enum Message {
@@ -106,7 +106,7 @@ enum Message {
 }
 ```
 
-Sent as WebSocket binary frames. No request ID — these are one-way messages.
+Sent as WebSocket binary frames with a maximum size of 5 MB. No request ID — these are one-way messages.
 
 ## Properties
 

@@ -306,6 +306,235 @@ Sync messages use a framing envelope:
 
 Unlike signed payloads, sync messages are not signed — they're authenticated by the connection layer (handshake establishes peer identity).
 
+## Message Size Limits
+
+WebSocket transport enforces a **5 MB maximum message size**. Messages exceeding this limit are rejected at the transport layer before deserialization.
+
+The codec defines error types for content validation (`BlobTooLarge`, `ArrayTooLarge`) but these are not currently enforced during decoding — they are scaffolding for future validation.
+
+## Signed Payload Formats
+
+### LooseCommit
+
+Schema: `STC\x00` (Sedimentree Commit, version 0)
+
+```
+╔════════╦═══════════╦═══════════════╦════════════╦═══════════╦══════════╦═════════════╦═══════════╗
+║ Schema ║ IssuerVK  ║ SedimentreeId ║ BlobDigest ║ ParentCnt ║ BlobSize ║ Parents...  ║ Signature ║
+║   4B   ║    32B    ║      32B      ║    32B     ║    1B     ║    8B    ║   N × 32B   ║    64B    ║
+╚════════╩═══════════╩═══════════════╩════════════╩═══════════╩══════════╩═════════════╩═══════════╝
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Schema | 4 bytes | `STC\x00` |
+| IssuerVK | 32 bytes | Ed25519 verifying key of the signer |
+| SedimentreeId | 32 bytes | Document identifier (binds commit to document) |
+| BlobDigest | 32 bytes | BLAKE3 hash of the blob content |
+| ParentCnt | 1 byte | Number of parent commits (max 255, sufficient for realistic workloads) |
+| BlobSize | 8 bytes | Size of blob in bytes (big-endian u64) |
+| Parents | N × 32 bytes | Parent commit digests, **sorted ascending** |
+| Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
+
+**Minimum size:** 173 bytes (0 parents)
+
+### Fragment
+
+Schema: `STF\x00` (Sedimentree Fragment, version 0)
+
+```
+╔════════╦══════════╦═══════════════╦══════╦════════════╦══════════╦══════════╦═════════╦═══════════╦══════════════╦═══════════╗
+║ Schema ║ IssuerVK ║ SedimentreeId ║ Head ║ BlobDigest ║ BlobSize ║ BndryCnt ║ CkptCnt ║ Boundary  ║ Checkpoints  ║ Signature ║
+║   4B   ║   32B    ║      32B      ║ 32B  ║    32B     ║    8B    ║    1B    ║   2B    ║  N × 32B  ║   M × 12B    ║    64B    ║
+╚════════╩══════════╩═══════════════╩══════╩════════════╩══════════╩══════════╩═════════╩═══════════╩══════════════╩═══════════╝
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Schema | 4 bytes | `STF\x00` |
+| IssuerVK | 32 bytes | Ed25519 verifying key of the signer |
+| SedimentreeId | 32 bytes | Document identifier (binds fragment to document) |
+| Head | 32 bytes | Digest of the head commit |
+| BlobDigest | 32 bytes | BLAKE3 hash of the fragment blob |
+| BlobSize | 8 bytes | Size of blob in bytes (big-endian u64) |
+| BndryCnt | 1 byte | Number of boundary commits (0-255) |
+| CkptCnt | 2 bytes | Number of checkpoints (big-endian u16, 0-65535) |
+| Boundary | N × 32 bytes | Boundary commit digests, **sorted ascending** |
+| Checkpoints | M × 12 bytes | Truncated checkpoint digests (96-bit), **sorted ascending** |
+| Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
+
+**Minimum size:** 207 bytes (0 boundary, 0 checkpoints)
+
+### Challenge (Handshake)
+
+Schema: `SUC\x00` (Subduction Challenge, version 0)
+
+```
+╔════════╦══════════╦══════════╦═══════════╦═══════╦═══════════╗
+║ Schema ║ IssuerVK ║ Audience ║ Timestamp ║ Nonce ║ Signature ║
+║   4B   ║   32B    ║   33B    ║    8B     ║  16B  ║    64B    ║
+╚════════╩══════════╩══════════╩═══════════╩═══════╩═══════════╝
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Schema | 4 bytes | `SUC\x00` |
+| IssuerVK | 32 bytes | Ed25519 verifying key of the initiator |
+| Audience | 33 bytes | `0x00` + PeerId (33B) or `0x01` + DiscoveryId (33B) |
+| Timestamp | 8 bytes | Unix seconds (big-endian u64) |
+| Nonce | 16 bytes | Random 128-bit value |
+| Signature | 64 bytes | Ed25519 signature |
+
+**Fixed size:** 157 bytes
+
+### Response (Handshake)
+
+Schema: `SUR\x00` (Subduction Response, version 0)
+
+```
+╔════════╦══════════╦═════════════════╦═════════════════╦═══════════╗
+║ Schema ║ IssuerVK ║ ChallengeDigest ║ ServerTimestamp ║ Signature ║
+║   4B   ║   32B    ║       32B       ║       8B        ║    64B    ║
+╚════════╩══════════╩═════════════════╩═════════════════╩═══════════╝
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Schema | 4 bytes | `SUR\x00` |
+| IssuerVK | 32 bytes | Ed25519 verifying key of the responder |
+| ChallengeDigest | 32 bytes | BLAKE3 hash of the challenge bytes |
+| ServerTimestamp | 8 bytes | Responder's current Unix seconds |
+| Signature | 64 bytes | Ed25519 signature |
+
+**Fixed size:** 140 bytes
+
+## Sync Message Formats
+
+All sync messages use the envelope format with schema `SUM\x00`:
+
+```
+╔════════╦══════════╦═════╦═════════════════════╗
+║ Schema ║   Size   ║ Tag ║      Payload        ║
+║   4B   ║    4B    ║ 1B  ║     (variable)      ║
+╚════════╩══════════╩═════╩═════════════════════╝
+```
+
+### Message Tags
+
+| Tag | Message Type |
+|-----|--------------|
+| `0x00` | LooseCommit |
+| `0x01` | Fragment |
+| `0x02` | BlobsRequest |
+| `0x03` | BlobsResponse |
+| `0x04` | BatchSyncRequest |
+| `0x05` | BatchSyncResponse |
+| `0x06` | RemoveSubscriptions |
+| `0x07` | DataRequestRejected |
+
+### LooseCommit Message (Tag 0x00)
+
+```
+╔═══════════════╦══════════════════════╦═════════╦══════════╗
+║ SedimentreeId ║ Signed<LooseCommit>  ║ BlobLen ║   Blob   ║
+║      32B      ║       variable       ║   4B    ║ variable ║
+╚═══════════════╩══════════════════════╩═════════╩══════════╝
+```
+
+### Fragment Message (Tag 0x01)
+
+```
+╔═══════════════╦══════════════════╦═════════╦══════════╗
+║ SedimentreeId ║ Signed<Fragment> ║ BlobLen ║   Blob   ║
+║      32B      ║     variable     ║   4B    ║ variable ║
+╚═══════════════╩══════════════════╩═════════╩══════════╝
+```
+
+### BlobsRequest (Tag 0x02)
+
+```
+╔═══════════════╦═══════╦════════════╗
+║ SedimentreeId ║ Count ║ Digests... ║
+║      32B      ║  2B   ║  N × 32B   ║
+╚═══════════════╩═══════╩════════════╝
+```
+
+### BlobsResponse (Tag 0x03)
+
+```
+╔═══════════════╦═══════╦═════════════════════╗
+║ SedimentreeId ║ Count ║ (BlobLen + Blob)... ║
+║      32B      ║  2B   ║ N × (4B + variable) ║
+╚═══════════════╩═══════╩═════════════════════╝
+```
+
+### BatchSyncRequest (Tag 0x04)
+
+```
+╔═══════════════╦═══════════╦════════╦══════╦═════════════════════╦══════════════════════════════╗
+║ SedimentreeId ║ RequestId ║ Subscr ║ Seed ║ CommitFPs + FragFPs ║       Fingerprints...        ║
+║      32B      ║    40B    ║   1B   ║ 16B  ║       2B + 2B       ║ (CommitCnt + FragCnt) × 8B   ║
+╚═══════════════╩═══════════╩════════╩══════╩═════════════════════╩══════════════════════════════╝
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| SedimentreeId | 32 bytes | Document to sync |
+| RequestId | 40 bytes | PeerId (32B) + nonce (8B) |
+| Subscribe | 1 byte | `0x00` = false, `0x01` = true |
+| Seed | 16 bytes | SipHash key (key0: 8B, key1: 8B) |
+| CommitFPCount | 2 bytes | Number of commit fingerprints |
+| FragFPCount | 2 bytes | Number of fragment fingerprints |
+| CommitFPs | N × 8 bytes | Commit fingerprints (SipHash-2-4 output) |
+| FragFPs | M × 8 bytes | Fragment fingerprints |
+
+### BatchSyncResponse (Tag 0x05)
+
+```
+╔═══════════╦═══════════════╦═══════════╦════════════════╗
+║ RequestId ║ SedimentreeId ║ ResultTag ║ Result Payload ║
+║    40B    ║      32B      ║    1B     ║    variable    ║
+╚═══════════╩═══════════════╩═══════════╩════════════════╝
+```
+
+**Result Tags:**
+| Tag | Result |
+|-----|--------|
+| `0x00` | OK (includes `SyncDiff`) |
+| `0x01` | NotFound |
+| `0x02` | Unauthorized |
+
+**`SyncDiff` (for OK result):**
+
+```
+╔═══════════╦═════════╦════════════╦══════════╦═══════════════════════════════════════════════════════════════════╗
+║ CommitCnt ║ FragCnt ║ ReqCommits ║ ReqFrags ║ MissingCommits + MissingFrags + RequestedCommitFPs + RequestedFragFPs ║
+║    2B     ║   2B    ║     2B     ║    2B    ║                           variable                                ║
+╚═══════════╩═════════╩════════════╩══════════╩═══════════════════════════════════════════════════════════════════╝
+```
+
+Each missing commit/fragment is: `Signed<T>` (variable) + BlobLen (4B) + Blob (variable)
+
+Requested fingerprints are 8 bytes each.
+
+### RemoveSubscriptions (Tag 0x06)
+
+```
+╔═══════╦════════════════════╗
+║ Count ║ SedimentreeIds...  ║
+║  2B   ║      N × 32B       ║
+╚═══════╩════════════════════╝
+```
+
+### DataRequestRejected (Tag 0x07)
+
+```
+╔═══════════════╗
+║ SedimentreeId ║
+║      32B      ║
+╚═══════════════╝
+```
+
 ## Future Considerations
 
 ### Post-Quantum Migration

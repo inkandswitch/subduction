@@ -50,6 +50,7 @@ impl<T: Schema + EncodeFields + Decode> VerifiedSignature<T> {
     /// # Errors
     ///
     /// Returns an error if the signature is invalid or the payload cannot be decoded.
+    #[must_use = "verification result should not be discarded"]
     pub fn try_from_signed(signed: &Signed<T>) -> Result<Self, VerificationError> {
         // Verify signature over payload bytes
         signed
@@ -121,6 +122,7 @@ impl<T: Schema + EncodeFields + Decode> VerifiedSignature<T> {
     /// # Errors
     ///
     /// Returns [`DecodeError`] if the payload cannot be decoded.
+    #[must_use = "decoded payload should not be discarded"]
     pub fn try_from_trusted(signed: Signed<T>) -> Result<Self, DecodeError> {
         let payload = signed.try_decode_trusted_payload()?;
         Ok(Self { signed, payload })

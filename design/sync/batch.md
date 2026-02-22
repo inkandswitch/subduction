@@ -188,7 +188,7 @@ The lookup tables are ephemeral — built per-request, used once, then dropped.
 
 ## Wire Format
 
-Messages are CBOR-encoded and wrapped in the `Message` enum:
+Messages use the canonical binary codec (see [protocol.md](../protocol.md#serialization)) and are wrapped in the `Message` enum:
 
 ```rust
 enum Message {
@@ -198,7 +198,7 @@ enum Message {
 }
 ```
 
-Sent as WebSocket binary frames.
+Sent as WebSocket binary frames with a maximum size of 5 MB.
 
 ## Properties
 
