@@ -2,20 +2,22 @@
 
 #![allow(clippy::expect_used)]
 
-use super::common::{TestSpawn, new_test_subduction, test_signer};
-use crate::{
-    connection::{nonce_cache::NonceCache, test_utils::MockConnection},
+use std::vec::Vec;
+use core::{convert::Infallible, fmt};
+use future_form::Sendable;
+use futures::{FutureExt, future::BoxFuture};
+use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
+use subduction_core::{
+    connection::{
+        nonce_cache::NonceCache,
+        test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
+    },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
-use alloc::vec::Vec;
-use core::fmt;
-use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
-use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
 use testresult::TestResult;
 
 #[tokio::test]
@@ -55,8 +57,8 @@ impl ConnectionPolicy<Sendable> for RejectConnectionPolicy {
 }
 
 impl StoragePolicy<Sendable> for RejectConnectionPolicy {
-    type FetchDisallowed = core::convert::Infallible;
-    type PutDisallowed = core::convert::Infallible;
+    type FetchDisallowed = Infallible;
+    type PutDisallowed = Infallible;
 
     fn authorize_fetch(
         &self,

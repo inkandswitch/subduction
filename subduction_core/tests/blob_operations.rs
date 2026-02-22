@@ -2,20 +2,23 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{TokioSpawn, new_test_subduction, test_signer};
-use crate::{
-    connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
+use std::sync::Arc;
+use core::time::Duration;
+use future_form::Sendable;
+use sedimentree_core::{
+    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
+};
+use subduction_core::{
+    connection::{
+        message::Message,
+        nonce_cache::NonceCache,
+        test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
+    },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
-};
-use alloc::sync::Arc;
-use core::time::Duration;
-use future_form::Sendable;
-use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use testresult::TestResult;
 

@@ -9,6 +9,5 @@
 //! see [`crate::storage::fetcher`] and [`crate::storage::putter`].
 
 pub mod connection;
-pub mod error;
 pub mod open;
 pub mod storage;

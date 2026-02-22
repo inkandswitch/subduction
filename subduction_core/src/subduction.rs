@@ -2525,9 +2525,6 @@ impl<
     /// Errors in sending individual items are logged but don't prevent sending
     /// other items.
     ///
-    /// This method is public to allow callers to spawn it as a background task
-    /// after calling [`sync_with_peer_receive_only`](Self::sync_with_peer_receive_only).
-    ///
     /// # Errors
     ///
     /// * [`SendRequestedDataError::Unauthorized`] if the peer is not authorized to fetch.
@@ -3061,6 +3058,3 @@ impl<
 > Unpin for ListenerFuture<'a, F, S, C, P, Sig, M, N>
 {
 }
-
-#[cfg(all(test, feature = "test_utils"))]
-mod tests;

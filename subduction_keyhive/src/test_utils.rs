@@ -1,6 +1,7 @@
 //! Test utilities for the keyhive protocol crate.
 
 use alloc::{sync::Arc, vec, vec::Vec};
+use core::convert::Infallible;
 
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
@@ -85,7 +86,7 @@ pub(crate) fn create_channel_pair(
 impl KeyhiveConnection<Local> for ChannelConnection {
     type SendError = ChannelSendError;
     type RecvError = ChannelRecvError;
-    type DisconnectError = core::convert::Infallible;
+    type DisconnectError = Infallible;
 
     fn peer_id(&self) -> KeyhivePeerId {
         self.remote_peer_id.clone()

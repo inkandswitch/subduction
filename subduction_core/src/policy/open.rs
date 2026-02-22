@@ -17,7 +17,7 @@ pub struct OpenPolicy;
 
 #[future_form(Sendable, Local)]
 impl<K: FutureForm> ConnectionPolicy<K> for OpenPolicy {
-    type ConnectionDisallowed = core::convert::Infallible;
+    type ConnectionDisallowed = Infallible;
 
     fn authorize_connect(
         &self,

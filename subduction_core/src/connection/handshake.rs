@@ -65,7 +65,7 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{authenticated::Authenticated, Connection};
+use super::{Connection, authenticated::Authenticated};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::crypto::digest::Digest;
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};

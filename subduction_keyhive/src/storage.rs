@@ -10,6 +10,7 @@
 //! * Events: `["keyhive-db", "/ops/", <hex-hash>]`
 
 use alloc::{string::String, sync::Arc, vec::Vec};
+use core::convert::Infallible;
 
 use async_lock::Mutex;
 use futures::{
@@ -137,7 +138,7 @@ impl MemoryKeyhiveStorage {
 }
 
 impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
-    type Error = core::convert::Infallible;
+    type Error = Infallible;
 
     fn save_archive(
         &self,
@@ -199,7 +200,7 @@ impl KeyhiveStorage<Local> for MemoryKeyhiveStorage {
 }
 
 impl KeyhiveStorage<Sendable> for MemoryKeyhiveStorage {
-    type Error = core::convert::Infallible;
+    type Error = Infallible;
 
     fn save_archive(
         &self,

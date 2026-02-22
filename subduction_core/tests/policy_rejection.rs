@@ -2,21 +2,8 @@
 
 #![allow(clippy::panic)]
 
-use super::common::{TestSpawn, TokioSpawn, test_signer};
-use crate::{
-    connection::{
-        message::{BatchSyncResponse, Message, SyncResult},
-        nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, MockConnection},
-    },
-    peer::id::PeerId,
-    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
-};
-use alloc::{collections::BTreeSet, vec::Vec};
-use core::{fmt, time::Duration};
+use std::{collections::BTreeSet, vec::Vec};
+use core::{convert::Infallible, fmt, time::Duration};
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
@@ -26,6 +13,18 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::{FingerprintSummary, Sedimentree},
+};
+use subduction_core::{
+    connection::{
+        message::{BatchSyncResponse, Message, SyncResult},
+        nonce_cache::NonceCache,
+        test_utils::{ChannelMockConnection, MockConnection, TestSpawn, TokioSpawn, test_signer},
+    },
+    peer::id::PeerId,
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+    sharded_map::ShardedMap,
+    storage::memory::MemoryStorage,
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use testresult::TestResult;
 
@@ -46,7 +45,7 @@ impl fmt::Display for PutRejected {
 impl core::error::Error for PutRejected {}
 
 impl ConnectionPolicy<Sendable> for RejectPutsPolicy {
-    type ConnectionDisallowed = core::convert::Infallible;
+    type ConnectionDisallowed = Infallible;
 
     fn authorize_connect(
         &self,
@@ -57,7 +56,7 @@ impl ConnectionPolicy<Sendable> for RejectPutsPolicy {
 }
 
 impl StoragePolicy<Sendable> for RejectPutsPolicy {
-    type FetchDisallowed = core::convert::Infallible;
+    type FetchDisallowed = Infallible;
     type PutDisallowed = PutRejected;
 
     fn authorize_fetch(
@@ -93,7 +92,7 @@ struct AllowSpecificIdPolicy {
 }
 
 impl ConnectionPolicy<Sendable> for AllowSpecificIdPolicy {
-    type ConnectionDisallowed = core::convert::Infallible;
+    type ConnectionDisallowed = Infallible;
 
     fn authorize_connect(
         &self,
@@ -104,7 +103,7 @@ impl ConnectionPolicy<Sendable> for AllowSpecificIdPolicy {
 }
 
 impl StoragePolicy<Sendable> for AllowSpecificIdPolicy {
-    type FetchDisallowed = core::convert::Infallible;
+    type FetchDisallowed = Infallible;
     type PutDisallowed = PutRejected;
 
     fn authorize_fetch(
@@ -317,7 +316,7 @@ impl fmt::Display for FetchRejected {
 impl core::error::Error for FetchRejected {}
 
 impl ConnectionPolicy<Sendable> for RejectFetchPolicy {
-    type ConnectionDisallowed = core::convert::Infallible;
+    type ConnectionDisallowed = Infallible;
 
     fn authorize_connect(
         &self,
@@ -329,7 +328,7 @@ impl ConnectionPolicy<Sendable> for RejectFetchPolicy {
 
 impl StoragePolicy<Sendable> for RejectFetchPolicy {
     type FetchDisallowed = FetchRejected;
-    type PutDisallowed = core::convert::Infallible;
+    type PutDisallowed = Infallible;
 
     fn authorize_fetch(
         &self,
@@ -420,9 +419,9 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     handle
         .inbound_tx
         .send(Message::BatchSyncRequest(
-            crate::connection::message::BatchSyncRequest {
+            subduction_core::connection::message::BatchSyncRequest {
                 id: sedimentree_id,
-                req_id: crate::connection::message::RequestId {
+                req_id: subduction_core::connection::message::RequestId {
                     requestor: peer_id,
                     nonce: 1,
                 },

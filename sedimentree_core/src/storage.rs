@@ -1,6 +1,7 @@
 //! Storage abstraction for `Sedimentree` data.
 
 use alloc::{sync::Arc, vec::Vec};
+use core::convert::Infallible;
 
 use crate::collections::{Map, Set};
 
@@ -174,7 +175,7 @@ impl MemoryStorage {
 
 #[future_form(Sendable, Local)]
 impl<K: FutureForm> Storage<K> for MemoryStorage {
-    type Error = core::convert::Infallible;
+    type Error = Infallible;
 
     fn save_sedimentree_id(
         &self,

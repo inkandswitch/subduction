@@ -171,17 +171,16 @@ impl<T: Encode + Decode> Signed<T> {
     /// but does NOT verify the signature. Use [`try_verify`](Self::try_verify)
     /// to verify.
     ///
+    /// The buffer may contain trailing bytes beyond the signed message; only
+    /// the actual message bytes (determined by decoding the payload) are retained.
+    ///
     /// # Errors
     ///
     /// Returns an error if:
     /// - The buffer is too short
     /// - The schema header doesn't match `T::SCHEMA`
     /// - The verifying key is invalid
-    ///
-    /// # Panics
-    ///
-    /// This function will not panic. All slice operations are bounds-checked
-    /// after validating minimum size.
+    /// - The payload cannot be decoded
     pub fn try_from_bytes(mut bytes: Vec<u8>) -> Result<Self, DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIZE {

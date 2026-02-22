@@ -13,12 +13,14 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use super::common::{TokioSpawn, test_signer};
-use crate::{
+use std::collections::BTreeSet;
+use core::time::Duration;
+use future_form::Sendable;
+use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
         nonce_cache::NonceCache,
-        test_utils::ChannelMockConnection,
+        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -26,9 +28,6 @@ use crate::{
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
-use alloc::collections::BTreeSet;
-use core::time::Duration;
-use future_form::Sendable;
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},

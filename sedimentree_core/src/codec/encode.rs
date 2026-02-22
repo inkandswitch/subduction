@@ -18,6 +18,16 @@ pub trait Encode: Schema {
     /// Size of the encoded fields (for buffer pre-allocation).
     fn fields_size(&self) -> usize;
 
+    /// Encode to a new `Vec<u8>` with schema header and fields.
+    ///
+    /// This is useful for hashing the canonical representation.
+    fn encode(&self) -> Vec<u8> {
+        let mut buf = Vec::with_capacity(4 + self.fields_size());
+        buf.extend_from_slice(&Self::SCHEMA);
+        self.encode_fields(&mut buf);
+        buf
+    }
+
     /// Total size of the signed message.
     ///
     /// This is `4 (schema) + 32 (issuer) + fields_size + 64 (signature)`.

@@ -27,6 +27,7 @@ serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"], optional = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -59,7 +60,7 @@ std = [
   "subduction_crypto/std",
   "thiserror/std"
 ]
-test_utils = ["std"]
+test_utils = ["std", "dep:tokio"]
 
 [lints]
 workspace = true

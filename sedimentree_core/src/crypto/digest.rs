@@ -1,6 +1,5 @@
 //! Typed digest for phantom-type safety.
 
-use alloc::vec::Vec;
 use core::marker::PhantomData;
 
 use crate::{
@@ -72,10 +71,7 @@ impl<T: Encode + Decode> Digest<T> {
     /// and then hashed with BLAKE3.
     #[must_use]
     pub fn hash(value: &T) -> Self {
-        let mut buf = Vec::with_capacity(T::MIN_SIZE);
-        buf.extend_from_slice(&T::SCHEMA);
-        value.encode_fields(&mut buf);
-        Self::hash_bytes(&buf)
+        Self::hash_bytes(&value.encode())
     }
 }
 

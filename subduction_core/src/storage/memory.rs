@@ -1,6 +1,7 @@
 //! In-memory storage backend.
 
 use alloc::{sync::Arc, vec::Vec};
+use core::convert::Infallible;
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
@@ -54,7 +55,7 @@ impl MemoryStorage {
 
 #[future_form(Sendable, Local)]
 impl<K: FutureForm> Storage<K> for MemoryStorage {
-    type Error = core::convert::Infallible;
+    type Error = Infallible;
 
     // ==================== Sedimentree IDs ====================
 
