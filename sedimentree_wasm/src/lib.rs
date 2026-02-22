@@ -17,4 +17,5 @@ pub mod fragment;
 pub mod loose_commit;
 pub mod sedimentree;
 pub mod sedimentree_id;
+pub mod signed;
 pub mod storage;

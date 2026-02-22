@@ -279,7 +279,7 @@ impl Storage<Sendable> for FsStorage {
             let commit_path = self.commit_path(sedimentree_id, digest);
             match tokio::fs::read(&commit_path).await {
                 Ok(data) => {
-                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
+                    let signed = Signed::try_decode(data).map_err(FsStorageError::from)?;
                     Ok(Some(signed))
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -340,7 +340,7 @@ impl Storage<Sendable> for FsStorage {
                     && let Some(digest) = Self::parse_commit_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
-                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
+                    let signed = Signed::try_decode(data).map_err(FsStorageError::from)?;
                     result.push((digest, signed));
                 }
             }
@@ -426,7 +426,7 @@ impl Storage<Sendable> for FsStorage {
             let fragment_path = self.fragment_path(sedimentree_id, digest);
             match tokio::fs::read(&fragment_path).await {
                 Ok(data) => {
-                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
+                    let signed = Signed::try_decode(data).map_err(FsStorageError::from)?;
                     Ok(Some(signed))
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -487,7 +487,7 @@ impl Storage<Sendable> for FsStorage {
                     && let Some(digest) = Self::parse_fragment_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
-                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
+                    let signed = Signed::try_decode(data).map_err(FsStorageError::from)?;
                     result.push((digest, signed));
                 }
             }

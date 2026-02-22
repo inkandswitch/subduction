@@ -7,7 +7,7 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use id::CommitId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, Encode},
@@ -97,106 +97,6 @@ impl HasBlobMeta for LooseCommit {
         Self::new(sedimentree_id, digest, parents, blob_meta)
     }
 }
-
-// ============================================================================
-// Local Storage Encoding
-// ============================================================================
-
-/// Fixed size for local storage: SedimentreeId(32) + Digest<Commit>(32) + Digest<Blob>(32) + |Parents|(1) + BlobSize(4).
-const LOCAL_FIXED_SIZE: usize = 32 + 32 + 32 + 1 + 4;
-
-impl LooseCommit {
-    /// Encode to bytes for local storage.
-    ///
-    /// Format: `SedimentreeId(32) ++ Digest(32) ++ BlobDigest(32) ++ ParentCount(1) ++ BlobSize(4) ++ Parents(32 each)`
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let size = LOCAL_FIXED_SIZE + self.parents.len() * 32;
-        let mut buf = Vec::with_capacity(size);
-
-        encode::array(self.sedimentree_id.as_bytes(), &mut buf);
-        encode::array(self.digest.as_bytes(), &mut buf);
-        encode::array(self.blob_meta.digest().as_bytes(), &mut buf);
-
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u8(self.parents.len() as u8, &mut buf);
-
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u32(self.blob_meta.size_bytes() as u32, &mut buf);
-
-        for parent in &self.parents {
-            encode::array(parent.as_bytes(), &mut buf);
-        }
-
-        buf
-    }
-
-    /// Decode from bytes stored locally.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError`] if the buffer is malformed.
-    pub fn try_from_bytes(buf: &[u8]) -> Result<Self, DecodeError> {
-        if buf.len() < LOCAL_FIXED_SIZE {
-            return Err(DecodeError::MessageTooShort {
-                type_name: "LooseCommit (local)",
-                need: LOCAL_FIXED_SIZE,
-                have: buf.len(),
-            });
-        }
-
-        let mut offset = 0;
-
-        let sedimentree_id_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let sedimentree_id = SedimentreeId::new(sedimentree_id_bytes);
-        offset += 32;
-
-        let digest_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let digest = Digest::from_bytes(digest_bytes);
-        offset += 32;
-
-        let blob_digest_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let blob_digest = Digest::<Blob>::from_bytes(blob_digest_bytes);
-        offset += 32;
-
-        let parent_count = decode::u8(buf, offset)? as usize;
-        offset += 1;
-
-        let blob_size = u64::from(decode::u32(buf, offset)?);
-        offset += 4;
-
-        let parents_size = parent_count * 32;
-        if buf.len() < offset + parents_size {
-            return Err(BufferTooShort {
-                reading: ReadingType::Slice { len: parents_size },
-                offset,
-                need: parents_size,
-                have: buf.len().saturating_sub(offset),
-            }
-            .into());
-        }
-
-        let mut parent_arrays: Vec<[u8; 32]> = Vec::with_capacity(parent_count);
-        for _ in 0..parent_count {
-            let parent_bytes: [u8; 32] = decode::array(buf, offset)?;
-            parent_arrays.push(parent_bytes);
-            offset += 32;
-        }
-
-        decode::verify_sorted(&parent_arrays)?;
-
-        let parents: BTreeSet<Digest<LooseCommit>> =
-            parent_arrays.into_iter().map(Digest::from_bytes).collect();
-
-        let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
-
-        Ok(LooseCommit::new(sedimentree_id, digest, parents, blob_meta))
-    }
-}
-
-// ============================================================================
-// Codec Implementation
-// ============================================================================
 
 /// Fixed fields size: SedimentreeId(32) + Digest<Commit>(32) + Digest<Blob>(32) + |Parents|(1) + BlobSize(4).
 const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 4;

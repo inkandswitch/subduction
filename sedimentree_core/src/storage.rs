@@ -3,13 +3,16 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::convert::Infallible;
 
-use crate::collections::{Map, Set};
-
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
+use subduction_crypto::verified_signature::VerifiedSignature;
 
 use crate::{
-    blob::Blob, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
+    blob::Blob,
+    collections::{Map, Set},
+    crypto::digest::Digest,
+    fragment::Fragment,
+    id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 

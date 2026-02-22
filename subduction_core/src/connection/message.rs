@@ -25,9 +25,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, id::FragmentId},
+    fragment::{id::FragmentId, Fragment},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -692,7 +692,7 @@ fn decode_loose_commit(payload: &[u8]) -> Result<Message, DecodeError> {
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
 
-    let commit = Signed::<LooseCommit>::try_from_bytes(
+    let commit = Signed::<LooseCommit>::try_decode(
         payload
             .get(offset..)
             .ok_or(BufferTooShort {
@@ -727,7 +727,7 @@ fn decode_fragment(payload: &[u8]) -> Result<Message, DecodeError> {
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
 
-    let fragment = Signed::<Fragment>::try_from_bytes(
+    let fragment = Signed::<Fragment>::try_decode(
         payload
             .get(offset..)
             .ok_or(BufferTooShort {
@@ -883,7 +883,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 
     let mut missing_commits = Vec::with_capacity(commit_count);
     for _ in 0..commit_count {
-        let commit = Signed::<LooseCommit>::try_from_bytes(
+        let commit = Signed::<LooseCommit>::try_decode(
             payload
                 .get(*offset..)
                 .ok_or(BufferTooShort {
@@ -915,7 +915,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 
     let mut missing_fragments = Vec::with_capacity(fragment_count);
     for _ in 0..fragment_count {
-        let fragment = Signed::<Fragment>::try_from_bytes(
+        let fragment = Signed::<Fragment>::try_decode(
             payload
                 .get(*offset..)
                 .ok_or(BufferTooShort {

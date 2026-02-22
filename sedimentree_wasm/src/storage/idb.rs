@@ -17,6 +17,7 @@ use sedimentree_core::{
     id::{BadSedimentreeId, SedimentreeId},
     loose_commit::LooseCommit,
 };
+use subduction_crypto::signed::Signed;
 use thiserror::Error;
 use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use web_sys::{
@@ -25,8 +26,9 @@ use web_sys::{
 };
 
 use crate::{
-    digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmLooseCommit,
+    digest::WasmDigest,
     sedimentree_id::WasmSedimentreeId,
+    signed::{WasmSignedFragment, WasmSignedLooseCommit},
 };
 
 /// The version number of the [`IndexedDB`] database schema.
@@ -321,21 +323,23 @@ impl WasmIndexedDbStorage {
         Ok(xs)
     }
 
-    /// Save a loose commit to storage.
+    /// Save a signed loose commit to storage.
     ///
     /// # Errors
     ///
     /// Returns a [`WasmSaveLooseCommitError`] if the loose commit could not be saved.
-    #[wasm_bindgen( js_name = saveLooseCommit)]
+    #[wasm_bindgen(js_name = saveLooseCommit)]
     pub async fn wasm_save_loose_commit(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        loose_commit: &WasmLooseCommit,
+        signed_commit: &WasmSignedLooseCommit,
     ) -> Result<(), WasmSaveLooseCommitError> {
-        let core_commit = LooseCommit::from(loose_commit.clone());
-        let digest = core_commit.digest();
-
-        let bytes = core_commit.to_bytes();
+        let signed: &Signed<LooseCommit> = signed_commit.as_ref();
+        let payload = signed
+            .try_decode_payload()
+            .map_err(|_| WasmSaveLooseCommitError::DecodeError)?;
+        let digest = payload.digest();
+        let bytes = signed.as_bytes().to_vec();
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -355,16 +359,16 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
-    /// Load all loose commits from storage.
+    /// Load all signed loose commits from storage.
     ///
     /// # Errors
     ///
     /// Returns a [`WasmLoadLooseCommitsError`] if loose commits could not be loaded.
-    #[wasm_bindgen( js_name = loadLooseCommits)]
+    #[wasm_bindgen(js_name = loadLooseCommits)]
     pub async fn wasm_load_loose_commits(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-    ) -> Result<Vec<WasmLooseCommit>, WasmLoadLooseCommitsError> {
+    ) -> Result<Vec<WasmSignedLooseCommit>, WasmLoadLooseCommitsError> {
         let tx = self
             .0
             .transaction_with_str_and_mode(LOOSE_COMMIT_STORE_NAME, IdbTransactionMode::Readonly)
@@ -384,14 +388,14 @@ impl WasmIndexedDbStorage {
         let vals = await_idb(&req).await?;
         let arr = js_sys::Array::from(&vals);
 
-        let mut out: Vec<WasmLooseCommit> = Vec::new();
+        let mut out: Vec<WasmSignedLooseCommit> = Vec::new();
         for js_val in arr.iter() {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadLooseCommitsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let commit = LooseCommit::try_from_bytes(&bytes)
+            let signed = Signed::<LooseCommit>::try_decode(bytes)
                 .map_err(|_| WasmLoadLooseCommitsError::DecodeError)?;
-            out.push(commit.into());
+            out.push(signed.into());
         }
 
         Ok(out)
@@ -454,7 +458,7 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
-    /// Save a fragment to storage.
+    /// Save a signed fragment to storage.
     ///
     /// # Errors
     ///
@@ -463,12 +467,14 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_save_fragment(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-        fragment: &WasmFragment,
+        signed_fragment: &WasmSignedFragment,
     ) -> Result<(), WasmSaveFragmentError> {
-        let core_fragment = Fragment::from(fragment.clone());
-        let digest = core_fragment.digest();
-
-        let bytes = core_fragment.to_bytes();
+        let signed: &Signed<Fragment> = signed_fragment.as_ref();
+        let payload = signed
+            .try_decode_payload()
+            .map_err(|_| WasmSaveFragmentError::DecodeError)?;
+        let digest = payload.digest();
+        let bytes = signed.as_bytes().to_vec();
 
         let record = Record {
             sedimentree_id: SedimentreeId::from(sedimentree_id.clone()),
@@ -488,7 +494,7 @@ impl WasmIndexedDbStorage {
         Ok(())
     }
 
-    /// Load all fragments from storage.
+    /// Load all signed fragments from storage.
     ///
     /// # Errors
     ///
@@ -497,7 +503,7 @@ impl WasmIndexedDbStorage {
     pub async fn wasm_load_fragments(
         &self,
         sedimentree_id: &WasmSedimentreeId,
-    ) -> Result<Vec<WasmFragment>, WasmLoadFragmentsError> {
+    ) -> Result<Vec<WasmSignedFragment>, WasmLoadFragmentsError> {
         let tx = self
             .0
             .transaction_with_str_and_mode(FRAGMENT_STORE_NAME, IdbTransactionMode::Readonly)
@@ -517,14 +523,14 @@ impl WasmIndexedDbStorage {
         let vals = await_idb(&req).await?;
         let arr = js_sys::Array::from(&vals);
 
-        let mut out: Vec<WasmFragment> = Vec::new();
+        let mut out: Vec<WasmSignedFragment> = Vec::new();
         for js_val in arr.iter() {
             let js_opaque = js_sys::Reflect::get(&js_val, &RECORD_FIELD_PAYLOAD.into())
                 .map_err(WasmLoadFragmentsError::IndexError)?;
             let bytes: Vec<u8> = Uint8Array::new(&js_opaque).to_vec();
-            let fragment = Fragment::try_from_bytes(&bytes)
+            let signed = Signed::<Fragment>::try_decode(bytes)
                 .map_err(|_| WasmLoadFragmentsError::DecodeError)?;
-            out.push(fragment.into());
+            out.push(signed.into());
         }
 
         Ok(out)

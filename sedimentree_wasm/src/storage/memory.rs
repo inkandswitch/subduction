@@ -96,7 +96,7 @@ impl MemoryStorage {
         let id: SedimentreeId = sedimentree_id.clone().into();
         let bytes = signed_commit.to_vec();
         future_to_promise(async move {
-            let signed: Signed<LooseCommit> = Signed::try_from_bytes(bytes)
+            let signed: Signed<LooseCommit> = Signed::try_decode(bytes)
                 .map_err(|e| JsValue::from_str(&format!("Codec decode error: {e}")))?;
             Storage::<Local>::save_loose_commit(&inner, id, signed)
                 .await
@@ -213,7 +213,7 @@ impl MemoryStorage {
         let id: SedimentreeId = sedimentree_id.clone().into();
         let bytes = signed_fragment.to_vec();
         future_to_promise(async move {
-            let signed: Signed<Fragment> = Signed::try_from_bytes(bytes)
+            let signed: Signed<Fragment> = Signed::try_decode(bytes)
                 .map_err(|e| JsValue::from_str(&format!("Codec decode error: {e}")))?;
             Storage::<Local>::save_fragment(&inner, id, signed)
                 .await

@@ -240,7 +240,7 @@ fn parse_digest_signed_array<T: Encode + Decode>(
 
         let signed_bytes = Uint8Array::new(&signed_val).to_vec();
         let signed: Signed<T> =
-            Signed::try_from_bytes(signed_bytes).map_err(JsSedimentreeStorageError::from)?;
+            Signed::try_decode(signed_bytes).map_err(JsSedimentreeStorageError::from)?;
 
         result.push((digest, signed));
     }
@@ -381,7 +381,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             }
 
             let bytes = Uint8Array::new(&js_value).to_vec();
-            let signed = Signed::try_from_bytes(bytes).map_err(JsSedimentreeStorageError::from)?;
+            let signed = Signed::try_decode(bytes).map_err(JsSedimentreeStorageError::from)?;
             Ok(Some(signed))
         })
     }
@@ -515,7 +515,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             }
 
             let bytes = Uint8Array::new(&js_value).to_vec();
-            let signed = Signed::try_from_bytes(bytes).map_err(JsSedimentreeStorageError::from)?;
+            let signed = Signed::try_decode(bytes).map_err(JsSedimentreeStorageError::from)?;
             Ok(Some(signed))
         })
     }

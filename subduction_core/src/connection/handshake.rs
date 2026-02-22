@@ -65,9 +65,20 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
-use sedimentree_core::crypto::digest::Digest;
+use sedimentree_core::{
+    codec::{
+        decode,
+        decode::Decode,
+        encode,
+        encode::Encode,
+        error::{DecodeError, InvalidEnumTag},
+        schema,
+        schema::Schema,
+    },
+    crypto::digest::Digest,
+};
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
@@ -260,20 +271,6 @@ impl Response {
         Ok(())
     }
 }
-
-// ============================================================================
-// Codec implementations for Challenge and Response
-// ============================================================================
-
-use sedimentree_core::codec::{
-    decode,
-    decode::Decode,
-    encode,
-    encode::Encode,
-    error::{DecodeError, InvalidEnumTag},
-    schema,
-    schema::Schema,
-};
 
 /// Size of Challenge fields (after schema + issuer, before signature).
 const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
@@ -660,11 +657,11 @@ impl HandshakeMessage {
 
         match tag {
             handshake_tags::SIGNED_CHALLENGE => {
-                let signed = Signed::<Challenge>::try_from_bytes(payload.to_vec())?;
+                let signed = Signed::<Challenge>::try_decode(payload.to_vec())?;
                 Ok(HandshakeMessage::SignedChallenge(signed))
             }
             handshake_tags::SIGNED_RESPONSE => {
-                let signed = Signed::<Response>::try_from_bytes(payload.to_vec())?;
+                let signed = Signed::<Response>::try_decode(payload.to_vec())?;
                 Ok(HandshakeMessage::SignedResponse(signed))
             }
             handshake_tags::REJECTION => {

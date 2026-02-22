@@ -181,7 +181,7 @@ impl<T: Encode + Decode> Signed<T> {
     /// - The schema header doesn't match `T::SCHEMA`
     /// - The verifying key is invalid
     /// - The payload cannot be decoded
-    pub fn try_from_bytes(mut bytes: Vec<u8>) -> Result<Self, DecodeError> {
+    pub fn try_decode(mut bytes: Vec<u8>) -> Result<Self, DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIZE {
             return Err(DecodeError::MessageTooShort {
@@ -490,7 +490,7 @@ mod tests {
         let bytes = sealed.as_bytes().to_vec();
 
         // Parse from wire bytes
-        let parsed = Signed::<TestPayload>::try_from_bytes(bytes)?;
+        let parsed = Signed::<TestPayload>::try_decode(bytes)?;
 
         // Verify the signature and decode
         let verified = parsed.try_verify()?;
@@ -537,7 +537,7 @@ mod tests {
         // Tamper with the payload (change the value)
         bytes[36] ^= 0xFF;
 
-        let parsed = Signed::<TestPayload>::try_from_bytes(bytes)?;
+        let parsed = Signed::<TestPayload>::try_decode(bytes)?;
         let result = parsed.try_verify();
 
         assert!(result.is_err(), "tampered bytes should fail verification");

@@ -9,7 +9,7 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, Encode},
@@ -22,7 +22,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -331,10 +331,6 @@ impl FragmentSpec {
     }
 }
 
-// ============================================================================
-// Codec Implementation
-// ============================================================================
-
 /// Fixed fields size: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(4).
 const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 4;
 
@@ -476,138 +472,6 @@ impl Decode for Fragment {
 // ============================================================================
 // Local Storage Encoding
 // ============================================================================
-
-/// Fixed size for local storage: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(4).
-const LOCAL_FIXED_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 4;
-
-impl Fragment {
-    /// Encode to bytes for local storage.
-    ///
-    /// Format: `SedimentreeId(32) ++ Head(32) ++ BlobDigest(32) ++ BoundaryCount(1) ++ CheckpointCount(2) ++ BlobSize(4) ++ Boundaries(32 each) ++ Checkpoints(12 each)`
-    #[must_use]
-    pub fn to_bytes(&self) -> Vec<u8> {
-        let size = LOCAL_FIXED_SIZE
-            + self.boundary().len() * 32
-            + self.checkpoints().len() * CHECKPOINT_BYTES;
-        let mut buf = Vec::with_capacity(size);
-
-        encode::array(self.sedimentree_id.as_bytes(), &mut buf);
-        encode::array(self.head().as_bytes(), &mut buf);
-        encode::array(self.summary().blob_meta().digest().as_bytes(), &mut buf);
-
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u8(self.boundary().len() as u8, &mut buf);
-
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u16(self.checkpoints().len() as u16, &mut buf);
-
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u32(self.summary().blob_meta().size_bytes() as u32, &mut buf);
-
-        for boundary in self.boundary() {
-            encode::array(boundary.as_bytes(), &mut buf);
-        }
-
-        for checkpoint in self.checkpoints() {
-            encode::array(checkpoint.as_bytes(), &mut buf);
-        }
-
-        buf
-    }
-
-    /// Decode from bytes stored locally.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`DecodeError`] if the buffer is malformed.
-    pub fn try_from_bytes(buf: &[u8]) -> Result<Self, DecodeError> {
-        if buf.len() < LOCAL_FIXED_SIZE {
-            return Err(DecodeError::MessageTooShort {
-                type_name: "Fragment (local)",
-                need: LOCAL_FIXED_SIZE,
-                have: buf.len(),
-            });
-        }
-
-        let mut offset = 0;
-
-        let sedimentree_id_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let sedimentree_id = SedimentreeId::new(sedimentree_id_bytes);
-        offset += 32;
-
-        let head_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let head = Digest::<LooseCommit>::from_bytes(head_bytes);
-        offset += 32;
-
-        let blob_digest_bytes: [u8; 32] = decode::array(buf, offset)?;
-        let blob_digest = Digest::<Blob>::from_bytes(blob_digest_bytes);
-        offset += 32;
-
-        let boundary_count = decode::u8(buf, offset)? as usize;
-        offset += 1;
-
-        let checkpoint_count = decode::u16(buf, offset)? as usize;
-        offset += 2;
-
-        let blob_size = u64::from(decode::u32(buf, offset)?);
-        offset += 4;
-
-        let boundary_size = boundary_count * 32;
-        let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
-        let total_variable_size = boundary_size + checkpoints_size;
-
-        if buf.len() < offset + total_variable_size {
-            return Err(BufferTooShort {
-                reading: ReadingType::Slice {
-                    len: total_variable_size,
-                },
-                offset,
-                need: total_variable_size,
-                have: buf.len().saturating_sub(offset),
-            }
-            .into());
-        }
-
-        let mut boundary_arrays: Vec<[u8; 32]> = Vec::with_capacity(boundary_count);
-        for _ in 0..boundary_count {
-            let boundary_bytes: [u8; 32] = decode::array(buf, offset)?;
-            boundary_arrays.push(boundary_bytes);
-            offset += 32;
-        }
-
-        decode::verify_sorted(&boundary_arrays)?;
-
-        let boundary: BTreeSet<Digest<LooseCommit>> = boundary_arrays
-            .into_iter()
-            .map(Digest::from_bytes)
-            .collect();
-
-        let mut checkpoint_arrays: Vec<[u8; CHECKPOINT_BYTES]> =
-            Vec::with_capacity(checkpoint_count);
-        for _ in 0..checkpoint_count {
-            let checkpoint_bytes: [u8; CHECKPOINT_BYTES] = decode::array(buf, offset)?;
-            checkpoint_arrays.push(checkpoint_bytes);
-            offset += CHECKPOINT_BYTES;
-        }
-
-        decode::verify_sorted(&checkpoint_arrays)?;
-
-        let checkpoints: BTreeSet<Checkpoint> = checkpoint_arrays
-            .into_iter()
-            .map(Checkpoint::from_bytes)
-            .collect();
-
-        let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
-
-        Ok(Fragment::from_parts(
-            sedimentree_id,
-            head,
-            boundary,
-            checkpoints,
-            blob_meta,
-        ))
-    }
-}
 
 #[cfg(test)]
 mod codec_tests {
