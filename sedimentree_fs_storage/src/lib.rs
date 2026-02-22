@@ -298,7 +298,7 @@ impl Storage<Sendable> for FsStorage {
             let blob = Blob::new(blob_data);
 
             // Reconstruct from trusted storage without re-verification
-            Ok(Some(VerifiedMeta::from_trusted(signed, blob)))
+            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
         })
     }
 
@@ -477,7 +477,7 @@ impl Storage<Sendable> for FsStorage {
             let blob = Blob::new(blob_data);
 
             // Reconstruct from trusted storage without re-verification
-            Ok(Some(VerifiedMeta::from_trusted(signed, blob)))
+            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
         })
     }
 

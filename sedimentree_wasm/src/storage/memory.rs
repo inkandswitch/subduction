@@ -101,7 +101,8 @@ impl MemoryStorage {
         let blob = Blob::new(blob.to_vec());
         future_to_promise(async move {
             // Reconstruct from trusted JS storage without re-verification
-            let verified = VerifiedMeta::from_trusted(signed, blob);
+            let verified = VerifiedMeta::try_from_trusted(signed, blob)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Storage::<Local>::save_loose_commit(&inner, id, verified)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;
@@ -214,7 +215,8 @@ impl MemoryStorage {
         let blob = Blob::new(blob.to_vec());
         future_to_promise(async move {
             // Reconstruct from trusted JS storage without re-verification
-            let verified = VerifiedMeta::from_trusted(signed, blob);
+            let verified = VerifiedMeta::try_from_trusted(signed, blob)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?;
             Storage::<Local>::save_fragment(&inner, id, verified)
                 .await
                 .map_err(|e| JsValue::from_str(&e.to_string()))?;

@@ -1,12 +1,12 @@
 //! In-memory storage backend.
 
 use alloc::{sync::Arc, vec::Vec};
-use core::convert::Infallible;
 
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use sedimentree_core::{
     blob::Blob,
+    codec::error::DecodeError,
     collections::{Map, Set},
     crypto::digest::Digest,
     fragment::Fragment,
@@ -14,6 +14,7 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
 };
 use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
+use thiserror::Error;
 
 use super::traits::Storage;
 
@@ -44,9 +45,14 @@ impl MemoryStorage {
     }
 }
 
+/// Failed to decode payload from stored data.
+#[derive(Debug, Clone, Copy, Error)]
+#[error(transparent)]
+pub struct MemoryStorageError(#[from] DecodeError);
+
 #[future_form(Sendable, Local)]
 impl<K: FutureForm> Storage<K> for MemoryStorage {
-    type Error = Infallible;
+    type Error = MemoryStorageError;
 
     // ==================== Sedimentree IDs ====================
 
@@ -109,10 +115,12 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::load_loose_commit");
             let locked = self.commits.lock().await;
-            Ok(locked.get(&sedimentree_id).and_then(|map| {
-                map.get(&digest)
-                    .map(|(signed, blob)| VerifiedMeta::from_trusted(signed.clone(), blob.clone()))
-            }))
+            locked
+                .get(&sedimentree_id)
+                .and_then(|map| map.get(&digest))
+                .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed.clone(), blob.clone()))
+                .transpose()
+                .map_err(MemoryStorageError::from)
         })
     }
 
@@ -137,16 +145,18 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_loose_commits");
             let locked = self.commits.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
                 .map(|map| {
                     map.values()
                         .map(|(signed, blob)| {
-                            VerifiedMeta::from_trusted(signed.clone(), blob.clone())
+                            VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
                         })
-                        .collect()
+                        .collect::<Result<Vec<_>, _>>()
                 })
-                .unwrap_or_default())
+                .transpose()
+                .map_err(MemoryStorageError::from)
+                .map(Option::unwrap_or_default)
         })
     }
 
@@ -209,10 +219,12 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::load_fragment");
             let locked = self.fragments.lock().await;
-            Ok(locked.get(&sedimentree_id).and_then(|map| {
-                map.get(&digest)
-                    .map(|(signed, blob)| VerifiedMeta::from_trusted(signed.clone(), blob.clone()))
-            }))
+            locked
+                .get(&sedimentree_id)
+                .and_then(|map| map.get(&digest))
+                .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed.clone(), blob.clone()))
+                .transpose()
+                .map_err(MemoryStorageError::from)
         })
     }
 
@@ -237,16 +249,18 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_fragments");
             let locked = self.fragments.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
                 .map(|map| {
                     map.values()
                         .map(|(signed, blob)| {
-                            VerifiedMeta::from_trusted(signed.clone(), blob.clone())
+                            VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
                         })
-                        .collect()
+                        .collect::<Result<Vec<_>, _>>()
                 })
-                .unwrap_or_default())
+                .transpose()
+                .map_err(MemoryStorageError::from)
+                .map(Option::unwrap_or_default)
         })
     }
 

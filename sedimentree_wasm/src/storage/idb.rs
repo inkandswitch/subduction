@@ -10,7 +10,10 @@ use alloc::{
 use core::cell::RefCell;
 use futures::channel::oneshot;
 use js_sys::Uint8Array;
-use sedimentree_core::id::{BadSedimentreeId, SedimentreeId};
+use sedimentree_core::{
+    codec::error::DecodeError,
+    id::{BadSedimentreeId, SedimentreeId},
+};
 use thiserror::Error;
 use wasm_bindgen::{convert::TryFromJsValue, prelude::*};
 use web_sys::{
@@ -365,7 +368,7 @@ impl WasmIndexedDbStorage {
             .map_err(WasmLoadCommitError::ReflectError)?;
 
         let signed_bytes = Uint8Array::new(&signed_val).to_vec();
-        let signed = WasmSignedLooseCommit::from_vec(signed_bytes);
+        let signed = WasmSignedLooseCommit::try_from_vec(signed_bytes)?;
         let blob = Uint8Array::new(&blob_val);
 
         Ok(Some(WasmCommitWithBlob::new(signed, blob)))
@@ -424,7 +427,7 @@ impl WasmIndexedDbStorage {
             let signed_bytes = Uint8Array::new(&signed_val).to_vec();
             let blob = Uint8Array::new(&blob_val);
 
-            let signed = WasmSignedLooseCommit::from_vec(signed_bytes);
+            let signed = WasmSignedLooseCommit::try_from_vec(signed_bytes)?;
 
             result.push(WasmCommitWithBlob::new(signed, blob));
         }
@@ -561,7 +564,7 @@ impl WasmIndexedDbStorage {
         let signed_bytes = Uint8Array::new(&signed_val).to_vec();
         let blob = Uint8Array::new(&blob_val);
 
-        let signed = WasmSignedFragment::from_vec(signed_bytes);
+        let signed = WasmSignedFragment::try_from_vec(signed_bytes)?;
 
         Ok(Some(WasmFragmentWithBlob::new(signed, blob)))
     }
@@ -619,7 +622,7 @@ impl WasmIndexedDbStorage {
             let signed_bytes = Uint8Array::new(&signed_val).to_vec();
             let blob = Uint8Array::new(&blob_val);
 
-            let signed = WasmSignedFragment::from_vec(signed_bytes);
+            let signed = WasmSignedFragment::try_from_vec(signed_bytes)?;
 
             result.push(WasmFragmentWithBlob::new(signed, blob));
         }
@@ -848,15 +851,19 @@ impl From<AwaitIdbError> for JsValue {
 /// Error types for `saveSedimentreeId`.
 #[derive(Debug, Error)]
 pub enum WasmSaveSedimentreeIdError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("saveSedimentreeId IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("saveSedimentreeId IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to put the sedimentree ID into `IndexedDB`.
     #[error("unable to `put` sedimentree ID into IndexedDB: {0:?}")]
     PutError(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -872,15 +879,19 @@ impl From<WasmSaveSedimentreeIdError> for JsValue {
 /// Error types for `deleteSedimentreeId`.
 #[derive(Debug, Error)]
 pub enum WasmDeleteSedimentreeIdError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("deleteSedimentreeId IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("deleteSedimentreeId IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to delete the sedimentree ID from `IndexedDB`.
     #[error("unable to `delete` sedimentree ID from IndexedDB: {0:?}")]
     DeleteError(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -896,24 +907,31 @@ impl From<WasmDeleteSedimentreeIdError> for JsValue {
 /// Error types for `loadAllSedimentreeIds`.
 #[derive(Debug, Error)]
 pub enum WasmLoadAllSedimentreeIdsError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("loadSedimentreeIds IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("loadSedimentreeIds IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to get all keys from `IndexedDB`.
     #[error("unable to get sedimentree IDs from IndexedDB: {0:?}")]
     GetAllKeysError(JsValue),
 
+    /// The loaded value is not an array.
     #[error("value loaded via loadSedimentreeIds is not an array: {0:?}")]
     NotAnArray(JsValue),
 
+    /// A stored element is not a string.
     #[error("value loaded via loadSedimentreeIds is not a string: {0:?}")]
     StoredElementNotAString(JsValue),
 
+    /// Invalid sedimentree ID format.
     #[error(transparent)]
     BadSedimentreeId(#[from] BadSedimentreeId),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -929,15 +947,19 @@ impl From<WasmLoadAllSedimentreeIdsError> for JsValue {
 /// Error types for `saveCommit`.
 #[derive(Debug, Error)]
 pub enum WasmSaveCommitError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("saveCommit IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("saveCommit IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to store the commit in `IndexedDB`.
     #[error("unable to store commit in IndexedDB: {0:?}")]
     UnableToStore(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -953,20 +975,29 @@ impl From<WasmSaveCommitError> for JsValue {
 /// Error types for `loadCommit`.
 #[derive(Debug, Error)]
 pub enum WasmLoadCommitError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("loadCommit IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("loadCommit IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to get the commit from `IndexedDB`.
     #[error("unable to get commit from IndexedDB: {0:?}")]
     UnableToGet(JsValue),
 
+    /// Failed to access a property on the JS object.
     #[error("reflect error: {0:?}")]
     ReflectError(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
+
+    /// Failed to decode the signed commit.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 }
 
 impl From<WasmLoadCommitError> for JsValue {
@@ -980,21 +1011,27 @@ impl From<WasmLoadCommitError> for JsValue {
 /// Error types for `listCommitDigests` and `listFragmentDigests`.
 #[derive(Debug, Error)]
 pub enum WasmListDigestsError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("listDigests IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("listDigests IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to get digests from `IndexedDB`.
     #[error("unable to get digests from IndexedDB: {0:?}")]
     UnableToGet(JsValue),
 
+    /// Failed to access a property on the JS object.
     #[error("reflect error: {0:?}")]
     ReflectError(JsValue),
 
+    /// Invalid digest format.
     #[error(transparent)]
     InvalidDigest(#[from] WasmInvalidDigest),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -1010,20 +1047,29 @@ impl From<WasmListDigestsError> for JsValue {
 /// Error types for `loadAllCommits`.
 #[derive(Debug, Error)]
 pub enum WasmLoadAllCommitsError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("loadAllCommits IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("loadAllCommits IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to get commits from `IndexedDB`.
     #[error("unable to get commits from IndexedDB: {0:?}")]
     UnableToGet(JsValue),
 
+    /// Failed to access a property on the JS object.
     #[error("reflect error: {0:?}")]
     ReflectError(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
+
+    /// Failed to decode the signed commit.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 }
 
 impl From<WasmLoadAllCommitsError> for JsValue {
@@ -1037,15 +1083,19 @@ impl From<WasmLoadAllCommitsError> for JsValue {
 /// Error types for `deleteCommit`.
 #[derive(Debug, Error)]
 pub enum WasmDeleteCommitError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("deleteCommit IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("deleteCommit IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to delete the commit from `IndexedDB`.
     #[error("unable to delete commit from IndexedDB: {0:?}")]
     UnableToDelete(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -1061,27 +1111,35 @@ impl From<WasmDeleteCommitError> for JsValue {
 /// Error types for `deleteAllCommits`.
 #[derive(Debug, Error)]
 pub enum WasmDeleteAllCommitsError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("deleteAllCommits IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("deleteAllCommits IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to create key range.
     #[error("deleteAllCommits IndexedDB key range error: {0:?}")]
     KeyRangeError(JsValue),
 
+    /// Failed to open cursor.
     #[error("deleteAllCommits IndexedDB cursor error: {0:?}")]
     UnableToOpenCursor(JsValue),
 
+    /// Cursor operation failed.
     #[error("cursor problem when deleting commits: {0:?}")]
     CursorError(JsValue),
 
+    /// Failed to advance cursor to next record.
     #[error("unable to advance cursor: {0:?}")]
     UnableToAdvanceCursor(JsValue),
 
+    /// Failed to delete the commit.
     #[error("unable to delete commit: {0:?}")]
     UnableToDelete(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -1097,15 +1155,19 @@ impl From<WasmDeleteAllCommitsError> for JsValue {
 /// Error types for `saveFragment`.
 #[derive(Debug, Error)]
 pub enum WasmSaveFragmentError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("saveFragment IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("saveFragment IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to store the fragment in `IndexedDB`.
     #[error("unable to store fragment in IndexedDB: {0:?}")]
     UnableToStore(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -1121,20 +1183,29 @@ impl From<WasmSaveFragmentError> for JsValue {
 /// Error types for `loadFragment`.
 #[derive(Debug, Error)]
 pub enum WasmLoadFragmentError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("loadFragment IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("loadFragment IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to get the fragment from `IndexedDB`.
     #[error("unable to get fragment from IndexedDB: {0:?}")]
     UnableToGet(JsValue),
 
+    /// Failed to access a property on the JS object.
     #[error("reflect error: {0:?}")]
     ReflectError(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
+
+    /// Failed to decode the signed fragment.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 }
 
 impl From<WasmLoadFragmentError> for JsValue {
@@ -1148,20 +1219,29 @@ impl From<WasmLoadFragmentError> for JsValue {
 /// Error types for `loadAllFragments`.
 #[derive(Debug, Error)]
 pub enum WasmLoadAllFragmentsError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("loadAllFragments IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("loadAllFragments IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to get fragments from `IndexedDB`.
     #[error("unable to get fragments from IndexedDB: {0:?}")]
     UnableToGet(JsValue),
 
+    /// Failed to access a property on the JS object.
     #[error("reflect error: {0:?}")]
     ReflectError(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
+
+    /// Failed to decode the signed fragment.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 }
 
 impl From<WasmLoadAllFragmentsError> for JsValue {
@@ -1175,15 +1255,19 @@ impl From<WasmLoadAllFragmentsError> for JsValue {
 /// Error types for `deleteFragment`.
 #[derive(Debug, Error)]
 pub enum WasmDeleteFragmentError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("deleteFragment IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("deleteFragment IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to delete the fragment from `IndexedDB`.
     #[error("unable to delete fragment from IndexedDB: {0:?}")]
     UnableToDelete(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }
@@ -1199,27 +1283,35 @@ impl From<WasmDeleteFragmentError> for JsValue {
 /// Error types for `deleteAllFragments`.
 #[derive(Debug, Error)]
 pub enum WasmDeleteAllFragmentsError {
+    /// Failed to begin `IndexedDB` transaction.
     #[error("deleteAllFragments IndexedDB transaction error: {0:?}")]
     TransactionError(JsValue),
 
+    /// Failed to access the object store.
     #[error("deleteAllFragments IndexedDB object store error: {0:?}")]
     ObjectStoreError(JsValue),
 
+    /// Failed to create key range.
     #[error("deleteAllFragments IndexedDB key range error: {0:?}")]
     KeyRangeError(JsValue),
 
+    /// Failed to open cursor.
     #[error("deleteAllFragments IndexedDB cursor error: {0:?}")]
     UnableToOpenCursor(JsValue),
 
+    /// Cursor operation failed.
     #[error("cursor problem when deleting fragments: {0:?}")]
     CursorError(JsValue),
 
+    /// Failed to advance cursor to next record.
     #[error("unable to advance cursor: {0:?}")]
     UnableToAdvanceCursor(JsValue),
 
+    /// Failed to delete the fragment.
     #[error("unable to delete fragment: {0:?}")]
     UnableToDelete(JsValue),
 
+    /// Error awaiting `IndexedDB` operation.
     #[error("error awaiting IndexedDB operation: {0:?}")]
     AwaitIdbError(#[from] AwaitIdbError),
 }

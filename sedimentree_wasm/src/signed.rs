@@ -1,7 +1,7 @@
 //! Wasm wrappers for signed types.
 
 use js_sys::Uint8Array;
-use sedimentree_core::{fragment::Fragment, loose_commit::LooseCommit};
+use sedimentree_core::{codec::error::DecodeError, fragment::Fragment, loose_commit::LooseCommit};
 use subduction_crypto::signed::Signed;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
@@ -45,7 +45,7 @@ impl WasmSignedLooseCommit {
     pub fn payload(&self) -> Result<WasmLooseCommit, JsValue> {
         let payload = self
             .0
-            .try_decode_payload()
+            .try_decode_trusted_payload()
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(payload.into())
     }
@@ -72,12 +72,11 @@ impl AsRef<Signed<LooseCommit>> for WasmSignedLooseCommit {
 impl WasmSignedLooseCommit {
     /// Create a `WasmSignedLooseCommit` from raw bytes (non-wasm-bindgen).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the bytes are not a valid signed loose commit.
-    #[must_use]
-    pub fn from_vec(bytes: Vec<u8>) -> Self {
-        Self(Signed::<LooseCommit>::try_decode(bytes).expect("valid signed loose commit bytes"))
+    /// Returns an error if the bytes are not a valid signed loose commit.
+    pub fn try_from_vec(bytes: Vec<u8>) -> Result<Self, DecodeError> {
+        Ok(Self(Signed::<LooseCommit>::try_decode(bytes)?))
     }
 
     /// Get the raw bytes of the signed loose commit.
@@ -124,7 +123,7 @@ impl WasmSignedFragment {
     pub fn payload(&self) -> Result<WasmFragment, JsValue> {
         let payload = self
             .0
-            .try_decode_payload()
+            .try_decode_trusted_payload()
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         Ok(payload.into())
     }
@@ -151,12 +150,11 @@ impl AsRef<Signed<Fragment>> for WasmSignedFragment {
 impl WasmSignedFragment {
     /// Create a `WasmSignedFragment` from raw bytes (non-wasm-bindgen).
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the bytes are not a valid signed fragment.
-    #[must_use]
-    pub fn from_vec(bytes: Vec<u8>) -> Self {
-        Self(Signed::<Fragment>::try_decode(bytes).expect("valid signed fragment bytes"))
+    /// Returns an error if the bytes are not a valid signed fragment.
+    pub fn try_from_vec(bytes: Vec<u8>) -> Result<Self, DecodeError> {
+        Ok(Self(Signed::<Fragment>::try_decode(bytes)?))
     }
 
     /// Get the raw bytes of the signed fragment.

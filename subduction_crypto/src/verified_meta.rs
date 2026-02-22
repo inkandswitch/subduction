@@ -2,10 +2,12 @@
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta},
+    blob::{has_meta::HasBlobMeta, verified::VerifiedBlobMeta, Blob, BlobMeta},
     codec::{decode::Decode, encode::Encode},
 };
 use thiserror::Error;
+
+use sedimentree_core::codec::error::DecodeError;
 
 use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};
 
@@ -141,13 +143,11 @@ impl<T: HasBlobMeta + Encode + Decode> VerifiedMeta<T> {
     /// Use this only for data loaded from trusted storage that was
     /// previously verified (signature + blob match) before being stored.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the payload cannot be decoded. This should never happen
-    /// for data from trusted storage.
-    #[must_use]
-    pub fn from_trusted(signed: Signed<T>, blob: Blob) -> Self {
-        let verified = VerifiedSignature::from_trusted(signed);
-        Self { verified, blob }
+    /// Returns [`DecodeError`] if the payload cannot be decoded.
+    pub fn try_from_trusted(signed: Signed<T>, blob: Blob) -> Result<Self, DecodeError> {
+        let verified = VerifiedSignature::try_from_trusted(signed)?;
+        Ok(Self { verified, blob })
     }
 }

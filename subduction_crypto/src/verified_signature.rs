@@ -2,7 +2,7 @@
 
 use core::cmp::Ordering;
 
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
+use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 
 use crate::signed::Signed;
 
@@ -88,16 +88,12 @@ impl<T: Encode + Decode> VerifiedSignature<T> {
     /// Use this only for data loaded from trusted storage that was
     /// previously verified before being stored.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the payload cannot be decoded. This should never happen
-    /// for data from trusted storage.
-    #[must_use]
-    pub fn from_trusted(signed: Signed<T>) -> Self {
-        let payload = signed
-            .try_decode_payload()
-            .expect("trusted storage should contain valid payloads");
-        Self { signed, payload }
+    /// Returns [`DecodeError`] if the payload cannot be decoded.
+    pub fn try_from_trusted(signed: Signed<T>) -> Result<Self, DecodeError> {
+        let payload = signed.try_decode_trusted_payload()?;
+        Ok(Self { signed, payload })
     }
 }
 

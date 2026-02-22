@@ -166,8 +166,6 @@ fn parse_digest_array<T: Encode + Decode>(js_value: &JsValue) -> Set<Digest<T>> 
     result
 }
 
-
-
 impl Storage<Local> for JsStorage {
     type Error = JsStorageError;
 
@@ -273,7 +271,7 @@ impl Storage<Local> for JsStorage {
             let blob = Blob::new(wasm_commit.blob().to_vec());
 
             // Reconstruct from trusted storage without re-verification
-            Ok(Some(VerifiedMeta::from_trusted(signed, blob)))
+            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
         })
     }
 
@@ -313,7 +311,7 @@ impl Storage<Local> for JsStorage {
                 let wasm_commit: WasmCommitWithBlob = (&commit_with_blob).into();
                 let signed: Signed<LooseCommit> = wasm_commit.signed().into();
                 let blob = Blob::new(wasm_commit.blob().to_vec());
-                result.push(VerifiedMeta::from_trusted(signed, blob));
+                result.push(VerifiedMeta::try_from_trusted(signed, blob)?);
             }
 
             Ok(result)
@@ -405,7 +403,7 @@ impl Storage<Local> for JsStorage {
             let blob = Blob::new(wasm_fragment.blob().to_vec());
 
             // Reconstruct from trusted storage without re-verification
-            Ok(Some(VerifiedMeta::from_trusted(signed, blob)))
+            Ok(Some(VerifiedMeta::try_from_trusted(signed, blob)?))
         })
     }
 
@@ -445,7 +443,7 @@ impl Storage<Local> for JsStorage {
                 let wasm_fragment: WasmFragmentWithBlob = (&fragment_with_blob).into();
                 let signed: Signed<Fragment> = wasm_fragment.signed().into();
                 let blob = Blob::new(wasm_fragment.blob().to_vec());
-                result.push(VerifiedMeta::from_trusted(signed, blob));
+                result.push(VerifiedMeta::try_from_trusted(signed, blob)?);
             }
 
             Ok(result)

@@ -151,7 +151,7 @@ impl<T: Encode + Decode> Signed<T> {
         Ok(VerifiedSignature::new(self.clone(), payload))
     }
 
-    /// Decode the payload without signature verification.
+    /// Decode the payload from trusted storage without signature verification.
     ///
     /// Use this only for data from trusted sources (e.g., local storage
     /// that was populated via a verified path).
@@ -161,7 +161,7 @@ impl<T: Encode + Decode> Signed<T> {
     /// # Errors
     ///
     /// Returns an error if the payload cannot be decoded.
-    pub fn try_decode_payload(&self) -> Result<T, DecodeError> {
+    pub fn try_decode_trusted_payload(&self) -> Result<T, DecodeError> {
         T::try_decode_fields(self.fields_bytes())
     }
 

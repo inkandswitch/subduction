@@ -138,6 +138,7 @@ pub struct WasmCommitWithBlob {
 #[wasm_bindgen(js_class = CommitWithBlob)]
 impl WasmCommitWithBlob {
     /// Create a new commit with blob.
+    #[must_use]
     #[wasm_bindgen(constructor)]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen requires owned Uint8Array
     pub fn new(signed: WasmSignedLooseCommit, blob: Uint8Array) -> Self {
@@ -148,12 +149,14 @@ impl WasmCommitWithBlob {
     }
 
     /// Get the signed commit.
+    #[must_use]
     #[wasm_bindgen(getter)]
     pub fn signed(&self) -> WasmSignedLooseCommit {
         self.signed.clone()
     }
 
     /// Get the blob.
+    #[must_use]
     #[wasm_bindgen(getter)]
     pub fn blob(&self) -> Uint8Array {
         Uint8Array::from(self.blob.as_slice())
