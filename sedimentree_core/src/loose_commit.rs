@@ -273,13 +273,13 @@ mod tests {
 }
 
 #[cfg(all(test, feature = "bolero"))]
-#[allow(clippy::panic)]
 mod proptests {
     use super::*;
     use crate::codec::encode::Encode;
 
     /// Round-trip property: encode then decode yields the original value.
     #[test]
+    #[allow(clippy::panic)]
     fn codec_round_trip() {
         bolero::check!()
             .with_arbitrary::<LooseCommit>()
