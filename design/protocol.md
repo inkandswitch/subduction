@@ -184,7 +184,7 @@ Signed payloads (`LooseCommit`, `Fragment`, `Challenge`, `Response`) use a custo
 | **Compact** | No field names, no type tags for primitives |
 | **Verifiable** | Schema header enables type checking before parsing |
 | **Versionable** | Per-type version byte allows independent evolution |
-| **no_std** | No heap allocation required for decoding |
+| **`no_std`** | Compatible with `no_std` + `alloc` environments |
 
 ### Codec Traits
 
