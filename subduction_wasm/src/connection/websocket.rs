@@ -138,7 +138,7 @@ impl WasmWebSocket {
                     }
                     Err(e) => {
                         tracing::error!(
-                            "CBOR decode failed for {} byte message: {:?}. First 64 bytes: {:?}",
+                            "decode failed for {} byte message: {:?}. First 64 bytes: {:?}",
                             bytes.len(),
                             e,
                             bytes.get(..64).unwrap_or(&bytes)

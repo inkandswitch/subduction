@@ -3,10 +3,7 @@
 #[cfg(feature = "idb")]
 pub mod idb;
 
-use alloc::{
-    string::{String, ToString},
-    vec::Vec,
-};
+use alloc::vec::Vec;
 use sedimentree_core::collections::Set;
 
 use future_form::{FutureForm, Local};
@@ -14,7 +11,7 @@ use futures::future::LocalBoxFuture;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
-    codec::{decode::Decode, encode::Encode},
+    codec::{decode::Decode, encode::Encode, error::DecodeError},
     crypto::digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
@@ -257,8 +254,8 @@ fn parse_digest_signed_array<T: Encode + Decode>(
         let digest: Digest<T> = WasmDigest::from(&js_digest).into();
 
         let signed_bytes = Uint8Array::new(&signed_val).to_vec();
-        let signed: Signed<T> = Signed::try_from_bytes(signed_bytes)
-            .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
+        let signed: Signed<T> =
+            Signed::try_from_bytes(signed_bytes).map_err(JsSedimentreeStorageError::from)?;
 
         result.push((digest, signed));
     }
@@ -399,8 +396,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             }
 
             let bytes = Uint8Array::new(&js_value).to_vec();
-            let signed = Signed::try_from_bytes(bytes)
-                .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
+            let signed = Signed::try_from_bytes(bytes).map_err(JsSedimentreeStorageError::from)?;
             Ok(Some(signed))
         })
     }
@@ -534,8 +530,7 @@ impl Storage<Local> for JsSedimentreeStorage {
             }
 
             let bytes = Uint8Array::new(&js_value).to_vec();
-            let signed = Signed::try_from_bytes(bytes)
-                .map_err(|e| JsSedimentreeStorageError::CborDecodeError(e.to_string()))?;
+            let signed = Signed::try_from_bytes(bytes).map_err(JsSedimentreeStorageError::from)?;
             Ok(Some(signed))
         })
     }
@@ -806,13 +801,9 @@ pub enum JsSedimentreeStorageError {
     #[error("JavaScript error: {0:?}")]
     JsError(JsValue),
 
-    /// CBOR encoding failed.
-    #[error("CBOR encode error: {0}")]
-    CborEncodeError(String),
-
-    /// CBOR decoding failed.
-    #[error("CBOR decode error: {0}")]
-    CborDecodeError(String),
+    /// Decoding failed.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 
     /// Failed to compute digest from signed payload.
     #[error("Failed to compute digest from signed payload")]

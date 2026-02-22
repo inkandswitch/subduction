@@ -4,19 +4,18 @@ This document describes the binary format and cryptographic choices for Subducti
 
 ## Binary Format
 
-Subduction uses two encoding layers:
+All Subduction messages use a custom canonical binary codec:
 
-| Layer | Format | Used For |
-|-------|--------|----------|
-| **Signed payloads** | Custom canonical binary | Commits, fragments, handshake — anything requiring signatures |
-| **Sync messages** | CBOR | Batch sync requests/responses, blob transfers |
+| Category | Examples |
+|----------|----------|
+| **Signed payloads** | `LooseCommit`, `Fragment`, `Challenge`, `Response` |
+| **Sync messages** | `BatchSyncRequest`, `BatchSyncResponse`, `BlobsRequest` |
 
-Signed payloads use a custom format (not CBOR) because:
-- Deterministic encoding is _required_ for signature verification
-- CBOR's "deterministic mode" has edge cases and implementation variance
-- Fixed field order eliminates canonicalization complexity
-
-Sync messages use [CBOR (RFC 8949)](https://www.rfc-editor.org/rfc/rfc8949.html) for flexibility and wide language support.
+The codec is designed for:
+- **Determinism** — Required for signature verification
+- **Compactness** — No field names, minimal overhead
+- **Simplicity** — No CBOR/MessagePack edge cases or implementation variance
+- **Predictability** — Fixed field order, big-endian integers
 
 ### Signed Payload Format
 
@@ -278,12 +277,25 @@ Decoding returns structured errors with context:
 
 All error types implement `#[from]` for ergonomic `?` propagation.
 
-### CBOR for Sync Messages
+### Sync Message Envelope
 
-Sync messages (`BatchSyncRequest`, `BatchSyncResponse`, blob transfers) use CBOR because:
-- They're not signed (no determinism requirement)
-- Schema flexibility is useful for protocol evolution
-- CBOR libraries handle complex nested structures well
+Sync messages use a framing envelope:
+
+```
+╔════════╦══════════╦═════╦═════════════════════╗
+║ Schema ║   Size   ║ Tag ║      Payload        ║
+║   4B   ║    4B    ║ 1B  ║     (variable)      ║
+╚════════╩══════════╩═════╩═════════════════════╝
+```
+
+| Field | Purpose |
+|-------|---------|
+| Schema | `SM` prefix + version (message envelope identity) |
+| Size | Total message size in bytes (big-endian u32) |
+| Tag | Message type discriminant |
+| Payload | Type-specific fields using the same primitive encoding |
+
+Unlike signed payloads, sync messages are not signed — they're authenticated by the connection layer (handshake establishes peer identity).
 
 ## Future Considerations
 

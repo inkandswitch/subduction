@@ -561,7 +561,7 @@ impl DriftCorrection {
 /// A transport capable of exchanging handshake messages.
 ///
 /// Implementors provide raw byte send/recv over their transport layer.
-/// The handshake protocol handles CBOR encoding/decoding of [`HandshakeMessage`].
+/// The handshake protocol handles encoding/decoding of [`HandshakeMessage`].
 pub trait Handshake<K: FutureForm> {
     /// Transport-level error type.
     type Error;
@@ -787,7 +787,7 @@ pub struct RespondResult {
 ///
 /// # Panics
 ///
-/// Panics if CBOR encoding of the challenge message fails (should never happen
+/// Panics if encoding of the challenge message fails (should never happen
 /// with well-formed types).
 #[allow(clippy::expect_used)]
 pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
@@ -863,7 +863,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
 ///
 /// # Panics
 ///
-/// Panics if CBOR encoding of the response or rejection message fails (should
+/// Panics if encoding of the response or rejection message fails (should
 /// never happen with well-formed types).
 #[allow(clippy::expect_used, clippy::too_many_arguments)]
 pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(

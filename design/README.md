@@ -50,7 +50,7 @@ sequenceDiagram
 ## Design Principles
 
 - **no_std compatible** — Core protocol logic works without std
-- **Transport agnostic** — Signed payloads use canonical binary, sync messages use CBOR
+- **Transport agnostic** — All messages use canonical binary format, transport is pluggable
 - **Policy separation** — Authentication (handshake) is separate from authorization (policy)
 - **Subscription-based** — Updates forwarded only to subscribed and authorized peers
 - **Content addressed** — All data identified by BLAKE3 hash

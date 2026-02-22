@@ -12,9 +12,9 @@
 //!         ├── blobs/
 //!         │   └── {digest_hex}           ← raw bytes
 //!         ├── commits/
-//!         │   └── {digest_hex}.cbor      ← Signed<LooseCommit>
+//!         │   └── {digest_hex}.bin       ← Signed<LooseCommit>
 //!         └── fragments/
-//!             └── {digest_hex}.cbor      ← Signed<Fragment>
+//!             └── {digest_hex}.bin       ← Signed<Fragment>
 //! ```
 //!
 //! # Example
@@ -31,8 +31,8 @@
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use sedimentree_core::{
-    blob::Blob, collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, codec::error::DecodeError, collections::Set, crypto::digest::Digest,
+    fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
 };
 use std::{
     path::{Path, PathBuf},
@@ -49,13 +49,9 @@ pub enum FsStorageError {
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
-    /// CBOR serialization error.
-    #[error("CBOR serialization error: {0}")]
-    CborSerialization(String),
-
-    /// CBOR deserialization error.
-    #[error("CBOR deserialization error: {0}")]
-    CborDeserialization(String),
+    /// Decoding error.
+    #[error(transparent)]
+    Decode(#[from] DecodeError),
 
     /// Failed to compute digest from signed payload.
     #[error("Failed to compute digest from signed payload")]
@@ -72,9 +68,9 @@ pub enum FsStorageError {
 ///         ├── blobs/
 ///         │   └── {digest_hex}           ← raw bytes
 ///         ├── commits/
-///         │   └── {digest_hex}.cbor      ← Signed<LooseCommit>
+///         │   └── {digest_hex}.bin       ← Signed<LooseCommit>
 ///         └── fragments/
-///             └── {digest_hex}.cbor      ← Signed<Fragment>
+///             └── {digest_hex}.bin       ← Signed<Fragment>
 /// ```
 #[derive(Debug, Clone)]
 pub struct FsStorage {
@@ -139,12 +135,12 @@ impl FsStorage {
 
     fn commit_path(&self, id: SedimentreeId, digest: Digest<LooseCommit>) -> PathBuf {
         self.commits_dir(id)
-            .join(format!("{}.cbor", hex::encode(digest.as_bytes())))
+            .join(format!("{}.bin", hex::encode(digest.as_bytes())))
     }
 
     fn fragment_path(&self, id: SedimentreeId, digest: Digest<Fragment>) -> PathBuf {
         self.fragments_dir(id)
-            .join(format!("{}.cbor", hex::encode(digest.as_bytes())))
+            .join(format!("{}.bin", hex::encode(digest.as_bytes())))
     }
 
     fn blob_path(&self, sedimentree_id: SedimentreeId, digest: Digest<Blob>) -> PathBuf {
@@ -178,7 +174,7 @@ impl FsStorage {
     }
 
     fn parse_commit_digest_from_filename(name: &str) -> Option<Digest<LooseCommit>> {
-        let hex_str = name.strip_suffix(".cbor")?;
+        let hex_str = name.strip_suffix(".bin")?;
         let bytes = hex::decode(hex_str).ok()?;
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
@@ -190,7 +186,7 @@ impl FsStorage {
     }
 
     fn parse_fragment_digest_from_filename(name: &str) -> Option<Digest<Fragment>> {
-        let hex_str = name.strip_suffix(".cbor")?;
+        let hex_str = name.strip_suffix(".bin")?;
         let bytes = hex::decode(hex_str).ok()?;
         if bytes.len() == 32 {
             let mut arr = [0u8; 32];
@@ -295,8 +291,7 @@ impl Storage<Sendable> for FsStorage {
             let commit_path = self.commit_path(sedimentree_id, digest);
             match tokio::fs::read(&commit_path).await {
                 Ok(data) => {
-                    let signed = Signed::try_from_bytes(data)
-                        .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
+                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
                     Ok(Some(signed))
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -357,8 +352,7 @@ impl Storage<Sendable> for FsStorage {
                     && let Some(digest) = Self::parse_commit_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
-                    let signed = Signed::try_from_bytes(data)
-                        .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
+                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
                     result.push((digest, signed));
                 }
             }
@@ -444,8 +438,7 @@ impl Storage<Sendable> for FsStorage {
             let fragment_path = self.fragment_path(sedimentree_id, digest);
             match tokio::fs::read(&fragment_path).await {
                 Ok(data) => {
-                    let signed = Signed::try_from_bytes(data)
-                        .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
+                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
                     Ok(Some(signed))
                 }
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
@@ -506,8 +499,7 @@ impl Storage<Sendable> for FsStorage {
                     && let Some(digest) = Self::parse_fragment_digest_from_filename(name)
                 {
                     let data = tokio::fs::read(entry.path()).await?;
-                    let signed = Signed::try_from_bytes(data)
-                        .map_err(|e| FsStorageError::CborDeserialization(e.to_string()))?;
+                    let signed = Signed::try_from_bytes(data).map_err(FsStorageError::from)?;
                     result.push((digest, signed));
                 }
             }

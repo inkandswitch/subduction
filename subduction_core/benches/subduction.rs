@@ -15,7 +15,7 @@
 //! ## What's NOT Tested Here
 //!
 //! - Actual sync protocol execution (see integration tests)
-//! - CBOR serialization/deserialization
+//! - Message serialization/deserialization
 //! - WebSocket round-trip latency
 //! - Storage I/O
 //! - Async runtime overhead
