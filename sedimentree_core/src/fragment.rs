@@ -469,115 +469,109 @@ impl Decode for Fragment {
     }
 }
 
-// ============================================================================
-// Local Storage Encoding
-// ============================================================================
-
-#[cfg(test)]
-mod codec_tests {
-    use super::*;
-    use alloc::vec;
-    use testresult::TestResult;
-
-    fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
-        Digest::from_bytes([byte; 32])
-    }
-
-    fn make_sedimentree_id(byte: u8) -> SedimentreeId {
-        SedimentreeId::new([byte; 32])
-    }
-
-    fn make_checkpoint(byte: u8) -> Checkpoint {
-        Checkpoint::new(make_digest(byte))
-    }
-
-    #[test]
-    fn codec_round_trip_empty() -> TestResult {
-        let sedimentree_id = make_sedimentree_id(0x01);
-        let fragment = Fragment::from_parts(
-            sedimentree_id,
-            make_digest(0x10),
-            BTreeSet::new(),
-            BTreeSet::new(),
-            BlobMeta::from_digest_size(make_digest(0x20), 1024),
-        );
-
-        let mut buf = Vec::new();
-        fragment.encode_fields(&mut buf);
-        assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
-
-        let decoded = Fragment::try_decode_fields(&buf)?;
-        assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
-        assert_eq!(decoded.head(), fragment.head());
-        assert_eq!(decoded.boundary(), fragment.boundary());
-        assert_eq!(decoded.checkpoints(), fragment.checkpoints());
-        Ok(())
-    }
-
-    #[test]
-    fn codec_round_trip_with_data() -> TestResult {
-        let sedimentree_id = make_sedimentree_id(0x01);
-        let boundary = BTreeSet::from([make_digest(0x30), make_digest(0x40)]);
-        let checkpoints = BTreeSet::from([make_checkpoint(0x50), make_checkpoint(0x60)]);
-
-        let fragment = Fragment::from_parts(
-            sedimentree_id,
-            make_digest(0x10),
-            boundary,
-            checkpoints,
-            BlobMeta::from_digest_size(make_digest(0x20), 2048),
-        );
-
-        let mut buf = Vec::new();
-        fragment.encode_fields(&mut buf);
-
-        let decoded = Fragment::try_decode_fields(&buf)?;
-        assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
-        assert_eq!(decoded.head(), fragment.head());
-        assert_eq!(decoded.boundary(), fragment.boundary());
-        assert_eq!(decoded.checkpoints(), fragment.checkpoints());
-        Ok(())
-    }
-
-    #[test]
-    fn codec_unsorted_boundary_rejected() {
-        let sedimentree_id = make_sedimentree_id(0x01);
-
-        let mut buf = Vec::new();
-        encode::array(sedimentree_id.as_bytes(), &mut buf);
-        encode::array(&[0x10; 32], &mut buf);
-        encode::array(&[0x20; 32], &mut buf);
-        encode::u8(2, &mut buf);
-        encode::u16(0, &mut buf);
-        encode::u32(1024, &mut buf);
-        encode::array(&[0x50; 32], &mut buf);
-        encode::array(&[0x30; 32], &mut buf);
-
-        let result = Fragment::try_decode_fields(&buf);
-        assert!(matches!(result, Err(DecodeError::UnsortedArray(_))));
-    }
-
-    #[test]
-    fn codec_buffer_too_short_rejected() {
-        let buf = vec![0u8; 50];
-
-        let result = Fragment::try_decode_fields(&buf);
-        assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
-    }
-
-    #[test]
-    fn codec_schema_is_correct() {
-        assert_eq!(Fragment::SCHEMA, *b"STF\x00");
-    }
-
-    #[test]
-    fn codec_min_size_is_correct() {
-        assert_eq!(Fragment::MIN_SIZE, 203);
-    }
-}
-
 #[cfg(test)]
 mod tests {
+    mod codec {
+        use super::super::*;
+        use alloc::vec;
+        use testresult::TestResult;
+
+        fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
+            Digest::from_bytes([byte; 32])
+        }
+
+        fn make_sedimentree_id(byte: u8) -> SedimentreeId {
+            SedimentreeId::new([byte; 32])
+        }
+
+        fn make_checkpoint(byte: u8) -> Checkpoint {
+            Checkpoint::new(make_digest(byte))
+        }
+
+        #[test]
+        fn round_trip_empty() -> TestResult {
+            let sedimentree_id = make_sedimentree_id(0x01);
+            let fragment = Fragment::from_parts(
+                sedimentree_id,
+                make_digest(0x10),
+                BTreeSet::new(),
+                BTreeSet::new(),
+                BlobMeta::from_digest_size(make_digest(0x20), 1024),
+            );
+
+            let mut buf = Vec::new();
+            fragment.encode_fields(&mut buf);
+            assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
+
+            let decoded = Fragment::try_decode_fields(&buf)?;
+            assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
+            assert_eq!(decoded.head(), fragment.head());
+            assert_eq!(decoded.boundary(), fragment.boundary());
+            assert_eq!(decoded.checkpoints(), fragment.checkpoints());
+            Ok(())
+        }
+
+        #[test]
+        fn round_trip_with_data() -> TestResult {
+            let sedimentree_id = make_sedimentree_id(0x01);
+            let boundary = BTreeSet::from([make_digest(0x30), make_digest(0x40)]);
+            let checkpoints = BTreeSet::from([make_checkpoint(0x50), make_checkpoint(0x60)]);
+
+            let fragment = Fragment::from_parts(
+                sedimentree_id,
+                make_digest(0x10),
+                boundary,
+                checkpoints,
+                BlobMeta::from_digest_size(make_digest(0x20), 2048),
+            );
+
+            let mut buf = Vec::new();
+            fragment.encode_fields(&mut buf);
+
+            let decoded = Fragment::try_decode_fields(&buf)?;
+            assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
+            assert_eq!(decoded.head(), fragment.head());
+            assert_eq!(decoded.boundary(), fragment.boundary());
+            assert_eq!(decoded.checkpoints(), fragment.checkpoints());
+            Ok(())
+        }
+
+        #[test]
+        fn unsorted_boundary_rejected() {
+            let sedimentree_id = make_sedimentree_id(0x01);
+
+            let mut buf = Vec::new();
+            encode::array(sedimentree_id.as_bytes(), &mut buf);
+            encode::array(&[0x10; 32], &mut buf);
+            encode::array(&[0x20; 32], &mut buf);
+            encode::u8(2, &mut buf);
+            encode::u16(0, &mut buf);
+            encode::u32(1024, &mut buf);
+            encode::array(&[0x50; 32], &mut buf);
+            encode::array(&[0x30; 32], &mut buf);
+
+            let result = Fragment::try_decode_fields(&buf);
+            assert!(matches!(result, Err(DecodeError::UnsortedArray(_))));
+        }
+
+        #[test]
+        fn buffer_too_short_rejected() {
+            let buf = vec![0u8; 50];
+
+            let result = Fragment::try_decode_fields(&buf);
+            assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
+        }
+
+        #[test]
+        fn schema_is_correct() {
+            assert_eq!(Fragment::SCHEMA, *b"STF\x00");
+        }
+
+        #[test]
+        fn min_size_is_correct() {
+            assert_eq!(Fragment::MIN_SIZE, 203);
+        }
+    }
     use alloc::collections::BTreeSet;
 
     use crate::{

@@ -1523,7 +1523,7 @@ mod tests {
         }
     }
 
-    mod codec_tests {
+    mod codec {
         use super::*;
 
         fn sample_challenge() -> Challenge {

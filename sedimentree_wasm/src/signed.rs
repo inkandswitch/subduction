@@ -1,5 +1,7 @@
 //! Wasm wrappers for signed types.
 
+use alloc::{string::ToString, vec::Vec};
+
 use js_sys::Uint8Array;
 use sedimentree_core::{codec::error::DecodeError, fragment::Fragment, loose_commit::LooseCommit};
 use subduction_crypto::signed::Signed;

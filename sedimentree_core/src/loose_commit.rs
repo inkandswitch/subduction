@@ -194,7 +194,7 @@ impl Decode for LooseCommit {
 }
 
 #[cfg(test)]
-mod codec_tests {
+mod tests {
     use super::*;
     use alloc::vec;
     use testresult::TestResult;
