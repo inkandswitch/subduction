@@ -271,3 +271,57 @@ mod tests {
         assert_eq!(LooseCommit::MIN_SIZE, 173);
     }
 }
+
+#[cfg(all(test, feature = "bolero"))]
+mod proptests {
+    use super::*;
+    use crate::codec::encode::Encode;
+
+    /// Round-trip property: encode then decode yields the original value.
+    #[test]
+    fn codec_round_trip() {
+        bolero::check!()
+            .with_arbitrary::<LooseCommit>()
+            .for_each(|commit| {
+                let mut buf = Vec::new();
+                commit.encode_fields(&mut buf);
+                let decoded = LooseCommit::try_decode_fields(&buf)
+                    .expect("decode should succeed for valid encoded data");
+                assert_eq!(&decoded, commit);
+            });
+    }
+
+    /// Fuzz the decoder with arbitrary bytes - should never panic.
+    #[test]
+    fn decode_does_not_panic() {
+        bolero::check!()
+            .with_arbitrary::<Vec<u8>>()
+            .for_each(|bytes| {
+                // We don't care about the result, just that it doesn't panic
+                let _ = LooseCommit::try_decode_fields(bytes);
+            });
+    }
+
+    /// Encoded size matches actual encoded length.
+    #[test]
+    fn fields_size_matches_encoded_length() {
+        bolero::check!()
+            .with_arbitrary::<LooseCommit>()
+            .for_each(|commit| {
+                let mut buf = Vec::new();
+                commit.encode_fields(&mut buf);
+                assert_eq!(buf.len(), commit.fields_size());
+            });
+    }
+
+    /// Full encode (with schema) size matches encoded_size().
+    #[test]
+    fn encoded_size_matches_actual() {
+        bolero::check!()
+            .with_arbitrary::<LooseCommit>()
+            .for_each(|commit| {
+                let encoded = commit.encode();
+                assert_eq!(encoded.len(), commit.encoded_size());
+            });
+    }
+}

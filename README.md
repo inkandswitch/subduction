@@ -34,12 +34,15 @@ graph TD
         subduction_core
     end
 
+    sedimentree_fs_storage
     automerge_sedimentree
     subduction_websocket
     subduction_cli
+    subduction_keyhive
     subduction_keyhive_policy
 
     subgraph Wasm
+        sedimentree_wasm
         subduction_wasm
         automerge_sedimentree_wasm
         automerge_subduction_wasm
@@ -49,31 +52,37 @@ graph TD
     subduction_crypto --> subduction_core
     sedimentree_core --> subduction_core
     sedimentree_core --> automerge_sedimentree
+    sedimentree_core --> sedimentree_fs_storage
+    sedimentree_core --> sedimentree_wasm
 
     subduction_core --> subduction_websocket
     subduction_core --> subduction_wasm
     subduction_core --> subduction_keyhive_policy
+    subduction_keyhive --> subduction_keyhive_policy
 
     subduction_websocket --> subduction_cli
+    sedimentree_fs_storage --> subduction_cli
 
     automerge_sedimentree --> automerge_sedimentree_wasm
-    subduction_wasm --> automerge_sedimentree_wasm
+    sedimentree_wasm --> automerge_sedimentree_wasm
 
     automerge_sedimentree_wasm --> automerge_subduction_wasm
     subduction_wasm --> automerge_subduction_wasm
 ```
 
-| Crate                  | Description                                                                             |
-|------------------------|-----------------------------------------------------------------------------------------|
-| `sedimentree_core`     | The core data partitioning scheme that enables efficient metadata-based synchronization |
-| `subduction_crypto`    | Cryptographic types: signed payloads and verification witnesses                         |
-| `subduction_core`      | The main synchronization protocol implementation                                        |
-| `subduction_websocket` | WebSocket transport layer for peer-to-peer connections                                  |
+| Crate                   | Description                                                                             |
+|-------------------------|-----------------------------------------------------------------------------------------|
+| `sedimentree_core`      | The core data partitioning scheme that enables efficient metadata-based synchronization |
+| `sedimentree_fs_storage`| Filesystem-based persistent storage for Sedimentree                                     |
+| `subduction_crypto`     | Cryptographic types: signed payloads and verification witnesses                         |
+| `subduction_core`       | The main synchronization protocol implementation                                        |
+| `subduction_websocket`  | WebSocket transport layer for peer-to-peer connections                                  |
 
 ### Platform Bindings
 
 | Crate                        | Description                                                |
 |------------------------------|------------------------------------------------------------|
+| `sedimentree_wasm`           | WebAssembly bindings for Sedimentree                       |
 | `subduction_wasm`            | WebAssembly bindings for browser and Node.js environments  |
 | `automerge_sedimentree`      | Sedimentree adapter for Automerge documents                |
 | `automerge_sedimentree_wasm` | Wasm bindings for Automerge + Sedimentree                  |
@@ -83,6 +92,7 @@ graph TD
 
 | Crate                       | Description                                            |
 |-----------------------------|--------------------------------------------------------|
+| `subduction_keyhive`        | Keyhive integration types                              |
 | `subduction_keyhive_policy` | Keyhive-based authorization policy for connections     |
 
 ### Tools
@@ -233,10 +243,15 @@ await syncer.register(subductionWs);
 ```
 subduction/
 ├── sedimentree_core/           # Core Sedimentree data structure
+├── sedimentree_fs_storage/     # Filesystem storage for Sedimentree
+├── sedimentree_wasm/           # Wasm bindings for Sedimentree
+├── subduction_crypto/          # Signed payloads and verification witnesses
 ├── subduction_core/            # Sync protocol implementation
 ├── subduction_websocket/       # WebSocket transport
-├── subduction_wasm/            # Wasm bindings
+├── subduction_wasm/            # Wasm bindings for Subduction
 ├── subduction_cli/             # CLI for server & client nodes
+├── subduction_keyhive/         # Keyhive integration types
+├── subduction_keyhive_policy/  # Keyhive authorization policy
 ├── automerge_sedimentree/      # Automerge integration
 ├── automerge_sedimentree_wasm/ # Wasm wrapper for automerge_sedimentree
 └── automerge_subduction_wasm/  # Wasm wrapper for automerge_sedimentree + subduction

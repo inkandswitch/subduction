@@ -319,10 +319,10 @@ The codec defines error types for content validation (`BlobTooLarge`, `ArrayTooL
 Schema: `STC\x00` (Sedimentree Commit, version 0)
 
 ```
-╔════════╦═══════════╦══════════════╦══════════════╦═══════════╦══════════╦═══════════════╦═══════════╗
-║ Schema ║ IssuerVK  ║ SedimentreeId ║ BlobDigest  ║ ParentCnt ║ BlobSize ║ Parents...    ║ Signature ║
-║   4B   ║   32B     ║     32B      ║     32B      ║    1B     ║    8B    ║ N × 32B       ║    64B    ║
-╚════════╩═══════════╩══════════════╩══════════════╩═══════════╩══════════╩═══════════════╩═══════════╝
+╔════════╦═══════════╦═══════════════╦════════════╦═══════════╦══════════╦═════════════╦═══════════╗
+║ Schema ║ IssuerVK  ║ SedimentreeId ║ BlobDigest ║ ParentCnt ║ BlobSize ║ Parents...  ║ Signature ║
+║   4B   ║    32B    ║      32B      ║    32B     ║    1B     ║    8B    ║   N × 32B   ║    64B    ║
+╚════════╩═══════════╩═══════════════╩════════════╩═══════════╩══════════╩═════════════╩═══════════╝
 ```
 
 | Field | Size | Description |
@@ -343,10 +343,10 @@ Schema: `STC\x00` (Sedimentree Commit, version 0)
 Schema: `STF\x00` (Sedimentree Fragment, version 0)
 
 ```
-╔════════╦═══════════╦══════════════╦═══════╦══════════════╦═══════════╦══════════╦═════════╦═══════════╦═══════════════╦═════════════════╦═══════════╗
-║ Schema ║ IssuerVK  ║ SedimentreeId ║ Head  ║  BlobDigest  ║ BlobSize  ║ BndryCnt ║ CkptCnt ║ Boundary  ║  Checkpoints  ║    Signature    ║
-║   4B   ║   32B     ║     32B      ║  32B  ║     32B      ║    8B     ║   1B     ║   2B    ║ N × 32B   ║   M × 12B     ║       64B       ║
-╚════════╩═══════════╩══════════════╩═══════╩══════════════╩═══════════╩══════════╩═════════╩═══════════╩═══════════════╩═════════════════╩═══════════╝
+╔════════╦══════════╦═══════════════╦══════╦════════════╦══════════╦══════════╦═════════╦═══════════╦══════════════╦═══════════╗
+║ Schema ║ IssuerVK ║ SedimentreeId ║ Head ║ BlobDigest ║ BlobSize ║ BndryCnt ║ CkptCnt ║ Boundary  ║ Checkpoints  ║ Signature ║
+║   4B   ║   32B    ║      32B      ║ 32B  ║    32B     ║    8B    ║    1B    ║   2B    ║  N × 32B  ║   M × 12B    ║    64B    ║
+╚════════╩══════════╩═══════════════╩══════╩════════════╩══════════╩══════════╩═════════╩═══════════╩══════════════╩═══════════╝
 ```
 
 | Field | Size | Description |
@@ -370,10 +370,10 @@ Schema: `STF\x00` (Sedimentree Fragment, version 0)
 Schema: `SUC\x00` (Subduction Challenge, version 0)
 
 ```
-╔════════╦═══════════╦═══════════════╦═════════════╦═══════╦═══════════╗
-║ Schema ║ IssuerVK  ║   Audience    ║  Timestamp  ║ Nonce ║ Signature ║
-║   4B   ║   32B     ║    33B        ║     8B      ║  16B  ║    64B    ║
-╚════════╩═══════════╩═══════════════╩═════════════╩═══════╩═══════════╝
+╔════════╦══════════╦══════════╦═══════════╦═══════╦═══════════╗
+║ Schema ║ IssuerVK ║ Audience ║ Timestamp ║ Nonce ║ Signature ║
+║   4B   ║   32B    ║   33B    ║    8B     ║  16B  ║    64B    ║
+╚════════╩══════════╩══════════╩═══════════╩═══════╩═══════════╝
 ```
 
 | Field | Size | Description |
@@ -392,10 +392,10 @@ Schema: `SUC\x00` (Subduction Challenge, version 0)
 Schema: `SUR\x00` (Subduction Response, version 0)
 
 ```
-╔════════╦═══════════╦═════════════════╦═══════════════════╦═══════════╗
-║ Schema ║ IssuerVK  ║ ChallengeDigest ║ ServerTimestamp   ║ Signature ║
-║   4B   ║   32B     ║      32B        ║        8B         ║    64B    ║
-╚════════╩═══════════╩═════════════════╩═══════════════════╩═══════════╝
+╔════════╦══════════╦═════════════════╦═════════════════╦═══════════╗
+║ Schema ║ IssuerVK ║ ChallengeDigest ║ ServerTimestamp ║ Signature ║
+║   4B   ║   32B    ║       32B       ║       8B        ║    64B    ║
+╚════════╩══════════╩═════════════════╩═════════════════╩═══════════╝
 ```
 
 | Field | Size | Description |
@@ -435,46 +435,46 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ### LooseCommit Message (Tag 0x00)
 
 ```
-╔══════════════╦══════════════════════╦══════════╦══════════╗
-║ SedimentreeId ║ Signed<LooseCommit>  ║ BlobLen  ║   Blob   ║
-║     32B      ║      variable        ║    4B    ║ variable ║
-╚══════════════╩══════════════════════╩══════════╩══════════╝
+╔═══════════════╦══════════════════════╦═════════╦══════════╗
+║ SedimentreeId ║ Signed<LooseCommit>  ║ BlobLen ║   Blob   ║
+║      32B      ║       variable       ║   4B    ║ variable ║
+╚═══════════════╩══════════════════════╩═════════╩══════════╝
 ```
 
 ### Fragment Message (Tag 0x01)
 
 ```
-╔══════════════╦═══════════════════╦══════════╦══════════╗
-║ SedimentreeId ║ Signed<Fragment>  ║ BlobLen  ║   Blob   ║
-║     32B      ║     variable      ║    4B    ║ variable ║
-╚══════════════╩═══════════════════╩══════════╩══════════╝
+╔═══════════════╦══════════════════╦═════════╦══════════╗
+║ SedimentreeId ║ Signed<Fragment> ║ BlobLen ║   Blob   ║
+║      32B      ║     variable     ║   4B    ║ variable ║
+╚═══════════════╩══════════════════╩═════════╩══════════╝
 ```
 
 ### BlobsRequest (Tag 0x02)
 
 ```
-╔══════════════╦═══════╦═════════════════╗
-║ SedimentreeId ║ Count ║ Digests...      ║
-║     32B      ║   2B  ║   N × 32B       ║
-╚══════════════╩═══════╩═════════════════╝
+╔═══════════════╦═══════╦════════════╗
+║ SedimentreeId ║ Count ║ Digests... ║
+║      32B      ║  2B   ║  N × 32B   ║
+╚═══════════════╩═══════╩════════════╝
 ```
 
 ### BlobsResponse (Tag 0x03)
 
 ```
-╔══════════════╦═══════╦═══════════════════════════════╗
-║ SedimentreeId ║ Count ║ (BlobLen + Blob)...           ║
-║     32B      ║   2B  ║ N × (4B + variable)           ║
-╚══════════════╩═══════╩═══════════════════════════════╝
+╔═══════════════╦═══════╦═════════════════════╗
+║ SedimentreeId ║ Count ║ (BlobLen + Blob)... ║
+║      32B      ║  2B   ║ N × (4B + variable) ║
+╚═══════════════╩═══════╩═════════════════════╝
 ```
 
 ### BatchSyncRequest (Tag 0x04)
 
 ```
-╔══════════════╦═══════════╦═══════╦═══════════╦═══════════════════╦═══════════════════════════════════════════╗
-║ SedimentreeId ║ RequestId ║ Subscr ║   Seed    ║ CommitFPs + FragFPs ║        Fingerprints...                    ║
-║     32B      ║    40B    ║   1B   ║    16B   ║   2B + 2B           ║ (CommitCnt + FragCnt) × 8B                ║
-╚══════════════╩═══════════╩════════╩══════════╩═════════════════════╩═══════════════════════════════════════════╝
+╔═══════════════╦═══════════╦════════╦══════╦═════════════════════╦══════════════════════════════╗
+║ SedimentreeId ║ RequestId ║ Subscr ║ Seed ║ CommitFPs + FragFPs ║       Fingerprints...        ║
+║      32B      ║    40B    ║   1B   ║ 16B  ║       2B + 2B       ║ (CommitCnt + FragCnt) × 8B   ║
+╚═══════════════╩═══════════╩════════╩══════╩═════════════════════╩══════════════════════════════╝
 ```
 
 | Field | Size | Description |
@@ -491,10 +491,10 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ### BatchSyncResponse (Tag 0x05)
 
 ```
-╔═══════════╦══════════════╦════════════╦═══════════════════════════════════════════╗
-║ RequestId ║ SedimentreeId ║ ResultTag  ║           Result Payload                  ║
-║    40B    ║     32B      ║     1B     ║             variable                      ║
-╚═══════════╩══════════════╩════════════╩═══════════════════════════════════════════╝
+╔═══════════╦═══════════════╦═══════════╦════════════════╗
+║ RequestId ║ SedimentreeId ║ ResultTag ║ Result Payload ║
+║    40B    ║      32B      ║    1B     ║    variable    ║
+╚═══════════╩═══════════════╩═══════════╩════════════════╝
 ```
 
 **Result Tags:**
@@ -507,10 +507,10 @@ All sync messages use the envelope format with schema `SUM\x00`:
 **SyncDiff (for Ok result):**
 
 ```
-╔═══════════╦═══════════╦════════════╦════════════╦═══════════════════════════════════════════════════════════════════════════════════════╗
-║ CommitCnt ║ FragCnt   ║ ReqCommits ║ ReqFrags   ║ MissingCommits + MissingFrags + RequestedCommitFPs + RequestedFragFPs                ║
-║    2B     ║    2B     ║     2B     ║     2B     ║                              variable                                                ║
-╚═══════════╩═══════════╩════════════╩════════════╩═══════════════════════════════════════════════════════════════════════════════════════╝
+╔═══════════╦═════════╦════════════╦══════════╦═══════════════════════════════════════════════════════════════════╗
+║ CommitCnt ║ FragCnt ║ ReqCommits ║ ReqFrags ║ MissingCommits + MissingFrags + RequestedCommitFPs + RequestedFragFPs ║
+║    2B     ║   2B    ║     2B     ║    2B    ║                           variable                                ║
+╚═══════════╩═════════╩════════════╩══════════╩═══════════════════════════════════════════════════════════════════╝
 ```
 
 Each missing commit/fragment is: `Signed<T>` (variable) + BlobLen (4B) + Blob (variable)
@@ -520,19 +520,19 @@ Requested fingerprints are 8 bytes each.
 ### RemoveSubscriptions (Tag 0x06)
 
 ```
-╔═══════╦══════════════════════╗
-║ Count ║ SedimentreeIds...    ║
-║   2B  ║      N × 32B         ║
-╚═══════╩══════════════════════╝
+╔═══════╦════════════════════╗
+║ Count ║ SedimentreeIds...  ║
+║  2B   ║      N × 32B       ║
+╚═══════╩════════════════════╝
 ```
 
 ### DataRequestRejected (Tag 0x07)
 
 ```
-╔══════════════╗
+╔═══════════════╗
 ║ SedimentreeId ║
-║     32B      ║
-╚══════════════╝
+║      32B      ║
+╚═══════════════╝
 ```
 
 ## Future Considerations
