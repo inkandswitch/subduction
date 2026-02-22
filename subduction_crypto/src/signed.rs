@@ -182,7 +182,7 @@ impl<T: Encode + Decode> Signed<T> {
     ///
     /// This function will not panic. All slice operations are bounds-checked
     /// after validating minimum size.
-    pub fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, DecodeError> {
+    pub fn try_from_bytes(mut bytes: Vec<u8>) -> Result<Self, DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIZE {
             return Err(DecodeError::MessageTooShort {
@@ -221,10 +221,34 @@ impl<T: Encode + Decode> Signed<T> {
         let issuer = VerifyingKey::from_bytes(&issuer_bytes)
             .map_err(|_| DecodeError::InvalidVerifyingKey)?;
 
-        // Extract signature - safe because MIN_SIZE >= SIGNATURE_SIZE
-        let sig_start = bytes.len().saturating_sub(SIGNATURE_SIZE);
+        // Decode the payload to determine the actual message size.
+        // The fields start after schema + issuer, and we need to parse them
+        // to know where they end (since they have variable-length arrays).
+        let fields_start = SCHEMA_SIZE + VERIFYING_KEY_SIZE;
+        let fields_bytes = bytes
+            .get(fields_start..)
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
+                need: fields_start + 1,
+                have: bytes.len(),
+            })?;
+        let payload = T::try_decode_fields(fields_bytes)?;
+        let fields_size = payload.fields_size();
+
+        // Calculate the actual message size and validate we have enough bytes
+        let actual_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        if bytes.len() < actual_size {
+            return Err(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
+                need: actual_size,
+                have: bytes.len(),
+            });
+        }
+
+        // Extract signature from the correct position
+        let sig_start = fields_start + fields_size;
         let sig_bytes: [u8; SIGNATURE_SIZE] = bytes
-            .get(sig_start..)
+            .get(sig_start..sig_start + SIGNATURE_SIZE)
             .and_then(|s| s.try_into().ok())
             .ok_or(DecodeError::MessageTooShort {
                 type_name: core::any::type_name::<T>(),
@@ -232,6 +256,9 @@ impl<T: Encode + Decode> Signed<T> {
                 have: bytes.len().saturating_sub(sig_start),
             })?;
         let signature = Signature::from_bytes(&sig_bytes);
+
+        // Truncate to only include the actual signed message bytes
+        bytes.truncate(actual_size);
 
         Ok(Self {
             issuer,

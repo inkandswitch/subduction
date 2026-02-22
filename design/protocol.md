@@ -6,10 +6,10 @@ This document describes the binary format and cryptographic choices for Subducti
 
 All Subduction messages use a custom canonical binary codec:
 
-| Category | Examples |
-|----------|----------|
-| **Signed payloads** | `LooseCommit`, `Fragment`, `Challenge`, `Response` |
-| **Sync messages** | `BatchSyncRequest`, `BatchSyncResponse`, `BlobsRequest` |
+| Category            | Examples                                                |
+|---------------------|---------------------------------------------------------|
+| **Signed payloads** | `LooseCommit`, `Fragment`, `Challenge`, `Response`      |
+| **Sync messages**   | `BatchSyncRequest`, `BatchSyncResponse`, `BlobsRequest` |
 
 The codec is designed for:
 - **Determinism** — Required for signature verification
@@ -29,12 +29,12 @@ All signed payloads use a canonical binary format:
 ╚════════╩══════════╩═══════════════════════════════════════╩══════════╝
 ```
 
-| Field       | Size     | Purpose                                      |
-|-------------|----------|----------------------------------------------|
-| **Schema**  | 4 bytes  | Type and version identifier (see below)      |
-| **IssuerVK**| 32 bytes | Ed25519 verifying key of the signer          |
-| **Fields**  | variable | Type-specific data (see [Serialization])     |
-| **Signature**| 64 bytes| Ed25519 signature over bytes `[0..len-64]`   |
+| Field         | Size     | Purpose                                    |
+|---------------|----------|--------------------------------------------|
+| **Schema**    | 4 bytes  | Type and version identifier (see below)    |
+| **IssuerVK**  | 32 bytes | Ed25519 verifying key of the signer        |
+| **Fields**    | variable | Type-specific data (see [Serialization])   |
+| **Signature** | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
 
 The signature covers _everything before it_ — schema, issuer, and all fields.
 
@@ -49,10 +49,10 @@ The 4-byte schema header identifies the payload type and version:
 ╚═════════════════╩═══════════╩═════════╝
 ```
 
-| Prefix | Namespace |
-|--------|-----------|
+| Prefix           | Namespace                                     |
+|------------------|-----------------------------------------------|
 | `ST` (0x53 0x54) | Sedimentree types (`LooseCommit`, `Fragment`) |
-| `SU` (0x53 0x55) | Subduction types (`Challenge`, `Response`) |
+| `SU` (0x53 0x55) | Subduction types (`Challenge`, `Response`)    |
 
 The type byte identifies the specific type within the namespace.
 The version byte enables forward-compatible evolution per type.
@@ -69,14 +69,14 @@ All signatures in Subduction use [Ed25519 (RFC 8032)](https://www.rfc-editor.org
 
 **Why Ed25519?**
 
-| Property | Benefit |
-|----------|---------|
-| **Fast verification** | 71,000 signatures/sec on modern hardware |
-| **Small signatures** | 64 bytes |
-| **Small keys** | 32 bytes (public), 32 bytes (private) |
-| **Deterministic** | Same message always produces same signature |
-| **Secure** | No known practical attacks; conservative design |
-| **Wide support** | Available in all major languages and HSMs |
+| Property              | Benefit                                         |
+|-----------------------|-------------------------------------------------|
+| **Fast verification** | 71,000 signatures/sec on modern hardware        |
+| **Small signatures**  | 64 bytes                                        |
+| **Small keys**        | 32 bytes (public), 32 bytes (private)           |
+| **Deterministic**     | Same message always produces same signature     |
+| **Secure**            | No known practical attacks; conservative design |
+| **Wide support**      | Available in all major languages and HSMs       |
 
 **Why fixed algorithm (no negotiation)?**
 
@@ -105,21 +105,21 @@ Direct use of the key bytes (rather than hashing) means:
 
 Batch sync uses [SipHash-2-4](https://www.aumasson.jp/siphash/siphash.pdf) for compact set reconciliation. Instead of exchanging full 32-byte BLAKE3 digests to determine what each peer has, peers exchange 8-byte keyed hashes (fingerprints) with a random per-request seed.
 
-| Property | Value |
-|----------|-------|
-| Output size | 8 bytes (u64) |
-| Key size | 16 bytes (two u64s) |
-| Security | PRF (pseudorandom function) under 128-bit key |
-| Speed | ~50-100ns per item on Wasm (no SIMD required) |
+| Property    | Value                                         |
+|-------------|-----------------------------------------------|
+| Output size | 8 bytes (u64)                                 |
+| Key size    | 16 bytes (two u64s)                           |
+| Security    | PRF (pseudorandom function) under 128-bit key |
+| Speed       | ~50-100ns per item on Wasm (no SIMD required) |
 
 **Why SipHash over BLAKE3 for reconciliation?**
 
-| | SipHash-2-4 | BLAKE3 keyed |
-|--|-------------|-------------|
-| **Purpose** | Keyed short hashing | Cryptographic MAC |
-| **Output** | Native u64 | 32 bytes (must truncate) |
-| **Speed (Wasm)** | Baseline | 5-10x slower |
-| **Speed (native)** | Baseline | 3-5x slower |
+|                    | SipHash-2-4         | BLAKE3 keyed             |
+|--------------------|---------------------|--------------------------|
+| **Purpose**        | Keyed short hashing | Cryptographic MAC        |
+| **Output**         | Native u64          | 32 bytes (must truncate) |
+| **Speed (Wasm)**   | Baseline            | 5-10x slower             |
+| **Speed (native)** | Baseline            | 3-5x slower              |
 
 At 1200 items per sync request, the server must hash every local item per incoming request. SipHash keeps this fast even on constrained runtimes.
 
@@ -178,13 +178,13 @@ Signed payloads (`LooseCommit`, `Fragment`, `Challenge`, `Response`) use a custo
 
 ### Design Goals
 
-| Goal | Rationale |
-|------|-----------|
+| Goal              | Rationale                                                            |
+|-------------------|----------------------------------------------------------------------|
 | **Deterministic** | Identical payloads produce identical bytes — required for signatures |
-| **Compact** | No field names, no type tags for primitives |
-| **Verifiable** | Schema header enables type checking before parsing |
-| **Versionable** | Per-type version byte allows independent evolution |
-| **`no_std`** | Compatible with `no_std` + `alloc` environments |
+| **Compact**       | No field names, no type tags for primitives                          |
+| **Verifiable**    | Schema header enables type checking before parsing                   |
+| **Versionable**   | Per-type version byte allows independent evolution                   |
+| **`no_std`**      | Compatible with `no_std` + `alloc` environments                      |
 
 ### Codec Traits
 
@@ -208,29 +208,29 @@ trait Decode: Schema + Sized {
 }
 ```
 
-### Replay Prevention
+### Scope Binding
 
-To prevent replay attacks, `LooseCommit` and `Fragment` embed their `SedimentreeId` directly as a field. This ID is included in the signed bytes, so a commit or fragment signed for one document cannot be replayed under a different document — the signature verification would fail.
+`LooseCommit` and `Fragment` embed their `SedimentreeId` directly as a field. This ID is included in the signed bytes, preventing data from being uploaded to the wrong document — the signature verification would fail if the `SedimentreeId` in the payload doesn't match the intended destination.
 
-| Type | Replay Prevention |
-|------|-------------------|
-| `LooseCommit` | Contains `sedimentree_id` field |
-| `Fragment` | Contains `sedimentree_id` field |
-| `Challenge` | Self-contained (includes audience and nonce) |
-| `Response` | Self-contained (includes challenge digest) |
+| Type          | Binding                                      |
+|---------------|----------------------------------------------|
+| `LooseCommit` | Contains `sedimentree_id` field              |
+| `Fragment`    | Contains `sedimentree_id` field              |
+| `Challenge`   | Self-contained (includes audience and nonce) |
+| `Response`    | Self-contained (includes challenge digest)   |
 
 ### Primitive Encoding
 
 All multi-byte integers are **big-endian** (network byte order):
 
-| Type | Encoding |
-|------|----------|
-| `u8` | 1 byte |
-| `u16` | 2 bytes, big-endian |
-| `u32` | 4 bytes, big-endian |
-| `u64` | 8 bytes, big-endian |
-| `[u8; N]` | N bytes, raw |
-| `&[u8]` | Length-prefixed (u16 or u32) + raw bytes |
+| Type      | Encoding                                 |
+|-----------|------------------------------------------|
+| `u8`      | 1 byte                                   |
+| `u16`     | 2 bytes, big-endian                      |
+| `u32`     | 4 bytes, big-endian                      |
+| `u64`     | 8 bytes, big-endian                      |
+| `[u8; N]` | N bytes, raw                             |
+| `&[u8]`   | Length-prefixed (u16 or u32) + raw bytes |
 
 ### Array Encoding
 
