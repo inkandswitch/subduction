@@ -88,8 +88,8 @@ impl HasBlobMeta for LooseCommit {
     }
 }
 
-/// Fixed fields size: SedimentreeId(32) + Digest<Blob>(32) + |Parents|(1) + BlobSize(4).
-const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 1 + 4;
+/// Fixed fields size: SedimentreeId(32) + Digest<Blob>(32) + |Parents|(1) + BlobSize(8).
+const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 1 + 8;
 
 /// Minimum signed message size: Schema(4) + IssuerVK(32) + Fields(69) + Signature(64).
 const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
@@ -108,8 +108,7 @@ impl EncodeFields for LooseCommit {
         #[allow(clippy::cast_possible_truncation)]
         encode::u8(self.parents().len() as u8, buf);
 
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u32(self.blob_meta().size_bytes() as u32, buf);
+        encode::u64(self.blob_meta().size_bytes(), buf);
 
         for parent in self.parents() {
             encode::array(parent.as_bytes(), buf);
@@ -146,8 +145,8 @@ impl Decode for LooseCommit {
         let parent_count = decode::u8(buf, offset)? as usize;
         offset += 1;
 
-        let blob_size = u64::from(decode::u32(buf, offset)?);
-        offset += 4;
+        let blob_size = decode::u64(buf, offset)?;
+        offset += 8;
 
         let parents_size = parent_count * 32;
         if buf.len() < offset + parents_size {
@@ -239,7 +238,7 @@ mod tests {
         encode::array(id.as_bytes(), &mut buf);
         encode::array(&[0x20; 32], &mut buf); // blob digest
         encode::u8(2, &mut buf);
-        encode::u32(1024, &mut buf);
+        encode::u64(1024, &mut buf);
         encode::array(&[0x50; 32], &mut buf);
         encode::array(&[0x30; 32], &mut buf);
 
@@ -262,6 +261,7 @@ mod tests {
 
     #[test]
     fn codec_min_size_is_correct() {
-        assert_eq!(LooseCommit::MIN_SIZE, 169);
+        // Schema(4) + IssuerVK(32) + SedimentreeId(32) + BlobDigest(32) + ParentCnt(1) + BlobSize(8) + Signature(64)
+        assert_eq!(LooseCommit::MIN_SIZE, 173);
     }
 }

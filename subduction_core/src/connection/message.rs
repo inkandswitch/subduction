@@ -328,9 +328,9 @@ mod tags {
 }
 
 mod min_sizes {
-    // sed_id(32) + Signed<LooseCommit>::MIN_SIZE(169) + blob_len_prefix(4)
-    pub(super) const LOOSE_COMMIT: usize = 32 + 169 + 4;
-    pub(super) const FRAGMENT: usize = 32 + 203 + 4;
+    // sed_id(32) + Signed<LooseCommit>::MIN_SIZE(173) + blob_len_prefix(4)
+    pub(super) const LOOSE_COMMIT: usize = 32 + 173 + 4;
+    pub(super) const FRAGMENT: usize = 32 + 207 + 4;
     pub(super) const BLOBS_REQUEST: usize = 32 + 2;
     pub(super) const BLOBS_RESPONSE: usize = 32 + 2;
     pub(super) const BATCH_SYNC_REQUEST: usize = 32 + 32 + 8 + 1 + 16 + 2 + 2;

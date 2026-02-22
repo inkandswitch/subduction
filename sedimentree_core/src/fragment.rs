@@ -9,7 +9,7 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, EncodeFields},
@@ -22,7 +22,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -331,8 +331,8 @@ impl FragmentSpec {
     }
 }
 
-/// Fixed fields size: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(4).
-const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 4;
+/// Fixed fields size: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(8).
+const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 8;
 
 /// Minimum signed message size: Schema(4) + IssuerVK(32) + Fields(103) + Signature(64).
 const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
@@ -358,8 +358,7 @@ impl EncodeFields for Fragment {
         #[allow(clippy::cast_possible_truncation)]
         encode::u16(self.checkpoints().len() as u16, buf);
 
-        #[allow(clippy::cast_possible_truncation)]
-        encode::u32(self.summary().blob_meta().size_bytes() as u32, buf);
+        encode::u64(self.summary().blob_meta().size_bytes(), buf);
 
         for boundary in self.boundary() {
             encode::array(boundary.as_bytes(), buf);
@@ -409,8 +408,8 @@ impl Decode for Fragment {
         let checkpoint_count = decode::u16(buf, offset)? as usize;
         offset += 2;
 
-        let blob_size = u64::from(decode::u32(buf, offset)?);
-        offset += 4;
+        let blob_size = decode::u64(buf, offset)?;
+        offset += 8;
 
         let boundary_size = boundary_count * 32;
         let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
@@ -542,13 +541,13 @@ mod tests {
 
             let mut buf = Vec::new();
             encode::array(sedimentree_id.as_bytes(), &mut buf);
-            encode::array(&[0x10; 32], &mut buf);
-            encode::array(&[0x20; 32], &mut buf);
-            encode::u8(2, &mut buf);
-            encode::u16(0, &mut buf);
-            encode::u32(1024, &mut buf);
-            encode::array(&[0x50; 32], &mut buf);
-            encode::array(&[0x30; 32], &mut buf);
+            encode::array(&[0x10; 32], &mut buf); // head
+            encode::array(&[0x20; 32], &mut buf); // blob digest
+            encode::u8(2, &mut buf); // boundary count
+            encode::u16(0, &mut buf); // checkpoint count
+            encode::u64(1024, &mut buf); // blob size
+            encode::array(&[0x50; 32], &mut buf); // boundary 1 (unsorted - bigger first)
+            encode::array(&[0x30; 32], &mut buf); // boundary 2 (smaller second)
 
             let result = Fragment::try_decode_fields(&buf);
             assert!(matches!(result, Err(DecodeError::UnsortedArray(_))));
@@ -569,7 +568,8 @@ mod tests {
 
         #[test]
         fn min_size_is_correct() {
-            assert_eq!(Fragment::MIN_SIZE, 203);
+            // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + BndryCnt(1) + CkptCnt(2) + BlobSize(8) + Signature(64)
+            assert_eq!(Fragment::MIN_SIZE, 207);
         }
     }
     use alloc::collections::BTreeSet;

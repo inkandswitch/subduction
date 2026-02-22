@@ -35,7 +35,7 @@ struct Challenge {
 ```
 
 The challenge is wrapped in `Signed<Challenge>`, which includes:
-- The CBOR-encoded payload
+- The canonical binary-encoded payload (see [protocol.md](./protocol.md#serialization))
 - The initiator's Ed25519 signature
 - The initiator's verifying key (from which `PeerId` is derived)
 
@@ -223,7 +223,7 @@ Future requests: initiator adjusts timestamp by +30s
 
 ## Wire Format
 
-All messages are CBOR-encoded, wrapped in a `HandshakeMessage` enum:
+All messages use the canonical binary codec (see [protocol.md](./protocol.md#serialization)), wrapped in a `HandshakeMessage` enum:
 
 ```rust
 enum HandshakeMessage {
