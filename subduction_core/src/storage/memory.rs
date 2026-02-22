@@ -6,26 +6,30 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::{
     blob::Blob,
+    codec::error::DecodeError,
     collections::{Map, Set},
     crypto::digest::Digest,
     fragment::Fragment,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
+use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
+use thiserror::Error;
 
-use super::{batch_result::BatchResult, traits::Storage};
-use subduction_crypto::signed::Signed;
+use super::traits::Storage;
 
 /// An in-memory storage backend.
 ///
 /// Commits and fragments are stored in content-addressed maps keyed by digest.
+/// Each commit/fragment is stored together with its blob as a `VerifiedMeta<T>`.
 #[derive(Debug, Clone, Default)]
 #[allow(clippy::type_complexity)]
 pub struct MemoryStorage {
     ids: Arc<Mutex<Set<SedimentreeId>>>,
-    commits: Arc<Mutex<Map<SedimentreeId, Map<Digest<LooseCommit>, Signed<LooseCommit>>>>>,
-    fragments: Arc<Mutex<Map<SedimentreeId, Map<Digest<Fragment>, Signed<Fragment>>>>>,
-    blobs: Arc<Mutex<Map<SedimentreeId, Map<Digest<Blob>, Blob>>>>,
+    /// Commits stored as (Signed<LooseCommit>, Blob) pairs.
+    commits: Arc<Mutex<Map<SedimentreeId, Map<Digest<LooseCommit>, (Signed<LooseCommit>, Blob)>>>>,
+    /// Fragments stored as (Signed<Fragment>, Blob) pairs.
+    fragments: Arc<Mutex<Map<SedimentreeId, Map<Digest<Fragment>, (Signed<Fragment>, Blob)>>>>,
 }
 
 impl MemoryStorage {
@@ -37,24 +41,18 @@ impl MemoryStorage {
             ids: Arc::new(Mutex::new(Set::new())),
             commits: Arc::new(Mutex::new(Map::new())),
             fragments: Arc::new(Mutex::new(Map::new())),
-            blobs: Arc::new(Mutex::new(Map::new())),
         }
-    }
-
-    /// Compute digest from a signed commit by decoding the payload.
-    fn commit_digest(signed: &Signed<LooseCommit>) -> Option<Digest<LooseCommit>> {
-        signed.decode_payload().ok().map(|c| c.digest())
-    }
-
-    /// Compute digest from a signed fragment by decoding the payload.
-    fn fragment_digest(signed: &Signed<Fragment>) -> Option<Digest<Fragment>> {
-        signed.decode_payload().ok().map(|f| f.digest())
     }
 }
 
+/// Failed to decode payload from stored data.
+#[derive(Debug, Clone, Copy, Error)]
+#[error(transparent)]
+pub struct MemoryStorageError(#[from] DecodeError);
+
 #[future_form(Sendable, Local)]
 impl<K: FutureForm> Storage<K> for MemoryStorage {
-    type Error = core::convert::Infallible;
+    type Error = MemoryStorageError;
 
     // ==================== Sedimentree IDs ====================
 
@@ -87,25 +85,25 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
-    // ==================== Loose Commits (CAS) ====================
+    // ==================== Loose Commits (compound with blob) ====================
 
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        loose_commit: Signed<LooseCommit>,
-    ) -> K::Future<'_, Result<Digest<LooseCommit>, Self::Error>> {
+        verified: VerifiedMeta<LooseCommit>,
+    ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            #[allow(clippy::expect_used)]
-            let digest = Self::commit_digest(&loose_commit)
-                .expect("signed commit should decode for digest computation");
+            let digest = Digest::hash(verified.payload());
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_loose_commit");
+
+            let (signed, _payload, blob) = verified.into_full_parts();
             self.commits
                 .lock()
                 .await
                 .entry(sedimentree_id)
                 .or_default()
-                .insert(digest, loose_commit);
-            Ok(digest)
+                .insert(digest, (signed, blob));
+            Ok(())
         })
     }
 
@@ -113,13 +111,16 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         digest: Digest<LooseCommit>,
-    ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, Self::Error>> {
+    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::load_loose_commit");
             let locked = self.commits.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
-                .and_then(|map| map.get(&digest).cloned()))
+                .and_then(|map| map.get(&digest))
+                .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed.clone(), blob.clone()))
+                .transpose()
+                .map_err(MemoryStorageError::from)
         })
     }
 
@@ -140,14 +141,22 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>> {
+    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_loose_commits");
             let locked = self.commits.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
-                .map(|map| map.iter().map(|(d, s)| (*d, s.clone())).collect())
-                .unwrap_or_default())
+                .map(|map| {
+                    map.values()
+                        .map(|(signed, blob)| {
+                            VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .map_err(MemoryStorageError::from)
+                .map(Option::unwrap_or_default)
         })
     }
 
@@ -180,25 +189,25 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
-    // ==================== Fragments (CAS) ====================
+    // ==================== Fragments (compound with blob) ====================
 
     fn save_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment: Signed<Fragment>,
-    ) -> K::Future<'_, Result<Digest<Fragment>, Self::Error>> {
+        verified: VerifiedMeta<Fragment>,
+    ) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            #[allow(clippy::expect_used)]
-            let digest = Self::fragment_digest(&fragment)
-                .expect("signed fragment should decode for digest computation");
+            let digest = verified.payload().digest();
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_fragment");
+
+            let (signed, _payload, blob) = verified.into_full_parts();
             self.fragments
                 .lock()
                 .await
                 .entry(sedimentree_id)
                 .or_default()
-                .insert(digest, fragment);
-            Ok(digest)
+                .insert(digest, (signed, blob));
+            Ok(())
         })
     }
 
@@ -206,13 +215,16 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         &self,
         sedimentree_id: SedimentreeId,
         digest: Digest<Fragment>,
-    ) -> K::Future<'_, Result<Option<Signed<Fragment>>, Self::Error>> {
+    ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::load_fragment");
             let locked = self.fragments.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
-                .and_then(|map| map.get(&digest).cloned()))
+                .and_then(|map| map.get(&digest))
+                .map(|(signed, blob)| VerifiedMeta::try_from_trusted(signed.clone(), blob.clone()))
+                .transpose()
+                .map_err(MemoryStorageError::from)
         })
     }
 
@@ -233,14 +245,22 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, Self::Error>> {
+    ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>> {
         K::from_future(async move {
             tracing::debug!(?sedimentree_id, "MemoryStorage::load_fragments");
             let locked = self.fragments.lock().await;
-            Ok(locked
+            locked
                 .get(&sedimentree_id)
-                .map(|map| map.iter().map(|(d, s)| (*d, s.clone())).collect())
-                .unwrap_or_default())
+                .map(|map| {
+                    map.values()
+                        .map(|(signed, blob)| {
+                            VerifiedMeta::try_from_trusted(signed.clone(), blob.clone())
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+                .transpose()
+                .map_err(MemoryStorageError::from)
+                .map(Option::unwrap_or_default)
         })
     }
 
@@ -269,210 +289,49 @@ impl<K: FutureForm> Storage<K> for MemoryStorage {
         })
     }
 
-    // ==================== Blobs (per-sedimentree CAS) ====================
-
-    fn save_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob: Blob,
-    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
-        K::from_future(async move {
-            let digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-            tracing::debug!(?sedimentree_id, ?digest, "MemoryStorage::save_blob");
-            self.blobs
-                .lock()
-                .await
-                .entry(sedimentree_id)
-                .or_default()
-                .entry(digest)
-                .or_insert(blob);
-            Ok(digest)
-        })
-    }
-
-    fn load_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob_digest: Digest<Blob>,
-    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>> {
-        K::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?blob_digest, "MemoryStorage::load_blob");
-            Ok(self
-                .blobs
-                .lock()
-                .await
-                .get(&sedimentree_id)
-                .and_then(|blobs| blobs.get(&blob_digest).cloned()))
-        })
-    }
-
-    fn load_blobs(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob_digests: &[Digest<Blob>],
-    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>> {
-        let blob_digests = blob_digests.to_vec();
-        K::from_future(async move {
-            tracing::debug!(
-                ?sedimentree_id,
-                count = blob_digests.len(),
-                "MemoryStorage::load_blobs"
-            );
-            let all_blobs = self.blobs.lock().await;
-            let tree_blobs = all_blobs.get(&sedimentree_id);
-            Ok(blob_digests
-                .into_iter()
-                .filter_map(|digest| {
-                    tree_blobs
-                        .and_then(|blobs| blobs.get(&digest).map(|blob| (digest, blob.clone())))
-                })
-                .collect())
-        })
-    }
-
-    fn delete_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob_digest: Digest<Blob>,
-    ) -> K::Future<'_, Result<(), Self::Error>> {
-        K::from_future(async move {
-            tracing::debug!(?sedimentree_id, ?blob_digest, "MemoryStorage::delete_blob");
-            if let Some(blobs) = self.blobs.lock().await.get_mut(&sedimentree_id) {
-                blobs.remove(&blob_digest);
-            }
-            Ok(())
-        })
-    }
-
-    // ==================== Convenience Methods ====================
-
-    fn save_commit_with_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        commit: Signed<LooseCommit>,
-        blob: Blob,
-    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
-        K::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::save_commit_with_blob");
-            let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-            self.blobs
-                .lock()
-                .await
-                .entry(sedimentree_id)
-                .or_default()
-                .entry(blob_digest)
-                .or_insert(blob);
-
-            #[allow(clippy::expect_used)]
-            let commit_digest = Self::commit_digest(&commit)
-                .expect("signed commit should decode for digest computation");
-            self.commits
-                .lock()
-                .await
-                .entry(sedimentree_id)
-                .or_default()
-                .insert(commit_digest, commit);
-            Ok(blob_digest)
-        })
-    }
-
-    fn save_fragment_with_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        fragment: Signed<Fragment>,
-        blob: Blob,
-    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>> {
-        K::from_future(async move {
-            tracing::debug!(?sedimentree_id, "MemoryStorage::save_fragment_with_blob");
-            let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-            self.blobs
-                .lock()
-                .await
-                .entry(sedimentree_id)
-                .or_default()
-                .entry(blob_digest)
-                .or_insert(blob);
-
-            #[allow(clippy::expect_used)]
-            let fragment_digest = Self::fragment_digest(&fragment)
-                .expect("signed fragment should decode for digest computation");
-            self.fragments
-                .lock()
-                .await
-                .entry(sedimentree_id)
-                .or_default()
-                .insert(fragment_digest, fragment);
-            Ok(blob_digest)
-        })
-    }
+    // ==================== Batch Operations ====================
 
     fn save_batch(
         &self,
         sedimentree_id: SedimentreeId,
-        commits: Vec<(Signed<LooseCommit>, Blob)>,
-        fragments: Vec<(Signed<Fragment>, Blob)>,
-    ) -> K::Future<'_, Result<BatchResult, Self::Error>> {
+        commits: Vec<VerifiedMeta<LooseCommit>>,
+        fragments: Vec<VerifiedMeta<Fragment>>,
+    ) -> K::Future<'_, Result<usize, Self::Error>> {
         K::from_future(async move {
+            let num_commits = commits.len();
+            let num_fragments = fragments.len();
             tracing::debug!(
                 ?sedimentree_id,
-                num_commits = commits.len(),
-                num_fragments = fragments.len(),
+                num_commits,
+                num_fragments,
                 "MemoryStorage::save_batch"
             );
 
             self.ids.lock().await.insert(sedimentree_id);
 
-            let mut commit_digests = Vec::with_capacity(commits.len());
-            let mut fragment_digests = Vec::with_capacity(fragments.len());
-
-            for (commit, blob) in commits {
-                let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-                self.blobs
-                    .lock()
-                    .await
-                    .entry(sedimentree_id)
-                    .or_default()
-                    .entry(blob_digest)
-                    .or_insert(blob);
-
-                #[allow(clippy::expect_used)]
-                let commit_digest = Self::commit_digest(&commit)
-                    .expect("signed commit should decode for digest computation");
+            for verified in commits {
+                let digest = Digest::hash(verified.payload());
+                let (signed, _payload, blob) = verified.into_full_parts();
                 self.commits
                     .lock()
                     .await
                     .entry(sedimentree_id)
                     .or_default()
-                    .insert(commit_digest, commit);
-                commit_digests.push(commit_digest);
+                    .insert(digest, (signed, blob));
             }
 
-            for (fragment, blob) in fragments {
-                let blob_digest: Digest<Blob> = Digest::hash_bytes(blob.contents());
-                self.blobs
-                    .lock()
-                    .await
-                    .entry(sedimentree_id)
-                    .or_default()
-                    .entry(blob_digest)
-                    .or_insert(blob);
-
-                #[allow(clippy::expect_used)]
-                let fragment_digest = Self::fragment_digest(&fragment)
-                    .expect("signed fragment should decode for digest computation");
+            for verified in fragments {
+                let digest = Digest::hash(verified.payload());
+                let (signed, _payload, blob) = verified.into_full_parts();
                 self.fragments
                     .lock()
                     .await
                     .entry(sedimentree_id)
                     .or_default()
-                    .insert(fragment_digest, fragment);
-                fragment_digests.push(fragment_digest);
+                    .insert(digest, (signed, blob));
             }
 
-            Ok(BatchResult {
-                commit_digests,
-                fragment_digests,
-            })
+            Ok(num_commits + num_fragments)
         })
     }
 }

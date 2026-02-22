@@ -85,14 +85,7 @@ impl WasmDigest {
     #[wasm_bindgen(js_name = toHexString)]
     pub fn to_hex_string(&self) -> String {
         // Create a temporary typed digest for formatting
-        Digest::<()>::from_bytes(self.0).to_string()
-    }
-
-    /// Hash the given data and return the digest.
-    #[must_use]
-    pub fn hash(data: &[u8]) -> WasmDigest {
-        let digest: Digest<()> = Digest::hash_bytes(data);
-        WasmDigest(*digest.as_bytes())
+        Digest::<()>::force_from_bytes(self.0).to_string()
     }
 }
 
@@ -106,7 +99,7 @@ impl<T> From<Digest<T>> for WasmDigest {
 /// Convert from `WasmDigest` to any typed `Digest`.
 impl<T> From<WasmDigest> for Digest<T> {
     fn from(digest: WasmDigest) -> Self {
-        Digest::from_bytes(digest.0)
+        Digest::force_from_bytes(digest.0)
     }
 }
 

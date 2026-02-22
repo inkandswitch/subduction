@@ -24,11 +24,10 @@ use crate::{
 /// - **Random collision**: ~N²/2⁹⁶ where N is set size
 /// - **Adversarial collision**: ~2⁴⁸ work (birthday attack on 96 bits)
 /// - **Preimage**: ~2⁹⁶ work
-#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
-#[cbor(transparent)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(feature = "serde", serde(transparent))]
-pub struct Checkpoint(#[n(0)] Truncated<Digest<LooseCommit>>);
+pub struct Checkpoint(Truncated<Digest<LooseCommit>>);
 
 impl Checkpoint {
     /// Create a checkpoint from a full commit digest.
@@ -43,6 +42,14 @@ impl Checkpoint {
     #[must_use]
     pub const fn from_truncated(truncated: Truncated<Digest<LooseCommit>>) -> Self {
         Self(truncated)
+    }
+
+    /// Create a checkpoint from raw bytes.
+    ///
+    /// This is the inverse of [`as_bytes`](Self::as_bytes).
+    #[must_use]
+    pub const fn from_bytes(bytes: [u8; 12]) -> Self {
+        Self(Truncated::from_bytes(bytes))
     }
 
     /// The underlying truncated digest.
@@ -67,6 +74,12 @@ impl From<Digest<LooseCommit>> for Checkpoint {
 impl From<Truncated<Digest<LooseCommit>>> for Checkpoint {
     fn from(truncated: Truncated<Digest<LooseCommit>>) -> Self {
         Self::from_truncated(truncated)
+    }
+}
+
+impl From<[u8; 12]> for Checkpoint {
+    fn from(bytes: [u8; 12]) -> Self {
+        Self::from_bytes(bytes)
     }
 }
 
@@ -103,7 +116,7 @@ mod tests {
 
     #[test]
     fn checkpoint_from_digest() {
-        let digest = Digest::<LooseCommit>::from_bytes([42u8; 32]);
+        let digest = Digest::<LooseCommit>::force_from_bytes([42u8; 32]);
         let checkpoint = Checkpoint::new(digest);
         assert_eq!(checkpoint.as_bytes(), &[42u8; 12]);
     }
@@ -115,8 +128,8 @@ mod tests {
         let mut bytes_b = [0u8; 32];
         bytes_b[31] = 2;
 
-        let a = Checkpoint::new(Digest::<LooseCommit>::from_bytes(bytes_a));
-        let b = Checkpoint::new(Digest::<LooseCommit>::from_bytes(bytes_b));
+        let a = Checkpoint::new(Digest::<LooseCommit>::force_from_bytes(bytes_a));
+        let b = Checkpoint::new(Digest::<LooseCommit>::force_from_bytes(bytes_b));
         assert_eq!(a, b); // Same first 12 bytes
     }
 }

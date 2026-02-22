@@ -164,7 +164,9 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
         }
 
         Ok(Some(
-            deps.into_iter().map(|h| Digest::from_bytes(h.0)).collect(),
+            deps.into_iter()
+                .map(|h| Digest::force_from_bytes(h.0))
+                .collect(),
         ))
     }
 }
@@ -178,7 +180,7 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
 pub fn digest_of_base58_id(b58_str: &str) -> Result<WasmDigest, WasmFromBase58Error> {
     let decoded = b58_str.from_base58()?;
     let raw: [u8; 32] = blake3::hash(&decoded).into();
-    Ok(Digest::<LooseCommit>::from_bytes(raw).into())
+    Ok(Digest::<LooseCommit>::force_from_bytes(raw).into())
 }
 
 #[wasm_bindgen]

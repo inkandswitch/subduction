@@ -82,7 +82,7 @@ impl WasmWebSocket {
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
                 tracing::debug!("WS received {} bytes", bytes.len());
-                match minicbor::decode::<Message>(&bytes) {
+                match Message::try_decode(&bytes) {
                     Ok(msg) => {
                         tracing::trace!("WS message decoded: {} bytes", bytes.len());
                         let inner_pending = closure_pending.clone();
@@ -138,7 +138,7 @@ impl WasmWebSocket {
                     }
                     Err(e) => {
                         tracing::error!(
-                            "CBOR decode failed for {} byte message: {:?}. First 64 bytes: {:?}",
+                            "decode failed for {} byte message: {:?}. First 64 bytes: {:?}",
                             bytes.len(),
                             e,
                             bytes.get(..64).unwrap_or(&bytes)
@@ -390,20 +390,20 @@ impl WasmWebSocket {
     async fn wait_for_open(
         ws: WebSocket,
     ) -> Result<WebSocket, WebSocketAuthenticatedConnectionError> {
-        let (open_tx, open_rx) = oneshot::channel::<Result<(), String>>();
+        let (open_tx, open_rx) = oneshot::channel::<Result<(), WebSocketConnectionFailed>>();
         let open_tx_cell = Rc::new(RefCell::new(Some(open_tx)));
         let open_tx_clone = open_tx_cell.clone();
 
         let onopen = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             if let Some(tx) = open_tx_clone.borrow_mut().take() {
-                drop(tx.send(Ok(())));
+                let _ = tx.send(Ok(()));
             }
         });
 
         let onerror_tx = open_tx_cell.clone();
         let onerror = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             if let Some(tx) = onerror_tx.borrow_mut().take() {
-                drop(tx.send(Err("WebSocket connection failed".into())));
+                let _ = tx.send(Err(WebSocketConnectionFailed));
             }
         });
 
@@ -414,14 +414,13 @@ impl WasmWebSocket {
         if ws.ready_state() == WebSocket::OPEN
             && let Some(tx) = open_tx_cell.borrow_mut().take()
         {
-            drop(tx.send(Ok(())));
+            let _ = tx.send(Ok(()));
         }
 
         // Wait for open or error
         open_rx
             .await
-            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)?
-            .map_err(WebSocketAuthenticatedConnectionError::ConnectionFailed)?;
+            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)??;
 
         // Clear temporary handlers
         ws.set_onopen(None);
@@ -535,8 +534,7 @@ impl Connection<Local> for WasmWebSocket {
     fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let request_id = message.request_id();
 
-        #[allow(clippy::expect_used)]
-        let msg_bytes = minicbor::to_vec(message).expect("serialization should be infallible");
+        let msg_bytes = message.encode();
 
         async move {
             self.socket
@@ -579,9 +577,7 @@ impl Connection<Local> for WasmWebSocket {
                 self.pending.lock().await.insert(req_id, tx);
             }
 
-            #[allow(clippy::expect_used)]
-            let msg_bytes = minicbor::to_vec(Message::BatchSyncRequest(req))
-                .expect("serialization should be infallible");
+            let msg_bytes = Message::BatchSyncRequest(req).encode();
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())
@@ -778,8 +774,8 @@ pub enum WebSocketAuthenticatedConnectionError {
     SocketCreationFailed(JsValue),
 
     /// WebSocket connection failed.
-    #[error("connection failed: {0}")]
-    ConnectionFailed(alloc::string::String),
+    #[error(transparent)]
+    ConnectionFailed(#[from] WebSocketConnectionFailed),
 
     /// Connection was canceled.
     #[error("connection canceled")]
@@ -801,6 +797,11 @@ impl From<WebSocketAuthenticatedConnectionError> for JsValue {
         js_err.into()
     }
 }
+
+/// WebSocket connection failed during open.
+#[derive(Debug, Clone, Copy, Error)]
+#[error("WebSocket connection failed")]
+pub struct WebSocketConnectionFailed;
 
 /// WebSocket setup was canceled.
 #[derive(Debug, Clone, Error)]

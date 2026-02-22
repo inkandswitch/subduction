@@ -52,7 +52,7 @@ impl CommitDag {
         let nodes = commits
             .clone()
             .map(|c| Node {
-                hash: c.digest(),
+                hash: Digest::hash(c),
                 parents: None,
                 children: None,
             })
@@ -73,7 +73,7 @@ impl CommitDag {
             #[allow(clippy::expect_used)]
             let child_idx = *dag
                 .node_map
-                .get(&commit.digest())
+                .get(&Digest::hash(commit))
                 .expect("commit digest not in node_map");
 
             for parent in commit.parents() {
@@ -504,32 +504,71 @@ impl Iterator for Parents<'_> {
 mod tests {
     use alloc::collections::BTreeSet;
 
-    use rand::{SeedableRng, rngs::SmallRng};
-
     use super::CommitDag;
     use crate::{
-        collections::Set,
-        commit::CountLeadingZeroBytes,
+        blob::{Blob, BlobMeta},
+        collections::{Map, Set},
+        crypto::digest::Digest,
+        depth::{Depth, DepthMetric},
+        id::SedimentreeId,
         loose_commit::LooseCommit,
-        test_utils::{digest_with_depth, random_blob_meta},
     };
+
+    fn make_sedimentree_id(seed: u8) -> SedimentreeId {
+        SedimentreeId::new([seed; 32])
+    }
+
+    fn make_commit(
+        sedimentree_id: SedimentreeId,
+        seed: u8,
+        parents: BTreeSet<Digest<LooseCommit>>,
+    ) -> LooseCommit {
+        let blob = Blob::from(&[seed][..]);
+        let blob_meta = BlobMeta::new(&blob);
+        LooseCommit::new(sedimentree_id, parents, blob_meta)
+    }
+
+    /// A mock depth metric that returns predetermined depths for specific digests.
+    struct MockDepthMetric {
+        depths: Map<Digest<LooseCommit>, Depth>,
+    }
+
+    impl MockDepthMetric {
+        fn new() -> Self {
+            Self { depths: Map::new() }
+        }
+
+        fn set_depth(&mut self, digest: Digest<LooseCommit>, depth: Depth) {
+            self.depths.insert(digest, depth);
+        }
+    }
+
+    impl DepthMetric for MockDepthMetric {
+        fn to_depth(&self, digest: Digest<LooseCommit>) -> Depth {
+            self.depths.get(&digest).copied().unwrap_or(Depth(0))
+        }
+    }
 
     /// No fragments: all commits with depth >= threshold remain as block boundaries.
     #[test]
     fn simplify_block_boundaries_without_fragments() {
-        let mut rng = SmallRng::seed_from_u64(42);
+        let sedimentree_id = make_sedimentree_id(1);
 
-        // Depths: a=2, b=0
-        let a_hash = digest_with_depth(2, 0x01);
-        let b_hash = digest_with_depth(0, 0x02);
+        // Create commits: b is root, a has b as parent
+        let b = make_commit(sedimentree_id, 1, BTreeSet::new());
+        let b_hash = Digest::hash(&b);
+        let a = make_commit(sedimentree_id, 2, BTreeSet::from([b_hash]));
+        let a_hash = Digest::hash(&a);
 
-        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
-        let a = LooseCommit::new(a_hash, BTreeSet::from([b_hash]), random_blob_meta(&mut rng));
+        // Set up mock depths: a=2, b=0
+        let mut depth_metric = MockDepthMetric::new();
+        depth_metric.set_depth(a_hash, Depth(2));
+        depth_metric.set_depth(b_hash, Depth(0));
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
         let simplified = dag
-            .simplify(&[], &CountLeadingZeroBytes)
+            .simplify(&[], &depth_metric)
             .commit_hashes()
             .collect::<Set<_>>();
 
@@ -541,19 +580,23 @@ mod tests {
     /// Two consecutive block boundary commits (both depth >= threshold).
     #[test]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
-        let mut rng = SmallRng::seed_from_u64(43);
+        let sedimentree_id = make_sedimentree_id(1);
 
-        // Depths: a=2, b=2
-        let a_hash = digest_with_depth(2, 0x01);
-        let b_hash = digest_with_depth(2, 0x02);
+        // Create commits: b is root, a has b as parent
+        let b = make_commit(sedimentree_id, 1, BTreeSet::new());
+        let b_hash = Digest::hash(&b);
+        let a = make_commit(sedimentree_id, 2, BTreeSet::from([b_hash]));
+        let a_hash = Digest::hash(&a);
 
-        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
-        let a = LooseCommit::new(a_hash, BTreeSet::from([b_hash]), random_blob_meta(&mut rng));
+        // Set up mock depths: a=2, b=2
+        let mut depth_metric = MockDepthMetric::new();
+        depth_metric.set_depth(a_hash, Depth(2));
+        depth_metric.set_depth(b_hash, Depth(2));
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
         let simplified = dag
-            .simplify(&[], &CountLeadingZeroBytes)
+            .simplify(&[], &depth_metric)
             .commit_hashes()
             .collect::<Set<_>>();
 
@@ -563,21 +606,16 @@ mod tests {
 
     #[test]
     fn test_parents() {
-        let mut rng = SmallRng::seed_from_u64(44);
+        let sedimentree_id = make_sedimentree_id(1);
 
-        let a_hash = digest_with_depth(0, 0x01);
-        let b_hash = digest_with_depth(0, 0x02);
-        let c_hash = digest_with_depth(0, 0x03);
-        let d_hash = digest_with_depth(0, 0x04);
-
-        let a = LooseCommit::new(a_hash, BTreeSet::new(), random_blob_meta(&mut rng));
-        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
-        let c = LooseCommit::new(
-            c_hash,
-            BTreeSet::from([a_hash, b_hash]),
-            random_blob_meta(&mut rng),
-        );
-        let d = LooseCommit::new(d_hash, BTreeSet::from([c_hash]), random_blob_meta(&mut rng));
+        // Create a DAG: a and b are roots, c has both as parents, d has c as parent
+        let a = make_commit(sedimentree_id, 1, BTreeSet::new());
+        let a_hash = Digest::hash(&a);
+        let b = make_commit(sedimentree_id, 2, BTreeSet::new());
+        let b_hash = Digest::hash(&b);
+        let c = make_commit(sedimentree_id, 3, BTreeSet::from([a_hash, b_hash]));
+        let c_hash = Digest::hash(&c);
+        let d = make_commit(sedimentree_id, 4, BTreeSet::from([c_hash]));
 
         let dag = CommitDag::from_commits([&a, &b, &c, &d].into_iter());
 

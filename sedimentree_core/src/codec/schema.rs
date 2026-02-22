@@ -1,0 +1,30 @@
+//! Schema identity for payloads.
+
+/// Prefix for sedimentree types.
+pub const SEDIMENTREE_PREFIX: [u8; 2] = *b"ST";
+
+/// Prefix for subduction types.
+pub const SUBDUCTION_PREFIX: [u8; 2] = *b"SU";
+
+/// Schema identity tag.
+///
+/// This trait provides the schema header that identifies a type
+/// in the wire format. It's shared between encoding and decoding.
+pub trait Schema {
+    /// 2-byte protocol prefix (e.g., [`SEDIMENTREE_PREFIX`] or [`SUBDUCTION_PREFIX`]).
+    const PREFIX: [u8; 2];
+
+    /// Type identifier byte within the protocol namespace.
+    const TYPE_BYTE: u8;
+
+    /// Schema version byte for forward compatibility.
+    const VERSION: u8;
+
+    /// Combined 4-byte schema header: `[prefix0, prefix1, type_byte, version]`.
+    const SCHEMA: [u8; 4] = [
+        Self::PREFIX[0],
+        Self::PREFIX[1],
+        Self::TYPE_BYTE,
+        Self::VERSION,
+    ];
+}

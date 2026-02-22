@@ -15,7 +15,7 @@
 //! ## What's NOT Tested Here
 //!
 //! - Actual sync protocol execution (see integration tests)
-//! - CBOR serialization/deserialization
+//! - Message serialization/deserialization
 //! - WebSocket round-trip latency
 //! - Storage I/O
 //! - Async runtime overhead
@@ -52,7 +52,7 @@ mod generators {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut bytes = [0u8; 32];
         rng.fill(&mut bytes);
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     /// Generate a deterministic blob digest from a seed.
@@ -60,7 +60,7 @@ mod generators {
         let mut rng = StdRng::seed_from_u64(seed);
         let mut bytes = [0u8; 32];
         rng.fill(&mut bytes);
-        Digest::from_bytes(bytes)
+        Digest::force_from_bytes(bytes)
     }
 
     /// Generate a peer ID from a seed.
@@ -89,11 +89,11 @@ mod generators {
 
     /// Generate a loose commit from a seed.
     pub(super) fn loose_commit_from_seed(seed: u64) -> LooseCommit {
-        let digest = digest_from_seed(seed);
+        let id = sedimentree_id_from_seed(seed);
         let parent = digest_from_seed(seed.wrapping_add(1));
-        #[allow(clippy::cast_possible_truncation)]
-        let blob_meta = BlobMeta::new(&[seed as u8; 64]);
-        LooseCommit::new(digest, BTreeSet::from([parent]), blob_meta)
+        let blob = blob_from_seed(seed.wrapping_add(2), 64);
+        let blob_meta = BlobMeta::new(&blob);
+        LooseCommit::new(id, BTreeSet::from([parent]), blob_meta)
     }
 
     /// Generate a fragment from a seed.
@@ -103,6 +103,7 @@ mod generators {
         num_parents: usize,
         num_members: usize,
     ) -> Fragment {
+        let id = sedimentree_id_from_seed(seed);
         let digest = digest_from_seed(seed);
         let parents: BTreeSet<Digest<LooseCommit>> = (0..num_parents)
             .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
@@ -110,9 +111,9 @@ mod generators {
         let members: Vec<Digest<LooseCommit>> = (0..num_members)
             .map(|i| digest_from_seed(seed.wrapping_add(200 + i as u64)))
             .collect();
-        #[allow(clippy::cast_possible_truncation)]
-        let blob_meta = BlobMeta::new(&[seed as u8; 128]);
-        Fragment::new(digest, parents, &members, blob_meta)
+        let blob = blob_from_seed(seed.wrapping_add(300), 128);
+        let blob_meta = BlobMeta::new(&blob);
+        Fragment::new(id, digest, parents, &members, blob_meta)
     }
 
     /// Generate a request ID from seeds.

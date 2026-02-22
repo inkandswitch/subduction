@@ -5,14 +5,11 @@ use alloc::{string::String, vec::Vec};
 /// A storage key, represented as a vector of strings.
 ///
 /// Storage laid out this way is amenable to range queries.
-#[derive(
-    Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct StorageKey(#[n(0)] Vec<String>);
+pub struct StorageKey(Vec<String>);
 
 impl StorageKey {
     /// Create a new storage key from its path segments or other identifier.

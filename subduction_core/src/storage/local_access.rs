@@ -3,7 +3,6 @@
 //! [`LocalStorageAccess`] provides direct storage access for operations that don't
 //! fit the capability model:
 //!
-//! - **Blobs**: Content-addressed, shared across sedimentrees
 //! - **Hydration**: Loading our own data at startup
 //!
 //! This is separate from [`StoragePowerbox`] which only mints capabilities for
@@ -13,17 +12,15 @@ use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob, collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    collections::Set, fragment::Fragment, id::SedimentreeId, loose_commit::LooseCommit,
 };
+use subduction_crypto::verified_meta::VerifiedMeta;
 
 use super::traits::Storage;
-use subduction_crypto::signed::Signed;
 
 /// Direct storage access for trusted local operations.
 ///
 /// Use this for:
-/// - Blob operations (content-addressed, not sedimentree-scoped)
 /// - Hydration (loading our own data at startup)
 /// - Internal sync operations
 ///
@@ -47,57 +44,6 @@ impl<S> LocalStorageAccess<S> {
         &self.storage
     }
 
-    // ==================== Blob Operations ====================
-
-    /// Save a blob under a sedimentree, returning its digest.
-    #[must_use]
-    pub fn save_blob<K: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob: Blob,
-    ) -> K::Future<'_, Result<Digest<Blob>, S::Error>>
-    where
-        S: Storage<K>,
-    {
-        self.storage.save_blob(sedimentree_id, blob)
-    }
-
-    /// Load blobs by their digests within a sedimentree.
-    ///
-    /// Returns only the blobs that were found. Missing digests are silently skipped.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying storage fails to load the blobs.
-    #[must_use]
-    #[allow(clippy::type_complexity)]
-    pub fn load_blobs<K: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-        digests: &[Digest<Blob>],
-    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, S::Error>>
-    where
-        S: Storage<K>,
-    {
-        self.storage.load_blobs(sedimentree_id, digests)
-    }
-
-    /// Load a single blob by its digest within a sedimentree.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the underlying storage fails to load the blob.
-    pub async fn load_blob<K: FutureForm>(
-        &self,
-        sedimentree_id: SedimentreeId,
-        digest: Digest<Blob>,
-    ) -> Result<Option<Blob>, S::Error>
-    where
-        S: Storage<K>,
-    {
-        self.storage.load_blob(sedimentree_id, digest).await
-    }
-
     // ==================== Hydration Operations ====================
 
     /// Load all sedimentree IDs from storage.
@@ -111,30 +57,28 @@ impl<S> LocalStorageAccess<S> {
         self.storage.load_all_sedimentree_ids()
     }
 
-    /// Load loose commits for a sedimentree.
+    /// Load all loose commits with their blobs for a sedimentree.
     ///
-    /// Returns digests alongside signed data for efficient indexing.
+    /// Used for hydration at startup.
     #[must_use]
-    #[allow(clippy::type_complexity)]
     pub fn load_loose_commits<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, S::Error>>
+    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, S::Error>>
     where
         S: Storage<K>,
     {
         self.storage.load_loose_commits(sedimentree_id)
     }
 
-    /// Load fragments for a sedimentree.
+    /// Load all fragments with their blobs for a sedimentree.
     ///
-    /// Returns digests alongside signed data for efficient indexing.
+    /// Used for hydration at startup.
     #[must_use]
-    #[allow(clippy::type_complexity)]
     pub fn load_fragments<K: FutureForm>(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, S::Error>>
+    ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, S::Error>>
     where
         S: Storage<K>,
     {

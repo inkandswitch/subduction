@@ -1,50 +1,50 @@
 //! Storage trait definition.
 //!
-//! The storage trait uses [`Signed`] types to ensure that only verified data
-//! can be stored. This provides cryptographic proof of authorship for all
-//! commits and fragments.
+//! The storage trait uses [`VerifiedMeta`] types to ensure that only verified data
+//! can be stored. This provides cryptographic proof of authorship and blob integrity
+//! for all commits and fragments.
+//!
+//! # Compound Storage
+//!
+//! Commits and fragments are stored _together with their blobs_ as a single
+//! atomic unit via [`VerifiedMeta<T>`]. This ensures:
+//!
+//! - Blob is always available when loading a commit/fragment
+//! - No orphaned blobs or commits/fragments without blobs
+//! - Signature and blob integrity verified before storage
+//!
+//! ```text
+//! Save: VerifiedMeta<LooseCommit> → storage (signed bytes + blob)
+//! Load: digest → VerifiedMeta<LooseCommit> (reconstructed from trusted storage)
+//! ```
 //!
 //! # Content-Addressed Storage
 //!
-//! Commits and fragments follow content-addressed storage (CAS) patterns,
-//! similar to blobs:
+//! Commits and fragments are keyed by the digest of their payload:
 //!
-//! ```text
-//! Blobs:     save(blob) → digest,  load(digest) → blob
-//! Commits:   save(id, commit) → digest,  load(id, digest) → commit
-//! Fragments: save(id, fragment) → digest,  load(id, digest) → fragment
-//! ```
-//!
-//! The `SedimentreeId` acts as a namespace — commits and fragments are
-//! content-addressed within their sedimentree.
+//! - O(1) lookup by digest for sync protocols
+//! - Efficient "what do I have vs. what do you have" comparisons
 
 use alloc::vec::Vec;
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob, collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
+    collections::Set, crypto::digest::Digest, fragment::Fragment, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
-
-use subduction_crypto::signed::Signed;
+use subduction_crypto::verified_meta::VerifiedMeta;
 
 /// Abstraction over storage for `Sedimentree` data.
 ///
-/// All commits and fragments are stored as [`Signed`] values, ensuring that
-/// only cryptographically verified data enters storage. This provides:
+/// All commits and fragments are stored as [`VerifiedMeta`] values, which bundle:
+/// - The signed payload (cryptographic proof of authorship)
+/// - The blob content (verified to match claimed metadata)
 ///
+/// This provides:
 /// - **Provenance**: Every stored commit/fragment has a verified author
-/// - **Integrity**: Signatures prevent tampering with stored data
+/// - **Integrity**: Signatures and blob hashes prevent tampering
+/// - **Atomicity**: Commit/fragment and blob are always stored together
 /// - **Trust on load**: Data loaded from storage is trusted (was verified before store)
-///
-/// # Content-Addressed Pattern
-///
-/// Commits and fragments are keyed by the digest of their payload (not the
-/// signature). This enables:
-///
-/// - O(1) lookup by digest for sync protocols
-/// - Efficient "what do I have vs. what do you have" comparisons
-/// - Forwarding signed data without decoding
 #[allow(clippy::type_complexity)]
 pub trait Storage<K: FutureForm + ?Sized> {
     /// The error type for storage operations.
@@ -67,23 +67,28 @@ pub trait Storage<K: FutureForm + ?Sized> {
     /// Get all sedimentree IDs that have data stored.
     fn load_all_sedimentree_ids(&self) -> K::Future<'_, Result<Set<SedimentreeId>, Self::Error>>;
 
-    // ==================== Loose Commits (CAS) ====================
+    // ==================== Loose Commits (compound with blob) ====================
 
-    /// Save a signed loose commit, returning its digest.
+    /// Save a verified loose commit with its blob.
     ///
-    /// The digest is computed from the commit payload and used as the key.
+    /// The commit and blob are stored atomically. The digest is computed from
+    /// the commit payload and used as the key.
     fn save_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
-        loose_commit: Signed<LooseCommit>,
-    ) -> K::Future<'_, Result<Digest<LooseCommit>, Self::Error>>;
+        verified: VerifiedMeta<LooseCommit>,
+    ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    /// Load a loose commit by its digest.
+    /// Load a loose commit with its blob by digest.
+    ///
+    /// Returns `None` if no commit exists with the given digest.
+    /// The returned `VerifiedMeta` is reconstructed from trusted storage
+    /// without re-verifying the signature or blob.
     fn load_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
         digest: Digest<LooseCommit>,
-    ) -> K::Future<'_, Result<Option<Signed<LooseCommit>>, Self::Error>>;
+    ) -> K::Future<'_, Result<Option<VerifiedMeta<LooseCommit>>, Self::Error>>;
 
     /// List all commit digests for a sedimentree.
     fn list_commit_digests(
@@ -91,44 +96,50 @@ pub trait Storage<K: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Set<Digest<LooseCommit>>, Self::Error>>;
 
-    /// Load all loose commits for a sedimentree.
+    /// Load all loose commits with their blobs for a sedimentree.
     ///
-    /// Returns digests alongside signed data for efficient indexing.
+    /// Used for hydration at startup. All returned `VerifiedMeta` values are
+    /// reconstructed from trusted storage without re-verification.
     fn load_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest<LooseCommit>, Signed<LooseCommit>)>, Self::Error>>;
+    ) -> K::Future<'_, Result<Vec<VerifiedMeta<LooseCommit>>, Self::Error>>;
 
-    /// Delete a loose commit by its digest.
+    /// Delete a loose commit and its blob by digest.
     fn delete_loose_commit(
         &self,
         sedimentree_id: SedimentreeId,
         digest: Digest<LooseCommit>,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    /// Delete all loose commits for a sedimentree.
+    /// Delete all loose commits and their blobs for a sedimentree.
     fn delete_loose_commits(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    // ==================== Fragments (CAS) ====================
+    // ==================== Fragments (compound with blob) ====================
 
-    /// Save a signed fragment, returning its digest.
+    /// Save a verified fragment with its blob.
     ///
-    /// The digest is computed from the fragment payload and used as the key.
+    /// The fragment and blob are stored atomically. The digest is computed from
+    /// the fragment payload and used as the key.
     fn save_fragment(
         &self,
         sedimentree_id: SedimentreeId,
-        fragment: Signed<Fragment>,
-    ) -> K::Future<'_, Result<Digest<Fragment>, Self::Error>>;
+        verified: VerifiedMeta<Fragment>,
+    ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    /// Load a fragment by its digest.
+    /// Load a fragment with its blob by digest.
+    ///
+    /// Returns `None` if no fragment exists with the given digest.
+    /// The returned `VerifiedMeta` is reconstructed from trusted storage
+    /// without re-verifying the signature or blob.
     fn load_fragment(
         &self,
         sedimentree_id: SedimentreeId,
         digest: Digest<Fragment>,
-    ) -> K::Future<'_, Result<Option<Signed<Fragment>>, Self::Error>>;
+    ) -> K::Future<'_, Result<Option<VerifiedMeta<Fragment>>, Self::Error>>;
 
     /// List all fragment digests for a sedimentree.
     fn list_fragment_digests(
@@ -136,82 +147,37 @@ pub trait Storage<K: FutureForm + ?Sized> {
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<Set<Digest<Fragment>>, Self::Error>>;
 
-    /// Load all fragments for a sedimentree.
+    /// Load all fragments with their blobs for a sedimentree.
     ///
-    /// Returns digests alongside signed data for efficient indexing.
+    /// Used for hydration at startup. All returned `VerifiedMeta` values are
+    /// reconstructed from trusted storage without re-verification.
     fn load_fragments(
         &self,
         sedimentree_id: SedimentreeId,
-    ) -> K::Future<'_, Result<Vec<(Digest<Fragment>, Signed<Fragment>)>, Self::Error>>;
+    ) -> K::Future<'_, Result<Vec<VerifiedMeta<Fragment>>, Self::Error>>;
 
-    /// Delete a fragment by its digest.
+    /// Delete a fragment and its blob by digest.
     fn delete_fragment(
         &self,
         sedimentree_id: SedimentreeId,
         digest: Digest<Fragment>,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    /// Delete all fragments for a sedimentree.
+    /// Delete all fragments and their blobs for a sedimentree.
     fn delete_fragments(
         &self,
         sedimentree_id: SedimentreeId,
     ) -> K::Future<'_, Result<(), Self::Error>>;
 
-    // ==================== Blobs (per-sedimentree CAS) ====================
+    // ==================== Batch Operations ====================
 
-    /// Save a blob under a sedimentree, returning its digest.
-    fn save_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob: Blob,
-    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>>;
-
-    /// Load a blob by its digest within a sedimentree.
-    fn load_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob_digest: Digest<Blob>,
-    ) -> K::Future<'_, Result<Option<Blob>, Self::Error>>;
-
-    /// Load blobs by their digests within a sedimentree.
+    /// Save a batch of commits and fragments with their blobs.
     ///
-    /// Returns only the blobs that were found. Missing digests are silently skipped.
-    fn load_blobs(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob_digests: &[Digest<Blob>],
-    ) -> K::Future<'_, Result<Vec<(Digest<Blob>, Blob)>, Self::Error>>;
-
-    /// Delete a blob by its digest within a sedimentree.
-    fn delete_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        blob_digest: Digest<Blob>,
-    ) -> K::Future<'_, Result<(), Self::Error>>;
-
-    // ==================== Convenience Methods ====================
-
-    /// Save a commit with its blob.
-    fn save_commit_with_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        commit: Signed<LooseCommit>,
-        blob: Blob,
-    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>>;
-
-    /// Save a fragment with its blob.
-    fn save_fragment_with_blob(
-        &self,
-        sedimentree_id: SedimentreeId,
-        fragment: Signed<Fragment>,
-        blob: Blob,
-    ) -> K::Future<'_, Result<Digest<Blob>, Self::Error>>;
-
-    /// Save a batch of commits and fragments.
+    /// Returns the total count of items saved (commits + fragments).
     fn save_batch(
         &self,
         sedimentree_id: SedimentreeId,
-        commits: Vec<(Signed<LooseCommit>, Blob)>,
-        fragments: Vec<(Signed<Fragment>, Blob)>,
-    ) -> K::Future<'_, Result<super::batch_result::BatchResult, Self::Error>>;
+        commits: Vec<VerifiedMeta<LooseCommit>>,
+        fragments: Vec<VerifiedMeta<Fragment>>,
+    ) -> K::Future<'_, Result<usize, Self::Error>>;
 }

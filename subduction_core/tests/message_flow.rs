@@ -5,36 +5,40 @@
 //! to observe timing and storage behavior.
 //!
 //! Tests run for both `Sendable` and `Local` future kinds to ensure
-//! behavior is consistent across native and WASM-like environments.
+//! behavior is consistent across native and Wasm-like environments.
 
-use alloc::collections::BTreeSet;
+use std::collections::BTreeSet;
 
-use super::common::{TokioSpawn, test_signer};
-use crate::{
-    connection::{message::Message, nonce_cache::NonceCache, test_utils::ChannelMockConnection},
+use core::time::Duration;
+use future_form::{Local, Sendable};
+use sedimentree_core::{
+    blob::{Blob, BlobMeta},
+    commit::CountLeadingZeroBytes,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+};
+use subduction_core::{
+    connection::{
+        message::Message,
+        nonce_cache::NonceCache,
+        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+    },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
-use core::time::Duration;
-use future_form::{Local, Sendable};
-use sedimentree_core::{
-    blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
-};
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;
 
-async fn make_test_commit_with_data(data: &[u8]) -> (Signed<LooseCommit>, Blob) {
+async fn make_test_commit_with_data(
+    id: &SedimentreeId,
+    data: &[u8],
+) -> (Signed<LooseCommit>, Blob) {
     let blob = Blob::new(data.to_vec());
-    let blob_meta = BlobMeta::new(data);
-    let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
+    let blob_meta = BlobMeta::new(&blob);
+    let commit = LooseCommit::new(*id, BTreeSet::new(), blob_meta);
     let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
@@ -63,7 +67,7 @@ async fn test_sendable_single_commit() -> TestResult {
     tokio::time::sleep(Duration::from_millis(10)).await;
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
-    let (commit, blob) = make_test_commit_with_data(b"test commit").await;
+    let (commit, blob) = make_test_commit_with_data(&sedimentree_id, b"test commit").await;
 
     handle
         .inbound_tx
@@ -119,7 +123,8 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 
     for i in 0..3u8 {
         let sedimentree_id = SedimentreeId::new([i; 32]);
-        let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+        let (commit, blob) =
+            make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes()).await;
 
         handle
             .inbound_tx
@@ -174,7 +179,8 @@ async fn test_sendable_same_sedimentree() -> TestResult {
     let sedimentree_id = SedimentreeId::new([99u8; 32]);
 
     for i in 0..3usize {
-        let (commit, blob) = make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+        let (commit, blob) =
+            make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes()).await;
 
         handle
             .inbound_tx
@@ -231,7 +237,7 @@ async fn test_local_single_commit() -> TestResult {
             tokio::time::sleep(Duration::from_millis(10)).await;
 
             let sedimentree_id = SedimentreeId::new([42u8; 32]);
-            let (commit, blob) = make_test_commit_with_data(b"test commit").await;
+            let (commit, blob) = make_test_commit_with_data(&sedimentree_id, b"test commit").await;
 
             handle
                 .inbound_tx
@@ -293,7 +299,8 @@ async fn test_local_multiple_sequential() -> TestResult {
             for i in 0..3u8 {
                 let sedimentree_id = SedimentreeId::new([i; 32]);
                 let (commit, blob) =
-                    make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+                    make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes())
+                        .await;
 
                 handle
                     .inbound_tx
@@ -354,7 +361,8 @@ async fn test_local_same_sedimentree() -> TestResult {
 
             for i in 0..3usize {
                 let (commit, blob) =
-                    make_test_commit_with_data(format!("commit {i}").as_bytes()).await;
+                    make_test_commit_with_data(&sedimentree_id, format!("commit {i}").as_bytes())
+                        .await;
 
                 handle
                     .inbound_tx

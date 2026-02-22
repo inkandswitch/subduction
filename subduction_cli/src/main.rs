@@ -2,7 +2,6 @@
 
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
-mod automerge_ephemeral_relay;
 mod client;
 pub mod metrics;
 mod purge;
@@ -32,9 +31,6 @@ async fn main() -> eyre::Result<()> {
     match args.command {
         Command::Server(server_args) => server::run(server_args, token).await?,
         Command::Client(client_args) => client::run(client_args, token).await?,
-        Command::EphemeralRelay(relay_args) => {
-            automerge_ephemeral_relay::run(relay_args, token).await?;
-        }
         Command::Purge(purge_args) => purge::run(purge_args).await?,
     }
 
@@ -178,10 +174,6 @@ enum Command {
     /// Start a Subduction node connecting to a WebSocket server
     #[command(name = "client", alias = "connect")]
     Client(client::ClientArgs),
-
-    /// Start an ephemeral message relay server for presence/awareness (automerge-repo protocol)
-    #[command(name = "ephemeral-relay", alias = "relay")]
-    EphemeralRelay(automerge_ephemeral_relay::EphemeralRelayArgs),
 
     /// Purge all storage data (destructive)
     #[command(name = "purge")]

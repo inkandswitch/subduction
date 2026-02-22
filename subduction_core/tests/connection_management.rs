@@ -1,7 +1,9 @@
 //! Tests for connection management (register, unregister, disconnect).
 
-use super::common::new_test_subduction;
-use crate::{connection::test_utils::MockConnection, peer::id::PeerId};
+use subduction_core::{
+    connection::test_utils::{MockConnection, new_test_subduction},
+    peer::id::PeerId,
+};
 use testresult::TestResult;
 
 #[tokio::test]

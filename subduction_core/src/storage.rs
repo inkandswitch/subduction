@@ -1,17 +1,21 @@
 //! Storage-related types and capabilities.
 //!
 //! This module provides:
-//! - [`Storage`] - The storage trait for persisting signed commits and fragments
+//! - [`Storage`] - The storage trait for persisting verified commits and fragments
 //! - [`MemoryStorage`] - In-memory storage backend
 //! - [`Fetcher`] / [`Putter`] / [`Destroyer`] - Capabilities for storage access
 //! - Storage key and ID utilities
 //!
-//! # Signed Storage
+//! # Compound Storage
 //!
-//! All commits and fragments are stored as [`Signed`] values. This ensures:
+//! All commits and fragments are stored as [`VerifiedMeta`] values, which bundle:
+//! - The signed payload (cryptographic proof of authorship)
+//! - The blob content (verified to match claimed metadata)
 //!
+//! This ensures:
 //! - **Provenance**: Every stored commit/fragment has a verified author
-//! - **Integrity**: Signatures prevent tampering with stored data
+//! - **Integrity**: Signatures and blob hashes prevent tampering
+//! - **Atomicity**: Commit/fragment and blob are always stored together
 //! - **Trust on load**: Data loaded from storage was verified before storage
 //!
 //! # Capability Model
@@ -44,10 +48,8 @@
 //!
 //! [`Subduction`]: crate::subduction::Subduction
 //! [`Destroyer`]: destroyer::Destroyer
-//! [`Signed`]: subduction_crypto::signed::Signed
+//! [`VerifiedMeta`]: subduction_crypto::verified_meta::VerifiedMeta
 
-pub mod batch_result;
-pub mod blob_access;
 pub mod destroyer;
 pub mod fetcher;
 pub mod id;

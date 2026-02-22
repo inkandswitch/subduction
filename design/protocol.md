@@ -1,51 +1,65 @@
 # Protocol Design
 
-This document describes the wire format and cryptographic choices for Subduction.
+This document describes the binary format and cryptographic choices for Subduction.
 
-## Wire Format
+## Binary Format
 
-All messages are encoded using [CBOR (RFC 8949)](https://www.rfc-editor.org/rfc/rfc8949.html), chosen for:
+All Subduction messages use a custom canonical binary codec:
 
-- **Compact binary encoding** — Smaller than JSON, no schema required
-- **Self-describing** — Type information embedded in the encoding
-- **Wide support** — Implementations in most languages
-- **Deterministic encoding** — Required for signature verification
+| Category            | Examples                                                |
+|---------------------|---------------------------------------------------------|
+| **Signed payloads** | `LooseCommit`, `Fragment`, `Challenge`, `Response`      |
+| **Sync messages**   | `BatchSyncRequest`, `BatchSyncResponse`, `BlobsRequest` |
 
-### Signed Payload Envelope
+The codec is designed for:
+- **Determinism** — Required for signature verification
+- **Compactness** — No field names, minimal overhead
+- **Simplicity** — No CBOR/MessagePack edge cases or implementation variance
+- **Predictability** — Fixed field order, big-endian integers
 
-Signed payloads use a structured envelope:
+### Signed Payload Format
+
+All signed payloads use a canonical binary format:
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│  Magic (3 bytes)  │  Version (1 byte)  │  Payload (N)   │
-├───────────────────┼────────────────────┼────────────────┤
-│       "SDN"       │        0x00        │  CBOR data     │
-└─────────────────────────────────────────────────────────┘
+┌───────────────────────── Payload ─────────────────────────┬── Seal ──┐
+╔════════╦══════════╦═══════════════════════════════════════╦══════════╗
+║ Schema ║ IssuerVK ║         Type-Specific Fields          ║   Sig    ║
+║   4B   ║   32B    ║             (variable)                ║   64B    ║
+╚════════╩══════════╩═══════════════════════════════════════╩══════════╝
 ```
 
-| Field       | Purpose                                                        |
-|-------------|----------------------------------------------------------------|
-| **Magic**   | `SDN` (0x53 0x44 0x4E) — Identifies Subduction signed payloads |
-| **Version** | Protocol version byte — Enables format evolution               |
-| **Payload** | CBOR-encoded content being signed                              |
+| Field         | Size     | Purpose                                    |
+|---------------|----------|--------------------------------------------|
+| **Schema**    | 4 bytes  | Type and version identifier (see below)    |
+| **IssuerVK**  | 32 bytes | Ed25519 verifying key of the signer        |
+| **Fields**    | variable | Type-specific data (see [Serialization])   |
+| **Signature** | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
 
-### Protocol Versioning
+The signature covers _everything before it_ — schema, issuer, and all fields.
 
-The protocol version is an enum allowing forward compatibility:
+### Schema Header
 
-```rust
-enum ProtocolVersion {
-    V0_1 = 0,  // Current version
-    // Future versions can be added here
-}
+The 4-byte schema header identifies the payload type and version:
+
+```
+╔═════════════════╦═══════════╦═════════╗
+║     Prefix      ║   Type    ║ Version ║
+║     2 bytes     ║   1 byte  ║ 1 byte  ║
+╚═════════════════╩═══════════╩═════════╝
 ```
 
-**Upgrade path:**
+| Prefix           | Namespace                                     |
+|------------------|-----------------------------------------------|
+| `ST` (0x53 0x54) | Sedimentree types (`LooseCommit`, `Fragment`) |
+| `SU` (0x53 0x55) | Subduction types (`Challenge`, `Response`)    |
 
-1. New versions add new enum variants
-2. Receivers check version before parsing payload
-3. Unknown versions can be rejected gracefully
-4. Version negotiation happens at connection time (future)
+The type byte identifies the specific type within the namespace.
+The version byte enables forward-compatible evolution per type.
+
+**Validation:** Decoders reject messages with unknown prefixes or unsupported versions.
+
+[Serialization]: #serialization
 
 ## Cryptographic Choices
 
@@ -55,14 +69,14 @@ All signatures in Subduction use [Ed25519 (RFC 8032)](https://www.rfc-editor.org
 
 **Why Ed25519?**
 
-| Property | Benefit |
-|----------|---------|
-| **Fast verification** | 71,000 signatures/sec on modern hardware |
-| **Small signatures** | 64 bytes |
-| **Small keys** | 32 bytes (public), 32 bytes (private) |
-| **Deterministic** | Same message always produces same signature |
-| **Secure** | No known practical attacks; conservative design |
-| **Wide support** | Available in all major languages and HSMs |
+| Property              | Benefit                                         |
+|-----------------------|-------------------------------------------------|
+| **Fast verification** | 71,000 signatures/sec on modern hardware        |
+| **Small signatures**  | 64 bytes                                        |
+| **Small keys**        | 32 bytes (public), 32 bytes (private)           |
+| **Deterministic**     | Same message always produces same signature     |
+| **Secure**            | No known practical attacks; conservative design |
+| **Wide support**      | Available in all major languages and HSMs       |
 
 **Why fixed algorithm (no negotiation)?**
 
@@ -91,21 +105,21 @@ Direct use of the key bytes (rather than hashing) means:
 
 Batch sync uses [SipHash-2-4](https://www.aumasson.jp/siphash/siphash.pdf) for compact set reconciliation. Instead of exchanging full 32-byte BLAKE3 digests to determine what each peer has, peers exchange 8-byte keyed hashes (fingerprints) with a random per-request seed.
 
-| Property | Value |
-|----------|-------|
-| Output size | 8 bytes (u64) |
-| Key size | 16 bytes (two u64s) |
-| Security | PRF (pseudorandom function) under 128-bit key |
-| Speed | ~50-100ns per item on Wasm (no SIMD required) |
+| Property    | Value                                         |
+|-------------|-----------------------------------------------|
+| Output size | 8 bytes (u64)                                 |
+| Key size    | 16 bytes (two u64s)                           |
+| Security    | PRF (pseudorandom function) under 128-bit key |
+| Speed       | ~50-100ns per item on Wasm (no SIMD required) |
 
 **Why SipHash over BLAKE3 for reconciliation?**
 
-| | SipHash-2-4 | BLAKE3 keyed |
-|--|-------------|-------------|
-| **Purpose** | Keyed short hashing | Cryptographic MAC |
-| **Output** | Native u64 | 32 bytes (must truncate) |
-| **Speed (Wasm)** | Baseline | 5-10x slower |
-| **Speed (native)** | Baseline | 3-5x slower |
+|                    | SipHash-2-4         | BLAKE3 keyed             |
+|--------------------|---------------------|--------------------------|
+| **Purpose**        | Keyed short hashing | Cryptographic MAC        |
+| **Output**         | Native u64          | 32 bytes (must truncate) |
+| **Speed (Wasm)**   | Baseline            | 5-10x slower             |
+| **Speed (native)** | Baseline            | 3-5x slower              |
 
 At 1200 items per sync request, the server must hash every local item per incoming request. SipHash keeps this fast even on constrained runtimes.
 
@@ -158,6 +172,140 @@ enum Message {
 
 See [`sync/`](./sync/) for details. Batch sync uses [fingerprint-based reconciliation](./sync/batch.md#fingerprint-based-reconciliation) for compact set diffing.
 
+## Serialization
+
+Signed payloads (`LooseCommit`, `Fragment`, `Challenge`, `Response`) use a custom canonical binary codec defined in `sedimentree_core::codec`. This section documents the encoding rules.
+
+### Design Goals
+
+| Goal              | Rationale                                                            |
+|-------------------|----------------------------------------------------------------------|
+| **Deterministic** | Identical payloads produce identical bytes — required for signatures |
+| **Compact**       | No field names, no type tags for primitives                          |
+| **Verifiable**    | Schema header enables type checking before parsing                   |
+| **Versionable**   | Per-type version byte allows independent evolution                   |
+| **`no_std`**      | Compatible with `no_std` + `alloc` environments                      |
+
+### Codec Traits
+
+```rust
+/// Type identity for schema validation.
+trait Schema {
+    /// 4-byte header: [prefix0, prefix1, type_byte, version].
+    const SCHEMA: [u8; 4];
+}
+
+/// Encode to canonical bytes (any serializable type).
+trait Encode {
+    fn encode(&self) -> Vec<u8>;
+    fn encoded_size(&self) -> usize;
+}
+
+/// Encode fields for schema-prefixed signed messages.
+trait EncodeFields: Schema {
+    fn encode_fields(&self, buf: &mut Vec<u8>);
+    fn fields_size(&self) -> usize;
+}
+
+// Blanket impl: Schema + EncodeFields → Encode
+impl<T: Schema + EncodeFields> Encode for T { /* schema + fields */ }
+
+/// Decode from canonical bytes.
+trait Decode: Schema + Sized {
+    const MIN_SIZE: usize;
+    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError>;
+}
+```
+
+**Trait design:**
+- `Encode` is the simple trait for any serializable type (e.g., `Blob`)
+- `EncodeFields` is for signed messages that need a schema prefix
+- The blanket impl gives `Encode` to all `Schema + EncodeFields` types automatically
+- `Signed<T>` requires `T: Schema + EncodeFields + Decode`
+
+### Scope Binding
+
+`LooseCommit` and `Fragment` embed their `SedimentreeId` directly as a field. This ID is included in the signed bytes, preventing data from being uploaded to the wrong document — the signature verification would fail if the `SedimentreeId` in the payload doesn't match the intended destination.
+
+| Type          | Binding                                      |
+|---------------|----------------------------------------------|
+| `LooseCommit` | Contains `sedimentree_id` field              |
+| `Fragment`    | Contains `sedimentree_id` field              |
+| `Challenge`   | Self-contained (includes audience and nonce) |
+| `Response`    | Self-contained (includes challenge digest)   |
+
+### Primitive Encoding
+
+All multi-byte integers are **big-endian** (network byte order):
+
+| Type      | Encoding                                 |
+|-----------|------------------------------------------|
+| `u8`      | 1 byte                                   |
+| `u16`     | 2 bytes, big-endian                      |
+| `u32`     | 4 bytes, big-endian                      |
+| `u64`     | 8 bytes, big-endian                      |
+| `[u8; N]` | N bytes, raw                             |
+| `&[u8]`   | Length-prefixed (u16 or u32) + raw bytes |
+
+### Array Encoding
+
+Variable-length arrays are encoded as:
+
+```
+╔═══════════╦═══════════╦═══════════╦═════╗
+║  Count    ║  Item 0   ║  Item 1   ║ ... ║
+║  2 bytes  ║  N bytes  ║  N bytes  ║     ║
+╚═══════════╩═══════════╩═══════════╩═════╝
+```
+
+**Invariants:**
+- Count is u16 big-endian (max 65,535 items)
+- Items must be **sorted ascending** by their byte representation
+- No duplicate items allowed
+- Decoders reject unsorted or duplicate arrays
+
+Sorted arrays enable:
+- O(log n) lookups without additional indexing
+- Deterministic encoding (no ordering ambiguity)
+- Efficient set operations during sync
+
+### Error Handling
+
+Decoding returns structured errors with context:
+
+| Error | Meaning |
+|-------|---------|
+| `BufferTooShort` | Not enough bytes to read a primitive |
+| `InvalidSchema` | Schema header doesn't match expected type |
+| `UnsortedArray` | Array elements not in ascending order |
+| `InvalidEnumTag` | Unknown discriminant value |
+| `SizeMismatch` | Declared size doesn't match actual data |
+| `BlobTooLarge` | Blob exceeds maximum allowed size |
+| `ArrayTooLarge` | Too many elements in array |
+| `DuplicateElement` | Array contains duplicates |
+
+All error types implement `#[from]` for ergonomic `?` propagation.
+
+### Sync Message Envelope
+
+Sync messages use a framing envelope:
+
+```
+╔════════╦══════════╦═════╦═════════════════════╗
+║ Schema ║   Size   ║ Tag ║      Payload        ║
+║   4B   ║    4B    ║ 1B  ║     (variable)      ║
+╚════════╩══════════╩═════╩═════════════════════╝
+```
+
+| Field | Purpose |
+|-------|---------|
+| Schema | `SM` prefix + version (message envelope identity) |
+| Size | Total message size in bytes (big-endian u32) |
+| Tag | Message type discriminant |
+| Payload | Type-specific fields using the same primitive encoding |
+
+Unlike signed payloads, sync messages are not signed — they're authenticated by the connection layer (handshake establishes peer identity).
+
 ## Future Considerations
 
 ### Post-Quantum Migration
@@ -192,10 +340,13 @@ Implementations include:
 - **WebCryptoSigner** — Browser WebCrypto API for Wasm
 - **HSM signers** — Hardware security modules (future)
 
-### Deterministic CBOR
+### Canonical Binary Codec
 
-For signature verification, CBOR encoding must be deterministic:
+Signed payloads use a custom codec (not CBOR) to guarantee determinism:
 
-- Map keys sorted by encoded length, then lexicographically
-- Integers use smallest encoding
-- No indefinite-length arrays/maps
+- Fixed field order defined by `EncodeFields` implementation
+- Big-endian integers (no smallest-encoding ambiguity)
+- Sorted arrays with no duplicates
+- No optional fields or default values
+
+See [Serialization](#serialization) for the full specification.

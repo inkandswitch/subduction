@@ -27,6 +27,7 @@ use sedimentree_core::{
     crypto::digest::Digest,
     depth::DepthMetric,
     fragment::Fragment,
+    id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,
 };
@@ -81,7 +82,7 @@ fn random_digest_with_depth(rng: &mut SmallRng, depth: u32) -> Digest<LooseCommi
         }
     }
 
-    Digest::from_bytes(bytes)
+    Digest::force_from_bytes(bytes)
 }
 
 /// Generate synthetic fragments matching the expected distribution for a document.
@@ -91,6 +92,10 @@ fn random_digest_with_depth(rng: &mut SmallRng, depth: u32) -> Digest<LooseCommi
 fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment> {
     let metric = CountLeadingZeroBytes;
     let mut rng = SmallRng::seed_from_u64(seed);
+
+    // Use a deterministic SedimentreeId for benchmarks
+    #[allow(clippy::cast_possible_truncation)]
+    let sedimentree_id = SedimentreeId::new([seed as u8; 32]);
 
     // Estimate fragment count (roughly one fragment per 256 commits on average)
     let fragment_count = (change_count / 256).max(1);
@@ -124,14 +129,20 @@ fn generate_synthetic_fragments(change_count: usize, seed: u64) -> Vec<Fragment>
 
         // Blob size: average commit is ~100 bytes, fragment covers ~256 commits
         let blob_size = 256 * 100;
-        let blob_digest = Digest::from_bytes({
+        let blob_digest = Digest::force_from_bytes({
             let mut b = [0u8; 32];
             rng.fill(&mut b);
             b
         });
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        fragments.push(Fragment::new(head, boundary, &checkpoints, blob_meta));
+        fragments.push(Fragment::new(
+            sedimentree_id,
+            head,
+            boundary,
+            &checkpoints,
+            blob_meta,
+        ));
 
         // Verify depth is as expected
         debug_assert_eq!(metric.to_depth(head).0, depth);
@@ -181,6 +192,10 @@ fn generate_fragments_for_metric(
     let mut rng = SmallRng::seed_from_u64(seed);
     let fragment_rate = metric_type.fragment_rate();
 
+    // Use a deterministic SedimentreeId for benchmarks
+    #[allow(clippy::cast_possible_truncation)]
+    let sedimentree_id = SedimentreeId::new([seed as u8; 32]);
+
     // Estimate fragment count based on metric's probability distribution
     let fragment_count = (change_count / fragment_rate).max(1);
 
@@ -225,14 +240,20 @@ fn generate_fragments_for_metric(
 
         // Blob size scales with fragment rate (larger fragments for sparser metrics)
         let blob_size = (fragment_rate * 100) as u64;
-        let blob_digest = Digest::from_bytes({
+        let blob_digest = Digest::force_from_bytes({
             let mut b = [0u8; 32];
             rng.fill(&mut b);
             b
         });
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        fragments.push(Fragment::new(head, boundary, &checkpoints, blob_meta));
+        fragments.push(Fragment::new(
+            sedimentree_id,
+            head,
+            boundary,
+            &checkpoints,
+            blob_meta,
+        ));
     }
 
     fragments
@@ -242,20 +263,23 @@ fn generate_fragments_for_metric(
 fn generate_loose_commits(count: usize, seed: u64) -> Vec<LooseCommit> {
     let mut rng = SmallRng::seed_from_u64(seed);
 
+    // Use a deterministic SedimentreeId for benchmarks
+    #[allow(clippy::cast_possible_truncation)]
+    let sedimentree_id = SedimentreeId::new([seed as u8; 32]);
+
     (0..count)
         .map(|_| {
-            let digest = random_digest_with_depth(&mut rng, 0);
             let parent_count = rng.gen_range(0..=2);
             let parents: BTreeSet<_> = (0..parent_count)
                 .map(|_| random_digest_with_depth(&mut rng, 0))
                 .collect();
-            let blob_digest = Digest::from_bytes({
+            let blob_digest = Digest::force_from_bytes({
                 let mut b = [0u8; 32];
                 rng.fill(&mut b);
                 b
             });
             let blob_meta = BlobMeta::from_digest_size(blob_digest, 100);
-            LooseCommit::new(digest, parents, blob_meta)
+            LooseCommit::new(sedimentree_id, parents, blob_meta)
         })
         .collect()
 }

@@ -19,7 +19,6 @@ ed25519-dalek = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
-minicbor = { workspace = true }
 sedimentree_core = { workspace = true }
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
@@ -38,7 +37,6 @@ bolero = ["dep:bolero", "arbitrary", "std"]
 serde = ["dep:serde", "ed25519-dalek/serde"]
 std = [
   "ed25519-dalek/std",
-  "minicbor/std",
   "sedimentree_core/std",
   "serde/std",
   "thiserror/std"

@@ -6,9 +6,13 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
+use js_sys::Uint8Array;
+
 use crate::{
     digest::{JsDigest, WasmDigest},
     loose_commit::WasmBlobMeta,
+    sedimentree_id::WasmSedimentreeId,
+    signed::WasmSignedFragment,
 };
 
 /// A data fragment used in the Sedimentree system.
@@ -19,11 +23,12 @@ pub struct WasmFragment(Fragment);
 #[wasm_refgen(js_ref = JsFragment)]
 #[wasm_bindgen(js_class = Fragment)]
 impl WasmFragment {
-    /// Create a new fragment from the given head, boundary, checkpoints, and blob metadata.
+    /// Create a new fragment from the given sedimentree ID, head, boundary, checkpoints, and blob metadata.
     #[wasm_bindgen(constructor)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
+        sedimentree_id: WasmSedimentreeId,
         head: WasmDigest,
         boundary: Vec<JsDigest>,
         checkpoints: Vec<JsDigest>,
@@ -34,6 +39,7 @@ impl WasmFragment {
             .map(|d| WasmDigest::from(d).into())
             .collect();
         Fragment::new(
+            sedimentree_id.into(),
             head.into(),
             boundary
                 .iter()
@@ -107,6 +113,43 @@ impl From<WasmConvertJsValueToFragmentArrayError> for JsValue {
         let err = js_sys::Error::new(&err.to_string());
         err.set_name("UnableToConvertFragmentArrayError");
         err.into()
+    }
+}
+
+/// A fragment stored with its associated blob.
+#[derive(Debug, Clone)]
+#[wasm_bindgen(js_name = FragmentWithBlob)]
+pub struct WasmFragmentWithBlob {
+    signed: WasmSignedFragment,
+    blob: Vec<u8>,
+}
+
+#[wasm_refgen(js_ref = JsFragmentWithBlob)]
+#[wasm_bindgen(js_class = FragmentWithBlob)]
+impl WasmFragmentWithBlob {
+    /// Create a new fragment with blob.
+    #[must_use]
+    #[wasm_bindgen(constructor)]
+    #[allow(clippy::needless_pass_by_value)] // wasm_bindgen requires owned Uint8Array
+    pub fn new(signed: WasmSignedFragment, blob: Uint8Array) -> Self {
+        Self {
+            signed,
+            blob: blob.to_vec(),
+        }
+    }
+
+    /// Get the signed fragment.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn signed(&self) -> WasmSignedFragment {
+        self.signed.clone()
+    }
+
+    /// Get the blob.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn blob(&self) -> Uint8Array {
+        Uint8Array::from(self.blob.as_slice())
     }
 }
 

@@ -323,7 +323,7 @@ impl<K: Hash + Ord, V, const N: usize> Default for ShardedMap<K, V, N> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::vec;
+    use alloc::{collections::BTreeSet, vec};
     use sedimentree_core::id::SedimentreeId;
     use testresult::TestResult;
 
@@ -373,7 +373,7 @@ mod tests {
                         SedimentreeId::new(*id3),
                     ];
 
-                    let mut shards_used = alloc::collections::BTreeSet::new();
+                    let mut shards_used = BTreeSet::new();
                     for id in &ids {
                         shards_used.insert(map.shard_index(id));
                     }

@@ -9,15 +9,11 @@ use alloc::{
 use thiserror::Error;
 
 /// A unique identifier for some data managed by Sedimentree.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct SedimentreeId(
-    #[n(0)]
-    #[cbor(with = "minicbor::bytes")]
-    [u8; 32],
-);
+pub struct SedimentreeId([u8; 32]);
 
 impl SedimentreeId {
     /// Constructor for a [`SedimentreeId`].

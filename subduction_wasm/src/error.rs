@@ -15,12 +15,12 @@ use wasm_bindgen::prelude::*;
 use crate::connection::websocket::{
     CallError, WasmWebSocket, WebSocketAuthenticatedConnectionError,
 };
-use sedimentree_wasm::storage::JsSedimentreeStorage;
+use sedimentree_wasm::storage::JsStorage;
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmHydrationError(#[from] HydrationError<Local, JsSedimentreeStorage>);
+pub struct WasmHydrationError(#[from] HydrationError<Local, JsStorage>);
 
 impl From<WasmHydrationError> for JsValue {
     fn from(err: WasmHydrationError) -> Self {
@@ -36,7 +36,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsSedimentreeStorage, WasmWebSocket>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmWebSocket>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -52,9 +52,7 @@ impl From<WasmIoError> for JsValue {
 /// including policy rejections.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmWriteError(
-    #[from] WriteError<Local, JsSedimentreeStorage, WasmWebSocket, Infallible>,
-);
+pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, WasmWebSocket, Infallible>);
 
 impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
@@ -67,9 +65,7 @@ impl From<WasmWriteError> for JsValue {
 /// A Wasm wrapper around the [`AttachError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmAttachError(
-    #[from] AttachError<Local, JsSedimentreeStorage, WasmWebSocket, Infallible>,
-);
+pub struct WasmAttachError(#[from] AttachError<Local, JsStorage, WasmWebSocket, Infallible>);
 
 impl From<WasmAttachError> for JsValue {
     fn from(err: WasmAttachError) -> Self {
@@ -116,7 +112,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsSedimentreeStorage, WasmWebSocket>);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, WasmWebSocket>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {

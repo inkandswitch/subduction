@@ -7,16 +7,15 @@ use core::cmp::min;
 
 use alloc::vec::Vec;
 
-use crate::crypto::digest::Digest;
+use crate::{codec::encode::Encode, crypto::digest::Digest};
 
 /// A binary object.
 ///
 /// Just a wrapper around a `Vec<u8>`.
-#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[cbor(transparent)]
-pub struct Blob(#[n(0)] Vec<u8>);
+pub struct Blob(Vec<u8>);
 
 impl core::fmt::Debug for Blob {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -107,7 +106,7 @@ impl Blob {
     /// Get metadata for the blob.
     #[must_use]
     pub fn meta(&self) -> BlobMeta {
-        BlobMeta::new(&self.0)
+        BlobMeta::new(self)
     }
 }
 
@@ -129,26 +128,32 @@ impl From<Blob> for Vec<u8> {
     }
 }
 
+impl Encode for Blob {
+    fn encode(&self) -> Vec<u8> {
+        self.0.clone()
+    }
+
+    fn encoded_size(&self) -> usize {
+        self.0.len()
+    }
+}
+
 /// Metadata for the underlying payload data itself.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct BlobMeta {
-    #[n(0)]
     digest: Digest<Blob>,
-
-    #[n(1)]
     size_bytes: u64,
 }
 
 impl BlobMeta {
-    /// Generate metadata for the given contents.
+    /// Generate metadata for the given blob.
     #[must_use]
-    pub fn new(contents: &[u8]) -> Self {
-        let digest = Digest::hash_bytes(contents);
-        let size_bytes = contents.len() as u64;
+    pub fn new(blob: &Blob) -> Self {
+        let digest = Digest::hash(blob);
+        let size_bytes = blob.as_slice().len() as u64;
         Self { digest, size_bytes }
     }
 

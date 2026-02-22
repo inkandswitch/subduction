@@ -11,8 +11,8 @@ use future_form::FutureForm;
 use sedimentree_core::id::SedimentreeId;
 
 use super::{
-    blob_access::BlobAccess, destroyer::Destroyer, fetcher::Fetcher,
-    local_access::LocalStorageAccess, putter::Putter, traits::Storage,
+    destroyer::Destroyer, fetcher::Fetcher, local_access::LocalStorageAccess, putter::Putter,
+    traits::Storage,
 };
 use crate::{peer::id::PeerId, policy::storage::StoragePolicy};
 
@@ -112,19 +112,6 @@ impl<S, P> StoragePowerbox<S, P> {
             .authorize_put(requestor, author, sedimentree_id)
             .await?;
         Ok(Putter::new(self.storage.clone(), sedimentree_id))
-    }
-
-    /// Get per-sedimentree blob-only storage access.
-    ///
-    /// Provides blob I/O scoped to a specific sedimentree without exposing
-    /// commit/fragment operations. For full sedimentree access, use
-    /// [`get_fetcher`](Self::get_fetcher) or [`get_putter`](Self::get_putter).
-    #[must_use]
-    pub fn blob_access<K: FutureForm>(&self, sedimentree_id: SedimentreeId) -> BlobAccess<K, S>
-    where
-        S: Storage<K>,
-    {
-        BlobAccess::new(self.storage.clone(), sedimentree_id)
     }
 
     /// Get direct storage access for hydration (startup data loading).

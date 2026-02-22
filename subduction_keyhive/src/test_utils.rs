@@ -1,6 +1,7 @@
 //! Test utilities for the keyhive protocol crate.
 
-use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
+use core::convert::Infallible;
 
 use async_channel::{Receiver, Sender};
 use async_lock::Mutex;
@@ -39,18 +40,6 @@ pub(crate) struct ChannelConnection {
     pub(crate) inbound_rx: Receiver<SignedMessage>,
 }
 
-/// Error type for channel connection operations.
-#[derive(Debug, Clone)]
-pub(crate) struct ChannelError(pub alloc::string::String);
-
-impl core::fmt::Display for ChannelError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "channel error: {}", self.0)
-    }
-}
-
-impl core::error::Error for ChannelError {}
-
 impl ChannelConnection {
     /// Create a new channel connection with the given channels.
     pub(crate) const fn new(
@@ -65,6 +54,16 @@ impl ChannelConnection {
         }
     }
 }
+
+/// Channel is closed, cannot send.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("channel closed: cannot send")]
+pub(crate) struct ChannelSendError;
+
+/// Channel is closed, cannot receive.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("channel closed: cannot receive")]
+pub(crate) struct ChannelRecvError;
 
 /// Create a pair of connected channel connections.
 ///
@@ -85,9 +84,9 @@ pub(crate) fn create_channel_pair(
 }
 
 impl KeyhiveConnection<Local> for ChannelConnection {
-    type SendError = ChannelError;
-    type RecvError = ChannelError;
-    type DisconnectError = ChannelError;
+    type SendError = ChannelSendError;
+    type RecvError = ChannelRecvError;
+    type DisconnectError = Infallible;
 
     fn peer_id(&self) -> KeyhivePeerId {
         self.remote_peer_id.clone()
@@ -95,17 +94,12 @@ impl KeyhiveConnection<Local> for ChannelConnection {
 
     fn send(&self, message: SignedMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
-        async move {
-            tx.send(message)
-                .await
-                .map_err(|e| ChannelError(e.to_string()))
-        }
-        .boxed_local()
+        async move { tx.send(message).await.map_err(|_| ChannelSendError) }.boxed_local()
     }
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<SignedMessage, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
-        async move { rx.recv().await.map_err(|e| ChannelError(e.to_string())) }.boxed_local()
+        async move { rx.recv().await.map_err(|_| ChannelRecvError) }.boxed_local()
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectError>> {

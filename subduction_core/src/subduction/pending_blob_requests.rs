@@ -153,7 +153,7 @@ mod tests {
     }
 
     fn test_digest(n: u8) -> Digest<Blob> {
-        Digest::from_bytes([n; 32])
+        Digest::force_from_bytes([n; 32])
     }
 
     /// Verifies internal consistency: index and entries must have same length.

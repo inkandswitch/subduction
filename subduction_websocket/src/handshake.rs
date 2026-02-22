@@ -170,9 +170,8 @@ mod tests {
                 .into_signed();
             let msg = HandshakeMessage::SignedChallenge(signed_challenge.clone());
 
-            let bytes = minicbor::to_vec(&msg)
-                .unwrap_or_else(|e| unreachable!("encoding should succeed: {e}"));
-            let decoded: HandshakeMessage = minicbor::decode(&bytes)
+            let bytes = msg.encode();
+            let decoded = HandshakeMessage::try_decode(&bytes)
                 .unwrap_or_else(|e| unreachable!("decoding should succeed: {e}"));
 
             let HandshakeMessage::SignedChallenge(decoded_signed) = decoded else {
@@ -190,9 +189,8 @@ mod tests {
                 Rejection::new(RejectionReason::ClockDrift, TimestampSeconds::new(1000));
             let msg = HandshakeMessage::Rejection(rejection);
 
-            let bytes = minicbor::to_vec(&msg)
-                .unwrap_or_else(|e| unreachable!("encoding should succeed: {e}"));
-            let decoded: HandshakeMessage = minicbor::decode(&bytes)
+            let bytes = msg.encode();
+            let decoded = HandshakeMessage::try_decode(&bytes)
                 .unwrap_or_else(|e| unreachable!("decoding should succeed: {e}"));
 
             let HandshakeMessage::Rejection(decoded_rejection) = decoded else {

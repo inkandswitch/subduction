@@ -2,53 +2,52 @@
 
 use core::marker::PhantomData;
 
-use crate::hex::decode_hex;
+use crate::{codec::encode::Encode, hex::decode_hex};
 
 /// A 32-byte digest with phantom type tracking what was digested.
 ///
 /// This provides type safety to ensure digests of different types
 /// are not accidentally mixed up.
+///
+/// # Type Safety
+///
+/// `Digest<T>` can only be created by hashing a value of type `T`
+/// via `Digest::hash(&value)` for any type implementing [`Encode`].
+///
+/// This prevents accidentally creating a `Digest<LooseCommit>` from
+/// blob data or other type mismatches.
 pub struct Digest<T> {
     bytes: [u8; 32],
     _marker: PhantomData<T>,
 }
 
-impl<T, Ctx> minicbor::Encode<Ctx> for Digest<T> {
-    fn encode<W: minicbor::encode::Write>(
-        &self,
-        e: &mut minicbor::Encoder<W>,
-        _ctx: &mut Ctx,
-    ) -> Result<(), minicbor::encode::Error<W::Error>> {
-        e.bytes(&self.bytes)?;
-        Ok(())
-    }
-}
-
-impl<'b, T, Ctx> minicbor::Decode<'b, Ctx> for Digest<T> {
-    fn decode(
-        d: &mut minicbor::Decoder<'b>,
-        _ctx: &mut Ctx,
-    ) -> Result<Self, minicbor::decode::Error> {
-        let bytes = d.bytes()?;
-        if bytes.len() != 32 {
-            return Err(minicbor::decode::Error::message(
-                "expected 32 bytes for digest",
-            ));
-        }
-        let mut arr = [0u8; 32];
-        arr.copy_from_slice(bytes);
-        Ok(Self::from_bytes(arr))
-    }
-}
-
 impl<T> Digest<T> {
-    /// Create a digest from raw bytes.
+    /// Create a digest from raw bytes without verification.
+    ///
+    /// # Safety
+    ///
+    /// This bypasses type safety - the caller must ensure the bytes actually
+    /// represent a hash of type `T`. Misuse can break digest type guarantees.
+    ///
+    /// Use only for:
+    /// - Deserialization from trusted sources (wire format, storage)
+    /// - Test fixtures with arbitrary bytes
+    ///
+    /// For creating new digests from values, use [`Digest::hash`] instead.
     #[must_use]
-    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+    pub const fn force_from_bytes(bytes: [u8; 32]) -> Self {
         Self {
             bytes,
             _marker: PhantomData,
         }
+    }
+
+    /// Hash raw bytes to create a digest.
+    ///
+    /// This is private - use the type-specific `hash` methods instead.
+    fn hash_raw(data: &[u8]) -> Self {
+        let hash = blake3::hash(data);
+        Self::force_from_bytes(*hash.as_bytes())
     }
 
     /// Get the raw bytes of the digest by reference.
@@ -61,13 +60,6 @@ impl<T> Digest<T> {
     #[must_use]
     pub const fn into_bytes(self) -> [u8; 32] {
         self.bytes
-    }
-
-    /// Hash raw bytes and create a digest.
-    #[must_use]
-    pub fn hash_bytes(data: &[u8]) -> Self {
-        let hash = blake3::hash(data);
-        Self::from_bytes(*hash.as_bytes())
     }
 
     /// Cast to a different phantom type.
@@ -89,17 +81,14 @@ impl<T> Digest<T> {
     }
 }
 
-impl<T: minicbor::Encode<()>> Digest<T> {
+impl<T: Encode> Digest<T> {
     /// Encode and hash a value to create a digest.
     ///
-    /// # Panics
-    ///
-    /// Panics if CBOR encoding fails (should never happen for well-formed types).
-    #[allow(clippy::expect_used)]
+    /// The value is encoded using its [`Encode`] implementation
+    /// and then hashed with BLAKE3.
     #[must_use]
     pub fn hash(value: &T) -> Self {
-        let encoded = minicbor::to_vec(value).expect("encoding should not fail");
-        Self::hash_bytes(&encoded)
+        Self::hash_raw(&value.encode())
     }
 }
 
@@ -162,7 +151,7 @@ impl<T> core::str::FromStr for Digest<T> {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let bytes = decode_hex(s).ok_or(InvalidDigest::InvalidHex)?;
         let arr: [u8; 32] = bytes.try_into().map_err(|_| InvalidDigest::WrongLength)?;
-        Ok(Self::from_bytes(arr))
+        Ok(Self::force_from_bytes(arr))
     }
 }
 
@@ -212,7 +201,7 @@ impl<'de, T> serde::Deserialize<'de> for Digest<T> {
                 }
                 let mut bytes = [0u8; 32];
                 bytes.copy_from_slice(v);
-                Ok(Digest::from_bytes(bytes))
+                Ok(Digest::force_from_bytes(bytes))
             }
         }
 
@@ -224,7 +213,7 @@ impl<'de, T> serde::Deserialize<'de> for Digest<T> {
 impl<'a, T: 'static> arbitrary::Arbitrary<'a> for Digest<T> {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         let bytes: [u8; 32] = u.arbitrary()?;
-        Ok(Self::from_bytes(bytes))
+        Ok(Self::force_from_bytes(bytes))
     }
 }
 
@@ -232,6 +221,6 @@ impl<'a, T: 'static> arbitrary::Arbitrary<'a> for Digest<T> {
 impl<T: 'static> bolero::generator::TypeGenerator for Digest<T> {
     fn generate<D: bolero::Driver>(driver: &mut D) -> Option<Self> {
         let bytes: [u8; 32] = bolero::generator::TypeGenerator::generate(driver)?;
-        Some(Self::from_bytes(bytes))
+        Some(Self::force_from_bytes(bytes))
     }
 }

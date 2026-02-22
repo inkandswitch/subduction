@@ -394,7 +394,7 @@ test.describe("Subduction", () => {
   });
 
   test.describe("Message Serialization", () => {
-    test("should round-trip Message through CBOR", async ({ page }) => {
+    test("should round-trip Message through binary codec", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Message, SedimentreeId, Digest } = window.subduction;
 
@@ -403,12 +403,12 @@ test.describe("Subduction", () => {
         digestBytes[0] = 42;
         const digest = new Digest(digestBytes);
         const original = Message.blobsRequest(sedimentreeId, [digest]);
-        const cborBytes = original.toCborBytes();
-        const restored = Message.fromCborBytes(cborBytes);
+        const bytes = original.toBytes();
+        const restored = Message.fromBytes(bytes);
 
         return {
-          hasCborBytes: cborBytes instanceof Uint8Array,
-          cborBytesLength: cborBytes.length,
+          hasBytes: bytes instanceof Uint8Array,
+          bytesLength: bytes.length,
           hasRestored: !!restored,
           typeMatches: original.type === restored.type,
           originalType: original.type,
@@ -416,19 +416,19 @@ test.describe("Subduction", () => {
         };
       });
 
-      expect(result.hasCborBytes).toBe(true);
-      expect(result.cborBytesLength).toBeGreaterThan(0);
+      expect(result.hasBytes).toBe(true);
+      expect(result.bytesLength).toBeGreaterThan(0);
       expect(result.hasRestored).toBe(true);
       expect(result.typeMatches).toBe(true);
     });
 
-    test("should throw MessageDeserializationError for invalid CBOR bytes", async ({ page }) => {
+    test("should throw MessageDeserializationError for invalid bytes", async ({ page }) => {
       const result = await page.evaluate(async () => {
         const { Message } = window.subduction;
 
         try {
           const invalidBytes = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);
-          Message.fromCborBytes(invalidBytes);
+          Message.fromBytes(invalidBytes);
           return { threw: false, errorName: null };
         } catch (error) {
           return {

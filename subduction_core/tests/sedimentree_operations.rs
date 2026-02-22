@@ -1,7 +1,7 @@
 //! Tests for sedimentree operations (add, get, remove).
 
-use super::common::new_test_subduction;
 use sedimentree_core::{id::SedimentreeId, sedimentree::Sedimentree};
+use subduction_core::connection::test_utils::new_test_subduction;
 use testresult::TestResult;
 
 #[tokio::test]

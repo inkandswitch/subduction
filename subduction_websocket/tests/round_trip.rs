@@ -3,12 +3,10 @@
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use testresult::TestResult;
 
-use arbitrary::{Arbitrary, Unstructured};
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
-    loose_commit::LooseCommit,
 };
 use subduction_core::{
     connection::{
@@ -132,24 +130,14 @@ async fn batch_sync() -> TestResult {
     let mut blob_bytes1 = [0u8; 64];
     let mut blob_bytes2 = [0u8; 64];
     let mut blob_bytes3 = [0u8; 64];
-    let mut digest_bytes1 = [0u8; 32];
-    let mut digest_bytes2 = [0u8; 32];
-    let mut digest_bytes3 = [0u8; 32];
 
     rand::thread_rng().fill_bytes(&mut blob_bytes1);
     rand::thread_rng().fill_bytes(&mut blob_bytes2);
     rand::thread_rng().fill_bytes(&mut blob_bytes3);
-    rand::thread_rng().fill_bytes(&mut digest_bytes1);
-    rand::thread_rng().fill_bytes(&mut digest_bytes2);
-    rand::thread_rng().fill_bytes(&mut digest_bytes3);
 
-    let blob1 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes1))?;
-    let blob2 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes2))?;
-    let blob3 = Blob::arbitrary(&mut Unstructured::new(&blob_bytes3))?;
-
-    let digest1: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes1))?;
-    let digest2: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes2))?;
-    let digest3: Digest<LooseCommit> = Digest::arbitrary(&mut Unstructured::new(&digest_bytes3))?;
+    let blob1 = Blob::new(blob_bytes1.to_vec());
+    let blob2 = Blob::new(blob_bytes2.to_vec());
+    let blob3 = Blob::new(blob_bytes3.to_vec());
 
     ///////////////////
     // SERVER SETUP //
@@ -180,7 +168,7 @@ async fn batch_sync() -> TestResult {
     });
 
     server_subduction
-        .add_commit(sed_id, digest1, BTreeSet::new(), blob1)
+        .add_commit(sed_id, BTreeSet::new(), blob1)
         .await?;
 
     let inserted = server_subduction
@@ -252,12 +240,8 @@ async fn batch_sync() -> TestResult {
         .await?;
     assert_eq!(client.connected_peer_ids().await.len(), 1);
 
-    client
-        .add_commit(sed_id, digest2, BTreeSet::new(), blob2)
-        .await?;
-    client
-        .add_commit(sed_id, digest3, BTreeSet::new(), blob3)
-        .await?;
+    client.add_commit(sed_id, BTreeSet::new(), blob2).await?;
+    client.add_commit(sed_id, BTreeSet::new(), blob3).await?;
 
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
@@ -283,20 +267,31 @@ async fn batch_sync() -> TestResult {
         .await
         .ok_or("sedimentree exists")?;
 
-    assert_eq!(server_updated.len(), 3);
-    assert!(server_updated.iter().any(|c| c.digest() == digest1));
-    assert!(server_updated.iter().any(|c| c.digest() == digest2));
-    assert!(server_updated.iter().any(|c| c.digest() == digest3));
+    // Verify both sides have all 3 commits after sync
+    assert_eq!(
+        server_updated.len(),
+        3,
+        "server should have 3 commits after sync"
+    );
 
     let client_updated = client
         .get_commits(sed_id)
         .await
         .ok_or("sedimentree exists")?;
 
-    assert_eq!(client_updated.len(), 3);
-    assert!(client_updated.iter().any(|c| c.digest() == digest1));
-    assert!(client_updated.iter().any(|c| c.digest() == digest2));
-    assert!(client_updated.iter().any(|c| c.digest() == digest3));
+    assert_eq!(
+        client_updated.len(),
+        3,
+        "client should have 3 commits after sync"
+    );
+
+    // Verify the digests match between server and client
+    let server_digests: BTreeSet<_> = server_updated.iter().map(Digest::hash).collect();
+    let client_digests: BTreeSet<_> = client_updated.iter().map(Digest::hash).collect();
+    assert_eq!(
+        server_digests, client_digests,
+        "server and client should have the same commits"
+    );
 
     Ok(())
 }

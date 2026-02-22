@@ -21,7 +21,6 @@ futures = { workspace = true }
 future_form = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, optional = true }
-minicbor = { workspace = true }
 nonempty = { workspace = true }
 num-bigint = { workspace = true }
 rand = { workspace = true, optional = true }

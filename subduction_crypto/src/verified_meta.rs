@@ -1,8 +1,13 @@
 //! A payload whose signature is valid AND whose blob matches the claimed metadata.
 
 use future_form::FutureForm;
-use sedimentree_core::blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta};
+use sedimentree_core::{
+    blob::{Blob, BlobMeta, has_meta::HasBlobMeta, verified::VerifiedBlobMeta},
+    codec::{decode::Decode, encode::EncodeFields, schema::Schema},
+};
 use thiserror::Error;
+
+use sedimentree_core::codec::error::DecodeError;
 
 use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignature};
 
@@ -15,7 +20,7 @@ use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignatur
 /// # Usage
 ///
 /// ```ignore
-/// let verified_sig = signed_commit.try_verify()?;
+/// let verified_sig = signed_commit.try_verify(&sedimentree_id)?;
 /// let verified_meta = VerifiedMeta::new(verified_sig, blob)?;
 /// putter.save_commit(verified_meta).await?;
 /// ```
@@ -25,7 +30,7 @@ use crate::{signed::Signed, signer::Signer, verified_signature::VerifiedSignatur
 ///
 /// [`Putter`]: subduction_core::storage::putter::Putter
 #[derive(Clone, Debug)]
-pub struct VerifiedMeta<T: for<'a> minicbor::Decode<'a, ()>> {
+pub struct VerifiedMeta<T: Schema + EncodeFields + Decode> {
     verified: VerifiedSignature<T>,
     blob: Blob,
 }
@@ -41,7 +46,7 @@ pub struct BlobMismatch {
     pub actual: BlobMeta,
 }
 
-impl<T: HasBlobMeta + minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>> VerifiedMeta<T> {
+impl<T: HasBlobMeta + Schema + EncodeFields + Decode> VerifiedMeta<T> {
     /// Create a `VerifiedMeta<T>` after verifying the blob matches the claimed metadata.
     ///
     /// # Errors
@@ -105,6 +110,13 @@ impl<T: HasBlobMeta + minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>> V
     /// Infallible because [`VerifiedBlobMeta`] guarantees the blob metadata
     /// matches by construction, and `T` is constructed from that metadata.
     ///
+    /// # Arguments
+    ///
+    /// * `signer` - The signer to use
+    /// * `args` - Type-specific arguments (besides `BlobMeta`)
+    /// * `verified_blob` - The verified blob with its metadata
+    /// * `ctx` - Encoding context (e.g., `SedimentreeId` for commits/fragments)
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -124,5 +136,18 @@ impl<T: HasBlobMeta + minicbor::Encode<()> + for<'a> minicbor::Decode<'a, ()>> V
         let meta = T::from_args(args, blob_meta);
         let verified = Signed::seal::<K, _>(signer, meta).await;
         Self { verified, blob }
+    }
+
+    /// Reconstruct from trusted storage without any verification.
+    ///
+    /// Use this only for data loaded from trusted storage that was
+    /// previously verified (signature + blob match) before being stored.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError`] if the payload cannot be decoded.
+    pub fn try_from_trusted(signed: Signed<T>, blob: Blob) -> Result<Self, DecodeError> {
+        let verified = VerifiedSignature::try_from_trusted(signed)?;
+        Ok(Self { verified, blob })
     }
 }

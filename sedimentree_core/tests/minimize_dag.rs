@@ -12,9 +12,20 @@
 use std::collections::BTreeSet;
 
 use sedimentree_core::{
+    blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,
+    id::SedimentreeId,
     test_utils::{TestGraph, seeded_rng},
 };
+
+const fn make_sedimentree_id(seed: u8) -> SedimentreeId {
+    SedimentreeId::new([seed; 32])
+}
+
+fn make_blob_meta(seed: u8) -> BlobMeta {
+    let blob = Blob::new(vec![seed]);
+    BlobMeta::new(&blob)
+}
 
 /// Diamond merge: A diverges to B and C, which merge at D.
 /// Fragment covers entire diamond.
@@ -39,7 +50,8 @@ fn diamond_merge_fragment_covers_interior() {
     let fragment = graph.make_fragment("a", &["d"], &["b", "c"]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment.clone()]);
 
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    // Use the mock depth metric from TestGraph instead of CountLeadingZeroBytes
+    let minimized = tree.minimize(graph.depth_metric());
 
     // Fragment should be kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -79,7 +91,7 @@ fn diamond_partial_coverage() {
     let fragment = graph.make_fragment("a", &["d"], &["b"]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment]);
 
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    let minimized = tree.minimize(graph.depth_metric());
 
     // Fragment should be kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -105,7 +117,7 @@ fn independent_branches_separate_fragments() {
     let fragment2 = graph.make_fragment("c", &["d"], &[]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment1, fragment2]);
 
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    let minimized = tree.minimize(graph.depth_metric());
 
     // Both fragments should be kept (independent, neither supports the other)
     assert_eq!(minimized.fragments().count(), 2);
@@ -131,7 +143,7 @@ fn deep_linear_chain() {
     let fragment = graph.make_fragment("a", &["e"], &["b", "c", "d"]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment]);
 
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    let minimized = tree.minimize(graph.depth_metric());
 
     // Single fragment kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -159,28 +171,33 @@ fn nested_fragments_three_levels() {
     let shallow_head = sedimentree_core::test_utils::digest_with_depth(1, 3);
     let shallow_boundary = sedimentree_core::test_utils::digest_with_depth(0, 102);
 
+    let sedimentree_id = make_sedimentree_id(1);
+
     // Deep fragment contains medium's head and boundary
     let deep_fragment = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         deep_head,
         BTreeSet::from([deep_boundary]),
         &[medium_head, medium_boundary, shallow_head, shallow_boundary],
-        sedimentree_core::blob::BlobMeta::new(&[1]),
+        make_blob_meta(1),
     );
 
     // Medium fragment contains shallow's head and boundary
     let medium_fragment = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         medium_head,
         BTreeSet::from([medium_boundary]),
         &[shallow_head, shallow_boundary],
-        sedimentree_core::blob::BlobMeta::new(&[2]),
+        make_blob_meta(2),
     );
 
     // Shallow fragment
     let shallow_fragment = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         shallow_head,
         BTreeSet::from([shallow_boundary]),
         &[],
-        sedimentree_core::blob::BlobMeta::new(&[3]),
+        make_blob_meta(3),
     );
 
     let tree = sedimentree_core::sedimentree::Sedimentree::new(
@@ -192,6 +209,7 @@ fn nested_fragments_three_levels() {
         vec![],
     );
 
+    // Use CountLeadingZeroBytes since digests were created with digest_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
@@ -220,18 +238,22 @@ fn overlapping_same_depth_both_kept() {
     let boundary1 = sedimentree_core::test_utils::digest_with_depth(1, 100);
     let boundary2 = sedimentree_core::test_utils::digest_with_depth(1, 101);
 
+    let sedimentree_id = make_sedimentree_id(1);
+
     let fragment1 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         head1,
         BTreeSet::from([boundary1]),
         &[],
-        sedimentree_core::blob::BlobMeta::new(&[1]),
+        make_blob_meta(1),
     );
 
     let fragment2 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         head2,
         BTreeSet::from([boundary2]),
         &[],
-        sedimentree_core::blob::BlobMeta::new(&[2]),
+        make_blob_meta(2),
     );
 
     let tree = sedimentree_core::sedimentree::Sedimentree::new(
@@ -239,6 +261,7 @@ fn overlapping_same_depth_both_kept() {
         vec![],
     );
 
+    // Use CountLeadingZeroBytes since digests were created with digest_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 
@@ -272,7 +295,7 @@ fn fragment_boundary_at_merge() {
     let fragment = graph.make_fragment("a", &["d"], &["b", "c"]);
     let tree = graph.to_sedimentree_with_fragments(vec![fragment]);
 
-    let minimized = tree.minimize(&CountLeadingZeroBytes);
+    let minimized = tree.minimize(graph.depth_metric());
 
     // Fragment should be kept
     assert_eq!(minimized.fragments().count(), 1);
@@ -288,6 +311,7 @@ fn fragment_boundary_at_merge() {
 /// Multiple deep fragments collectively support a shallow one.
 #[test]
 fn collective_support_from_multiple_deep() {
+    let sedimentree_id = make_sedimentree_id(1);
     let shallow_head = sedimentree_core::test_utils::digest_with_depth(2, 1);
     let shallow_boundary = sedimentree_core::test_utils::digest_with_depth(1, 100);
 
@@ -295,28 +319,31 @@ fn collective_support_from_multiple_deep() {
     let deep1_head = sedimentree_core::test_utils::digest_with_depth(3, 10);
     let deep1_boundary = sedimentree_core::test_utils::digest_with_depth(1, 101);
     let deep1 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         deep1_head,
         BTreeSet::from([deep1_boundary]),
         &[shallow_head],
-        sedimentree_core::blob::BlobMeta::new(&[1]),
+        make_blob_meta(1),
     );
 
     // Deep fragment 2 contains shallow's boundary
     let deep2_head = sedimentree_core::test_utils::digest_with_depth(3, 20);
     let deep2_boundary = sedimentree_core::test_utils::digest_with_depth(1, 102);
     let deep2 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         deep2_head,
         BTreeSet::from([deep2_boundary]),
         &[shallow_boundary],
-        sedimentree_core::blob::BlobMeta::new(&[2]),
+        make_blob_meta(2),
     );
 
     // Shallow fragment
     let shallow = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         shallow_head,
         BTreeSet::from([shallow_boundary]),
         &[],
-        sedimentree_core::blob::BlobMeta::new(&[3]),
+        make_blob_meta(3),
     );
 
     let tree = sedimentree_core::sedimentree::Sedimentree::new(
@@ -324,6 +351,7 @@ fn collective_support_from_multiple_deep() {
         vec![],
     );
 
+    // Use CountLeadingZeroBytes since digests were created with digest_with_depth
     let minimized = tree.minimize(&CountLeadingZeroBytes);
     let fragments: Vec<_> = minimized.fragments().cloned().collect();
 

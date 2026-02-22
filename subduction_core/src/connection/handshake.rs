@@ -62,12 +62,22 @@ use alloc::vec::Vec;
 use core::time::Duration;
 
 use future_form::FutureForm;
-use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
 use super::{Connection, authenticated::Authenticated};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
-use sedimentree_core::crypto::digest::Digest;
+use sedimentree_core::{
+    codec::{
+        decode,
+        decode::Decode,
+        encode,
+        encode::EncodeFields,
+        error::{DecodeError, InvalidEnumTag},
+        schema,
+        schema::Schema,
+    },
+    crypto::digest::Digest,
+};
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
@@ -77,14 +87,11 @@ pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
 ///
 /// This is a BLAKE3 hash of a URL or similar service identifier, used when
 /// a client knows where to connect but not the peer's identity ahead of time.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
-#[cbor(transparent)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DiscoveryId(#[cbor(with = "minicbor::bytes")] [u8; 32]);
+pub struct DiscoveryId([u8; 32]);
 
 impl DiscoveryId {
     /// Create a discovery ID from a service identifier.
@@ -92,8 +99,8 @@ impl DiscoveryId {
     /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
     #[must_use]
     pub fn new(service_identifier: &[u8]) -> Self {
-        let digest = RawDigest::<()>::hash_bytes(service_identifier);
-        Self(*digest.as_bytes())
+        let hash = blake3::hash(service_identifier);
+        Self(*hash.as_bytes())
     }
 
     /// Create a discovery ID from a pre-hashed value.
@@ -114,20 +121,16 @@ impl DiscoveryId {
 /// Supports two modes:
 /// - `Known`: Client knows the server's [`PeerId`] ahead of time
 /// - `Discover`: Client knows the URL/endpoint but not the peer identity
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Audience {
     /// Known peer identity.
-    #[n(0)]
-    Known(#[n(0)] PeerId),
+    Known(PeerId),
 
     /// Discovery mode: hash of URL or similar service identifier.
-    #[n(1)]
-    Discover(#[n(0)] DiscoveryId),
+    Discover(DiscoveryId),
 }
 
 impl Audience {
@@ -162,23 +165,18 @@ impl Audience {
 ///
 /// This is signed by the client and sent to the server. The server extracts
 /// the client's identity from the signature's issuer.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Challenge {
     /// Who the client is connecting to.
-    #[n(0)]
     pub audience: Audience,
 
     /// Client's timestamp (used for replay protection).
-    #[n(1)]
     pub timestamp: TimestampSeconds,
 
     /// Random nonce for uniqueness.
-    #[n(2)]
     pub nonce: Nonce,
 }
 
@@ -231,19 +229,15 @@ impl Challenge {
 ///
 /// This is signed by the server. The client extracts the server's identity
 /// from the signature's issuer and uses the server timestamp for drift correction.
-#[derive(
-    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, minicbor::Encode, minicbor::Decode,
-)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Response {
     /// Hash of the challenge being responded to (binds response to request).
-    #[n(0)]
     pub challenge_digest: Digest<Challenge>,
 
     /// Server's current timestamp (for client-side drift correction).
-    #[n(1)]
     pub server_timestamp: TimestampSeconds,
 }
 
@@ -277,26 +271,159 @@ impl Response {
     }
 }
 
+/// Size of Challenge fields (after schema + issuer, before signature).
+const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
+
+/// Minimum size of a signed Challenge message.
+pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 157 bytes
+
+impl Schema for Challenge {
+    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+    const TYPE_BYTE: u8 = b'H'; // Handshake
+    const VERSION: u8 = 0;
+}
+
+impl EncodeFields for Challenge {
+    fn encode_fields(&self, buf: &mut Vec<u8>) {
+        // AudienceTag (1 byte)
+        match &self.audience {
+            Audience::Known(_) => encode::u8(0x00, buf),
+            Audience::Discover(_) => encode::u8(0x01, buf),
+        }
+
+        // AudienceValue (32 bytes)
+        match &self.audience {
+            Audience::Known(peer_id) => encode::array(peer_id.as_bytes(), buf),
+            Audience::Discover(disc_id) => encode::array(disc_id.as_bytes(), buf),
+        }
+
+        // Timestamp (8 bytes, big-endian)
+        encode::u64(self.timestamp.as_secs(), buf);
+
+        // Nonce (16 bytes)
+        encode::array(self.nonce.as_bytes(), buf);
+    }
+
+    fn fields_size(&self) -> usize {
+        CHALLENGE_FIELDS_SIZE
+    }
+}
+
+impl Decode for Challenge {
+    const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
+
+    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+        if buf.len() < CHALLENGE_FIELDS_SIZE {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "Challenge",
+                need: CHALLENGE_FIELDS_SIZE,
+                have: buf.len(),
+            });
+        }
+
+        // AudienceTag (1 byte)
+        let audience_tag = decode::u8(buf, 0)?;
+
+        // AudienceValue (32 bytes)
+        let audience_value: [u8; 32] = decode::array(buf, 1)?;
+
+        let audience = match audience_tag {
+            0x00 => Audience::Known(PeerId::new(audience_value)),
+            0x01 => Audience::Discover(DiscoveryId::from_raw(audience_value)),
+            tag => {
+                return Err(InvalidEnumTag {
+                    tag,
+                    type_name: "Audience",
+                }
+                .into());
+            }
+        };
+
+        // Timestamp (8 bytes)
+        let timestamp_secs = decode::u64(buf, 33)?;
+        let timestamp = TimestampSeconds::new(timestamp_secs);
+
+        // Nonce (16 bytes)
+        let nonce_bytes: [u8; 16] = decode::array(buf, 41)?;
+        let nonce = Nonce::from_bytes(nonce_bytes);
+
+        Ok(Self {
+            audience,
+            timestamp,
+            nonce,
+        })
+    }
+}
+
+/// Size of Response fields (after schema + issuer, before signature).
+const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
+
+/// Minimum size of a signed Response message.
+pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 bytes
+
+impl Schema for Response {
+    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+    const TYPE_BYTE: u8 = b'R'; // Response
+    const VERSION: u8 = 0;
+}
+
+impl EncodeFields for Response {
+    fn encode_fields(&self, buf: &mut Vec<u8>) {
+        // ChallengeDigest (32 bytes)
+        encode::array(self.challenge_digest.as_bytes(), buf);
+
+        // ServerTimestamp (8 bytes, big-endian)
+        encode::u64(self.server_timestamp.as_secs(), buf);
+    }
+
+    fn fields_size(&self) -> usize {
+        RESPONSE_FIELDS_SIZE
+    }
+}
+
+impl Decode for Response {
+    const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
+
+    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+        if buf.len() < RESPONSE_FIELDS_SIZE {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "Response",
+                need: RESPONSE_FIELDS_SIZE,
+                have: buf.len(),
+            });
+        }
+
+        // ChallengeDigest (32 bytes)
+        let challenge_digest_bytes: [u8; 32] = decode::array(buf, 0)?;
+        let challenge_digest = Digest::force_from_bytes(challenge_digest_bytes);
+
+        // ServerTimestamp (8 bytes)
+        let server_timestamp_secs = decode::u64(buf, 32)?;
+        let server_timestamp = TimestampSeconds::new(server_timestamp_secs);
+
+        Ok(Self {
+            challenge_digest,
+            server_timestamp,
+        })
+    }
+}
+
 /// Reasons for rejecting a handshake (sent unsigned).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum RejectionReason {
     /// Client's timestamp is too far from server's clock.
-    #[n(0)]
     ClockDrift,
 
     /// The audience field doesn't match this server.
-    #[n(1)]
     InvalidAudience,
 
     /// This nonce was already used (replay attack detected).
-    #[n(2)]
     ReplayedNonce,
 
     /// The signature on the challenge is invalid.
-    #[n(3)]
     InvalidSignature,
 }
 
@@ -307,17 +434,15 @@ pub enum RejectionReason {
 /// This message is unsigned. Clients should NOT use the `server_timestamp`
 /// for drift correction if the drift is implausible (> [`MAX_PLAUSIBLE_DRIFT`]).
 /// An attacker could send fake rejections with manipulated timestamps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, minicbor::Encode, minicbor::Decode)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Rejection {
     /// Why the handshake was rejected.
-    #[n(0)]
     pub reason: RejectionReason,
 
     /// Server's current timestamp (informational only).
-    #[n(1)]
     pub server_timestamp: TimestampSeconds,
 }
 
@@ -430,7 +555,7 @@ impl DriftCorrection {
 /// A transport capable of exchanging handshake messages.
 ///
 /// Implementors provide raw byte send/recv over their transport layer.
-/// The handshake protocol handles CBOR encoding/decoding of [`HandshakeMessage`].
+/// The handshake protocol handles encoding/decoding of [`HandshakeMessage`].
 pub trait Handshake<K: FutureForm> {
     /// Transport-level error type.
     type Error;
@@ -447,19 +572,150 @@ pub trait Handshake<K: FutureForm> {
 /// This enum wraps the three possible message types exchanged during handshake:
 /// - Initiator sends [`SignedChallenge`]
 /// - Responder sends [`SignedResponse`] on success, or [`Rejection`] on failure
-#[derive(Debug, minicbor::Encode, minicbor::Decode)]
+///
+/// # Wire Layout
+///
+/// ```text
+/// ╔═════╦═════════════════════════════╗
+/// ║ Tag ║         Payload             ║
+/// ║ 1B  ║         variable            ║
+/// ╚═════╩═════════════════════════════╝
+/// ```
+///
+/// - Tag `0x00`: `Signed<Challenge>` (157 bytes)
+/// - Tag `0x01`: `Signed<Response>` (140 bytes)
+/// - Tag `0x02`: `Rejection` (9 bytes)
+#[derive(Debug)]
 pub enum HandshakeMessage {
     /// A signed challenge from the initiator.
-    #[n(0)]
-    SignedChallenge(#[n(0)] Signed<Challenge>),
+    SignedChallenge(Signed<Challenge>),
 
     /// A signed response from the responder.
-    #[n(1)]
-    SignedResponse(#[n(0)] Signed<Response>),
+    SignedResponse(Signed<Response>),
 
     /// An unsigned rejection from the responder.
-    #[n(2)]
-    Rejection(#[n(0)] Rejection),
+    Rejection(Rejection),
+}
+
+mod handshake_tags {
+    pub(super) const SIGNED_CHALLENGE: u8 = 0x00;
+    pub(super) const SIGNED_RESPONSE: u8 = 0x01;
+    pub(super) const REJECTION: u8 = 0x02;
+}
+
+mod rejection_tags {
+    pub(super) const CLOCK_DRIFT: u8 = 0x00;
+    pub(super) const INVALID_AUDIENCE: u8 = 0x01;
+    pub(super) const REPLAYED_NONCE: u8 = 0x02;
+    pub(super) const INVALID_SIGNATURE: u8 = 0x03;
+}
+
+impl HandshakeMessage {
+    /// Encode the handshake message to wire bytes.
+    #[must_use]
+    pub fn encode(&self) -> Vec<u8> {
+        match self {
+            HandshakeMessage::SignedChallenge(signed) => {
+                let mut buf = Vec::with_capacity(1 + signed.as_bytes().len());
+                buf.push(handshake_tags::SIGNED_CHALLENGE);
+                buf.extend_from_slice(signed.as_bytes());
+                buf
+            }
+            HandshakeMessage::SignedResponse(signed) => {
+                let mut buf = Vec::with_capacity(1 + signed.as_bytes().len());
+                buf.push(handshake_tags::SIGNED_RESPONSE);
+                buf.extend_from_slice(signed.as_bytes());
+                buf
+            }
+            HandshakeMessage::Rejection(rejection) => {
+                let mut buf = Vec::with_capacity(1 + 1 + 8);
+                buf.push(handshake_tags::REJECTION);
+                buf.push(match rejection.reason {
+                    RejectionReason::ClockDrift => rejection_tags::CLOCK_DRIFT,
+                    RejectionReason::InvalidAudience => rejection_tags::INVALID_AUDIENCE,
+                    RejectionReason::ReplayedNonce => rejection_tags::REPLAYED_NONCE,
+                    RejectionReason::InvalidSignature => rejection_tags::INVALID_SIGNATURE,
+                });
+                buf.extend_from_slice(&rejection.server_timestamp.as_secs().to_be_bytes());
+                buf
+            }
+        }
+    }
+
+    /// Decode a handshake message from wire bytes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the message is malformed.
+    pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
+        let (&tag, payload) = bytes.split_first().ok_or(DecodeError::MessageTooShort {
+            type_name: "HandshakeMessage",
+            need: 1,
+            have: 0,
+        })?;
+
+        match tag {
+            handshake_tags::SIGNED_CHALLENGE => {
+                let signed = Signed::<Challenge>::try_decode(payload.to_vec())?;
+                Ok(HandshakeMessage::SignedChallenge(signed))
+            }
+            handshake_tags::SIGNED_RESPONSE => {
+                let signed = Signed::<Response>::try_decode(payload.to_vec())?;
+                Ok(HandshakeMessage::SignedResponse(signed))
+            }
+            handshake_tags::REJECTION => {
+                if payload.len() < 9 {
+                    return Err(DecodeError::MessageTooShort {
+                        type_name: "Rejection",
+                        need: 10,
+                        have: bytes.len(),
+                    });
+                }
+                let (&reason_tag, rest) =
+                    payload.split_first().ok_or(DecodeError::MessageTooShort {
+                        type_name: "RejectionReason",
+                        need: 1,
+                        have: 0,
+                    })?;
+                let reason = match reason_tag {
+                    rejection_tags::CLOCK_DRIFT => RejectionReason::ClockDrift,
+                    rejection_tags::INVALID_AUDIENCE => RejectionReason::InvalidAudience,
+                    rejection_tags::REPLAYED_NONCE => RejectionReason::ReplayedNonce,
+                    rejection_tags::INVALID_SIGNATURE => RejectionReason::InvalidSignature,
+                    other => {
+                        return Err(InvalidEnumTag {
+                            tag: other,
+                            type_name: "RejectionReason",
+                        }
+                        .into());
+                    }
+                };
+                let timestamp_bytes: [u8; 8] = rest
+                    .get(..8)
+                    .ok_or(DecodeError::MessageTooShort {
+                        type_name: "Rejection timestamp",
+                        need: 8,
+                        have: rest.len(),
+                    })?
+                    .try_into()
+                    .map_err(|_| DecodeError::MessageTooShort {
+                        type_name: "Rejection timestamp",
+                        need: 8,
+                        have: rest.len(),
+                    })?;
+                let server_timestamp = TimestampSeconds::new(u64::from_be_bytes(timestamp_bytes));
+                Ok(HandshakeMessage::Rejection(Rejection {
+                    reason,
+                    server_timestamp,
+                }))
+            }
+            _ => Err(InvalidEnumTag {
+                tag,
+                type_name: "HandshakeMessage",
+            }
+            .into()),
+        }
+    }
 }
 
 /// Errors that can occur during authentication.
@@ -469,9 +725,9 @@ pub enum AuthenticateError<E> {
     #[error("transport error: {0}")]
     Transport(E),
 
-    /// CBOR decoding error.
-    #[error("CBOR decode error: {0}")]
-    Decode(#[from] minicbor::decode::Error),
+    /// Message decoding error.
+    #[error("decode error: {0}")]
+    Decode(#[from] DecodeError),
 
     /// Handshake protocol error (signature or validation failure).
     #[error("handshake error: {0}")]
@@ -538,7 +794,7 @@ pub struct RespondResult {
 ///
 /// # Panics
 ///
-/// Panics if CBOR encoding of the challenge message fails (should never happen
+/// Panics if encoding of the challenge message fails (should never happen
 /// with well-formed types).
 #[allow(clippy::expect_used)]
 pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
@@ -553,9 +809,8 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
     let challenge = Challenge::new(audience, now, nonce);
     let signed_challenge = Signed::seal::<K, _>(signer, challenge).await.into_signed();
     let msg = HandshakeMessage::SignedChallenge(signed_challenge);
-    let bytes = minicbor::to_vec(&msg).expect("challenge encoding should not fail");
     handshake
-        .send(bytes)
+        .send(msg.encode())
         .await
         .map_err(AuthenticateError::Transport)?;
 
@@ -568,7 +823,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
         return Err(AuthenticateError::ConnectionClosed);
     }
 
-    let response_msg: HandshakeMessage = minicbor::decode(&response_bytes)?;
+    let response_msg = HandshakeMessage::try_decode(&response_bytes)?;
 
     match response_msg {
         HandshakeMessage::SignedResponse(signed_response) => {
@@ -613,7 +868,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
 ///
 /// # Panics
 ///
-/// Panics if CBOR encoding of the response or rejection message fails (should
+/// Panics if encoding of the response or rejection message fails (should
 /// never happen with well-formed types).
 #[allow(clippy::expect_used, clippy::too_many_arguments)]
 pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
@@ -635,7 +890,7 @@ pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Sig
         return Err(AuthenticateError::ConnectionClosed);
     }
 
-    let challenge_msg: HandshakeMessage = minicbor::decode(&challenge_bytes)?;
+    let challenge_msg = HandshakeMessage::try_decode(&challenge_bytes)?;
 
     let HandshakeMessage::SignedChallenge(signed_challenge) = challenge_msg else {
         return Err(AuthenticateError::UnexpectedMessage);
@@ -677,9 +932,8 @@ pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Sig
     {
         let rejection = Rejection::new(RejectionReason::ReplayedNonce, now);
         let msg = HandshakeMessage::Rejection(rejection);
-        let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
         handshake
-            .send(bytes)
+            .send(msg.encode())
             .await
             .map_err(AuthenticateError::Transport)?;
         return Err(AuthenticateError::Handshake(
@@ -690,10 +944,8 @@ pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Sig
     // Create and send response
     let signed_response = create_response(signer, &verified.challenge, now).await;
     let response_msg = HandshakeMessage::SignedResponse(signed_response);
-    let response_bytes =
-        minicbor::to_vec(&response_msg).expect("response encoding should not fail");
     handshake
-        .send(response_bytes)
+        .send(response_msg.encode())
         .await
         .map_err(AuthenticateError::Transport)?;
 
@@ -717,9 +969,8 @@ async fn send_rejection<K: FutureForm, H: Handshake<K>>(
     };
     let rejection = Rejection::new(reason, now);
     let msg = HandshakeMessage::Rejection(rejection);
-    let bytes = minicbor::to_vec(&msg).expect("rejection encoding should not fail");
     handshake
-        .send(bytes)
+        .send(msg.encode())
         .await
         .map_err(AuthenticateError::Transport)
 }
@@ -1211,13 +1462,27 @@ mod tests {
         }
 
         #[test]
-        fn prop_audience_cbor_roundtrip() {
+        fn prop_challenge_codec_roundtrip() {
             bolero::check!()
-                .with_type::<Audience>()
-                .for_each(|audience| {
-                    let encoded = minicbor::to_vec(audience).expect("encode");
-                    let decoded: Audience = minicbor::decode(&encoded).expect("decode");
-                    assert_eq!(audience, &decoded);
+                .with_type::<Challenge>()
+                .for_each(|challenge| {
+                    let mut buf = Vec::new();
+                    challenge.encode_fields(&mut buf);
+                    let decoded =
+                        Challenge::try_decode_fields(&buf).expect("decode should succeed");
+                    assert_eq!(challenge, &decoded);
+                });
+        }
+
+        #[test]
+        fn prop_response_codec_roundtrip() {
+            bolero::check!()
+                .with_type::<Response>()
+                .for_each(|response| {
+                    let mut buf = Vec::new();
+                    response.encode_fields(&mut buf);
+                    let decoded = Response::try_decode_fields(&buf).expect("decode should succeed");
+                    assert_eq!(response, &decoded);
                 });
         }
     }
@@ -1226,21 +1491,219 @@ mod tests {
         use super::*;
 
         #[test]
-        fn transparent_encoding_is_flat() {
-            // DiscoveryId should encode as raw bytes, not as a nested struct.
-            // The Discover variant (index 1) should contain the bytes directly.
+        fn bytes_roundtrip() {
+            let raw_bytes: [u8; 32] = [0x42; 32];
+            let discovery_id = DiscoveryId::from_raw(raw_bytes);
+            assert_eq!(*discovery_id.as_bytes(), raw_bytes);
+        }
+
+        #[test]
+        fn audience_discover_preserves_bytes() {
             let raw_bytes: [u8; 32] = [0x42; 32];
             let discovery_id = DiscoveryId::from_raw(raw_bytes);
             let audience = Audience::Discover(discovery_id);
 
-            let encoded = minicbor::to_vec(audience).expect("encode");
+            // Encode via Challenge codec to test encoding
+            let challenge = Challenge {
+                audience,
+                timestamp: TimestampSeconds::new(0),
+                nonce: Nonce::from_u128(0),
+            };
+
+            let mut buf = Vec::new();
+            challenge.encode_fields(&mut buf);
 
             // Decode and verify the bytes are preserved
-            let decoded: Audience = minicbor::decode(&encoded).expect("decode");
-            let Audience::Discover(id) = decoded else {
+            let decoded = Challenge::try_decode_fields(&buf).expect("decode");
+            let Audience::Discover(id) = decoded.audience else {
                 unreachable!("encoded Discover, should decode as Discover");
             };
             assert_eq!(*id.as_bytes(), raw_bytes);
+        }
+    }
+
+    mod codec {
+        use super::*;
+
+        fn sample_challenge() -> Challenge {
+            Challenge {
+                audience: Audience::Known(PeerId::new([0x42; 32])),
+                timestamp: TimestampSeconds::new(1_234_567_890),
+                nonce: Nonce::from_u128(0xDEAD_BEEF_CAFE_BABE_1234_5678_9ABC_DEF0),
+            }
+        }
+
+        fn sample_response() -> Response {
+            Response {
+                challenge_digest: Digest::force_from_bytes([0xAB; 32]),
+                server_timestamp: TimestampSeconds::new(1_234_567_890),
+            }
+        }
+
+        #[test]
+        fn challenge_fields_roundtrip() {
+            let challenge = sample_challenge();
+            let mut buf = Vec::new();
+            challenge.encode_fields(&mut buf);
+
+            assert_eq!(buf.len(), CHALLENGE_FIELDS_SIZE);
+
+            let decoded = Challenge::try_decode_fields(&buf).expect("decode should succeed");
+            assert_eq!(decoded, challenge);
+        }
+
+        type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+        #[test]
+        fn challenge_known_audience_tag() -> TestResult {
+            let challenge = Challenge {
+                audience: Audience::Known(PeerId::new([0x00; 32])),
+                timestamp: TimestampSeconds::new(0),
+                nonce: Nonce::from_u128(0),
+            };
+
+            let mut buf = Vec::new();
+            challenge.encode_fields(&mut buf);
+
+            assert_eq!(*buf.first().ok_or("empty buffer")?, 0x00); // Known tag
+            Ok(())
+        }
+
+        #[test]
+        fn challenge_discover_audience_tag() -> TestResult {
+            let challenge = Challenge {
+                audience: Audience::Discover(DiscoveryId::from_raw([0xFF; 32])),
+                timestamp: TimestampSeconds::new(0),
+                nonce: Nonce::from_u128(0),
+            };
+
+            let mut buf = Vec::new();
+            challenge.encode_fields(&mut buf);
+
+            assert_eq!(*buf.first().ok_or("empty buffer")?, 0x01); // Discover tag
+            Ok(())
+        }
+
+        #[test]
+        fn challenge_invalid_audience_tag_rejected() -> TestResult {
+            let mut buf = vec![0u8; CHALLENGE_FIELDS_SIZE];
+            *buf.first_mut().ok_or("empty buffer")? = 0x02; // Invalid tag
+
+            let result = Challenge::try_decode_fields(&buf);
+            assert!(matches!(
+                result,
+                Err(DecodeError::InvalidEnumTag(InvalidEnumTag {
+                    tag: 0x02,
+                    type_name: "Audience"
+                }))
+            ));
+            Ok(())
+        }
+
+        #[test]
+        fn challenge_buffer_too_short() {
+            let buf = vec![0u8; CHALLENGE_FIELDS_SIZE - 1];
+            let result = Challenge::try_decode_fields(&buf);
+            assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
+        }
+
+        #[test]
+        fn challenge_timestamp_big_endian() -> TestResult {
+            let challenge = Challenge {
+                audience: Audience::Known(PeerId::new([0x00; 32])),
+                timestamp: TimestampSeconds::new(0x0102_0304_0506_0708),
+                nonce: Nonce::from_u128(0),
+            };
+
+            let mut buf = Vec::new();
+            challenge.encode_fields(&mut buf);
+
+            // Timestamp is at offset 33 (1 + 32)
+            let timestamp_bytes = buf.get(33..41).ok_or("buffer too short")?;
+            assert_eq!(
+                timestamp_bytes,
+                &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn challenge_fields_size_constant() {
+            let challenge = sample_challenge();
+            assert_eq!(challenge.fields_size(), CHALLENGE_FIELDS_SIZE);
+        }
+
+        #[test]
+        fn challenge_signed_size_correct() {
+            let challenge = sample_challenge();
+            assert_eq!(challenge.signed_size(), CHALLENGE_MIN_SIZE);
+        }
+
+        #[test]
+        fn response_fields_roundtrip() {
+            let response = sample_response();
+            let mut buf = Vec::new();
+            response.encode_fields(&mut buf);
+
+            assert_eq!(buf.len(), RESPONSE_FIELDS_SIZE);
+
+            let decoded = Response::try_decode_fields(&buf).expect("decode should succeed");
+            assert_eq!(decoded.challenge_digest, response.challenge_digest);
+            assert_eq!(decoded.server_timestamp, response.server_timestamp);
+        }
+
+        #[test]
+        fn response_challenge_digest_preserved() -> TestResult {
+            let digest_bytes = [0x42; 32];
+            let response = Response {
+                challenge_digest: Digest::force_from_bytes(digest_bytes),
+                server_timestamp: TimestampSeconds::new(0),
+            };
+
+            let mut buf = Vec::new();
+            response.encode_fields(&mut buf);
+
+            // Digest is at offset 0
+            assert_eq!(buf.get(0..32).ok_or("buffer too short")?, &digest_bytes);
+            Ok(())
+        }
+
+        #[test]
+        fn response_timestamp_big_endian() -> TestResult {
+            let response = Response {
+                challenge_digest: Digest::force_from_bytes([0x00; 32]),
+                server_timestamp: TimestampSeconds::new(0x0102_0304_0506_0708),
+            };
+
+            let mut buf = Vec::new();
+            response.encode_fields(&mut buf);
+
+            // Timestamp is at offset 32
+            let timestamp_bytes = buf.get(32..40).ok_or("buffer too short")?;
+            assert_eq!(
+                timestamp_bytes,
+                &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+            );
+            Ok(())
+        }
+
+        #[test]
+        fn response_buffer_too_short() {
+            let buf = vec![0u8; RESPONSE_FIELDS_SIZE - 1];
+            let result = Response::try_decode_fields(&buf);
+            assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
+        }
+
+        #[test]
+        fn response_fields_size_constant() {
+            let response = sample_response();
+            assert_eq!(response.fields_size(), RESPONSE_FIELDS_SIZE);
+        }
+
+        #[test]
+        fn response_signed_size_correct() {
+            let response = sample_response();
+            assert_eq!(response.signed_size(), RESPONSE_MIN_SIZE);
         }
     }
 }

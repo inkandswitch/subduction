@@ -70,8 +70,6 @@ js-sys = { version = "0.3.81", default-features = false }
 keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
 metrics = "0.24"
 metrics-exporter-prometheus = "0.16"
-minicbor = { version = "2.1", default-features = false, features = ["alloc", "derive"] }
-minicbor-serde = { version = "0.6", default-features = false, features = ["alloc"] }
 nonempty = { version = "0.12.0", default-features = false }
 num-bigint = { version = "0.4.6", default-features = false }
 rand = { version = "0.8.5", default-features = false }

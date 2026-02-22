@@ -1,22 +1,25 @@
 //! Tests for Subduction initialization.
 
-use super::common::{TestSpawn, new_test_subduction, test_signer};
-use crate::{
-    connection::{nonce_cache::NonceCache, test_utils::MockConnection},
+use future_form::Sendable;
+use sedimentree_core::commit::CountLeadingZeroBytes;
+use subduction_core::{
+    connection::{
+        nonce_cache::NonceCache,
+        test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
+    },
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
-use future_form::Sendable;
-use sedimentree_core::commit::CountLeadingZeroBytes;
 
 #[test]
 fn test_new_creates_empty_subduction() {
     let storage = MemoryStorage::new();
     let depth_metric = CountLeadingZeroBytes;
 
-    let (subduction, _listener_fut, _actor_fut) =
+    // Verify construction doesn't panic
+    let (_subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
             None,
             test_signer(),
@@ -28,11 +31,6 @@ fn test_new_creates_empty_subduction() {
             TestSpawn,
             DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
-
-    // Verify initial state via async runtime would be needed,
-    // but we can at least verify construction doesn't panic
-    assert!(!subduction.abort_manager_handle.is_aborted());
-    assert!(!subduction.abort_listener_handle.is_aborted());
 }
 
 #[tokio::test]

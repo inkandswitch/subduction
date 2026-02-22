@@ -15,19 +15,20 @@ repository.workspace = true
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
+blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures = { workspace = true }
 future_form = { workspace = true }
 getrandom = { workspace = true }
 metrics = { workspace = true, optional = true }
-minicbor = { workspace = true }
 nonempty = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }
 serde = { workspace = true, optional = true, features = ["derive"] }
 siphasher = { workspace = true }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"], optional = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
@@ -60,7 +61,7 @@ std = [
   "subduction_crypto/std",
   "thiserror/std"
 ]
-test_utils = ["std"]
+test_utils = ["std", "dep:tokio"]
 
 [lints]
 workspace = true
