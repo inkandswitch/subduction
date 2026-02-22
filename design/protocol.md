@@ -331,7 +331,7 @@ Schema: `STC\x00` (Sedimentree Commit, version 0)
 | IssuerVK | 32 bytes | Ed25519 verifying key of the signer |
 | SedimentreeId | 32 bytes | Document identifier (binds commit to document) |
 | BlobDigest | 32 bytes | BLAKE3 hash of the blob content |
-| ParentCnt | 1 byte | Number of parent commits (0-255) |
+| ParentCnt | 1 byte | Number of parent commits (max 255, sufficient for realistic workloads) |
 | BlobSize | 8 bytes | Size of blob in bytes (big-endian u64) |
 | Parents | N × 32 bytes | Parent commit digests, **sorted ascending** |
 | Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |

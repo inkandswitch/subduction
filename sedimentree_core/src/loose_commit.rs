@@ -7,7 +7,7 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use id::CommitId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, EncodeFields},
@@ -26,6 +26,12 @@ use crate::{
 ///
 /// The commit's digest is computed via [`Digest::hash`] and not stored in the struct.
 /// Use [`Sedimentree`](crate::sedimentree::Sedimentree) to store commits with their digests.
+///
+/// # Wire Format Limits
+///
+/// The parent count is encoded as a `u8`, limiting commits to **255 parents**.
+/// This is sufficient for any realistic workload — hitting this limit would require
+/// 255+ peers making concurrent changes without seeing each other's updates.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]

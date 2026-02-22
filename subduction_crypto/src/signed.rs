@@ -291,9 +291,8 @@ impl<T: Schema + EncodeFields + Decode> Signed<T> {
     ) -> VerifiedSignature<T> {
         let issuer = signer.verifying_key();
 
-        // Calculate size and pre-allocate
-        let fields_size = payload.fields_size();
-        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        // Pre-allocate
+        let total_size = payload.signed_size();
         let mut bytes = Vec::with_capacity(total_size);
 
         // Write schema
@@ -336,8 +335,7 @@ impl<T: Schema + EncodeFields + Decode> Signed<T> {
     /// * `payload` - The payload
     #[must_use]
     pub fn from_parts(issuer: VerifyingKey, signature: Signature, payload: &T) -> Self {
-        let fields_size = payload.fields_size();
-        let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+        let total_size = payload.signed_size();
         let mut bytes = Vec::with_capacity(total_size);
 
         bytes.extend_from_slice(&T::SCHEMA);
