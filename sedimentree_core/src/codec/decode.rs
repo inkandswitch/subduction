@@ -28,6 +28,10 @@ pub trait Decode: Schema + Sized {
 }
 
 /// Decode a u8.
+///
+/// # Errors
+///
+/// Returns [`BufferTooShort`] if there's not enough data at `offset`.
 #[inline]
 pub fn u8(buf: &[u8], offset: usize) -> Result<u8, BufferTooShort> {
     buf.get(offset).copied().ok_or(BufferTooShort {
@@ -39,6 +43,10 @@ pub fn u8(buf: &[u8], offset: usize) -> Result<u8, BufferTooShort> {
 }
 
 /// Decode a u16 from big-endian bytes.
+///
+/// # Errors
+///
+/// Returns [`BufferTooShort`] if there are fewer than 2 bytes at `offset`.
 #[inline]
 pub fn u16(buf: &[u8], offset: usize) -> Result<u16, BufferTooShort> {
     let bytes: [u8; 2] = buf
@@ -54,6 +62,10 @@ pub fn u16(buf: &[u8], offset: usize) -> Result<u16, BufferTooShort> {
 }
 
 /// Decode a u32 from big-endian bytes.
+///
+/// # Errors
+///
+/// Returns [`BufferTooShort`] if there are fewer than 4 bytes at `offset`.
 #[inline]
 pub fn u32(buf: &[u8], offset: usize) -> Result<u32, BufferTooShort> {
     let bytes: [u8; 4] = buf
@@ -69,6 +81,10 @@ pub fn u32(buf: &[u8], offset: usize) -> Result<u32, BufferTooShort> {
 }
 
 /// Decode a u64 from big-endian bytes.
+///
+/// # Errors
+///
+/// Returns [`BufferTooShort`] if there are fewer than 8 bytes at `offset`.
 #[inline]
 pub fn u64(buf: &[u8], offset: usize) -> Result<u64, BufferTooShort> {
     let bytes: [u8; 8] = buf
@@ -84,6 +100,10 @@ pub fn u64(buf: &[u8], offset: usize) -> Result<u64, BufferTooShort> {
 }
 
 /// Decode a fixed-size array.
+///
+/// # Errors
+///
+/// Returns [`BufferTooShort`] if there are fewer than `N` bytes at `offset`.
 #[inline]
 pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], BufferTooShort> {
     buf.get(offset..offset + N)
@@ -97,6 +117,10 @@ pub fn array<const N: usize>(buf: &[u8], offset: usize) -> Result<[u8; N], Buffe
 }
 
 /// Get a slice of bytes.
+///
+/// # Errors
+///
+/// Returns [`BufferTooShort`] if there are fewer than `len` bytes at `offset`.
 #[inline]
 pub fn slice(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], BufferTooShort> {
     buf.get(offset..offset + len).ok_or(BufferTooShort {
@@ -109,12 +133,17 @@ pub fn slice(buf: &[u8], offset: usize, len: usize) -> Result<&[u8], BufferTooSh
 
 /// Verify that a slice of fixed-size elements is sorted ascending.
 ///
-/// Returns `Ok(())` if sorted, or `Err(UnsortedArray)` with
-/// the index of the first out-of-order element.
+/// # Errors
+///
+/// Returns [`UnsortedArray`] with the index of the first out-of-order element.
 pub fn verify_sorted<const N: usize>(elements: &[[u8; N]]) -> Result<(), UnsortedArray> {
-    for i in 1..elements.len() {
-        if elements[i - 1] >= elements[i] {
-            return Err(UnsortedArray { index: i });
+    for (i, window) in elements.windows(2).enumerate() {
+        let [prev, curr] = window else {
+            // windows(2) always yields slices of length 2, but the compiler doesn't know
+            continue;
+        };
+        if prev >= curr {
+            return Err(UnsortedArray { index: i + 1 });
         }
     }
     Ok(())

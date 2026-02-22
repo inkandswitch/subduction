@@ -17,7 +17,7 @@ use sedimentree_core::{
     test_utils::{TestGraph, seeded_rng},
 };
 
-fn make_sedimentree_id(seed: u8) -> SedimentreeId {
+const fn make_sedimentree_id(seed: u8) -> SedimentreeId {
     SedimentreeId::new([seed; 32])
 }
 

@@ -23,9 +23,9 @@
 //! ```
 //!
 //! - **Schema**: 4-byte header identifying type and version (e.g., `STC\x00`)
-//! - **IssuerVK**: Ed25519 verifying key of the signer (32 bytes)
+//! - **`IssuerVK`**: `Ed25519` verifying key of the signer (32 bytes)
 //! - **Fields**: Type-specific data encoded by the [`Encode`] implementation
-//! - **Signature**: Ed25519 signature over the payload (64 bytes)
+//! - **Signature**: `Ed25519` signature over the payload (64 bytes)
 //!
 //! # Encoding Conventions
 //!

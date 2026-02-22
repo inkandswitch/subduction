@@ -162,7 +162,7 @@ impl LooseCommit {
         let parent_count = decode::u8(buf, offset)? as usize;
         offset += 1;
 
-        let blob_size = decode::u32(buf, offset)? as u64;
+        let blob_size = u64::from(decode::u32(buf, offset)?);
         offset += 4;
 
         let parents_size = parent_count * 32;
@@ -261,7 +261,7 @@ impl Decode for LooseCommit {
         let parent_count = decode::u8(buf, offset)? as usize;
         offset += 1;
 
-        let blob_size = decode::u32(buf, offset)? as u64;
+        let blob_size = u64::from(decode::u32(buf, offset)?);
         offset += 4;
 
         let parents_size = parent_count * 32;

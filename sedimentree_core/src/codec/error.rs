@@ -93,7 +93,7 @@ pub struct SizeMismatch {
     pub actual: usize,
 }
 
-/// BlobMeta size exceeds maximum allowed.
+/// [`BlobMeta`](crate::blob::BlobMeta) size exceeds maximum allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("blob too large: {size} bytes, max {max}")]
 pub struct BlobTooLarge {
@@ -171,7 +171,7 @@ pub enum DecodeError {
     #[error(transparent)]
     SizeMismatch(#[from] SizeMismatch),
 
-    /// BlobMeta size exceeds maximum allowed.
+    /// [`BlobMeta`](crate::blob::BlobMeta) size exceeds maximum allowed.
     #[error(transparent)]
     BlobTooLarge(#[from] BlobTooLarge),
 

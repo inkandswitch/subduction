@@ -413,7 +413,7 @@ impl Decode for Fragment {
         let checkpoint_count = decode::u16(buf, offset)? as usize;
         offset += 2;
 
-        let blob_size = decode::u32(buf, offset)? as u64;
+        let blob_size = u64::from(decode::u32(buf, offset)?);
         offset += 4;
 
         let boundary_size = boundary_count * 32;
@@ -549,7 +549,7 @@ impl Fragment {
         let checkpoint_count = decode::u16(buf, offset)? as usize;
         offset += 2;
 
-        let blob_size = decode::u32(buf, offset)? as u64;
+        let blob_size = u64::from(decode::u32(buf, offset)?);
         offset += 4;
 
         let boundary_size = boundary_count * 32;
