@@ -7,7 +7,7 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use id::CommitId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, Encode},
@@ -297,6 +297,7 @@ impl Decode for LooseCommit {
 mod codec_tests {
     use super::*;
     use alloc::vec;
+    use testresult::TestResult;
 
     fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
         Digest::from_bytes([byte; 32])
@@ -307,7 +308,7 @@ mod codec_tests {
     }
 
     #[test]
-    fn codec_round_trip_no_parents() {
+    fn codec_round_trip_no_parents() -> TestResult {
         let id = make_sedimentree_id(0x01);
         let commit = LooseCommit::new(
             id,
@@ -320,12 +321,13 @@ mod codec_tests {
         commit.encode_fields(&mut buf);
         assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
 
-        let decoded = LooseCommit::try_decode_fields(&buf).expect("decode should succeed");
+        let decoded = LooseCommit::try_decode_fields(&buf)?;
         assert_eq!(decoded, commit);
+        Ok(())
     }
 
     #[test]
-    fn codec_round_trip_with_parents() {
+    fn codec_round_trip_with_parents() -> TestResult {
         let id = make_sedimentree_id(0x01);
         let parents = BTreeSet::from([make_digest(0x30), make_digest(0x40), make_digest(0x50)]);
         let commit = LooseCommit::new(
@@ -339,8 +341,9 @@ mod codec_tests {
         commit.encode_fields(&mut buf);
         assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE + 3 * 32);
 
-        let decoded = LooseCommit::try_decode_fields(&buf).expect("decode should succeed");
+        let decoded = LooseCommit::try_decode_fields(&buf)?;
         assert_eq!(decoded, commit);
+        Ok(())
     }
 
     #[test]

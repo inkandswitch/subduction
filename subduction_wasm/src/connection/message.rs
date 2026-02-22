@@ -238,7 +238,7 @@ impl From<WasmMessage> for Message {
 }
 
 /// An error indicating a failure to deserialize a [`Message`].
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Copy, Error)]
 #[error("failed to deserialize Message: {0}")]
 pub struct JsMessageDeserializationError(DecodeError);
 

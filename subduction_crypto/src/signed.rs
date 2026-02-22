@@ -16,9 +16,9 @@
 //! ```
 //!
 //! - **Schema**: 4-byte header identifying type and version
-//! - **IssuerVK**: Ed25519 verifying key of the signer (32 bytes)
+//! - **`IssuerVK`**: `Ed25519` verifying key of the signer (32 bytes)
 //! - **Fields**: Type-specific data encoded by the [`Encode`] implementation
-//! - **Signature**: Ed25519 signature over bytes `[0..len-64]`
+//! - **Signature**: `Ed25519` signature over bytes `[0..len-64]`
 
 use alloc::vec::Vec;
 use core::{cmp::Ordering, marker::PhantomData};
@@ -119,13 +119,19 @@ impl<T: Encode + Decode> Signed<T> {
     /// This is the data that was signed: schema + issuer + fields.
     #[must_use]
     pub fn payload_bytes(&self) -> &[u8] {
-        &self.bytes[..self.bytes.len() - SIGNATURE_SIZE]
+        // SAFETY: Signed<T> is only constructed after validating MIN_SIZE >= SIGNATURE_SIZE
+        self.bytes
+            .get(..self.bytes.len().saturating_sub(SIGNATURE_SIZE))
+            .unwrap_or(&[])
     }
 
     /// Get the fields bytes (after schema + issuer, before signature).
     #[must_use]
     pub fn fields_bytes(&self) -> &[u8] {
-        &self.bytes[SCHEMA_SIZE + VERIFYING_KEY_SIZE..self.bytes.len() - SIGNATURE_SIZE]
+        let start = SCHEMA_SIZE + VERIFYING_KEY_SIZE;
+        let end = self.bytes.len().saturating_sub(SIGNATURE_SIZE);
+        // SAFETY: Signed<T> is only constructed after validating MIN_SIZE
+        self.bytes.get(start..end).unwrap_or(&[])
     }
 
     /// Verify the signature and decode the payload.
@@ -171,6 +177,11 @@ impl<T: Encode + Decode> Signed<T> {
     /// - The buffer is too short
     /// - The schema header doesn't match `T::SCHEMA`
     /// - The verifying key is invalid
+    ///
+    /// # Panics
+    ///
+    /// This function will not panic. All slice operations are bounds-checked
+    /// after validating minimum size.
     pub fn try_from_bytes(bytes: Vec<u8>) -> Result<Self, DecodeError> {
         // Check minimum size
         if bytes.len() < T::MIN_SIZE {
@@ -181,10 +192,15 @@ impl<T: Encode + Decode> Signed<T> {
             });
         }
 
-        // Validate schema
-        let schema: [u8; SCHEMA_SIZE] = bytes[0..SCHEMA_SIZE]
-            .try_into()
-            .expect("length checked above");
+        // Validate schema - safe because MIN_SIZE >= SCHEMA_SIZE
+        let schema: [u8; SCHEMA_SIZE] = bytes
+            .get(0..SCHEMA_SIZE)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(DecodeError::MessageTooShort {
+            type_name: core::any::type_name::<T>(),
+            need: SCHEMA_SIZE,
+            have: bytes.len(),
+        })?;
         if schema != T::SCHEMA {
             return Err(InvalidSchema {
                 expected: T::SCHEMA,
@@ -193,18 +209,28 @@ impl<T: Encode + Decode> Signed<T> {
             .into());
         }
 
-        // Extract issuer
+        // Extract issuer - safe because MIN_SIZE >= SCHEMA_SIZE + VERIFYING_KEY_SIZE
         let issuer_bytes: [u8; VERIFYING_KEY_SIZE] = bytes
-            [SCHEMA_SIZE..SCHEMA_SIZE + VERIFYING_KEY_SIZE]
-            .try_into()
-            .expect("length checked above");
+            .get(SCHEMA_SIZE..SCHEMA_SIZE + VERIFYING_KEY_SIZE)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
+                need: SCHEMA_SIZE + VERIFYING_KEY_SIZE,
+                have: bytes.len(),
+            })?;
         let issuer = VerifyingKey::from_bytes(&issuer_bytes)
             .map_err(|_| DecodeError::InvalidVerifyingKey)?;
 
-        // Extract signature
-        let sig_start = bytes.len() - SIGNATURE_SIZE;
-        let sig_bytes: [u8; SIGNATURE_SIZE] =
-            bytes[sig_start..].try_into().expect("length checked above");
+        // Extract signature - safe because MIN_SIZE >= SIGNATURE_SIZE
+        let sig_start = bytes.len().saturating_sub(SIGNATURE_SIZE);
+        let sig_bytes: [u8; SIGNATURE_SIZE] = bytes
+            .get(sig_start..)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: core::any::type_name::<T>(),
+                need: SIGNATURE_SIZE,
+                have: bytes.len().saturating_sub(sig_start),
+            })?;
         let signature = Signature::from_bytes(&sig_bytes);
 
         Ok(Self {
@@ -259,7 +285,7 @@ impl<T: Encode + Decode> Signed<T> {
 
         debug_assert_eq!(bytes.len(), total_size);
 
-        let signed = Self {
+        let result = Self {
             issuer,
             signature,
             bytes,
@@ -267,7 +293,7 @@ impl<T: Encode + Decode> Signed<T> {
         };
 
         // We just signed it, so we know it's valid — no need to verify
-        VerifiedSignature::new(signed, payload)
+        VerifiedSignature::new(result, payload)
     }
 
     /// Create a signed payload from raw components.
@@ -374,6 +400,7 @@ impl<'a, T: Encode + Decode + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used, clippy::indexing_slicing)]
 mod tests {
     use alloc::vec::Vec;
 
@@ -383,6 +410,7 @@ mod tests {
         error::DecodeError,
         schema::{self, Schema},
     };
+    use testresult::TestResult;
 
     use crate::signer::memory::MemorySigner;
 
@@ -424,25 +452,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn seal_produces_verifiable_bytes() {
+    async fn seal_produces_verifiable_bytes() -> TestResult {
         let signer = test_signer(1);
         let payload = TestPayload { value: 42 };
 
         // Seal the payload
         let verified = Signed::seal::<future_form::Sendable, _>(&signer, payload).await;
-        let signed = verified.into_signed();
+        let sealed = verified.into_signed();
 
         // Get the wire bytes
-        let bytes = signed.as_bytes().to_vec();
+        let bytes = sealed.as_bytes().to_vec();
 
         // Parse from wire bytes
-        let parsed = Signed::<TestPayload>::try_from_bytes(bytes).expect("should parse");
+        let parsed = Signed::<TestPayload>::try_from_bytes(bytes)?;
 
         // Verify the signature and decode
-        let verified = parsed.try_verify().expect("should verify");
+        let verified = parsed.try_verify()?;
 
         assert_eq!(verified.payload(), &payload);
         assert_eq!(verified.issuer(), signer.verifying_key());
+        Ok(())
     }
 
     #[tokio::test]
@@ -472,7 +501,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tampered_bytes_fail_verification() {
+    async fn tampered_bytes_fail_verification() -> TestResult {
         let signer = test_signer(1);
         let payload = TestPayload { value: 42 };
 
@@ -482,9 +511,10 @@ mod tests {
         // Tamper with the payload (change the value)
         bytes[36] ^= 0xFF;
 
-        let parsed = Signed::<TestPayload>::try_from_bytes(bytes).expect("should parse");
+        let parsed = Signed::<TestPayload>::try_from_bytes(bytes)?;
         let result = parsed.try_verify();
 
         assert!(result.is_err(), "tampered bytes should fail verification");
+        Ok(())
     }
 }

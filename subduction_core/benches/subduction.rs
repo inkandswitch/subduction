@@ -29,7 +29,7 @@ mod generators {
     use futures::executor::block_on;
     use std::collections::BTreeSet;
 
-    use rand::{Rng, SeedableRng, rngs::StdRng};
+    use rand::{rngs::StdRng, Rng, SeedableRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         crypto::{digest::Digest, fingerprint::FingerprintSeed},
@@ -89,11 +89,12 @@ mod generators {
 
     /// Generate a loose commit from a seed.
     pub(super) fn loose_commit_from_seed(seed: u64) -> LooseCommit {
+        let id = sedimentree_id_from_seed(seed);
         let digest = digest_from_seed(seed);
         let parent = digest_from_seed(seed.wrapping_add(1));
         #[allow(clippy::cast_possible_truncation)]
         let blob_meta = BlobMeta::new(&[seed as u8; 64]);
-        LooseCommit::new(digest, BTreeSet::from([parent]), blob_meta)
+        LooseCommit::new(id, digest, BTreeSet::from([parent]), blob_meta)
     }
 
     /// Generate a fragment from a seed.
@@ -103,6 +104,7 @@ mod generators {
         num_parents: usize,
         num_members: usize,
     ) -> Fragment {
+        let id = sedimentree_id_from_seed(seed);
         let digest = digest_from_seed(seed);
         let parents: BTreeSet<Digest<LooseCommit>> = (0..num_parents)
             .map(|i| digest_from_seed(seed.wrapping_add(100 + i as u64)))
@@ -112,7 +114,7 @@ mod generators {
             .collect();
         #[allow(clippy::cast_possible_truncation)]
         let blob_meta = BlobMeta::new(&[seed as u8; 128]);
-        Fragment::new(digest, parents, &members, blob_meta)
+        Fragment::new(id, digest, parents, &members, blob_meta)
     }
 
     /// Generate a request ID from seeds.
@@ -141,16 +143,14 @@ mod generators {
     pub(super) fn signed_loose_commit_from_seed(seed: u64) -> Signed<LooseCommit> {
         let signer = signer_from_seed(seed);
         let commit = loose_commit_from_seed(seed);
-        let ctx = sedimentree_id_from_seed(seed);
-        block_on(Signed::seal::<Sendable, _>(&signer, commit, &ctx)).into_signed()
+        block_on(Signed::seal::<Sendable, _>(&signer, commit)).into_signed()
     }
 
     /// Generate a signed fragment from a seed.
     pub(super) fn signed_fragment_from_seed(seed: u64) -> Signed<Fragment> {
         let signer = signer_from_seed(seed);
         let fragment = fragment_from_seed(seed, 3, 10);
-        let ctx = sedimentree_id_from_seed(seed);
-        block_on(Signed::seal::<Sendable, _>(&signer, fragment, &ctx)).into_signed()
+        block_on(Signed::seal::<Sendable, _>(&signer, fragment)).into_signed()
     }
 
     /// Generate a sync diff with commits and fragments.
@@ -161,12 +161,11 @@ mod generators {
         blob_size: usize,
     ) -> SyncDiff {
         let signer = signer_from_seed(seed);
-        let ctx = sedimentree_id_from_seed(seed);
 
         let missing_commits: Vec<(Signed<LooseCommit>, Blob)> = (0..num_commits)
             .map(|i| {
                 let commit = loose_commit_from_seed(seed.wrapping_add(i as u64));
-                let verified = block_on(Signed::seal::<Sendable, _>(&signer, commit, &ctx));
+                let verified = block_on(Signed::seal::<Sendable, _>(&signer, commit));
                 let blob = blob_from_seed(seed.wrapping_add(1000 + i as u64), blob_size);
                 (verified.into_signed(), blob)
             })
@@ -175,7 +174,7 @@ mod generators {
         let missing_fragments: Vec<(Signed<Fragment>, Blob)> = (0..num_fragments)
             .map(|i| {
                 let fragment = fragment_from_seed(seed.wrapping_add(2000 + i as u64), 3, 10);
-                let verified = block_on(Signed::seal::<Sendable, _>(&signer, fragment, &ctx));
+                let verified = block_on(Signed::seal::<Sendable, _>(&signer, fragment));
                 let blob = blob_from_seed(seed.wrapping_add(3000 + i as u64), blob_size * 4);
                 (verified.into_signed(), blob)
             })
@@ -226,7 +225,7 @@ mod generators {
 }
 
 mod id {
-    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{
         connection::{id::ConnectionId, message::RequestId},
@@ -362,7 +361,7 @@ mod id {
 }
 
 mod message {
-    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
     use subduction_core::connection::message::Message;
 
     use super::generators::{
@@ -507,7 +506,7 @@ mod message {
 mod sync {
     use std::collections::BTreeSet;
 
-    use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BatchSize, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{
         BatchSyncRequest, BatchSyncResponse, Message, SyncResult,
@@ -660,7 +659,7 @@ mod sync {
 mod collections {
     use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
     use sedimentree_core::id::SedimentreeId;
     use subduction_core::{connection::id::ConnectionId, peer::id::PeerId};
 
@@ -845,7 +844,7 @@ mod collections {
 }
 
 mod cloning {
-    use criterion::{BenchmarkId, Criterion, Throughput, black_box};
+    use criterion::{black_box, BenchmarkId, Criterion, Throughput};
     use subduction_core::connection::{id::ConnectionId, message::Message};
 
     use super::generators::{
@@ -949,7 +948,7 @@ mod cloning {
 }
 
 mod display {
-    use criterion::{Criterion, black_box};
+    use criterion::{black_box, Criterion};
     use subduction_core::storage::id::StorageId;
 
     use super::generators::{digest_from_seed, peer_id_from_seed, sedimentree_id_from_seed};

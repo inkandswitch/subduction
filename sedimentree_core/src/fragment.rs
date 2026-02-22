@@ -9,7 +9,7 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, Encode},
@@ -22,7 +22,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -613,6 +613,7 @@ impl Fragment {
 mod codec_tests {
     use super::*;
     use alloc::vec;
+    use testresult::TestResult;
 
     fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
         Digest::from_bytes([byte; 32])
@@ -627,7 +628,7 @@ mod codec_tests {
     }
 
     #[test]
-    fn codec_round_trip_empty() {
+    fn codec_round_trip_empty() -> TestResult {
         let sedimentree_id = make_sedimentree_id(0x01);
         let fragment = Fragment::from_parts(
             sedimentree_id,
@@ -641,15 +642,16 @@ mod codec_tests {
         fragment.encode_fields(&mut buf);
         assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
 
-        let decoded = Fragment::try_decode_fields(&buf).expect("decode should succeed");
+        let decoded = Fragment::try_decode_fields(&buf)?;
         assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
         assert_eq!(decoded.head(), fragment.head());
         assert_eq!(decoded.boundary(), fragment.boundary());
         assert_eq!(decoded.checkpoints(), fragment.checkpoints());
+        Ok(())
     }
 
     #[test]
-    fn codec_round_trip_with_data() {
+    fn codec_round_trip_with_data() -> TestResult {
         let sedimentree_id = make_sedimentree_id(0x01);
         let boundary = BTreeSet::from([make_digest(0x30), make_digest(0x40)]);
         let checkpoints = BTreeSet::from([make_checkpoint(0x50), make_checkpoint(0x60)]);
@@ -665,11 +667,12 @@ mod codec_tests {
         let mut buf = Vec::new();
         fragment.encode_fields(&mut buf);
 
-        let decoded = Fragment::try_decode_fields(&buf).expect("decode should succeed");
+        let decoded = Fragment::try_decode_fields(&buf)?;
         assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
         assert_eq!(decoded.head(), fragment.head());
         assert_eq!(decoded.boundary(), fragment.boundary());
         assert_eq!(decoded.checkpoints(), fragment.checkpoints());
+        Ok(())
     }
 
     #[test]

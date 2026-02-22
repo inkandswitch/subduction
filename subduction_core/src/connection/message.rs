@@ -10,7 +10,7 @@
 //! ```
 //!
 //! - **Schema**: `SUM\x00` (4 bytes)
-//! - **TotalSize**: Total message size in bytes (big-endian u32)
+//! - **`TotalSize`**: Total message size in bytes (big-endian u32)
 //! - **Tag**: Variant discriminant (u8)
 //! - **Payload**: Variant-specific data
 
@@ -25,9 +25,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, id::FragmentId},
+    fragment::{id::FragmentId, Fragment},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -313,7 +313,7 @@ impl RequestedData {
 /// Schema header for `Message` envelope.
 pub const MESSAGE_SCHEMA: [u8; 4] = *b"SUM\x00";
 
-/// Minimum size of a Message envelope (schema + total_size + tag).
+/// Minimum size of a Message envelope (schema + `total_size` + tag).
 const ENVELOPE_HEADER_SIZE: usize = 4 + 4 + 1; // 9 bytes
 
 mod tags {
@@ -401,6 +401,7 @@ impl Message {
     /// # Errors
     ///
     /// Returns an error if the message is malformed.
+    #[allow(clippy::indexing_slicing)] // Length validated before access
     pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
         if bytes.len() < ENVELOPE_HEADER_SIZE {
             return Err(DecodeError::MessageTooShort {
@@ -410,7 +411,13 @@ impl Message {
             });
         }
 
-        let schema: [u8; 4] = bytes[0..4].try_into().expect("length checked");
+        let schema: [u8; 4] = bytes.get(0..4).and_then(|s| s.try_into().ok()).ok_or(
+            DecodeError::MessageTooShort {
+                type_name: "Message schema",
+                need: 4,
+                have: bytes.len(),
+            },
+        )?;
         if schema != MESSAGE_SCHEMA {
             return Err(InvalidSchema {
                 expected: MESSAGE_SCHEMA,
@@ -419,8 +426,13 @@ impl Message {
             .into());
         }
 
-        let total_size =
-            u32::from_be_bytes(bytes[4..8].try_into().expect("length checked")) as usize;
+        let total_size = u32::from_be_bytes(bytes.get(4..8).and_then(|s| s.try_into().ok()).ok_or(
+            DecodeError::MessageTooShort {
+                type_name: "Message total_size",
+                need: 8,
+                have: bytes.len(),
+            },
+        )?) as usize;
         if bytes.len() != total_size {
             return Err(SizeMismatch {
                 declared: total_size,
@@ -429,8 +441,18 @@ impl Message {
             .into());
         }
 
-        let tag = bytes[8];
-        let payload = &bytes[ENVELOPE_HEADER_SIZE..];
+        let tag = *bytes.get(8).ok_or(DecodeError::MessageTooShort {
+            type_name: "Message tag",
+            need: 9,
+            have: bytes.len(),
+        })?;
+        let payload = bytes
+            .get(ENVELOPE_HEADER_SIZE..)
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: "Message payload",
+                need: ENVELOPE_HEADER_SIZE,
+                have: bytes.len(),
+            })?;
 
         let (min_payload_size, type_name) = match tag {
             tags::LOOSE_COMMIT => (min_sizes::LOOSE_COMMIT, "LooseCommit"),
@@ -581,7 +603,7 @@ fn encode_batch_sync_request(buf: &mut Vec<u8>, req: &BatchSyncRequest) {
     buf.extend_from_slice(req.id.as_bytes());
     buf.extend_from_slice(req.req_id.requestor.as_bytes());
     buf.extend_from_slice(&req.req_id.nonce.to_be_bytes());
-    buf.push(if req.subscribe { 0x01 } else { 0x00 });
+    buf.push(u8::from(req.subscribe));
 
     let seed = req.fingerprint_summary.seed();
     buf.extend_from_slice(&seed.key0().to_be_bytes());
@@ -670,21 +692,32 @@ fn decode_loose_commit(payload: &[u8]) -> Result<Message, DecodeError> {
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
 
-    let commit = Signed::<LooseCommit>::try_from_bytes(payload[offset..].to_vec())?;
+    let commit = Signed::<LooseCommit>::try_from_bytes(
+        payload
+            .get(offset..)
+            .ok_or(BufferTooShort {
+                reading: ReadingType::Slice { len: 0 },
+                offset,
+                need: 1,
+                have: 0,
+            })?
+            .to_vec(),
+    )?;
     offset += commit.as_bytes().len();
 
     let blob_size = read_u32(payload, &mut offset)? as usize;
 
-    if payload.len() < offset + blob_size {
-        return Err(BufferTooShort {
-            reading: ReadingType::Slice { len: blob_size },
-            offset,
-            need: blob_size,
-            have: payload.len().saturating_sub(offset),
-        }
-        .into());
-    }
-    let blob = Blob::new(payload[offset..offset + blob_size].to_vec());
+    let blob = Blob::new(
+        payload
+            .get(offset..offset + blob_size)
+            .ok_or(BufferTooShort {
+                reading: ReadingType::Slice { len: blob_size },
+                offset,
+                need: blob_size,
+                have: payload.len().saturating_sub(offset),
+            })?
+            .to_vec(),
+    );
 
     Ok(Message::LooseCommit { id, commit, blob })
 }
@@ -694,21 +727,32 @@ fn decode_fragment(payload: &[u8]) -> Result<Message, DecodeError> {
 
     let id = SedimentreeId::new(read_array::<32>(payload, &mut offset)?);
 
-    let fragment = Signed::<Fragment>::try_from_bytes(payload[offset..].to_vec())?;
+    let fragment = Signed::<Fragment>::try_from_bytes(
+        payload
+            .get(offset..)
+            .ok_or(BufferTooShort {
+                reading: ReadingType::Slice { len: 0 },
+                offset,
+                need: 1,
+                have: 0,
+            })?
+            .to_vec(),
+    )?;
     offset += fragment.as_bytes().len();
 
     let blob_size = read_u32(payload, &mut offset)? as usize;
 
-    if payload.len() < offset + blob_size {
-        return Err(BufferTooShort {
-            reading: ReadingType::Slice { len: blob_size },
-            offset,
-            need: blob_size,
-            have: payload.len().saturating_sub(offset),
-        }
-        .into());
-    }
-    let blob = Blob::new(payload[offset..offset + blob_size].to_vec());
+    let blob = Blob::new(
+        payload
+            .get(offset..offset + blob_size)
+            .ok_or(BufferTooShort {
+                reading: ReadingType::Slice { len: blob_size },
+                offset,
+                need: blob_size,
+                have: payload.len().saturating_sub(offset),
+            })?
+            .to_vec(),
+    );
 
     Ok(Message::Fragment { id, fragment, blob })
 }
@@ -736,16 +780,17 @@ fn decode_blobs_response(payload: &[u8]) -> Result<Message, DecodeError> {
     let mut blobs = Vec::with_capacity(count);
     for _ in 0..count {
         let blob_size = read_u32(payload, &mut offset)? as usize;
-        if payload.len() < offset + blob_size {
-            return Err(BufferTooShort {
-                reading: ReadingType::Slice { len: blob_size },
-                offset,
-                need: blob_size,
-                have: payload.len().saturating_sub(offset),
-            }
-            .into());
-        }
-        blobs.push(Blob::new(payload[offset..offset + blob_size].to_vec()));
+        blobs.push(Blob::new(
+            payload
+                .get(offset..offset + blob_size)
+                .ok_or(BufferTooShort {
+                    reading: ReadingType::Slice { len: blob_size },
+                    offset,
+                    need: blob_size,
+                    have: payload.len().saturating_sub(offset),
+                })?
+                .to_vec(),
+        ));
         offset += blob_size;
     }
 
@@ -838,20 +883,31 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 
     let mut missing_commits = Vec::with_capacity(commit_count);
     for _ in 0..commit_count {
-        let commit = Signed::<LooseCommit>::try_from_bytes(payload[*offset..].to_vec())?;
+        let commit = Signed::<LooseCommit>::try_from_bytes(
+            payload
+                .get(*offset..)
+                .ok_or(BufferTooShort {
+                    reading: ReadingType::Slice { len: 0 },
+                    offset: *offset,
+                    need: 1,
+                    have: 0,
+                })?
+                .to_vec(),
+        )?;
         *offset += commit.as_bytes().len();
 
         let blob_size = read_u32(payload, offset)? as usize;
-        if payload.len() < *offset + blob_size {
-            return Err(BufferTooShort {
-                reading: ReadingType::Slice { len: blob_size },
-                offset: *offset,
-                need: blob_size,
-                have: payload.len().saturating_sub(*offset),
-            }
-            .into());
-        }
-        let blob = Blob::new(payload[*offset..*offset + blob_size].to_vec());
+        let blob = Blob::new(
+            payload
+                .get(*offset..*offset + blob_size)
+                .ok_or(BufferTooShort {
+                    reading: ReadingType::Slice { len: blob_size },
+                    offset: *offset,
+                    need: blob_size,
+                    have: payload.len().saturating_sub(*offset),
+                })?
+                .to_vec(),
+        );
         *offset += blob_size;
 
         missing_commits.push((commit, blob));
@@ -859,20 +915,31 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
 
     let mut missing_fragments = Vec::with_capacity(fragment_count);
     for _ in 0..fragment_count {
-        let fragment = Signed::<Fragment>::try_from_bytes(payload[*offset..].to_vec())?;
+        let fragment = Signed::<Fragment>::try_from_bytes(
+            payload
+                .get(*offset..)
+                .ok_or(BufferTooShort {
+                    reading: ReadingType::Slice { len: 0 },
+                    offset: *offset,
+                    need: 1,
+                    have: 0,
+                })?
+                .to_vec(),
+        )?;
         *offset += fragment.as_bytes().len();
 
         let blob_size = read_u32(payload, offset)? as usize;
-        if payload.len() < *offset + blob_size {
-            return Err(BufferTooShort {
-                reading: ReadingType::Slice { len: blob_size },
-                offset: *offset,
-                need: blob_size,
-                have: payload.len().saturating_sub(*offset),
-            }
-            .into());
-        }
-        let blob = Blob::new(payload[*offset..*offset + blob_size].to_vec());
+        let blob = Blob::new(
+            payload
+                .get(*offset..*offset + blob_size)
+                .ok_or(BufferTooShort {
+                    reading: ReadingType::Slice { len: blob_size },
+                    offset: *offset,
+                    need: blob_size,
+                    have: payload.len().saturating_sub(*offset),
+                })?
+                .to_vec(),
+        );
         *offset += blob_size;
 
         missing_fragments.push((fragment, blob));
@@ -919,90 +986,71 @@ fn decode_data_request_rejected(payload: &[u8]) -> Result<Message, DecodeError> 
 }
 
 fn read_u8(buf: &[u8], offset: &mut usize) -> Result<u8, DecodeError> {
-    if buf.len() < *offset + 1 {
-        return Err(BufferTooShort {
-            reading: ReadingType::U8,
-            offset: *offset,
-            need: 1,
-            have: buf.len().saturating_sub(*offset),
-        }
-        .into());
-    }
-    let val = buf[*offset];
+    let val = *buf.get(*offset).ok_or(BufferTooShort {
+        reading: ReadingType::U8,
+        offset: *offset,
+        need: 1,
+        have: buf.len().saturating_sub(*offset),
+    })?;
     *offset += 1;
     Ok(val)
 }
 
 fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, DecodeError> {
-    if buf.len() < *offset + 2 {
-        return Err(BufferTooShort {
-            reading: ReadingType::U16,
-            offset: *offset,
-            need: 2,
-            have: buf.len().saturating_sub(*offset),
-        }
-        .into());
-    }
     let val = u16::from_be_bytes(
-        buf[*offset..*offset + 2]
-            .try_into()
-            .expect("length checked"),
+        buf.get(*offset..*offset + 2)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(BufferTooShort {
+                reading: ReadingType::U16,
+                offset: *offset,
+                need: 2,
+                have: buf.len().saturating_sub(*offset),
+            })?,
     );
     *offset += 2;
     Ok(val)
 }
 
 fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, DecodeError> {
-    if buf.len() < *offset + 4 {
-        return Err(BufferTooShort {
-            reading: ReadingType::U32,
-            offset: *offset,
-            need: 4,
-            have: buf.len().saturating_sub(*offset),
-        }
-        .into());
-    }
     let val = u32::from_be_bytes(
-        buf[*offset..*offset + 4]
-            .try_into()
-            .expect("length checked"),
+        buf.get(*offset..*offset + 4)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(BufferTooShort {
+                reading: ReadingType::U32,
+                offset: *offset,
+                need: 4,
+                have: buf.len().saturating_sub(*offset),
+            })?,
     );
     *offset += 4;
     Ok(val)
 }
 
 fn read_u64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
-    if buf.len() < *offset + 8 {
-        return Err(BufferTooShort {
-            reading: ReadingType::U64,
-            offset: *offset,
-            need: 8,
-            have: buf.len().saturating_sub(*offset),
-        }
-        .into());
-    }
     let val = u64::from_be_bytes(
-        buf[*offset..*offset + 8]
-            .try_into()
-            .expect("length checked"),
+        buf.get(*offset..*offset + 8)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(BufferTooShort {
+                reading: ReadingType::U64,
+                offset: *offset,
+                need: 8,
+                have: buf.len().saturating_sub(*offset),
+            })?,
     );
     *offset += 8;
     Ok(val)
 }
 
 fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N], DecodeError> {
-    if buf.len() < *offset + N {
-        return Err(BufferTooShort {
+    let arr: [u8; N] = buf
+        .get(*offset..*offset + N)
+        .and_then(|s| s.try_into().ok())
+        .ok_or(BufferTooShort {
             reading: ReadingType::Array { size: N },
             offset: *offset,
             need: N,
             have: buf.len().saturating_sub(*offset),
-        }
-        .into());
-    }
-    let arr: [u8; N] = buf[*offset..*offset + N]
-        .try_into()
-        .expect("length checked");
+        })?;
     *offset += N;
     Ok(arr)
 }
@@ -1212,20 +1260,23 @@ mod tests {
     mod codec {
         use super::*;
 
+        type TestResult = Result<(), Box<dyn std::error::Error>>;
+
         #[test]
-        fn blobs_request_roundtrip() {
+        fn blobs_request_roundtrip() -> TestResult {
             let msg = Message::BlobsRequest {
                 id: SedimentreeId::new([1u8; 32]),
                 digests: vec![Digest::from_bytes([2u8; 32]), Digest::from_bytes([3u8; 32])],
             };
 
             let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded)?;
             assert_eq!(msg, decoded);
+            Ok(())
         }
 
         #[test]
-        fn blobs_response_roundtrip() {
+        fn blobs_response_roundtrip() -> TestResult {
             let msg = Message::BlobsResponse {
                 id: SedimentreeId::new([1u8; 32]),
                 blobs: vec![
@@ -1235,12 +1286,13 @@ mod tests {
             };
 
             let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded)?;
             assert_eq!(msg, decoded);
+            Ok(())
         }
 
         #[test]
-        fn batch_sync_request_roundtrip() {
+        fn batch_sync_request_roundtrip() -> TestResult {
             let mut commit_fps = BTreeSet::new();
             commit_fps.insert(Fingerprint::<CommitId>::from_u64(12345));
             commit_fps.insert(Fingerprint::<CommitId>::from_u64(67890));
@@ -1260,12 +1312,13 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded)?;
             assert_eq!(msg, decoded);
+            Ok(())
         }
 
         #[test]
-        fn batch_sync_response_not_found_roundtrip() {
+        fn batch_sync_response_not_found_roundtrip() -> TestResult {
             let msg = Message::BatchSyncResponse(BatchSyncResponse {
                 req_id: RequestId {
                     requestor: PeerId::new([1u8; 32]),
@@ -1276,12 +1329,13 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded)?;
             assert_eq!(msg, decoded);
+            Ok(())
         }
 
         #[test]
-        fn batch_sync_response_unauthorized_roundtrip() {
+        fn batch_sync_response_unauthorized_roundtrip() -> TestResult {
             let msg = Message::BatchSyncResponse(BatchSyncResponse {
                 req_id: RequestId {
                     requestor: PeerId::new([1u8; 32]),
@@ -1292,40 +1346,50 @@ mod tests {
             });
 
             let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded)?;
             assert_eq!(msg, decoded);
+            Ok(())
         }
 
         #[test]
-        fn remove_subscriptions_roundtrip() {
+        fn remove_subscriptions_roundtrip() -> TestResult {
             let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
                 ids: vec![SedimentreeId::new([1u8; 32]), SedimentreeId::new([2u8; 32])],
             });
 
             let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded)?;
             assert_eq!(msg, decoded);
+            Ok(())
         }
 
         #[test]
-        fn data_request_rejected_roundtrip() {
+        fn data_request_rejected_roundtrip() -> TestResult {
             let msg = Message::DataRequestRejected(DataRequestRejected {
                 id: SedimentreeId::new([42u8; 32]),
             });
 
             let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded).expect("decode failed");
+            let decoded = Message::try_decode(&encoded)?;
             assert_eq!(msg, decoded);
+            Ok(())
         }
 
         #[test]
-        fn invalid_schema_rejected() {
+        fn invalid_schema_rejected() -> TestResult {
             let mut bad_bytes = vec![0x00; 20];
-            bad_bytes[0..4].copy_from_slice(b"BAD\x00");
-            bad_bytes[4..8].copy_from_slice(&20u32.to_be_bytes());
+            bad_bytes
+                .get_mut(0..4)
+                .ok_or("buffer too short")?
+                .copy_from_slice(b"BAD\x00");
+            bad_bytes
+                .get_mut(4..8)
+                .ok_or("buffer too short")?
+                .copy_from_slice(&20u32.to_be_bytes());
 
             let result = Message::try_decode(&bad_bytes);
             assert!(matches!(result, Err(DecodeError::InvalidSchema(_))));
+            Ok(())
         }
 
         #[test]
@@ -1341,14 +1405,21 @@ mod tests {
         }
 
         #[test]
-        fn invalid_tag_rejected() {
+        fn invalid_tag_rejected() -> TestResult {
             let mut bad_bytes = vec![0x00; 20];
-            bad_bytes[0..4].copy_from_slice(&MESSAGE_SCHEMA);
-            bad_bytes[4..8].copy_from_slice(&20u32.to_be_bytes());
-            bad_bytes[8] = 0xFF;
+            bad_bytes
+                .get_mut(0..4)
+                .ok_or("buffer too short")?
+                .copy_from_slice(&MESSAGE_SCHEMA);
+            bad_bytes
+                .get_mut(4..8)
+                .ok_or("buffer too short")?
+                .copy_from_slice(&20u32.to_be_bytes());
+            *bad_bytes.get_mut(8).ok_or("buffer too short")? = 0xFF;
 
             let result = Message::try_decode(&bad_bytes);
             assert!(matches!(result, Err(DecodeError::InvalidEnumTag(_))));
+            Ok(())
         }
     }
 }

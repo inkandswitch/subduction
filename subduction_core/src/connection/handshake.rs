@@ -65,7 +65,7 @@ use future_form::FutureForm;
 use sedimentree_core::crypto::digest::Digest as RawDigest;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::crypto::digest::Digest;
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
@@ -652,16 +652,11 @@ impl HandshakeMessage {
     ///
     /// Returns an error if the message is malformed.
     pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.is_empty() {
-            return Err(DecodeError::MessageTooShort {
-                type_name: "HandshakeMessage",
-                need: 1,
-                have: 0,
-            });
-        }
-
-        let tag = bytes[0];
-        let payload = &bytes[1..];
+        let (&tag, payload) = bytes.split_first().ok_or(DecodeError::MessageTooShort {
+            type_name: "HandshakeMessage",
+            need: 1,
+            have: 0,
+        })?;
 
         match tag {
             handshake_tags::SIGNED_CHALLENGE => {
@@ -680,7 +675,13 @@ impl HandshakeMessage {
                         have: bytes.len(),
                     });
                 }
-                let reason = match payload[0] {
+                let (&reason_tag, rest) =
+                    payload.split_first().ok_or(DecodeError::MessageTooShort {
+                        type_name: "RejectionReason",
+                        need: 1,
+                        have: 0,
+                    })?;
+                let reason = match reason_tag {
                     rejection_tags::CLOCK_DRIFT => RejectionReason::ClockDrift,
                     rejection_tags::INVALID_AUDIENCE => RejectionReason::InvalidAudience,
                     rejection_tags::REPLAYED_NONCE => RejectionReason::ReplayedNonce,
@@ -693,7 +694,19 @@ impl HandshakeMessage {
                         .into());
                     }
                 };
-                let timestamp_bytes: [u8; 8] = payload[1..9].try_into().expect("length checked");
+                let timestamp_bytes: [u8; 8] = rest
+                    .get(..8)
+                    .ok_or(DecodeError::MessageTooShort {
+                        type_name: "Rejection timestamp",
+                        need: 8,
+                        have: rest.len(),
+                    })?
+                    .try_into()
+                    .map_err(|_| DecodeError::MessageTooShort {
+                        type_name: "Rejection timestamp",
+                        need: 8,
+                        have: rest.len(),
+                    })?;
                 let server_timestamp = TimestampSeconds::new(u64::from_be_bytes(timestamp_bytes));
                 Ok(HandshakeMessage::Rejection(Rejection {
                     reason,
@@ -1519,7 +1532,7 @@ mod tests {
         fn sample_challenge() -> Challenge {
             Challenge {
                 audience: Audience::Known(PeerId::new([0x42; 32])),
-                timestamp: TimestampSeconds::new(1234567890),
+                timestamp: TimestampSeconds::new(1_234_567_890),
                 nonce: Nonce::from_u128(0xDEAD_BEEF_CAFE_BABE_1234_5678_9ABC_DEF0),
             }
         }
@@ -1527,7 +1540,7 @@ mod tests {
         fn sample_response() -> Response {
             Response {
                 challenge_digest: Digest::from_bytes([0xAB; 32]),
-                server_timestamp: TimestampSeconds::new(1234567890),
+                server_timestamp: TimestampSeconds::new(1_234_567_890),
             }
         }
 
@@ -1543,8 +1556,10 @@ mod tests {
             assert_eq!(decoded, challenge);
         }
 
+        type TestResult = Result<(), Box<dyn std::error::Error>>;
+
         #[test]
-        fn challenge_known_audience_tag() {
+        fn challenge_known_audience_tag() -> TestResult {
             let challenge = Challenge {
                 audience: Audience::Known(PeerId::new([0x00; 32])),
                 timestamp: TimestampSeconds::new(0),
@@ -1554,11 +1569,12 @@ mod tests {
             let mut buf = Vec::new();
             challenge.encode_fields(&mut buf);
 
-            assert_eq!(buf[0], 0x00); // Known tag
+            assert_eq!(*buf.first().ok_or("empty buffer")?, 0x00); // Known tag
+            Ok(())
         }
 
         #[test]
-        fn challenge_discover_audience_tag() {
+        fn challenge_discover_audience_tag() -> TestResult {
             let challenge = Challenge {
                 audience: Audience::Discover(DiscoveryId::from_raw([0xFF; 32])),
                 timestamp: TimestampSeconds::new(0),
@@ -1568,13 +1584,14 @@ mod tests {
             let mut buf = Vec::new();
             challenge.encode_fields(&mut buf);
 
-            assert_eq!(buf[0], 0x01); // Discover tag
+            assert_eq!(*buf.first().ok_or("empty buffer")?, 0x01); // Discover tag
+            Ok(())
         }
 
         #[test]
-        fn challenge_invalid_audience_tag_rejected() {
+        fn challenge_invalid_audience_tag_rejected() -> TestResult {
             let mut buf = vec![0u8; CHALLENGE_FIELDS_SIZE];
-            buf[0] = 0x02; // Invalid tag
+            *buf.first_mut().ok_or("empty buffer")? = 0x02; // Invalid tag
 
             let result = Challenge::try_decode_fields(&buf);
             assert!(matches!(
@@ -1584,6 +1601,7 @@ mod tests {
                     type_name: "Audience"
                 }))
             ));
+            Ok(())
         }
 
         #[test]
@@ -1594,10 +1612,10 @@ mod tests {
         }
 
         #[test]
-        fn challenge_timestamp_big_endian() {
+        fn challenge_timestamp_big_endian() -> TestResult {
             let challenge = Challenge {
                 audience: Audience::Known(PeerId::new([0x00; 32])),
-                timestamp: TimestampSeconds::new(0x0102030405060708),
+                timestamp: TimestampSeconds::new(0x0102_0304_0506_0708),
                 nonce: Nonce::from_u128(0),
             };
 
@@ -1605,11 +1623,12 @@ mod tests {
             challenge.encode_fields(&mut buf);
 
             // Timestamp is at offset 33 (1 + 32)
-            let timestamp_bytes = &buf[33..41];
+            let timestamp_bytes = buf.get(33..41).ok_or("buffer too short")?;
             assert_eq!(
                 timestamp_bytes,
                 &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
             );
+            Ok(())
         }
 
         #[test]
@@ -1638,7 +1657,7 @@ mod tests {
         }
 
         #[test]
-        fn response_challenge_digest_preserved() {
+        fn response_challenge_digest_preserved() -> TestResult {
             let digest_bytes = [0x42; 32];
             let response = Response {
                 challenge_digest: Digest::from_bytes(digest_bytes),
@@ -1649,25 +1668,27 @@ mod tests {
             response.encode_fields(&mut buf);
 
             // Digest is at offset 0
-            assert_eq!(&buf[0..32], &digest_bytes);
+            assert_eq!(buf.get(0..32).ok_or("buffer too short")?, &digest_bytes);
+            Ok(())
         }
 
         #[test]
-        fn response_timestamp_big_endian() {
+        fn response_timestamp_big_endian() -> TestResult {
             let response = Response {
                 challenge_digest: Digest::from_bytes([0x00; 32]),
-                server_timestamp: TimestampSeconds::new(0x0102030405060708),
+                server_timestamp: TimestampSeconds::new(0x0102_0304_0506_0708),
             };
 
             let mut buf = Vec::new();
             response.encode_fields(&mut buf);
 
             // Timestamp is at offset 32
-            let timestamp_bytes = &buf[32..40];
+            let timestamp_bytes = buf.get(32..40).ok_or("buffer too short")?;
             assert_eq!(
                 timestamp_bytes,
                 &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
             );
+            Ok(())
         }
 
         #[test]

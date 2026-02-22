@@ -189,40 +189,35 @@ Signed payloads (`LooseCommit`, `Fragment`, `Challenge`, `Response`) use a custo
 ### Codec Traits
 
 ```rust
-/// Type identity and binding context.
+/// Type identity for schema validation.
 trait Schema {
-    /// Value the signature is cryptographically bound to.
-    type Binding;
-    
     /// 4-byte header: [prefix0, prefix1, type_byte, version].
     const SCHEMA: [u8; 4];
 }
 
 /// Encode to canonical bytes.
 trait Encode: Schema {
-    fn encode_fields(&self, binding: &Self::Binding, buf: &mut Vec<u8>);
-    fn fields_size(&self, binding: &Self::Binding) -> usize;
+    fn encode_fields(&self, buf: &mut Vec<u8>);
+    fn fields_size(&self) -> usize;
 }
 
 /// Decode from canonical bytes.
 trait Decode: Schema + Sized {
     const MIN_SIZE: usize;
-    fn try_decode_fields(buf: &[u8], binding: &Self::Binding) -> Result<Self, DecodeError>;
+    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError>;
 }
 ```
 
-### Signature Binding
+### Replay Prevention
 
-The `Binding` associated type prevents replay attacks. For example:
+To prevent replay attacks, `LooseCommit` and `Fragment` embed their `SedimentreeId` directly as a field. This ID is included in the signed bytes, so a commit or fragment signed for one document cannot be replayed under a different document — the signature verification would fail.
 
-| Type | Binding | Purpose |
-|------|---------|---------|
-| `LooseCommit` | `SedimentreeId` | Commit can't be replayed under a different document |
-| `Fragment` | `SedimentreeId` | Fragment can't be replayed under a different document |
-| `Challenge` | `()` | Self-contained, no external binding needed |
-| `Response` | `()` | Self-contained, no external binding needed |
-
-The binding value is included in the signed bytes via `encode_fields`, so tampering with the binding invalidates the signature.
+| Type | Replay Prevention |
+|------|-------------------|
+| `LooseCommit` | Contains `sedimentree_id` field |
+| `Fragment` | Contains `sedimentree_id` field |
+| `Challenge` | Self-contained (includes audience and nonce) |
+| `Response` | Self-contained (includes challenge digest) |
 
 ### Primitive Encoding
 
@@ -270,7 +265,6 @@ Decoding returns structured errors with context:
 | `UnsortedArray` | Array elements not in ascending order |
 | `InvalidEnumTag` | Unknown discriminant value |
 | `SizeMismatch` | Declared size doesn't match actual data |
-| `ContextMismatch` | Binding value doesn't match signed payload |
 | `BlobTooLarge` | Blob exceeds maximum allowed size |
 | `ArrayTooLarge` | Too many elements in array |
 | `DuplicateElement` | Array contains duplicates |
