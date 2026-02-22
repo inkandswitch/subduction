@@ -164,7 +164,9 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
         }
 
         Ok(Some(
-            deps.into_iter().map(|h| Digest::force_from_bytes(h.0)).collect(),
+            deps.into_iter()
+                .map(|h| Digest::force_from_bytes(h.0))
+                .collect(),
         ))
     }
 }

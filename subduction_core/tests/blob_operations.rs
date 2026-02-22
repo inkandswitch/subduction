@@ -16,13 +16,13 @@ use subduction_core::{
     connection::{
         message::Message,
         nonce_cache::NonceCache,
-        test_utils::{new_test_subduction, test_signer, ChannelMockConnection, TokioSpawn},
+        test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use testresult::TestResult;
 

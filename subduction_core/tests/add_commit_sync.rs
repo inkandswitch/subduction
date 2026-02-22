@@ -1,4 +1,4 @@
-//! Diagnostic tests for add_commit followed by sync.
+//! Diagnostic tests for `add_commit` followed by sync.
 //!
 //! These tests investigate the issue where commits added via `add_commit`
 //! may not be properly synced to peers.
@@ -253,7 +253,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
     // Verify we have 5 commits
     let commits = subduction.get_commits(sed_id).await;
     assert_eq!(
-        commits.as_ref().map(|c| c.len()),
+        commits.as_ref().map(Vec::len),
         Some(5),
         "Should have 5 commits locally"
     );
@@ -299,7 +299,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
     Ok(())
 }
 
-/// Test: Full sync flow - add commits then call full_sync.
+/// Test: Full sync flow - add commits then call `full_sync`.
 #[tokio::test]
 async fn full_sync_sends_all_commits() -> TestResult {
     use subduction_core::connection::message::Message;

@@ -377,7 +377,7 @@ impl<
     /// This is only available with the `test_utils` feature or in tests.
     #[cfg(any(feature = "test_utils", test))]
     #[must_use]
-    pub fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, N>> {
+    pub const fn sedimentrees(&self) -> &Arc<ShardedMap<SedimentreeId, Sedimentree, N>> {
         &self.sedimentrees
     }
 
@@ -1238,10 +1238,8 @@ impl<
             .map_err(WriteError::PutDisallowed)?;
 
         // Index blobs by digest for matching with commits/fragments
-        let blobs_by_digest: Map<Digest<Blob>, Blob> = blobs
-            .into_iter()
-            .map(|b| (Digest::hash(&b), b))
-            .collect();
+        let blobs_by_digest: Map<Digest<Blob>, Blob> =
+            blobs.into_iter().map(|b| (Digest::hash(&b), b)).collect();
 
         // Sign commits and pair with their blobs
         let mut verified_commits = Vec::with_capacity(sedimentree.loose_commits().count());

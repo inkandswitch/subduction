@@ -766,7 +766,10 @@ fn decode_blobs_request(payload: &[u8]) -> Result<Message, DecodeError> {
 
     let mut digests = Vec::with_capacity(count);
     for _ in 0..count {
-        digests.push(Digest::force_from_bytes(read_array::<32>(payload, &mut offset)?));
+        digests.push(Digest::force_from_bytes(read_array::<32>(
+            payload,
+            &mut offset,
+        )?));
     }
 
     Ok(Message::BlobsRequest { id, digests })
@@ -1267,7 +1270,10 @@ mod tests {
         fn blobs_request_roundtrip() -> TestResult {
             let msg = Message::BlobsRequest {
                 id: SedimentreeId::new([1u8; 32]),
-                digests: vec![Digest::force_from_bytes([2u8; 32]), Digest::force_from_bytes([3u8; 32])],
+                digests: vec![
+                    Digest::force_from_bytes([2u8; 32]),
+                    Digest::force_from_bytes([3u8; 32]),
+                ],
             };
 
             let encoded = msg.encode();

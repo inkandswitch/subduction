@@ -18,7 +18,7 @@ use criterion::{criterion_group, criterion_main};
 mod generators {
     use std::collections::BTreeSet;
 
-    use rand::{rngs::SmallRng, Rng, SeedableRng};
+    use rand::{Rng, SeedableRng, rngs::SmallRng};
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
         crypto::digest::Digest,
@@ -241,9 +241,7 @@ mod digest {
     use std::hint::black_box;
 
     use criterion::{BenchmarkId, Criterion, Throughput};
-    use sedimentree_core::{
-        commit::CountLeadingZeroBytes, crypto::digest::Digest, depth::DepthMetric,
-    };
+    use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric};
 
     use super::generators::{digest_from_seed, digest_with_leading_zeros};
 

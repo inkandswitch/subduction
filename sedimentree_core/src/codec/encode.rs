@@ -41,7 +41,7 @@ pub trait EncodeFields: Schema {
     }
 }
 
-/// Blanket impl: anything with Schema + EncodeFields gets Encode for free.
+/// Blanket impl: anything with [`Schema`] + [`EncodeFields`] gets [`Encode`] for free.
 impl<T: Schema + EncodeFields> Encode for T {
     fn encode(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(4 + self.fields_size());
