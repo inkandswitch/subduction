@@ -1,13 +1,21 @@
 //! WebSocket client for Subduction.
 
 use eyre::Result;
+use future_form::Sendable;
 use sedimentree_fs_storage::FsStorage;
 use std::{path::PathBuf, time::Duration};
-use subduction_core::{connection::handshake::Audience, peer::id::PeerId};
+use subduction_core::{
+    connection::{authenticated::Authenticated, handshake::Audience},
+    peer::id::PeerId,
+};
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
+
+/// Type alias for authenticated WebSocket client connection.
+type AuthenticatedClient =
+    Authenticated<TokioWebSocketClient<MemorySigner, FuturesTimerTimeout>, Sendable>;
 
 /// Arguments for the client command.
 #[derive(Debug, clap::Parser)]
@@ -57,7 +65,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     let server_peer_id = crate::parse_peer_id(&args.server_peer_id)?;
 
     tracing::info!("Connecting to WebSocket server at {}", uri);
-    let (_client, listener, sender): (TokioWebSocketClient<MemorySigner, _>, _, _) =
+    let (_authenticated_client, listener, sender): (AuthenticatedClient, _, _) =
         TokioWebSocketClient::new(
             uri,
             FuturesTimerTimeout,

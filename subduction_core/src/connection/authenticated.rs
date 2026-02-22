@@ -108,6 +108,27 @@ impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
         }
     }
 
+    /// Transform the inner connection while preserving the authentication proof.
+    ///
+    /// This is useful when wrapping an authenticated connection in a higher-level
+    /// type (e.g., `WebSocket` → `TokioWebSocketClient`) while preserving the
+    /// proof that the underlying connection completed handshake verification.
+    ///
+    /// # Type Safety
+    ///
+    /// The new connection type `D` must wrap or delegate to the original
+    /// authenticated connection `C`. The caller is responsible for ensuring
+    /// this invariant holds. Typical use is when `D` is a newtype or wrapper
+    /// around `C` that adds functionality (reconnection, logging, etc.)
+    /// without changing the underlying authenticated channel.
+    #[must_use]
+    pub fn map<D: Connection<K>>(self, f: impl FnOnce(C) -> D) -> Authenticated<D, K> {
+        Authenticated {
+            inner: f(self.inner),
+            _marker: PhantomData,
+        }
+    }
+
     /// The verified peer identity.
     pub fn peer_id(&self) -> PeerId {
         self.inner.peer_id()
