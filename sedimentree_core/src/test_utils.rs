@@ -16,7 +16,7 @@ use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 use crate::{
     blob::BlobMeta, collections::Map, crypto::digest::Digest, fragment::Fragment,
-    loose_commit::LooseCommit, sedimentree::Sedimentree,
+    id::SedimentreeId, loose_commit::LooseCommit, sedimentree::Sedimentree,
 };
 
 /// Create a digest with a specific number of leading zero bytes.
@@ -95,9 +95,10 @@ pub fn make_fragment_at_depth(
     boundary: BTreeSet<Digest<LooseCommit>>,
     checkpoints: &[Digest<LooseCommit>],
 ) -> Fragment {
+    let sedimentree_id = SedimentreeId::new([seed; 32]);
     let head = digest_with_depth(depth, seed);
     let blob_meta = BlobMeta::new(&[seed]);
-    Fragment::new(head, boundary, checkpoints, blob_meta)
+    Fragment::new(sedimentree_id, head, boundary, checkpoints, blob_meta)
 }
 
 /// Create a simple fragment with a single boundary commit.
@@ -113,6 +114,7 @@ pub fn make_simple_fragment(head_depth: u8, head_seed: u8, boundary_seed: u8) ->
 /// with named nodes and explicit parent relationships.
 #[derive(Debug, Clone)]
 pub struct TestGraph {
+    sedimentree_id: SedimentreeId,
     nodes: Map<String, Digest<LooseCommit>>,
     parents: Map<Digest<LooseCommit>, Vec<Digest<LooseCommit>>>,
     blob_metas: Map<Digest<LooseCommit>, BlobMeta>,
@@ -167,7 +169,12 @@ impl TestGraph {
             parents.entry(*child_hash).or_default().push(*parent_hash);
         }
 
+        let mut bytes = [0u8; 32];
+        rng.fill_bytes(&mut bytes);
+        let sedimentree_id = SedimentreeId::new(bytes);
+
         Self {
+            sedimentree_id,
             nodes,
             parents,
             blob_metas,
@@ -207,7 +214,7 @@ impl TestGraph {
                     .get(hash)
                     .copied()
                     .unwrap_or_else(|| BlobMeta::new(&[]));
-                LooseCommit::new(*hash, parents, blob_meta)
+                LooseCommit::new(self.sedimentree_id, *hash, parents, blob_meta)
             })
             .collect()
     }
@@ -268,7 +275,7 @@ impl TestGraph {
             .get(&head)
             .copied()
             .unwrap_or_else(|| BlobMeta::new(&[]));
-        Fragment::new(head, boundary, &checkpoints, blob_meta)
+        Fragment::new(self.sedimentree_id, head, boundary, &checkpoints, blob_meta)
     }
 }
 

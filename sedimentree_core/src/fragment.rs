@@ -11,13 +11,10 @@ use id::FragmentId;
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
     codec::{
-        decode,
-        decode::Decode,
-        encode,
-        encode::Encode,
-        error::{BufferTooShort, ContextMismatch, DecodeError, ReadingType},
-        schema,
-        schema::Schema,
+        decode::{self, Decode},
+        encode::{self, Encode},
+        error::{BufferTooShort, DecodeError, ReadingType},
+        schema::{self, Schema},
     },
     crypto::{
         digest::Digest,
@@ -37,9 +34,9 @@ use crate::{
 /// metadata about the the content to aid in deduplication and synchronization.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Fragment {
+    sedimentree_id: SedimentreeId,
     summary: FragmentSummary,
     checkpoints: BTreeSet<Checkpoint>,
     digest: Digest<Fragment>,
@@ -52,6 +49,7 @@ impl Fragment {
     /// range. They are truncated to 12 bytes internally for compact storage.
     #[must_use]
     pub fn new(
+        sedimentree_id: SedimentreeId,
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
         checkpoints: &[Digest<LooseCommit>],
@@ -60,7 +58,13 @@ impl Fragment {
         let truncated_checkpoints: BTreeSet<Checkpoint> =
             checkpoints.iter().map(|d| Checkpoint::new(*d)).collect();
 
-        Self::from_parts(head, boundary, truncated_checkpoints, blob_meta)
+        Self::from_parts(
+            sedimentree_id,
+            head,
+            boundary,
+            truncated_checkpoints,
+            blob_meta,
+        )
     }
 
     /// Constructor from pre-truncated checkpoints.
@@ -68,6 +72,7 @@ impl Fragment {
     /// Used by codec decoding where checkpoints are already in truncated form.
     #[must_use]
     pub fn from_parts(
+        sedimentree_id: SedimentreeId,
         head: Digest<LooseCommit>,
         boundary: BTreeSet<Digest<LooseCommit>>,
         checkpoints: BTreeSet<Checkpoint>,
@@ -75,6 +80,7 @@ impl Fragment {
     ) -> Self {
         let digest = {
             let mut hasher = blake3::Hasher::new();
+            hasher.update(sedimentree_id.as_bytes());
             hasher.update(head.as_bytes());
 
             for end in &boundary {
@@ -90,6 +96,7 @@ impl Fragment {
         };
 
         Self {
+            sedimentree_id,
             summary: FragmentSummary {
                 head,
                 boundary,
@@ -185,10 +192,17 @@ impl Fragment {
     pub const fn fragment_id(&self) -> FragmentId {
         FragmentId::new(self.summary.head)
     }
+
+    /// The [`SedimentreeId`] this fragment belongs to.
+    #[must_use]
+    pub const fn sedimentree_id(&self) -> SedimentreeId {
+        self.sedimentree_id
+    }
 }
 
 impl HasBlobMeta for Fragment {
     type Args = (
+        SedimentreeId,
         Digest<LooseCommit>,
         BTreeSet<Digest<LooseCommit>>,
         Vec<Digest<LooseCommit>>,
@@ -198,14 +212,18 @@ impl HasBlobMeta for Fragment {
         self.summary().blob_meta()
     }
 
-    fn from_args((head, boundary, checkpoints): Self::Args, blob_meta: BlobMeta) -> Self {
-        Self::new(head, boundary, &checkpoints, blob_meta)
+    fn from_args(
+        (sedimentree_id, head, boundary, checkpoints): Self::Args,
+        blob_meta: BlobMeta,
+    ) -> Self {
+        Self::new(sedimentree_id, head, boundary, &checkpoints, blob_meta)
     }
 }
 
 /// The minimal data for a [`Fragment`].
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FragmentSummary {
     head: Digest<LooseCommit>,
@@ -327,15 +345,14 @@ const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
 const CHECKPOINT_BYTES: usize = 12;
 
 impl Schema for Fragment {
-    type Binding = SedimentreeId;
     const PREFIX: [u8; 2] = schema::SEDIMENTREE_PREFIX;
     const TYPE_BYTE: u8 = b'F';
     const VERSION: u8 = 0;
 }
 
 impl Encode for Fragment {
-    fn encode_fields(&self, binding: &Self::Binding, buf: &mut Vec<u8>) {
-        encode::array(binding.as_bytes(), buf);
+    fn encode_fields(&self, buf: &mut Vec<u8>) {
+        encode::array(self.sedimentree_id.as_bytes(), buf);
         encode::array(self.head().as_bytes(), buf);
         encode::array(self.summary().blob_meta().digest().as_bytes(), buf);
 
@@ -357,7 +374,7 @@ impl Encode for Fragment {
         }
     }
 
-    fn fields_size(&self, _binding: &Self::Binding) -> usize {
+    fn fields_size(&self) -> usize {
         CODEC_FIXED_FIELDS_SIZE
             + (self.boundary().len() * 32)
             + (self.checkpoints().len() * CHECKPOINT_BYTES)
@@ -367,7 +384,7 @@ impl Encode for Fragment {
 impl Decode for Fragment {
     const MIN_SIZE: usize = CODEC_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], binding: &Self::Binding) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < CODEC_FIXED_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Fragment",
@@ -379,14 +396,8 @@ impl Decode for Fragment {
         let mut offset = 0;
 
         let sedimentree_id_bytes: [u8; 32] = decode::array(buf, offset)?;
+        let sedimentree_id = SedimentreeId::new(sedimentree_id_bytes);
         offset += 32;
-
-        if sedimentree_id_bytes != *binding.as_bytes() {
-            return Err(ContextMismatch {
-                field: "SedimentreeId",
-            }
-            .into());
-        }
 
         let head_bytes: [u8; 32] = decode::array(buf, offset)?;
         let head = Digest::<LooseCommit>::from_bytes(head_bytes);
@@ -452,21 +463,27 @@ impl Decode for Fragment {
 
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        Ok(Fragment::from_parts(head, boundary, checkpoints, blob_meta))
+        Ok(Fragment::from_parts(
+            sedimentree_id,
+            head,
+            boundary,
+            checkpoints,
+            blob_meta,
+        ))
     }
 }
 
 // ============================================================================
-// Local Storage Encoding (context-free)
+// Local Storage Encoding
 // ============================================================================
 
-/// Fixed size for local storage: Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(4).
-const LOCAL_FIXED_SIZE: usize = 32 + 32 + 1 + 2 + 4;
+/// Fixed size for local storage: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(4).
+const LOCAL_FIXED_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 4;
 
 impl Fragment {
-    /// Encode to bytes for local storage (without signature context).
+    /// Encode to bytes for local storage.
     ///
-    /// Format: `Head(32) ++ BlobDigest(32) ++ BoundaryCount(1) ++ CheckpointCount(2) ++ BlobSize(4) ++ Boundaries(32 each) ++ Checkpoints(12 each)`
+    /// Format: `SedimentreeId(32) ++ Head(32) ++ BlobDigest(32) ++ BoundaryCount(1) ++ CheckpointCount(2) ++ BlobSize(4) ++ Boundaries(32 each) ++ Checkpoints(12 each)`
     #[must_use]
     pub fn to_bytes(&self) -> Vec<u8> {
         let size = LOCAL_FIXED_SIZE
@@ -474,6 +491,7 @@ impl Fragment {
             + self.checkpoints().len() * CHECKPOINT_BYTES;
         let mut buf = Vec::with_capacity(size);
 
+        encode::array(self.sedimentree_id.as_bytes(), &mut buf);
         encode::array(self.head().as_bytes(), &mut buf);
         encode::array(self.summary().blob_meta().digest().as_bytes(), &mut buf);
 
@@ -513,6 +531,10 @@ impl Fragment {
 
         let mut offset = 0;
 
+        let sedimentree_id_bytes: [u8; 32] = decode::array(buf, offset)?;
+        let sedimentree_id = SedimentreeId::new(sedimentree_id_bytes);
+        offset += 32;
+
         let head_bytes: [u8; 32] = decode::array(buf, offset)?;
         let head = Digest::<LooseCommit>::from_bytes(head_bytes);
         offset += 32;
@@ -577,7 +599,13 @@ impl Fragment {
 
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        Ok(Fragment::from_parts(head, boundary, checkpoints, blob_meta))
+        Ok(Fragment::from_parts(
+            sedimentree_id,
+            head,
+            boundary,
+            checkpoints,
+            blob_meta,
+        ))
     }
 }
 
@@ -600,8 +628,9 @@ mod codec_tests {
 
     #[test]
     fn codec_round_trip_empty() {
-        let ctx = make_sedimentree_id(0x01);
+        let sedimentree_id = make_sedimentree_id(0x01);
         let fragment = Fragment::from_parts(
+            sedimentree_id,
             make_digest(0x10),
             BTreeSet::new(),
             BTreeSet::new(),
@@ -609,10 +638,11 @@ mod codec_tests {
         );
 
         let mut buf = Vec::new();
-        fragment.encode_fields(&ctx, &mut buf);
+        fragment.encode_fields(&mut buf);
         assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
 
-        let decoded = Fragment::try_decode_fields(&buf, &ctx).expect("decode should succeed");
+        let decoded = Fragment::try_decode_fields(&buf).expect("decode should succeed");
+        assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
         assert_eq!(decoded.head(), fragment.head());
         assert_eq!(decoded.boundary(), fragment.boundary());
         assert_eq!(decoded.checkpoints(), fragment.checkpoints());
@@ -620,11 +650,12 @@ mod codec_tests {
 
     #[test]
     fn codec_round_trip_with_data() {
-        let ctx = make_sedimentree_id(0x01);
+        let sedimentree_id = make_sedimentree_id(0x01);
         let boundary = BTreeSet::from([make_digest(0x30), make_digest(0x40)]);
         let checkpoints = BTreeSet::from([make_checkpoint(0x50), make_checkpoint(0x60)]);
 
         let fragment = Fragment::from_parts(
+            sedimentree_id,
             make_digest(0x10),
             boundary,
             checkpoints,
@@ -632,38 +663,21 @@ mod codec_tests {
         );
 
         let mut buf = Vec::new();
-        fragment.encode_fields(&ctx, &mut buf);
+        fragment.encode_fields(&mut buf);
 
-        let decoded = Fragment::try_decode_fields(&buf, &ctx).expect("decode should succeed");
+        let decoded = Fragment::try_decode_fields(&buf).expect("decode should succeed");
+        assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
         assert_eq!(decoded.head(), fragment.head());
         assert_eq!(decoded.boundary(), fragment.boundary());
         assert_eq!(decoded.checkpoints(), fragment.checkpoints());
     }
 
     #[test]
-    fn codec_context_mismatch_rejected() {
-        let ctx = make_sedimentree_id(0x01);
-        let wrong_ctx = make_sedimentree_id(0x02);
-        let fragment = Fragment::from_parts(
-            make_digest(0x10),
-            BTreeSet::new(),
-            BTreeSet::new(),
-            BlobMeta::from_digest_size(make_digest(0x20), 1024),
-        );
-
-        let mut buf = Vec::new();
-        fragment.encode_fields(&ctx, &mut buf);
-
-        let result = Fragment::try_decode_fields(&buf, &wrong_ctx);
-        assert!(matches!(result, Err(DecodeError::ContextMismatch(_))));
-    }
-
-    #[test]
     fn codec_unsorted_boundary_rejected() {
-        let ctx = make_sedimentree_id(0x01);
+        let sedimentree_id = make_sedimentree_id(0x01);
 
         let mut buf = Vec::new();
-        encode::array(ctx.as_bytes(), &mut buf);
+        encode::array(sedimentree_id.as_bytes(), &mut buf);
         encode::array(&[0x10; 32], &mut buf);
         encode::array(&[0x20; 32], &mut buf);
         encode::u8(2, &mut buf);
@@ -672,16 +686,15 @@ mod codec_tests {
         encode::array(&[0x50; 32], &mut buf);
         encode::array(&[0x30; 32], &mut buf);
 
-        let result = Fragment::try_decode_fields(&buf, &ctx);
+        let result = Fragment::try_decode_fields(&buf);
         assert!(matches!(result, Err(DecodeError::UnsortedArray(_))));
     }
 
     #[test]
     fn codec_buffer_too_short_rejected() {
-        let ctx = make_sedimentree_id(0x01);
         let buf = vec![0u8; 50];
 
-        let result = Fragment::try_decode_fields(&buf, &ctx);
+        let result = Fragment::try_decode_fields(&buf);
         assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
     }
 
@@ -705,6 +718,7 @@ mod tests {
         commit::CountLeadingZeroBytes,
         crypto::digest::Digest,
         fragment::{Fragment, FragmentSummary},
+        id::SedimentreeId,
         loose_commit::LooseCommit,
         test_utils::digest_with_depth,
     };
@@ -714,8 +728,9 @@ mod tests {
         boundary: BTreeSet<Digest<LooseCommit>>,
         checkpoints: &[Digest<LooseCommit>],
     ) -> Fragment {
+        let sedimentree_id = SedimentreeId::new([0x42; 32]);
         let blob_meta = BlobMeta::new(&[1]);
-        Fragment::new(head, boundary, checkpoints, blob_meta)
+        Fragment::new(sedimentree_id, head, boundary, checkpoints, blob_meta)
     }
 
     // ============================================================

@@ -65,7 +65,7 @@ impl<T> Digest<T> {
     }
 }
 
-impl<T: Encode + Decode<Binding = ()>> Digest<T> {
+impl<T: Encode + Decode> Digest<T> {
     /// Encode and hash a value to create a digest.
     ///
     /// The value is encoded using its [`Encode`] implementation
@@ -74,7 +74,7 @@ impl<T: Encode + Decode<Binding = ()>> Digest<T> {
     pub fn hash(value: &T) -> Self {
         let mut buf = Vec::with_capacity(T::MIN_SIZE);
         buf.extend_from_slice(&T::SCHEMA);
-        value.encode_fields(&(), &mut buf);
+        value.encode_fields(&mut buf);
         Self::hash_bytes(&buf)
     }
 }

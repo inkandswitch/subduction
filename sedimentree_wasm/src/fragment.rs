@@ -9,6 +9,7 @@ use wasm_refgen::wasm_refgen;
 use crate::{
     digest::{JsDigest, WasmDigest},
     loose_commit::WasmBlobMeta,
+    sedimentree_id::WasmSedimentreeId,
 };
 
 /// A data fragment used in the Sedimentree system.
@@ -19,11 +20,12 @@ pub struct WasmFragment(Fragment);
 #[wasm_refgen(js_ref = JsFragment)]
 #[wasm_bindgen(js_class = Fragment)]
 impl WasmFragment {
-    /// Create a new fragment from the given head, boundary, checkpoints, and blob metadata.
+    /// Create a new fragment from the given sedimentree ID, head, boundary, checkpoints, and blob metadata.
     #[wasm_bindgen(constructor)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
     pub fn new(
+        sedimentree_id: WasmSedimentreeId,
         head: WasmDigest,
         boundary: Vec<JsDigest>,
         checkpoints: Vec<JsDigest>,
@@ -34,6 +36,7 @@ impl WasmFragment {
             .map(|d| WasmDigest::from(d).into())
             .collect();
         Fragment::new(
+            sedimentree_id.into(),
             head.into(),
             boundary
                 .iter()

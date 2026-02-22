@@ -36,8 +36,8 @@ fn make_commit_parts() -> (Digest<LooseCommit>, BTreeSet<Digest<LooseCommit>>, B
 async fn make_signed_test_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blob) {
     let (digest, parents, blob) = make_commit_parts();
     let blob_meta = BlobMeta::new(blob.as_slice());
-    let commit = LooseCommit::new(digest, parents, blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit, id).await;
+    let commit = LooseCommit::new(*id, digest, parents, blob_meta);
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
 
@@ -59,8 +59,8 @@ fn make_fragment_parts() -> (
 async fn make_signed_test_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob) {
     let (head, boundary, checkpoints, blob) = make_fragment_parts();
     let blob_meta = BlobMeta::new(blob.as_slice());
-    let fragment = Fragment::new(head, boundary, &checkpoints, blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment, id).await;
+    let fragment = Fragment::new(*id, head, boundary, &checkpoints, blob_meta);
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob)
 }
 

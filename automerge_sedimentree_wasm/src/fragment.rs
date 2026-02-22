@@ -4,7 +4,10 @@ use alloc::vec::Vec;
 use sedimentree_core::collections::{Map, Set};
 
 use sedimentree_core::{commit::FragmentState, crypto::digest::Digest, loose_commit::LooseCommit};
-use sedimentree_wasm::{digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmBlobMeta};
+use sedimentree_wasm::{
+    digest::WasmDigest, fragment::WasmFragment, loose_commit::WasmBlobMeta,
+    sedimentree_id::WasmSedimentreeId,
+};
 use wasm_bindgen::prelude::*;
 
 /// The state of a fragment while being built.
@@ -69,8 +72,15 @@ impl WasmFragmentState {
     /// Convert the fragment state into a fragment.
     #[must_use]
     #[wasm_bindgen(js_name = intoFragment)]
-    pub fn into_fragment(&self, blob_meta: &WasmBlobMeta) -> WasmFragment {
-        self.0.clone().to_fragment(blob_meta.clone().into()).into()
+    pub fn into_fragment(
+        &self,
+        sedimentree_id: WasmSedimentreeId,
+        blob_meta: &WasmBlobMeta,
+    ) -> WasmFragment {
+        self.0
+            .clone()
+            .to_fragment(sedimentree_id.into(), blob_meta.clone().into())
+            .into()
     }
 }
 

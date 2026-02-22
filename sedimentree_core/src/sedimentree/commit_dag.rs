@@ -510,21 +510,37 @@ mod tests {
     use crate::{
         collections::Set,
         commit::CountLeadingZeroBytes,
+        id::SedimentreeId,
         loose_commit::LooseCommit,
         test_utils::{digest_with_depth, random_blob_meta},
     };
+
+    fn make_sedimentree_id(seed: u8) -> SedimentreeId {
+        SedimentreeId::new([seed; 32])
+    }
 
     /// No fragments: all commits with depth >= threshold remain as block boundaries.
     #[test]
     fn simplify_block_boundaries_without_fragments() {
         let mut rng = SmallRng::seed_from_u64(42);
+        let sedimentree_id = make_sedimentree_id(1);
 
         // Depths: a=2, b=0
         let a_hash = digest_with_depth(2, 0x01);
         let b_hash = digest_with_depth(0, 0x02);
 
-        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
-        let a = LooseCommit::new(a_hash, BTreeSet::from([b_hash]), random_blob_meta(&mut rng));
+        let b = LooseCommit::new(
+            sedimentree_id,
+            b_hash,
+            BTreeSet::new(),
+            random_blob_meta(&mut rng),
+        );
+        let a = LooseCommit::new(
+            sedimentree_id,
+            a_hash,
+            BTreeSet::from([b_hash]),
+            random_blob_meta(&mut rng),
+        );
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
@@ -542,13 +558,24 @@ mod tests {
     #[test]
     fn simplify_consecutive_block_boundary_commits_without_fragments() {
         let mut rng = SmallRng::seed_from_u64(43);
+        let sedimentree_id = make_sedimentree_id(1);
 
         // Depths: a=2, b=2
         let a_hash = digest_with_depth(2, 0x01);
         let b_hash = digest_with_depth(2, 0x02);
 
-        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
-        let a = LooseCommit::new(a_hash, BTreeSet::from([b_hash]), random_blob_meta(&mut rng));
+        let b = LooseCommit::new(
+            sedimentree_id,
+            b_hash,
+            BTreeSet::new(),
+            random_blob_meta(&mut rng),
+        );
+        let a = LooseCommit::new(
+            sedimentree_id,
+            a_hash,
+            BTreeSet::from([b_hash]),
+            random_blob_meta(&mut rng),
+        );
 
         let dag = CommitDag::from_commits([&a, &b].into_iter());
 
@@ -564,20 +591,37 @@ mod tests {
     #[test]
     fn test_parents() {
         let mut rng = SmallRng::seed_from_u64(44);
+        let sedimentree_id = make_sedimentree_id(1);
 
         let a_hash = digest_with_depth(0, 0x01);
         let b_hash = digest_with_depth(0, 0x02);
         let c_hash = digest_with_depth(0, 0x03);
         let d_hash = digest_with_depth(0, 0x04);
 
-        let a = LooseCommit::new(a_hash, BTreeSet::new(), random_blob_meta(&mut rng));
-        let b = LooseCommit::new(b_hash, BTreeSet::new(), random_blob_meta(&mut rng));
+        let a = LooseCommit::new(
+            sedimentree_id,
+            a_hash,
+            BTreeSet::new(),
+            random_blob_meta(&mut rng),
+        );
+        let b = LooseCommit::new(
+            sedimentree_id,
+            b_hash,
+            BTreeSet::new(),
+            random_blob_meta(&mut rng),
+        );
         let c = LooseCommit::new(
+            sedimentree_id,
             c_hash,
             BTreeSet::from([a_hash, b_hash]),
             random_blob_meta(&mut rng),
         );
-        let d = LooseCommit::new(d_hash, BTreeSet::from([c_hash]), random_blob_meta(&mut rng));
+        let d = LooseCommit::new(
+            sedimentree_id,
+            d_hash,
+            BTreeSet::from([c_hash]),
+            random_blob_meta(&mut rng),
+        );
 
         let dag = CommitDag::from_commits([&a, &b, &c, &d].into_iter());
 

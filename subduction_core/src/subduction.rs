@@ -330,11 +330,11 @@ impl<
             // Extract payloads from trusted storage (already verified before storage)
             let loose_commits: Vec<_> = signed_loose_commits
                 .into_iter()
-                .filter_map(|(_, signed)| signed.try_decode_payload(&id).ok())
+                .filter_map(|(_, signed)| signed.try_decode_payload().ok())
                 .collect();
             let fragments: Vec<_> = signed_fragments
                 .into_iter()
-                .filter_map(|(_, signed)| signed.try_decode_payload(&id).ok())
+                .filter_map(|(_, signed)| signed.try_decode_payload().ok())
                 .collect();
 
             let sedimentree = Sedimentree::new(fragments, loose_commits);
@@ -1241,13 +1241,13 @@ impl<
         // Sign all commits and fragments with our signer (seal returns Verified)
         let mut verified_commits = Vec::with_capacity(sedimentree.loose_commits().count());
         for commit in sedimentree.loose_commits() {
-            let verified = Signed::seal::<F, _>(&self.signer, commit.clone(), &id).await;
+            let verified = Signed::seal::<F, _>(&self.signer, commit.clone()).await;
             verified_commits.push(verified);
         }
 
         let mut verified_fragments = Vec::with_capacity(sedimentree.fragments().count());
         for fragment in sedimentree.fragments() {
-            let verified = Signed::seal::<F, _>(&self.signer, fragment.clone(), &id).await;
+            let verified = Signed::seal::<F, _>(&self.signer, fragment.clone()).await;
             verified_fragments.push(verified);
         }
 
@@ -1333,7 +1333,7 @@ impl<
 
         let verified_blob = VerifiedBlobMeta::new(blob);
         let verified_meta: VerifiedMeta<LooseCommit> =
-            VerifiedMeta::seal::<F, _>(&self.signer, (digest, parents), verified_blob, &id).await;
+            VerifiedMeta::seal::<F, _>(&self.signer, (id, digest, parents), verified_blob).await;
         let signed_for_wire = verified_meta.signed().clone();
         let blob = verified_meta.blob().clone();
 
@@ -1417,9 +1417,8 @@ impl<
 
         let verified_meta: VerifiedMeta<Fragment> = VerifiedMeta::seal::<F, _>(
             &self.signer,
-            (head, boundary, checkpoints.to_vec()),
+            (id, head, boundary, checkpoints.to_vec()),
             verified_blob,
-            &id,
         )
         .await;
         let fragment_digest = verified_meta.payload().digest();
@@ -1491,7 +1490,7 @@ impl<
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
-        let verified = match signed_commit.try_verify(&id) {
+        let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(
@@ -1576,7 +1575,7 @@ impl<
         blob: Blob,
     ) -> Result<bool, IoError<F, S, C>> {
         // Verify the signature
-        let verified = match signed_fragment.try_verify(&id) {
+        let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
                 tracing::warn!(
@@ -1721,11 +1720,11 @@ impl<
             if let Entry::Vacant(entry) = locked.entry(id) {
                 let loose_commits: Vec<_> = commit_by_digest
                     .values()
-                    .filter_map(|signed| signed.try_decode_payload(&id).ok())
+                    .filter_map(|signed| signed.try_decode_payload().ok())
                     .collect();
                 let fragments: Vec<_> = fragment_by_digest
                     .values()
-                    .filter_map(|signed| signed.try_decode_payload(&id).ok())
+                    .filter_map(|signed| signed.try_decode_payload().ok())
                     .collect();
 
                 if !loose_commits.is_empty() || !fragments.is_empty() {
@@ -1764,7 +1763,7 @@ impl<
 
         for digest in local_commit_digests {
             if let Some(signed_commit) = commit_by_digest.get(&digest)
-                && let Ok(payload) = signed_commit.try_decode_payload(&id)
+                && let Ok(payload) = signed_commit.try_decode_payload()
             {
                 let blob_digest = payload.blob_meta().digest();
                 if let Some(blob) = fetcher
@@ -1782,7 +1781,7 @@ impl<
 
         for digest in local_fragment_digests {
             if let Some(signed_fragment) = fragment_by_digest.get(&digest)
-                && let Ok(payload) = signed_fragment.try_decode_payload(&id)
+                && let Ok(payload) = signed_fragment.try_decode_payload()
             {
                 let blob_digest = payload.summary().blob_meta().digest();
                 if let Some(blob) = fetcher
@@ -1864,7 +1863,7 @@ impl<
         };
 
         for (signed_commit, blob) in diff.missing_commits {
-            let verified = match signed_commit.try_verify(&id) {
+            let verified = match signed_commit.try_verify() {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!("batch sync commit signature verification failed: {e}");
@@ -1884,7 +1883,7 @@ impl<
         }
 
         for (signed_fragment, blob) in diff.missing_fragments {
-            let verified = match signed_fragment.try_verify(&id) {
+            let verified = match signed_fragment.try_verify() {
                 Ok(v) => v,
                 Err(e) => {
                     tracing::warn!("batch sync fragment signature verification failed: {e}");
@@ -2037,7 +2036,7 @@ impl<
                     let fragments_to_receive = missing_fragments.len();
 
                     for (signed_commit, blob) in missing_commits {
-                        let verified = match signed_commit.try_verify(&id) {
+                        let verified = match signed_commit.try_verify() {
                             Ok(v) => v,
                             Err(e) => {
                                 tracing::warn!("sync commit signature verification failed: {e}");
@@ -2057,7 +2056,7 @@ impl<
                     }
 
                     for (signed_fragment, blob) in missing_fragments {
-                        let verified = match signed_fragment.try_verify(&id) {
+                        let verified = match signed_fragment.try_verify() {
                             Ok(v) => v,
                             Err(e) => {
                                 tracing::warn!("sync fragment signature verification failed: {e}");
@@ -2264,7 +2263,7 @@ impl<
                                 );
 
                                 for (signed_commit, blob) in missing_commits {
-                                    let verified = match signed_commit.try_verify(&id) {
+                                    let verified = match signed_commit.try_verify() {
                                         Ok(v) => v,
                                         Err(e) => {
                                             tracing::warn!(
@@ -2286,7 +2285,7 @@ impl<
                                 }
 
                                 for (signed_fragment, blob) in missing_fragments {
-                                    let verified = match signed_fragment.try_verify(&id) {
+                                    let verified = match signed_fragment.try_verify() {
                                         Ok(v) => v,
                                         Err(e) => {
                                             tracing::warn!(
@@ -2641,7 +2640,7 @@ impl<
 
                 for commit_digest in &requested_commit_digests {
                     if let Some(signed_commit) = commit_by_digest.get(commit_digest)
-                        && let Ok(payload) = signed_commit.try_decode_payload(&id)
+                        && let Ok(payload) = signed_commit.try_decode_payload()
                     {
                         blob_digests.push(payload.blob_meta().digest());
                     }
@@ -2649,7 +2648,7 @@ impl<
 
                 for fragment_digest in &requested_fragment_digests {
                     if let Some(signed_fragment) = fragment_by_digest.get(fragment_digest)
-                        && let Ok(payload) = signed_fragment.try_decode_payload(&id)
+                        && let Ok(payload) = signed_fragment.try_decode_payload()
                     {
                         blob_digests.push(payload.summary().blob_meta().digest());
                     }
@@ -2667,7 +2666,7 @@ impl<
                 .iter()
                 .filter_map(|commit_digest| {
                     let signed_commit = commit_by_digest.get(commit_digest)?;
-                    let payload = signed_commit.try_decode_payload(&id).ok()?;
+                    let payload = signed_commit.try_decode_payload().ok()?;
                     let blob = blob_by_digest.get(&payload.blob_meta().digest())?;
                     Some(Message::LooseCommit {
                         id,
@@ -2681,7 +2680,7 @@ impl<
                 .iter()
                 .filter_map(|fragment_digest| {
                     let signed_fragment = fragment_by_digest.get(fragment_digest)?;
-                    let payload = signed_fragment.try_decode_payload(&id).ok()?;
+                    let payload = signed_fragment.try_decode_payload().ok()?;
                     let blob = blob_by_digest.get(&payload.summary().blob_meta().digest())?;
                     Some(Message::Fragment {
                         id,

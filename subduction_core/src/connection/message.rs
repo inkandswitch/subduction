@@ -1030,11 +1030,12 @@ mod tests {
             let signer = test_signer();
             let id = SedimentreeId::new([1u8; 32]);
             let commit = LooseCommit::new(
+                id,
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit, &id)
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
                 .await
                 .into_signed();
             let msg = Message::LooseCommit {
@@ -1050,12 +1051,13 @@ mod tests {
             let signer = test_signer();
             let id = SedimentreeId::new([1u8; 32]);
             let fragment = Fragment::new(
+                id,
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment, &id)
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
                 .await
                 .into_signed();
             let msg = Message::Fragment {
@@ -1132,12 +1134,13 @@ mod tests {
             let signer = test_signer();
             let id = SedimentreeId::new([0u8; 32]);
             let commit = LooseCommit::new(
+                id,
                 Digest::from_bytes([1u8; 32]),
                 BTreeSet::new(),
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([2u8; 16]));
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit, &id)
+            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
                 .await
                 .into_signed();
 
@@ -1160,13 +1163,14 @@ mod tests {
             let signer = test_signer();
             let id = SedimentreeId::new([0u8; 32]);
             let fragment = Fragment::new(
+                id,
                 Digest::from_bytes([2u8; 32]),
                 BTreeSet::new(),
                 &[],
                 sedimentree_core::blob::BlobMeta::new(&[]),
             );
             let blob = Blob::new(Vec::from([3u8; 16]));
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment, &id)
+            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
                 .await
                 .into_signed();
 

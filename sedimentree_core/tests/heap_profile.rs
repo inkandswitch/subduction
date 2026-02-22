@@ -16,6 +16,7 @@ use sedimentree_core::{
     blob::{Blob, BlobMeta},
     crypto::digest::Digest,
     fragment::Fragment,
+    id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,
 };
@@ -55,10 +56,18 @@ mod generators {
         BlobMeta::from_digest_size(blob_digest_from_seed(seed), size)
     }
 
+    fn make_sedimentree_id(seed: u64) -> SedimentreeId {
+        let mut bytes = [0u8; 32];
+        let mut rng = SmallRng::seed_from_u64(seed);
+        rng.fill(&mut bytes);
+        SedimentreeId::new(bytes)
+    }
+
     fn synthetic_commit(seed: u64, parents: BTreeSet<Digest<LooseCommit>>) -> LooseCommit {
+        let sedimentree_id = make_sedimentree_id(seed);
         let digest = digest_from_seed(seed);
         let blob_meta = synthetic_blob_meta(seed.wrapping_add(1_000_000), 1024);
-        LooseCommit::new(digest, parents, blob_meta)
+        LooseCommit::new(sedimentree_id, digest, parents, blob_meta)
     }
 
     fn synthetic_fragment(
@@ -67,6 +76,7 @@ mod generators {
         checkpoint_count: usize,
         leading_zeros: usize,
     ) -> Fragment {
+        let sedimentree_id = make_sedimentree_id(head_seed);
         let head = digest_with_leading_zeros(leading_zeros, head_seed);
         let boundary: BTreeSet<Digest<LooseCommit>> = (0..boundary_count)
             .map(|i| digest_with_leading_zeros(leading_zeros, head_seed + 100 + i as u64))
@@ -75,7 +85,7 @@ mod generators {
             .map(|i| digest_from_seed(head_seed + 200 + i as u64))
             .collect();
         let blob_meta = synthetic_blob_meta(head_seed + 300, 4096);
-        Fragment::new(head, boundary, &checkpoints, blob_meta)
+        Fragment::new(sedimentree_id, head, boundary, &checkpoints, blob_meta)
     }
 
     fn linear_commit_chain(count: usize, base_seed: u64) -> Vec<LooseCommit> {

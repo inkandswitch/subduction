@@ -103,10 +103,9 @@ impl WasmMessage {
     #[must_use]
     pub fn commit(&self) -> Option<WasmLooseCommit> {
         match &self.0 {
-            Message::LooseCommit { id, commit, .. } => commit
-                .try_decode_payload(id)
-                .ok()
-                .map(WasmLooseCommit::from),
+            Message::LooseCommit { commit, .. } => {
+                commit.try_decode_payload().ok().map(WasmLooseCommit::from)
+            }
             Message::Fragment { .. }
             | Message::BlobsRequest { .. }
             | Message::BlobsResponse { .. }
@@ -124,8 +123,8 @@ impl WasmMessage {
     #[must_use]
     pub fn fragment(&self) -> Option<WasmFragment> {
         match &self.0 {
-            Message::Fragment { id, fragment, .. } => {
-                fragment.try_decode_payload(id).ok().map(WasmFragment::from)
+            Message::Fragment { fragment, .. } => {
+                fragment.try_decode_payload().ok().map(WasmFragment::from)
             }
             Message::LooseCommit { .. }
             | Message::BlobsRequest { .. }

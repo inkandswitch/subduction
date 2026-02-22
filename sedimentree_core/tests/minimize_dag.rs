@@ -13,8 +13,13 @@ use std::collections::BTreeSet;
 
 use sedimentree_core::{
     commit::CountLeadingZeroBytes,
+    id::SedimentreeId,
     test_utils::{TestGraph, seeded_rng},
 };
+
+fn make_sedimentree_id(seed: u8) -> SedimentreeId {
+    SedimentreeId::new([seed; 32])
+}
 
 /// Diamond merge: A diverges to B and C, which merge at D.
 /// Fragment covers entire diamond.
@@ -159,8 +164,11 @@ fn nested_fragments_three_levels() {
     let shallow_head = sedimentree_core::test_utils::digest_with_depth(1, 3);
     let shallow_boundary = sedimentree_core::test_utils::digest_with_depth(0, 102);
 
+    let sedimentree_id = make_sedimentree_id(1);
+
     // Deep fragment contains medium's head and boundary
     let deep_fragment = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         deep_head,
         BTreeSet::from([deep_boundary]),
         &[medium_head, medium_boundary, shallow_head, shallow_boundary],
@@ -169,6 +177,7 @@ fn nested_fragments_three_levels() {
 
     // Medium fragment contains shallow's head and boundary
     let medium_fragment = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         medium_head,
         BTreeSet::from([medium_boundary]),
         &[shallow_head, shallow_boundary],
@@ -177,6 +186,7 @@ fn nested_fragments_three_levels() {
 
     // Shallow fragment
     let shallow_fragment = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         shallow_head,
         BTreeSet::from([shallow_boundary]),
         &[],
@@ -220,7 +230,10 @@ fn overlapping_same_depth_both_kept() {
     let boundary1 = sedimentree_core::test_utils::digest_with_depth(1, 100);
     let boundary2 = sedimentree_core::test_utils::digest_with_depth(1, 101);
 
+    let sedimentree_id = make_sedimentree_id(1);
+
     let fragment1 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         head1,
         BTreeSet::from([boundary1]),
         &[],
@@ -228,6 +241,7 @@ fn overlapping_same_depth_both_kept() {
     );
 
     let fragment2 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         head2,
         BTreeSet::from([boundary2]),
         &[],
@@ -288,6 +302,7 @@ fn fragment_boundary_at_merge() {
 /// Multiple deep fragments collectively support a shallow one.
 #[test]
 fn collective_support_from_multiple_deep() {
+    let sedimentree_id = make_sedimentree_id(1);
     let shallow_head = sedimentree_core::test_utils::digest_with_depth(2, 1);
     let shallow_boundary = sedimentree_core::test_utils::digest_with_depth(1, 100);
 
@@ -295,6 +310,7 @@ fn collective_support_from_multiple_deep() {
     let deep1_head = sedimentree_core::test_utils::digest_with_depth(3, 10);
     let deep1_boundary = sedimentree_core::test_utils::digest_with_depth(1, 101);
     let deep1 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         deep1_head,
         BTreeSet::from([deep1_boundary]),
         &[shallow_head],
@@ -305,6 +321,7 @@ fn collective_support_from_multiple_deep() {
     let deep2_head = sedimentree_core::test_utils::digest_with_depth(3, 20);
     let deep2_boundary = sedimentree_core::test_utils::digest_with_depth(1, 102);
     let deep2 = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         deep2_head,
         BTreeSet::from([deep2_boundary]),
         &[shallow_boundary],
@@ -313,6 +330,7 @@ fn collective_support_from_multiple_deep() {
 
     // Shallow fragment
     let shallow = sedimentree_core::fragment::Fragment::new(
+        sedimentree_id,
         shallow_head,
         BTreeSet::from([shallow_boundary]),
         &[],

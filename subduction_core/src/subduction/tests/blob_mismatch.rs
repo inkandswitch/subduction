@@ -33,8 +33,8 @@ async fn make_valid_commit(id: &SedimentreeId, data: &[u8]) -> (Signed<LooseComm
     let blob = Blob::new(data.to_vec());
     let blob_meta = BlobMeta::new(data);
     let digest = Digest::<LooseCommit>::hash_bytes(data);
-    let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit, id).await;
+    let commit = LooseCommit::new(*id, digest, BTreeSet::new(), blob_meta);
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
     (verified.into_signed(), blob)
 }
 
@@ -45,8 +45,8 @@ async fn make_mismatched_commit(id: &SedimentreeId) -> (Signed<LooseCommit>, Blo
     let claimed_data = b"claimed data";
     let blob_meta = BlobMeta::new(claimed_data);
     let digest = Digest::<LooseCommit>::hash_bytes(claimed_data);
-    let commit = LooseCommit::new(digest, BTreeSet::new(), blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit, id).await;
+    let commit = LooseCommit::new(*id, digest, BTreeSet::new(), blob_meta);
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), commit).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different data";
@@ -61,8 +61,8 @@ async fn make_valid_fragment(id: &SedimentreeId, data: &[u8]) -> (Signed<Fragmen
     let blob_meta = BlobMeta::new(data);
     let head = Digest::<LooseCommit>::hash_bytes(b"head");
     let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
-    let fragment = Fragment::new(head, boundary, &[], blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment, id).await;
+    let fragment = Fragment::new(*id, head, boundary, &[], blob_meta);
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
     (verified.into_signed(), blob)
 }
 
@@ -73,8 +73,8 @@ async fn make_mismatched_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob
     let blob_meta = BlobMeta::new(claimed_data);
     let head = Digest::<LooseCommit>::hash_bytes(b"head");
     let boundary = BTreeSet::from([Digest::<LooseCommit>::hash_bytes(b"boundary")]);
-    let fragment = Fragment::new(head, boundary, &[], blob_meta);
-    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment, id).await;
+    let fragment = Fragment::new(*id, head, boundary, &[], blob_meta);
+    let verified = Signed::seal::<Sendable, _>(&test_signer(), fragment).await;
 
     // But actual blob contains different data
     let actual_data = b"actual different fragment data";

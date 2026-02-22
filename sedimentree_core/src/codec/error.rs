@@ -93,14 +93,6 @@ pub struct SizeMismatch {
     pub actual: usize,
 }
 
-/// Context value (e.g., SedimentreeId) doesn't match signed payload.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("context mismatch: {field}")]
-pub struct ContextMismatch {
-    /// Description of what mismatched.
-    pub field: &'static str,
-}
-
 /// BlobMeta size exceeds maximum allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 #[error("blob too large: {size} bytes, max {max}")]
@@ -178,10 +170,6 @@ pub enum DecodeError {
     /// Declared size doesn't match actual data.
     #[error(transparent)]
     SizeMismatch(#[from] SizeMismatch),
-
-    /// Context value (e.g., SedimentreeId) doesn't match signed payload.
-    #[error(transparent)]
-    ContextMismatch(#[from] ContextMismatch),
 
     /// BlobMeta size exceeds maximum allowed.
     #[error(transparent)]

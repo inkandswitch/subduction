@@ -519,15 +519,21 @@ mod tests {
 
     use super::*;
 
+    fn make_sedimentree_id(seed: u8) -> SedimentreeId {
+        SedimentreeId::new([seed; 32])
+    }
+
     fn make_commit(seed: u8) -> LooseCommit {
+        let sedimentree_id = make_sedimentree_id(seed);
         let mut bytes = [0u8; 32];
         bytes[0] = seed;
         let digest = Digest::from_bytes(bytes);
         let blob_meta = BlobMeta::new(&[seed]);
-        LooseCommit::new(digest, BTreeSet::new(), blob_meta)
+        LooseCommit::new(sedimentree_id, digest, BTreeSet::new(), blob_meta)
     }
 
     fn make_fragment(seed: u8) -> Fragment {
+        let sedimentree_id = make_sedimentree_id(seed);
         let mut head_bytes = [0u8; 32];
         head_bytes[0] = seed;
         let mut boundary_bytes = [0u8; 32];
@@ -535,6 +541,7 @@ mod tests {
         boundary_bytes[1] = 1;
         let blob_meta = BlobMeta::new(&[seed]);
         Fragment::new(
+            sedimentree_id,
             Digest::from_bytes(head_bytes),
             BTreeSet::from([Digest::from_bytes(boundary_bytes)]),
             &[],
@@ -717,6 +724,7 @@ mod tests {
                     }
 
                     let deeper = Fragment::new(
+                        SedimentreeId::arbitrary(u)?,
                         start_hash,
                         BTreeSet::from([deeper_boundary_hash]),
                         &checkpoints,
@@ -746,6 +754,7 @@ mod tests {
             }
             impl<'a> arbitrary::Arbitrary<'a> for Scenario {
                 fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
+                    let sedimentree_id = SedimentreeId::arbitrary(u)?;
                     let mut frontier: Vec<Digest<LooseCommit>> = Vec::new();
                     let num_commits: u32 = u.int_in_range(1..=20)?;
                     let mut result = Vec::with_capacity(num_commits as usize);
@@ -766,7 +775,7 @@ mod tests {
                         }
                         frontier.retain(|p| !parents.contains(p));
                         frontier.push(hash);
-                        result.push(LooseCommit::new(hash, parents, blob_meta));
+                        result.push(LooseCommit::new(sedimentree_id, hash, parents, blob_meta));
                     }
                     Ok(Scenario { commits: result })
                 }
@@ -930,6 +939,7 @@ mod tests {
     mod minimize_tests {
         use alloc::{collections::BTreeSet, vec, vec::Vec};
 
+        use super::make_sedimentree_id;
         use crate::{
             blob::BlobMeta,
             commit::CountLeadingZeroBytes,
@@ -1139,9 +1149,10 @@ mod tests {
 
         #[test]
         fn minimize_fragment_empty_boundary() {
+            let sedimentree_id = make_sedimentree_id(1);
             let head = digest_with_depth(2, 1);
             let blob_meta = BlobMeta::new(&[1]);
-            let fragment = Fragment::new(head, BTreeSet::new(), &[], blob_meta);
+            let fragment = Fragment::new(sedimentree_id, head, BTreeSet::new(), &[], blob_meta);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
@@ -1152,9 +1163,11 @@ mod tests {
         #[test]
         fn minimize_head_equals_boundary() {
             // Degenerate case: head is also in boundary
+            let sedimentree_id = make_sedimentree_id(1);
             let head = digest_with_depth(2, 1);
             let blob_meta = BlobMeta::new(&[1]);
-            let fragment = Fragment::new(head, BTreeSet::from([head]), &[], blob_meta);
+            let fragment =
+                Fragment::new(sedimentree_id, head, BTreeSet::from([head]), &[], blob_meta);
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
             let minimized = tree.minimize(&CountLeadingZeroBytes);
@@ -1166,10 +1179,17 @@ mod tests {
         #[test]
         fn minimize_head_in_checkpoints() {
             // Head appears in own checkpoints (redundant but valid)
+            let sedimentree_id = make_sedimentree_id(1);
             let head = digest_with_depth(2, 1);
             let boundary = digest_with_depth(1, 100);
             let blob_meta = BlobMeta::new(&[1]);
-            let fragment = Fragment::new(head, BTreeSet::from([boundary]), &[head], blob_meta);
+            let fragment = Fragment::new(
+                sedimentree_id,
+                head,
+                BTreeSet::from([boundary]),
+                &[head],
+                blob_meta,
+            );
 
             let tree = Sedimentree::new(vec![fragment.clone()], vec![]);
             let minimized = tree.minimize(&CountLeadingZeroBytes);

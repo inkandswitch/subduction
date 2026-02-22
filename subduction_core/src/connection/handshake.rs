@@ -282,14 +282,13 @@ const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
 pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 157 bytes
 
 impl Schema for Challenge {
-    type Binding = ();
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
     const TYPE_BYTE: u8 = b'H'; // Handshake
     const VERSION: u8 = 0;
 }
 
 impl Encode for Challenge {
-    fn encode_fields(&self, _binding: &Self::Binding, buf: &mut Vec<u8>) {
+    fn encode_fields(&self, buf: &mut Vec<u8>) {
         // AudienceTag (1 byte)
         match &self.audience {
             Audience::Known(_) => encode::u8(0x00, buf),
@@ -309,7 +308,7 @@ impl Encode for Challenge {
         encode::array(self.nonce.as_bytes(), buf);
     }
 
-    fn fields_size(&self, _binding: &Self::Binding) -> usize {
+    fn fields_size(&self) -> usize {
         CHALLENGE_FIELDS_SIZE
     }
 }
@@ -317,7 +316,7 @@ impl Encode for Challenge {
 impl Decode for Challenge {
     const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], _binding: &Self::Binding) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Challenge",
@@ -367,14 +366,13 @@ const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
 pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 bytes
 
 impl Schema for Response {
-    type Binding = ();
     const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
     const TYPE_BYTE: u8 = b'R'; // Response
     const VERSION: u8 = 0;
 }
 
 impl Encode for Response {
-    fn encode_fields(&self, _binding: &Self::Binding, buf: &mut Vec<u8>) {
+    fn encode_fields(&self, buf: &mut Vec<u8>) {
         // ChallengeDigest (32 bytes)
         encode::array(self.challenge_digest.as_bytes(), buf);
 
@@ -382,7 +380,7 @@ impl Encode for Response {
         encode::u64(self.server_timestamp.as_secs(), buf);
     }
 
-    fn fields_size(&self, _binding: &Self::Binding) -> usize {
+    fn fields_size(&self) -> usize {
         RESPONSE_FIELDS_SIZE
     }
 }
@@ -390,7 +388,7 @@ impl Encode for Response {
 impl Decode for Response {
     const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8], _binding: &Self::Binding) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < RESPONSE_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Response",
@@ -800,9 +798,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
 ) -> Result<(Authenticated<C, K>, E), AuthenticateError<H::Error>> {
     // Create and send challenge
     let challenge = Challenge::new(audience, now, nonce);
-    let signed_challenge = Signed::seal::<K, _>(signer, challenge, &())
-        .await
-        .into_signed();
+    let signed_challenge = Signed::seal::<K, _>(signer, challenge).await.into_signed();
     let msg = HandshakeMessage::SignedChallenge(signed_challenge);
     handshake
         .send(msg.encode())
@@ -981,9 +977,7 @@ pub async fn create_challenge<K: FutureForm, S: Signer<K>>(
     nonce: Nonce,
 ) -> Signed<Challenge> {
     let challenge = Challenge::new(audience, now, nonce);
-    Signed::seal::<K, _>(signer, challenge, &())
-        .await
-        .into_signed()
+    Signed::seal::<K, _>(signer, challenge).await.into_signed()
 }
 
 /// Result of verifying a challenge on the server side.
@@ -1012,7 +1006,7 @@ pub fn verify_challenge(
 ) -> Result<VerifiedChallenge, HandshakeError> {
     // Verify signature and decode
     let verified = signed_challenge
-        .try_verify(&())
+        .try_verify()
         .map_err(|_| HandshakeError::InvalidSignature)?;
 
     let challenge = verified.payload();
@@ -1035,9 +1029,7 @@ pub async fn create_response<K: FutureForm, S: Signer<K>>(
     now: TimestampSeconds,
 ) -> Signed<Response> {
     let response = Response::for_challenge(challenge, now);
-    Signed::seal::<K, _>(signer, response, &())
-        .await
-        .into_signed()
+    Signed::seal::<K, _>(signer, response).await.into_signed()
 }
 
 /// Result of verifying a response on the client side.
@@ -1063,7 +1055,7 @@ pub fn verify_response(
 ) -> Result<VerifiedResponse, HandshakeError> {
     // Verify signature and decode
     let verified = signed_response
-        .try_verify(&())
+        .try_verify()
         .map_err(|_| HandshakeError::InvalidSignature)?;
 
     let response = verified.payload();
@@ -1466,9 +1458,9 @@ mod tests {
                 .with_type::<Challenge>()
                 .for_each(|challenge| {
                     let mut buf = Vec::new();
-                    challenge.encode_fields(&(), &mut buf);
+                    challenge.encode_fields(&mut buf);
                     let decoded =
-                        Challenge::try_decode_fields(&buf, &()).expect("decode should succeed");
+                        Challenge::try_decode_fields(&buf).expect("decode should succeed");
                     assert_eq!(challenge, &decoded);
                 });
         }
@@ -1479,9 +1471,8 @@ mod tests {
                 .with_type::<Response>()
                 .for_each(|response| {
                     let mut buf = Vec::new();
-                    response.encode_fields(&(), &mut buf);
-                    let decoded =
-                        Response::try_decode_fields(&buf, &()).expect("decode should succeed");
+                    response.encode_fields(&mut buf);
+                    let decoded = Response::try_decode_fields(&buf).expect("decode should succeed");
                     assert_eq!(response, &decoded);
                 });
         }
@@ -1511,10 +1502,10 @@ mod tests {
             };
 
             let mut buf = Vec::new();
-            challenge.encode_fields(&(), &mut buf);
+            challenge.encode_fields(&mut buf);
 
             // Decode and verify the bytes are preserved
-            let decoded = Challenge::try_decode_fields(&buf, &()).expect("decode");
+            let decoded = Challenge::try_decode_fields(&buf).expect("decode");
             let Audience::Discover(id) = decoded.audience else {
                 unreachable!("encoded Discover, should decode as Discover");
             };
@@ -1544,11 +1535,11 @@ mod tests {
         fn challenge_fields_roundtrip() {
             let challenge = sample_challenge();
             let mut buf = Vec::new();
-            challenge.encode_fields(&(), &mut buf);
+            challenge.encode_fields(&mut buf);
 
             assert_eq!(buf.len(), CHALLENGE_FIELDS_SIZE);
 
-            let decoded = Challenge::try_decode_fields(&buf, &()).expect("decode should succeed");
+            let decoded = Challenge::try_decode_fields(&buf).expect("decode should succeed");
             assert_eq!(decoded, challenge);
         }
 
@@ -1561,7 +1552,7 @@ mod tests {
             };
 
             let mut buf = Vec::new();
-            challenge.encode_fields(&(), &mut buf);
+            challenge.encode_fields(&mut buf);
 
             assert_eq!(buf[0], 0x00); // Known tag
         }
@@ -1575,7 +1566,7 @@ mod tests {
             };
 
             let mut buf = Vec::new();
-            challenge.encode_fields(&(), &mut buf);
+            challenge.encode_fields(&mut buf);
 
             assert_eq!(buf[0], 0x01); // Discover tag
         }
@@ -1585,7 +1576,7 @@ mod tests {
             let mut buf = vec![0u8; CHALLENGE_FIELDS_SIZE];
             buf[0] = 0x02; // Invalid tag
 
-            let result = Challenge::try_decode_fields(&buf, &());
+            let result = Challenge::try_decode_fields(&buf);
             assert!(matches!(
                 result,
                 Err(DecodeError::InvalidEnumTag(InvalidEnumTag {
@@ -1598,7 +1589,7 @@ mod tests {
         #[test]
         fn challenge_buffer_too_short() {
             let buf = vec![0u8; CHALLENGE_FIELDS_SIZE - 1];
-            let result = Challenge::try_decode_fields(&buf, &());
+            let result = Challenge::try_decode_fields(&buf);
             assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
         }
 
@@ -1611,7 +1602,7 @@ mod tests {
             };
 
             let mut buf = Vec::new();
-            challenge.encode_fields(&(), &mut buf);
+            challenge.encode_fields(&mut buf);
 
             // Timestamp is at offset 33 (1 + 32)
             let timestamp_bytes = &buf[33..41];
@@ -1624,24 +1615,24 @@ mod tests {
         #[test]
         fn challenge_fields_size_constant() {
             let challenge = sample_challenge();
-            assert_eq!(challenge.fields_size(&()), CHALLENGE_FIELDS_SIZE);
+            assert_eq!(challenge.fields_size(), CHALLENGE_FIELDS_SIZE);
         }
 
         #[test]
         fn challenge_signed_size_correct() {
             let challenge = sample_challenge();
-            assert_eq!(challenge.signed_size(&()), CHALLENGE_MIN_SIZE);
+            assert_eq!(challenge.signed_size(), CHALLENGE_MIN_SIZE);
         }
 
         #[test]
         fn response_fields_roundtrip() {
             let response = sample_response();
             let mut buf = Vec::new();
-            response.encode_fields(&(), &mut buf);
+            response.encode_fields(&mut buf);
 
             assert_eq!(buf.len(), RESPONSE_FIELDS_SIZE);
 
-            let decoded = Response::try_decode_fields(&buf, &()).expect("decode should succeed");
+            let decoded = Response::try_decode_fields(&buf).expect("decode should succeed");
             assert_eq!(decoded.challenge_digest, response.challenge_digest);
             assert_eq!(decoded.server_timestamp, response.server_timestamp);
         }
@@ -1655,7 +1646,7 @@ mod tests {
             };
 
             let mut buf = Vec::new();
-            response.encode_fields(&(), &mut buf);
+            response.encode_fields(&mut buf);
 
             // Digest is at offset 0
             assert_eq!(&buf[0..32], &digest_bytes);
@@ -1669,7 +1660,7 @@ mod tests {
             };
 
             let mut buf = Vec::new();
-            response.encode_fields(&(), &mut buf);
+            response.encode_fields(&mut buf);
 
             // Timestamp is at offset 32
             let timestamp_bytes = &buf[32..40];
@@ -1682,20 +1673,20 @@ mod tests {
         #[test]
         fn response_buffer_too_short() {
             let buf = vec![0u8; RESPONSE_FIELDS_SIZE - 1];
-            let result = Response::try_decode_fields(&buf, &());
+            let result = Response::try_decode_fields(&buf);
             assert!(matches!(result, Err(DecodeError::MessageTooShort { .. })));
         }
 
         #[test]
         fn response_fields_size_constant() {
             let response = sample_response();
-            assert_eq!(response.fields_size(&()), RESPONSE_FIELDS_SIZE);
+            assert_eq!(response.fields_size(), RESPONSE_FIELDS_SIZE);
         }
 
         #[test]
         fn response_signed_size_correct() {
             let response = sample_response();
-            assert_eq!(response.signed_size(&()), RESPONSE_MIN_SIZE);
+            assert_eq!(response.signed_size(), RESPONSE_MIN_SIZE);
         }
     }
 }

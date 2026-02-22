@@ -11,6 +11,7 @@ use crate::{
     crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     fragment::Fragment,
+    id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 
@@ -333,9 +334,10 @@ impl<T> FragmentState<T> {
 
     /// Converts into a [`Fragment`] with the given [`BlobMeta`].
     #[must_use]
-    pub fn to_fragment(self, blob_meta: BlobMeta) -> Fragment {
+    pub fn to_fragment(self, sedimentree_id: SedimentreeId, blob_meta: BlobMeta) -> Fragment {
         let checkpoints: Vec<_> = self.checkpoints.iter().copied().collect();
         Fragment::new(
+            sedimentree_id,
             self.head_digest,
             self.boundary.keys().copied().collect(),
             &checkpoints,

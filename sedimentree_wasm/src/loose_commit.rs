@@ -6,6 +6,7 @@ use wasm_bindgen::prelude::*;
 use wasm_refgen::wasm_refgen;
 
 use super::digest::{JsDigest, WasmDigest};
+use crate::sedimentree_id::WasmSedimentreeId;
 
 /// A Wasm wrapper around the [`LooseCommit`] type.
 #[wasm_bindgen(js_name = LooseCommit)]
@@ -15,15 +16,21 @@ pub struct WasmLooseCommit(LooseCommit);
 #[wasm_refgen(js_ref = JsLooseCommit)]
 #[wasm_bindgen(js_class = LooseCommit)]
 impl WasmLooseCommit {
-    /// Create a new `LooseCommit` from the given digest, parents, and blob metadata.
+    /// Create a new `LooseCommit` from the given sedimentree ID, digest, parents, and blob metadata.
     #[wasm_bindgen(constructor)]
     #[must_use]
     #[allow(clippy::needless_pass_by_value)] // wasm_bindgen needs to take Vecs not slices
-    pub fn new(digest: &WasmDigest, parents: Vec<JsDigest>, blob_meta: &WasmBlobMeta) -> Self {
+    pub fn new(
+        sedimentree_id: WasmSedimentreeId,
+        digest: &WasmDigest,
+        parents: Vec<JsDigest>,
+        blob_meta: &WasmBlobMeta,
+    ) -> Self {
         let core_parents: BTreeSet<Digest<LooseCommit>> =
             parents.iter().map(|d| WasmDigest::from(d).into()).collect();
 
         let core_commit = LooseCommit::new(
+            sedimentree_id.into(),
             digest.clone().into(),
             core_parents,
             blob_meta.clone().into(),
