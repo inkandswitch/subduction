@@ -1,6 +1,6 @@
 [package]
 name = "sedimentree_wasm"
-version = "0.3.1"
+version = "0.4.0"
 description = "Wasm/JavaScript bindings for Sedimentree (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["sedimentree", "wasm"]
