@@ -151,7 +151,7 @@
         packages = {
           subduction_cli = pkgs.rustPlatform.buildRustPackage {
             pname = "subduction_cli";
-            version = "0.3.1";
+            version = "0.4.0";
             meta = {
               description = "CLI tool for running Subduction with WebSockets";
               longDescription = ''
