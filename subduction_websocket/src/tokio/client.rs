@@ -14,6 +14,7 @@ use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
         Connection, Reconnect,
+        authenticated::Authenticated,
         handshake::{self, Audience, AuthenticateError},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
@@ -66,7 +67,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
     /// # Returns
     ///
     /// A tuple of:
-    /// - The client instance
+    /// - The authenticated client instance (wrapped in [`Authenticated`] to prove handshake completed)
     /// - A future for the listener task (receives incoming messages)
     /// - A future for the sender task (sends outgoing messages)
     ///
@@ -86,7 +87,14 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         default_time_limit: Duration,
         signer: R,
         audience: Audience,
-    ) -> Result<(Self, ListenerTask<'a>, SenderTask<'a>), ClientConnectError>
+    ) -> Result<
+        (
+            Authenticated<Self, Sendable>,
+            ListenerTask<'a>,
+            SenderTask<'a>,
+        ),
+        ClientConnectError,
+    >
     where
         O: 'a,
         R: 'a,
@@ -128,13 +136,15 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
         let listener = ListenerTask::new(async move { listener_socket.listen().await }.boxed());
         let sender = SenderTask::new(sender_fut);
 
-        let client = TokioWebSocketClient {
+        // Lift the Authenticated proof from WebSocket to TokioWebSocketClient
+        let authenticated_client = authenticated.map(|_socket| TokioWebSocketClient {
             address,
             signer,
             audience,
             socket,
-        };
-        Ok((client, listener, sender))
+        });
+
+        Ok((authenticated_client, listener, sender))
     }
 
     /// Start listening for incoming messages.
@@ -205,7 +215,7 @@ impl<
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ReconnectionError>> {
         async move {
-            let (new_instance, listener, sender) = TokioWebSocketClient::new(
+            let (authenticated, listener, sender) = TokioWebSocketClient::new(
                 self.address.clone(),
                 self.socket.timeout_strategy().clone(),
                 self.socket.default_time_limit(),
@@ -214,7 +224,8 @@ impl<
             )
             .await?;
 
-            *self = new_instance;
+            // Extract the inner client from the Authenticated wrapper
+            *self = authenticated.into_inner();
             tokio::spawn(async move {
                 if let Err(e) = listener.await {
                     tracing::error!("WebSocket client listener error after reconnect: {e:?}");

@@ -9,10 +9,7 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::{
-        Connection, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
-    },
+    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -101,7 +98,7 @@ async fn rend_receive() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    let ws = client_ws.clone();
+    let ws = client_ws.inner().clone();
     tokio::spawn(async move {
         ws.listen().await?;
         Ok::<(), eyre::Report>(())
@@ -235,9 +232,7 @@ async fn batch_sync() -> TestResult {
     });
 
     assert_eq!(client.connected_peer_ids().await.len(), 0);
-    client
-        .register(Authenticated::new_for_test(client_ws))
-        .await?;
+    client.register(client_ws).await?;
     assert_eq!(client.connected_peer_ids().await.len(), 1);
 
     client.add_commit(sed_id, BTreeSet::new(), blob2).await?;

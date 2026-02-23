@@ -9,8 +9,7 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, authenticated::Authenticated, handshake::Audience, message::Message,
-        nonce_cache::NonceCache,
+        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -324,9 +323,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             Ok::<(), eyre::Report>(())
         });
 
-        client
-            .register(Authenticated::new_for_test(client_ws))
-            .await?;
+        client.register(client_ws).await?;
 
         clients.push(client);
 
@@ -497,9 +494,7 @@ async fn request_with_delayed_response() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client
-        .register(Authenticated::new_for_test(client_ws))
-        .await?;
+    client.register(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -632,9 +627,7 @@ async fn large_message_handling() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client
-        .register(Authenticated::new_for_test(client_ws))
-        .await?;
+    client.register(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -758,9 +751,7 @@ async fn message_ordering() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client
-        .register(Authenticated::new_for_test(client_ws))
-        .await?;
+    client.register(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
