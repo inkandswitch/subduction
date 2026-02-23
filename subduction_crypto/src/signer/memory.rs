@@ -42,6 +42,14 @@ impl MemorySigner {
     pub fn verifying_key(&self) -> VerifyingKey {
         self.signing_key.verifying_key()
     }
+
+    /// Get the seed bytes (private key material).
+    ///
+    /// Use with caution — this exposes the private key.
+    #[must_use]
+    pub fn seed_bytes(&self) -> [u8; 32] {
+        self.signing_key.to_bytes()
+    }
 }
 
 #[future_form(Sendable, Local)]

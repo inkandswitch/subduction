@@ -1,5 +1,6 @@
 //! WebSocket client for Subduction.
 
+use crate::key;
 use eyre::Result;
 use future_form::Sendable;
 use sedimentree_fs_storage::FsStorage;
@@ -28,10 +29,8 @@ pub(crate) struct ClientArgs {
     #[arg(short, long)]
     pub(crate) data_dir: Option<PathBuf>,
 
-    /// Key seed (64 hex characters) for deterministic key generation.
-    /// If not provided, a random key will be generated.
-    #[arg(short, long)]
-    pub(crate) key_seed: Option<String>,
+    #[command(flatten)]
+    pub(crate) key: key::KeyArgs,
 
     /// Expected server peer ID (64 hex characters).
     /// Required to verify the server's identity during handshake.
@@ -53,13 +52,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
     let _storage = FsStorage::new(data_dir)?;
 
-    let signer = match &args.key_seed {
-        Some(hex_seed) => {
-            let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
-            MemorySigner::from_bytes(&seed_bytes)
-        }
-        None => MemorySigner::generate(),
-    };
+    let signer = key::load_or_create_signer(&args.key)?;
     let peer_id = PeerId::from(signer.verifying_key());
 
     let server_peer_id = crate::parse_peer_id(&args.server_peer_id)?;

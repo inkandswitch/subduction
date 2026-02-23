@@ -33,7 +33,17 @@ in {
       keySeed = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Key seed (64 hex characters) for deterministic key generation. If null, a random key will be generated.";
+        description = "Key seed (64 hex characters) for deterministic key generation. Mutually exclusive with keyFile.";
+      };
+
+      keyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = ''
+          Path to a file containing the signing key seed (32 bytes, hex or raw).
+          If the file doesn't exist, a new key will be generated and saved.
+          Mutually exclusive with keySeed.
+        '';
       };
 
       handshakeMaxDrift = lib.mkOption {
@@ -58,6 +68,12 @@ in {
         type = lib.types.int;
         default = 5;
         description = "Request timeout in seconds.";
+      };
+
+      maxMessageSize = lib.mkOption {
+        type = lib.types.int;
+        default = 52428800; # 50 MB
+        description = "Maximum WebSocket message size in bytes.";
       };
 
       metricsPort = lib.mkOption {
@@ -118,6 +134,8 @@ in {
         (toString cfg.server.timeout)
         "--handshake-max-drift"
         (toString cfg.server.handshakeMaxDrift)
+        "--max-message-size"
+        (toString cfg.server.maxMessageSize)
       ]
       ++ lib.optionals cfg.server.enableMetrics [
         "--metrics"
@@ -127,6 +145,7 @@ in {
         (toString cfg.server.metricsRefreshInterval)
       ]
       ++ lib.optionals (cfg.server.keySeed != null) ["--key-seed" cfg.server.keySeed]
+      ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
       ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
       ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
 

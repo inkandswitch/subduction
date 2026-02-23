@@ -3,6 +3,7 @@
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
 mod client;
+mod key;
 pub mod metrics;
 mod purge;
 mod server;
