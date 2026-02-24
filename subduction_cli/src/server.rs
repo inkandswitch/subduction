@@ -13,7 +13,7 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
-    timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer, DEFAULT_MAX_MESSAGE_SIZE,
+    DEFAULT_MAX_MESSAGE_SIZE, timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer,
 };
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
