@@ -18,8 +18,9 @@ use subduction_core::{
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+use subduction_websocket::{
+    DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -87,6 +88,7 @@ async fn client_reconnect() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
     )
     .await?;
@@ -171,6 +173,7 @@ async fn server_graceful_shutdown() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
     )
     .await?;
@@ -268,6 +271,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
     )
     .await?;
@@ -446,6 +450,7 @@ async fn request_with_delayed_response() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
     )
     .await?;
@@ -579,6 +584,7 @@ async fn large_message_handling() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(10),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
     )
     .await?;
@@ -703,6 +709,7 @@ async fn message_ordering() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
     )
     .await?;
@@ -797,6 +804,7 @@ async fn server_try_connect_known_peer() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server1_signer,
         None, // No discovery mode
         MemoryStorage::default(),
@@ -812,6 +820,7 @@ async fn server_try_connect_known_peer() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server2_signer,
         None, // No discovery mode
         MemoryStorage::default(),
@@ -852,6 +861,7 @@ async fn server_try_connect_discover() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server1_signer,
         Some(service_name),
         MemoryStorage::default(),
@@ -867,6 +877,7 @@ async fn server_try_connect_discover() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server2_signer,
         Some(service_name),
         MemoryStorage::default(),
@@ -904,6 +915,7 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server1_signer,
         Some("service-a.local"),
         MemoryStorage::default(),
@@ -919,6 +931,7 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server2_signer,
         Some("service-b.local"),
         MemoryStorage::default(),

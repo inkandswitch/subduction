@@ -239,7 +239,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree_wasm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "automerge",
  "base58",
@@ -258,14 +258,16 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
  "console_error_panic_hook",
  "getrandom 0.3.4",
+ "js-sys",
  "subduction_wasm",
  "tracing",
+ "tracing-subscriber",
  "wasm-bindgen",
  "wasm-tracing",
  "wasm_refgen",
@@ -2845,7 +2847,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -3126,7 +3128,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "subduction_cli"
-version = "0.3.1"
+version = "0.4.1"
 dependencies = [
  "ahash",
  "async-lock",
@@ -3143,7 +3145,6 @@ dependencies = [
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
- "rand 0.8.5",
  "sedimentree_core",
  "sedimentree_fs_storage",
  "subduction_core",
@@ -3189,7 +3190,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_crypto"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
  "arbitrary",
  "bolero",
@@ -3243,7 +3244,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -3273,7 +3274,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "arbitrary",
  "async-channel",

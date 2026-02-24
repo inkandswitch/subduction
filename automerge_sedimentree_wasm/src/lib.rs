@@ -110,9 +110,14 @@ impl CommitStore<'static> for WasmSedimentreeAutomerge {
             .get_change_meta_by_hash(hash_hex)
             .map_err(WasmLookupError::ProblemCallingGetChangeMetaByHash)?;
 
+        if js_value_should_be_change_meta.is_null() || js_value_should_be_change_meta.is_undefined()
+        {
+            return Ok(None);
+        }
+
         let _obj: &js_sys::Object = js_value_should_be_change_meta
             .dyn_ref()
-            .ok_or_else(|| WasmLookupError::MetaShouldBeObject)?;
+            .ok_or(WasmLookupError::MetaShouldBeObject)?;
 
         let deps_val =
             js_sys::Reflect::get(&js_value_should_be_change_meta, &JsValue::from_str("deps"))

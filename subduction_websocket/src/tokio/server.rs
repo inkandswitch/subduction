@@ -1,7 +1,7 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    MAX_MESSAGE_SIZE,
+    DEFAULT_MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
@@ -104,6 +104,7 @@ where
     /// * `timeout` - The timeout strategy for requests
     /// * `default_time_limit` - Default timeout duration
     /// * `handshake_max_drift` - Maximum acceptable clock drift during handshake
+    /// * `max_message_size` - Maximum WebSocket message size in bytes
     /// * `subduction` - The Subduction instance to register connections with
     ///
     /// # Errors
@@ -115,6 +116,7 @@ where
         timeout: O,
         default_time_limit: Duration,
         handshake_max_drift: Duration,
+        max_message_size: usize,
         subduction: TokioWebSocketSubduction<S, P, Sig, O, M>,
     ) -> Result<Self, tungstenite::Error> {
         let server_peer_id = subduction.peer_id();
@@ -157,7 +159,7 @@ where
                                     let tout = timeout.clone();
                                     async move {
                                         let mut ws_config = WebSocketConfig::default();
-                                        ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
+                                        ws_config.max_message_size = Some(max_message_size);
 
                                         // Step 1: WebSocket protocol upgrade
                                         let ws_stream = match accept_hdr_async_with_config(tcp, NoCallback, Some(ws_config)).await {
@@ -260,6 +262,7 @@ where
         timeout: O,
         default_time_limit: Duration,
         handshake_max_drift: Duration,
+        max_message_size: usize,
         signer: Sig,
         service_name: Option<&str>,
         storage: S,
@@ -286,6 +289,7 @@ where
             timeout,
             default_time_limit,
             handshake_max_drift,
+            max_message_size,
             subduction,
         )
         .await?;
@@ -375,7 +379,7 @@ where
         tracing::info!("Connecting to peer at {uri_str}");
 
         let mut ws_config = WebSocketConfig::default();
-        ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
+        ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;
@@ -488,7 +492,7 @@ where
         tracing::info!("Connecting to peer at {uri_str} via discovery ({service_name})");
 
         let mut ws_config = WebSocketConfig::default();
-        ws_config.max_message_size = Some(MAX_MESSAGE_SIZE);
+        ws_config.max_message_size = Some(DEFAULT_MAX_MESSAGE_SIZE);
         let (ws_stream, _resp) = connect_async_with_config(uri, Some(ws_config))
             .await
             .map_err(TryConnectError::WebSocket)?;

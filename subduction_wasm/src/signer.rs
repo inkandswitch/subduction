@@ -30,8 +30,12 @@ extern "C" {
 
     /// Sign a message and return the 64-byte Ed25519 signature.
     /// Can return either a Uint8Array directly or a Promise<Uint8Array>.
+    ///
+    /// Accepts a `Uint8Array` (JS-heap owned) rather than `&[u8]` (Wasm memory view)
+    /// to prevent detached ArrayBuffer errors when the JS signer re-enters Wasm
+    /// and malloc grows memory.
     #[wasm_bindgen(method, js_name = sign)]
-    fn js_sign(this: &JsSigner, message: &[u8]) -> JsValue;
+    fn js_sign(this: &JsSigner, message: Uint8Array) -> JsValue;
 
     /// Get the 32-byte Ed25519 verifying (public) key.
     #[wasm_bindgen(method, js_name = verifyingKey)]
@@ -56,7 +60,12 @@ impl Signer<Local> for JsSigner {
     /// Panics if the JavaScript signer returns an invalid signature (not 64 bytes).
     #[allow(clippy::expect_used)]
     fn sign(&self, message: &[u8]) -> <Local as FutureForm>::Future<'_, Signature> {
-        let result = self.js_sign(message);
+        // Copy message to a JS-heap Uint8Array before crossing the Wasm/JS boundary.
+        // Passing &[u8] creates a view into Wasm linear memory; if the JS signer
+        // re-enters Wasm (e.g. WebCryptoSigner.sign → passArray8ToWasm0 → malloc)
+        // and malloc grows memory, the view's backing ArrayBuffer is detached.
+        let js_message = Uint8Array::from(message);
+        let result = self.js_sign(js_message);
 
         Local::from_future(async move {
             // Check if result is a Promise and await it if so

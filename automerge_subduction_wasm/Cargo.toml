@@ -1,6 +1,6 @@
 [package]
 name = "automerge_subduction_wasm"
-version = "0.2.0"
+version = "0.2.1"
 description = "Wasm bindings for syncing Automerge documents via Subduction"
 categories = ["web-programming"]
 keywords = ["automerge", "sedimentree", "wasm"]
@@ -21,8 +21,10 @@ crate-type = ["cdylib", "rlib"]
 automerge = { workspace = true, features = ["wasm"] }
 console_error_panic_hook = { version = "0.1.7", optional = true }
 automerge_sedimentree_wasm = { workspace = true }
+js-sys = { workspace = true }
 subduction_wasm = { workspace = true }
 tracing = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["registry", "std"] }
 wasm-bindgen = { workspace = true }
 wasm-tracing = { workspace = true, optional = true }
 wasm_refgen = { workspace = true }

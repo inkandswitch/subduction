@@ -433,7 +433,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                     break;
                 }
                 Err(e) => {
-                    tracing::error!("error reading from websocket: {}", e);
+                    // Distinguish between expected disconnects and real errors
+                    if is_expected_disconnect(&e) {
+                        tracing::debug!("connection closed: {}", e);
+                    } else {
+                        tracing::error!("error reading from websocket: {}", e);
+                    }
                     Err(e)?;
                 }
             }
@@ -441,6 +446,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
         Ok(())
     }
+}
+
+/// Check if a WebSocket error is an expected disconnect (not a real error).
+///
+/// These are normal occurrences when the remote end closes without a proper
+/// WebSocket close handshake (e.g., browser tab closed, network disconnect).
+const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
+    use tungstenite::Error;
+    matches!(
+        e,
+        Error::ConnectionClosed
+            | Error::AlreadyClosed
+            | Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)
+    )
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sync>

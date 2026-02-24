@@ -179,10 +179,19 @@ pub trait CommitStore<'a> {
                 continue;
             }
 
-            let fragment_state = self.fragment(head, known_fragment_states, strategy)?;
-            fresh_heads.push(head);
-            horizon.extend(fragment_state.boundary().keys().copied());
-            known_fragment_states.insert(head, fragment_state);
+            match self.fragment(head, known_fragment_states, strategy) {
+                Ok(fragment_state) => {
+                    fresh_heads.push(head);
+                    horizon.extend(fragment_state.boundary().keys().copied());
+                    known_fragment_states.insert(head, fragment_state);
+                }
+                Err(FragmentError::MissingCommit(missing)) => {
+                    // Partial history (e.g. mid-sync incremental loading).
+                    // Skip this head; a later broadcast will retry once all commits arrive.
+                    tracing::debug!(%head, %missing, "skipping head with incomplete history");
+                }
+                Err(e) => return Err(e),
+            }
         }
 
         let mut fresh = Vec::with_capacity(fresh_heads.len());

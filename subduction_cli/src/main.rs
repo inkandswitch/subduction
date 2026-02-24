@@ -3,6 +3,7 @@
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
 mod client;
+mod key;
 pub mod metrics;
 mod purge;
 mod server;
@@ -38,7 +39,7 @@ async fn main() -> eyre::Result<()> {
 }
 
 fn setup_tracing() {
-    let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let fmt_filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("warn"));
 
     // Build base registry with fmt layer
     let registry = tracing_subscriber::registry()

@@ -3,6 +3,9 @@
 //! This module provides a ready-to-use signer that uses `crypto.subtle`
 //! for secure key generation and signing operations. Keys are persisted
 //! to `IndexedDB` so they survive page reloads.
+//!
+//! Works in both window and Web Worker contexts by accessing APIs through
+//! `globalThis` rather than `window`.
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use future_form::{FutureForm, Local};
@@ -12,6 +15,43 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::peer_id::WasmPeerId;
+
+/// Get the `SubtleCrypto` object from the global scope.
+///
+/// Works in both window and Web Worker contexts.
+fn get_subtle_crypto() -> Result<web_sys::SubtleCrypto, JsValue> {
+    let global = js_sys::global();
+
+    let crypto = js_sys::Reflect::get(&global, &JsValue::from_str("crypto"))
+        .map_err(|_| JsValue::from_str("crypto not available in this context"))?;
+
+    if crypto.is_undefined() {
+        return Err(JsValue::from_str("crypto not available in this context"));
+    }
+
+    let crypto: web_sys::Crypto = crypto
+        .dyn_into()
+        .map_err(|_| JsValue::from_str("crypto is not a Crypto object"))?;
+
+    Ok(crypto.subtle())
+}
+
+/// Get the `IDBFactory` from the global scope.
+///
+/// Works in both window and Web Worker contexts.
+fn get_idb_factory() -> Result<web_sys::IdbFactory, JsValue> {
+    let global = js_sys::global();
+
+    let idb = js_sys::Reflect::get(&global, &JsValue::from_str("indexedDB"))
+        .map_err(|_| JsValue::from_str("indexedDB not available in this context"))?;
+
+    if idb.is_undefined() {
+        return Err(JsValue::from_str("indexedDB not available in this context"));
+    }
+
+    idb.dyn_into()
+        .map_err(|_| JsValue::from_str("indexedDB is not an IDBFactory object"))
+}
 
 const DB_NAME: &str = "subduction-signer";
 const STORE_NAME: &str = "keys";
@@ -59,11 +99,7 @@ impl WebCryptoSigner {
 
     /// Generate a new signer without persisting (for testing or ephemeral use).
     async fn generate_new() -> Result<WebCryptoSigner, JsValue> {
-        let crypto = web_sys::window()
-            .ok_or_else(|| JsValue::from_str("No window object"))?
-            .crypto()
-            .map_err(|_| JsValue::from_str("No crypto object"))?;
-        let subtle = crypto.subtle();
+        let subtle = get_subtle_crypto()?;
 
         // Generate Ed25519 keypair
         let algorithm = js_sys::Object::new();
@@ -96,10 +132,7 @@ impl WebCryptoSigner {
 
     /// Load the signer from `IndexedDB` if it exists.
     async fn load_from_idb() -> Result<Option<WebCryptoSigner>, JsValue> {
-        let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
-        let idb_factory = window
-            .indexed_db()?
-            .ok_or_else(|| JsValue::from_str("IndexedDB not available"))?;
+        let idb_factory = get_idb_factory()?;
 
         // Open database with version and upgrade handler to ensure store exists.
         // This prevents a race where open() without version creates an empty DB,
@@ -147,10 +180,7 @@ impl WebCryptoSigner {
         public_key_array.copy_to(&mut public_key_bytes);
 
         // Import private key from JWK
-        let crypto = window
-            .crypto()
-            .map_err(|_| JsValue::from_str("No crypto object"))?;
-        let subtle = crypto.subtle();
+        let subtle = get_subtle_crypto()?;
 
         let algorithm = js_sys::Object::new();
         js_sys::Reflect::set(&algorithm, &"name".into(), &"Ed25519".into())?;
@@ -172,14 +202,8 @@ impl WebCryptoSigner {
 
     /// Save the signer to `IndexedDB`.
     async fn save_to_idb(&self) -> Result<(), JsValue> {
-        let window = web_sys::window().ok_or_else(|| JsValue::from_str("No window object"))?;
-        let crypto = window
-            .crypto()
-            .map_err(|_| JsValue::from_str("No crypto object"))?;
-        let subtle = crypto.subtle();
-        let idb_factory = window
-            .indexed_db()?
-            .ok_or_else(|| JsValue::from_str("IndexedDB not available"))?;
+        let subtle = get_subtle_crypto()?;
+        let idb_factory = get_idb_factory()?;
 
         // Export private key as JWK
         let jwk = JsFuture::from(subtle.export_key("jwk", &self.private_key)?).await?;
@@ -259,11 +283,7 @@ impl WebCryptoSigner {
     ///
     /// Returns an error if `WebCrypto` signing fails.
     pub async fn sign(&self, message: &[u8]) -> Result<Uint8Array, JsValue> {
-        let crypto = web_sys::window()
-            .ok_or_else(|| JsValue::from_str("No window object"))?
-            .crypto()
-            .map_err(|_| JsValue::from_str("No crypto object"))?;
-        let subtle = crypto.subtle();
+        let subtle = get_subtle_crypto()?;
 
         let algorithm = js_sys::Object::new();
         js_sys::Reflect::set(&algorithm, &"name".into(), &"Ed25519".into())?;

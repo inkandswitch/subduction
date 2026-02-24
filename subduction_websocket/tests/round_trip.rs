@@ -17,8 +17,9 @@ use subduction_core::{
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::tokio::{
-    TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+use subduction_websocket::{
+    DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 
 static TRACING: OnceLock<()> = OnceLock::new();
@@ -73,6 +74,7 @@ async fn rend_receive() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         task_subduction,
     )
     .await?;
@@ -179,6 +181,7 @@ async fn batch_sync() -> TestResult {
         TimeoutTokio,
         Duration::from_secs(5),
         HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
         server_subduction.clone(),
     )
     .await?;

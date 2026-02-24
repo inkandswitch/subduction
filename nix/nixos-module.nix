@@ -50,7 +50,25 @@ in {
       keySeed = lib.mkOption {
         type = lib.types.nullOr lib.types.str;
         default = null;
-        description = "Key seed (64 hex characters) for deterministic key generation. If null, a random key will be generated.";
+        description = "Key seed (64 hex characters) for deterministic key generation. Mutually exclusive with keyFile.";
+      };
+
+      keyFile = lib.mkOption {
+        type = lib.types.nullOr lib.types.path;
+        default = null;
+        description = ''
+          Path to an existing file containing the signing key seed (32 bytes, hex or raw).
+          Mutually exclusive with keySeed and ephemeralKey.
+        '';
+      };
+
+      ephemeralKey = lib.mkOption {
+        type = lib.types.bool;
+        default = false;
+        description = ''
+          Use a random ephemeral key (lost on restart).
+          Mutually exclusive with keySeed and keyFile.
+        '';
       };
 
       handshakeMaxDrift = lib.mkOption {
@@ -75,6 +93,12 @@ in {
         type = lib.types.int;
         default = 5;
         description = "Request timeout in seconds.";
+      };
+
+      maxMessageSize = lib.mkOption {
+        type = lib.types.int;
+        default = 52428800; # 50 MB
+        description = "Maximum WebSocket message size in bytes.";
       };
 
       metricsPort = lib.mkOption {
@@ -134,8 +158,33 @@ in {
 
   config = let
     anyEnabled = cfg.server.enable || cfg.relay.enable;
+    hasKeySource = cfg.server.keySeed != null || cfg.server.keyFile != null || cfg.server.ephemeralKey;
   in
     lib.mkMerge [
+      # Assertions
+      {
+        assertions = [
+          {
+            assertion = !cfg.server.enable || hasKeySource;
+            message = ''
+              services.subduction.server requires a key source. Set one of:
+                - keyFile (recommended): Path to persistent key file
+                - keySeed: Hex-encoded key seed
+                - ephemeralKey: Use random key (lost on restart)
+            '';
+          }
+          {
+            assertion = !cfg.server.enable || lib.length (lib.filter (x: x) [
+              (cfg.server.keySeed != null)
+              (cfg.server.keyFile != null)
+              cfg.server.ephemeralKey
+            ]) <= 1;
+            message = "services.subduction.server: keySeed, keyFile, and ephemeralKey are mutually exclusive";
+          }
+        ];
+      }
+
+
       # Service configuration
       (lib.mkIf anyEnabled {
         users.users.${cfg.user} = {
@@ -169,6 +218,8 @@ in {
                   (toString cfg.server.timeout)
                   "--handshake-max-drift"
                   (toString cfg.server.handshakeMaxDrift)
+                  "--max-message-size"
+                  (toString cfg.server.maxMessageSize)
                 ]
                 ++ lib.optionals cfg.server.enableMetrics [
                   "--metrics"
@@ -178,6 +229,8 @@ in {
                   (toString cfg.server.metricsRefreshInterval)
                 ]
                 ++ lib.optionals (cfg.server.keySeed != null) ["--key-seed" cfg.server.keySeed]
+                ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
+                ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
                 ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
                 ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
             in

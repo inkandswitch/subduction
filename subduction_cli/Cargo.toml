@@ -1,6 +1,6 @@
 [package]
 name = "subduction_cli"
-version = "0.4.0"
+version = "0.4.1"
 description = "CLI server and client for Subduction sync over WebSockets"
 
 categories = ["command-line-utilities", "web-programming"]
@@ -29,7 +29,6 @@ futures-util = { workspace = true }
 hex = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-rand = { workspace = true, features = ["std", "std_rng"] }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }

@@ -1,6 +1,6 @@
 //! WebSocket server for Subduction.
 
-use crate::metrics;
+use crate::{key, metrics};
 use eyre::Result;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
@@ -12,7 +12,9 @@ use subduction_core::{
     storage::metrics::{MetricsStorage, RefreshMetrics},
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer};
+use subduction_websocket::{
+    DEFAULT_MAX_MESSAGE_SIZE, timeout::FuturesTimerTimeout, tokio::server::TokioWebSocketServer,
+};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
 
@@ -27,10 +29,8 @@ pub(crate) struct ServerArgs {
     #[arg(short, long)]
     pub(crate) data_dir: Option<PathBuf>,
 
-    /// Key seed (64 hex characters) for deterministic key generation.
-    /// If not provided, a random key will be generated.
-    #[arg(short, long)]
-    pub(crate) key_seed: Option<String>,
+    #[command(flatten)]
+    pub(crate) key: key::KeyArgs,
 
     /// Maximum clock drift allowed during handshake (in seconds)
     #[arg(long, default_value = "600")]
@@ -47,6 +47,10 @@ pub(crate) struct ServerArgs {
     /// Request timeout in seconds
     #[arg(short, long, default_value = "5")]
     pub(crate) timeout: u64,
+
+    /// Maximum WebSocket message size in bytes (default: 50 MB)
+    #[arg(long, default_value_t = DEFAULT_MAX_MESSAGE_SIZE)]
+    pub(crate) max_message_size: usize,
 
     /// Metrics server port (Prometheus endpoint)
     #[arg(long, default_value = "9090")]
@@ -71,8 +75,13 @@ const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
 /// Run the WebSocket server.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()> {
+    tracing::warn!("Subduction server v{}", env!("CARGO_PKG_VERSION"));
+
     let addr: SocketAddr = args.socket.parse()?;
-    let data_dir = args.data_dir.unwrap_or_else(|| PathBuf::from("./data"));
+    let data_dir = args
+        .data_dir
+        .clone()
+        .unwrap_or_else(|| PathBuf::from("./data"));
 
     // Initialize and start metrics server if enabled
     if args.metrics {
@@ -113,13 +122,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
     }
 
-    let signer = match &args.key_seed {
-        Some(hex_seed) => {
-            let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
-            MemorySigner::from_bytes(&seed_bytes)
-        }
-        None => MemorySigner::generate(),
-    };
+    let signer = key::load_signer(&args.key)?;
     let peer_id = PeerId::from(signer.verifying_key());
 
     // Default service name to socket address if not specified
@@ -134,6 +137,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             FuturesTimerTimeout,
             Duration::from_secs(args.timeout),
             Duration::from_secs(args.handshake_max_drift),
+            args.max_message_size,
             signer.clone(),
             Some(service_name.as_str()),
             storage,

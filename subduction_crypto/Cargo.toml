@@ -1,6 +1,6 @@
 [package]
 name = "subduction_crypto"
-version = "0.1.0"
+version = "0.1.1"
 description = "Cryptographic types for Subduction: signed payloads, verification witnesses"
 
 authors.workspace = true
@@ -15,7 +15,7 @@ rust-version.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
-ed25519-dalek = { workspace = true }
+ed25519-dalek = { workspace = true, features = ["zeroize"] }
 future_form = { workspace = true }
 futures = { workspace = true }
 getrandom = { workspace = true }
