@@ -136,7 +136,7 @@ mod tracing_setup {
     use std::sync::OnceLock;
 
     use tracing_subscriber::{
-        filter::LevelFilter, layer::SubscriberExt, reload, util::SubscriberInitExt, Registry,
+        Registry, filter::LevelFilter, layer::SubscriberExt, reload, util::SubscriberInitExt,
     };
     use wasm_tracing::{WasmLayer, WasmLayerConfig};
 
