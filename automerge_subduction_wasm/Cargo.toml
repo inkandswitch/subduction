@@ -1,6 +1,6 @@
 [package]
 name = "automerge_subduction_wasm"
-version = "0.2.0"
+version = "0.2.1"
 description = "Wasm bindings for syncing Automerge documents via Subduction"
 categories = ["web-programming"]
 keywords = ["automerge", "sedimentree", "wasm"]

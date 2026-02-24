@@ -1,6 +1,6 @@
 [package]
 name = "subduction_crypto"
-version = "0.1.0"
+version = "0.1.1"
 description = "Cryptographic types for Subduction: signed payloads, verification witnesses"
 
 authors.workspace = true

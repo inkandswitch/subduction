@@ -1,6 +1,6 @@
 [package]
 name = "subduction_cli"
-version = "0.4.0"
+version = "0.4.1"
 description = "CLI server and client for Subduction sync over WebSockets"
 
 categories = ["command-line-utilities", "web-programming"]

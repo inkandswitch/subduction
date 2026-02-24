@@ -40,9 +40,8 @@ in {
         type = lib.types.nullOr lib.types.path;
         default = null;
         description = ''
-          Path to a file containing the signing key seed (32 bytes, hex or raw).
-          If the file doesn't exist, a new key will be generated and saved.
-          Mutually exclusive with keySeed and ephemeral.
+          Path to an existing file containing the signing key seed (32 bytes, hex or raw).
+          Mutually exclusive with keySeed and ephemeralKey.
         '';
       };
 
