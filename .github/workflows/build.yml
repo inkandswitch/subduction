@@ -11,7 +11,21 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.extract.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from subduction_cli/Cargo.toml
+        id: extract
+        run: |
+          version=$(grep '^version' subduction_cli/Cargo.toml | head -1 | sed 's/.*"\(.*\)"/\1/')
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   build-cli:
+    needs: version
     strategy:
       matrix:
         include:
@@ -19,20 +33,37 @@ jobs:
             target: x86_64-unknown-linux-gnu
             artifact-name: subduction-linux-x86_64
             cargo-flags: ""
+            ext: ""
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             artifact-name: subduction-linux-x86_64-musl
             cargo-flags: "--no-default-features --features rustls"
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            artifact-name: subduction-macos-x86_64
+            ext: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+            artifact-name: subduction-linux-aarch64
             cargo-flags: ""
+            ext: ""
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            artifact-name: subduction-linux-aarch64-musl
+            cargo-flags: "--no-default-features --features rustls"
+            ext: ""
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact-name: subduction-macos-aarch64
             cargo-flags: ""
+            ext: ""
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact-name: subduction-windows-x86_64
+            cargo-flags: ""
+            ext: ".exe"
 
     runs-on: ${{ matrix.os }}
+
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
@@ -44,35 +75,47 @@ jobs:
           cache: true
 
       - name: Install musl tools
-        if: matrix.target == 'x86_64-unknown-linux-musl'
+        if: contains(matrix.target, 'musl')
         run: sudo apt-get update && sudo apt-get install -y musl-tools
 
       - name: Build CLI
         run: cargo build --release --package subduction_cli --target ${{ matrix.target }} ${{ matrix.cargo-flags }}
 
       - name: Rename binary
+        shell: bash
         run: |
           mkdir -p dist
-          cp target/${{ matrix.target }}/release/subduction_cli dist/${{ matrix.artifact-name }}
+          cp target/${{ matrix.target }}/release/subduction_cli${{ matrix.ext }} dist/${{ matrix.artifact-name }}-${{ env.VERSION }}${{ matrix.ext }}
 
       - name: Upload CLI artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact-name }}
-          path: dist/${{ matrix.artifact-name }}
+          name: ${{ matrix.artifact-name }}-${{ env.VERSION }}
+          path: dist/${{ matrix.artifact-name }}-${{ env.VERSION }}${{ matrix.ext }}
           retention-days: 90
 
   build-wasm:
+    needs: version
     runs-on: ubuntu-latest
+
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
 
     steps:
       - uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@v21
 
       - name: Setup Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+        uses: DeterminateSystems/magic-nix-cache-action@v13
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        with:
+          name: inkandswitch
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        if: ${{ !github.event.pull_request.head.repo.fork }}
 
       - name: Install pnpm dependencies
         run: |
@@ -88,7 +131,7 @@ jobs:
       - name: Upload subduction_wasm artifact
         uses: actions/upload-artifact@v4
         with:
-          name: subduction-wasm
+          name: subduction-wasm-${{ env.VERSION }}
           path: |
             subduction_wasm/pkg/
             subduction_wasm/pkg-node/
@@ -100,7 +143,7 @@ jobs:
       - name: Upload automerge_sedimentree_wasm artifact
         uses: actions/upload-artifact@v4
         with:
-          name: automerge-sedimentree-wasm
+          name: automerge-sedimentree-wasm-${{ env.VERSION }}
           path: |
             automerge_sedimentree_wasm/pkg/
             automerge_sedimentree_wasm/pkg-node/
@@ -111,7 +154,7 @@ jobs:
       - name: Upload automerge_subduction_wasm artifact
         uses: actions/upload-artifact@v4
         with:
-          name: automerge-subduction-wasm
+          name: automerge-subduction-wasm-${{ env.VERSION }}
           path: |
             automerge_subduction_wasm/pkg/
             automerge_subduction_wasm/pkg-node/
@@ -119,3 +162,103 @@ jobs:
             automerge_subduction_wasm/package.json
             automerge_subduction_wasm/README.md
           retention-days: 90
+
+  release:
+    if: github.ref == 'refs/heads/main'
+    needs: [version, build-cli, build-wasm]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Prepare release assets
+        run: |
+          mkdir -p release
+
+          # CLI binaries
+          for name in \
+            subduction-linux-x86_64 \
+            subduction-linux-x86_64-musl \
+            subduction-linux-aarch64 \
+            subduction-linux-aarch64-musl \
+            subduction-macos-aarch64 \
+            subduction-windows-x86_64 \
+          ; do
+            dir="artifacts/${name}-${VERSION}"
+            if [ ! -d "$dir" ]; then
+              echo "::error::Expected artifact directory missing: $dir"
+              exit 1
+            fi
+            find "$dir" -type f | while read -r file; do
+              cp "$file" "release/$(basename "$file")"
+              chmod +x "release/$(basename "$file")" 2>/dev/null || true
+            done
+          done
+
+          # Wasm tarballs
+          for name in subduction-wasm automerge-sedimentree-wasm automerge-subduction-wasm; do
+            tar -czf "release/${name}-${VERSION}.tar.gz" -C "artifacts/${name}-${VERSION}" .
+          done
+
+          ls -lh release/
+
+      - name: Determine release tag
+        id: tag
+        run: |
+          date=$(date +%Y-%m-%d)
+          tag="v${VERSION}-nightly.${date}"
+
+          # If this tag already exists, delete the old release
+          if gh release view "$tag" &>/dev/null; then
+            gh release delete "$tag" --yes --cleanup-tag
+          fi
+
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Create GitHub Release
+        run: |
+          gh release create "${{ steps.tag.outputs.tag }}" \
+            --title "v${VERSION} (nightly ${{ steps.tag.outputs.date }})" \
+            --prerelease \
+            --notes "$(cat <<EOF
+          ## Subduction v${VERSION} — Nightly Build
+
+          **Date:** ${{ steps.tag.outputs.date }}
+          **Commit:** [\`${GITHUB_SHA::8}\`](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commit/${GITHUB_SHA})
+
+          ### CLI Binaries
+
+          | Platform | File |
+          |----------|------|
+          | Linux x86_64 | \`subduction-linux-x86_64-${VERSION}\` |
+          | Linux x86_64 (static) | \`subduction-linux-x86_64-musl-${VERSION}\` |
+          | Linux aarch64 | \`subduction-linux-aarch64-${VERSION}\` |
+          | Linux aarch64 (static) | \`subduction-linux-aarch64-musl-${VERSION}\` |
+          | macOS aarch64 (Apple Silicon) | \`subduction-macos-aarch64-${VERSION}\` |
+          | Windows x86_64 | \`subduction-windows-x86_64-${VERSION}.exe\` |
+
+          ### Wasm Packages
+
+          | Package | File |
+          |---------|------|
+          | subduction_wasm | \`subduction-wasm-${VERSION}.tar.gz\` |
+          | automerge_sedimentree_wasm | \`automerge-sedimentree-wasm-${VERSION}.tar.gz\` |
+          | automerge_subduction_wasm | \`automerge-subduction-wasm-${VERSION}.tar.gz\` |
+          EOF
+          )" \
+            release/*
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

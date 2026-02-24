@@ -46,9 +46,17 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Install Nix
-      uses: cachix/install-nix-action@v26
+      uses: DeterminateSystems/nix-installer-action@v21
+
+    - name: Setup Nix cache
+      uses: DeterminateSystems/magic-nix-cache-action@v13
+
+    - name: Setup Cachix
+      uses: cachix/cachix-action@v15
+      if: ${{ !github.event.pull_request.head.repo.fork }}
       with:
-        github_access_token: ${{ secrets.GITHUB_TOKEN }}
+        name: inkandswitch
+        authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
 
     - name: Test std features via Nix
       run: nix develop --command test:std
