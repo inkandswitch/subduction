@@ -185,9 +185,10 @@ pub trait CommitStore<'a> {
                     horizon.extend(fragment_state.boundary().keys().copied());
                     known_fragment_states.insert(head, fragment_state);
                 }
-                Err(FragmentError::MissingCommit(_)) => {
+                Err(FragmentError::MissingCommit(missing)) => {
                     // Partial history (e.g. mid-sync incremental loading).
                     // Skip this head; a later broadcast will retry once all commits arrive.
+                    tracing::debug!(%head, %missing, "skipping head with incomplete history");
                 }
                 Err(e) => return Err(e),
             }
