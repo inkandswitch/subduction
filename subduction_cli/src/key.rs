@@ -1,6 +1,6 @@
 //! Key loading and persistence utilities.
 
-use eyre::{Result, WrapErr, eyre};
+use eyre::{eyre, Result, WrapErr};
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -11,23 +11,28 @@ use subduction_crypto::signer::memory::MemorySigner;
 #[derive(Debug, clap::Args)]
 pub(crate) struct KeyArgs {
     /// Key seed (64 hex characters) for deterministic key generation.
-    /// Mutually exclusive with --key-file.
-    #[arg(short, long, conflicts_with = "key_file")]
+    /// Mutually exclusive with --key-file and --ephemeral-key.
+    #[arg(short, long, conflicts_with_all = ["key_file", "ephemeral_key"])]
     pub(crate) key_seed: Option<String>,
 
     /// Path to a file containing the signing key seed (32 bytes, hex or raw).
     /// If the file doesn't exist, a new key will be generated and saved.
-    /// Mutually exclusive with --key-seed.
-    #[arg(long, conflicts_with = "key_seed")]
+    /// Mutually exclusive with --key-seed and --ephemeral-key.
+    #[arg(long, conflicts_with_all = ["key_seed", "ephemeral_key"])]
     pub(crate) key_file: Option<PathBuf>,
+
+    /// Use a random ephemeral key (lost on restart).
+    /// Mutually exclusive with --key-seed and --key-file.
+    #[arg(long, conflicts_with_all = ["key_seed", "key_file"])]
+    pub(crate) ephemeral_key: bool,
 }
 
-/// Load a signer from the configured source, or generate a new one.
+/// Load a signer from the configured source.
 ///
-/// Priority:
-/// 1. `--key-seed`: Use the provided hex seed
-/// 2. `--key-file`: Load from file, or generate and save if file doesn't exist
-/// 3. Neither: Generate a random ephemeral key (warning: lost on restart)
+/// Requires one of:
+/// - `--key-seed`: Use the provided hex seed
+/// - `--key-file`: Load from file, or generate and save if file doesn't exist
+/// - `--ephemeral-key`: Generate a random ephemeral key (lost on restart)
 pub(crate) fn load_or_create_signer(args: &KeyArgs) -> Result<MemorySigner> {
     if let Some(hex_seed) = &args.key_seed {
         let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
@@ -39,11 +44,17 @@ pub(crate) fn load_or_create_signer(args: &KeyArgs) -> Result<MemorySigner> {
         return load_or_create_key_file(key_path);
     }
 
-    // No key source specified — generate ephemeral key
-    tracing::warn!(
-        "No --key-seed or --key-file specified. Generating ephemeral key (will be lost on restart)."
-    );
-    Ok(MemorySigner::generate())
+    if args.ephemeral_key {
+        tracing::warn!("Using ephemeral key (will be lost on restart)");
+        return Ok(MemorySigner::generate());
+    }
+
+    Err(eyre!(
+        "No key source specified. Use one of:\n  \
+         --key-file <PATH>   Persistent key file (recommended)\n  \
+         --key-seed <HEX>    Deterministic key from hex seed\n  \
+         --ephemeral-key     Random key (lost on restart)"
+    ))
 }
 
 /// Load a signing key from a file, or create one if it doesn't exist.
