@@ -52,7 +52,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
     let _storage = FsStorage::new(data_dir)?;
 
-    let signer = key::load_or_create_signer(&args.key)?;
+    let signer = key::load_signer(&args.key)?;
     let peer_id = PeerId::from(signer.verifying_key());
 
     let server_peer_id = crate::parse_peer_id(&args.server_peer_id)?;

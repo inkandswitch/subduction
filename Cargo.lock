@@ -3143,7 +3143,6 @@ dependencies = [
  "hex",
  "metrics",
  "metrics-exporter-prometheus",
- "rand 0.8.5",
  "sedimentree_core",
  "sedimentree_fs_storage",
  "subduction_core",

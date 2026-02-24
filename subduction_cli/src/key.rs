@@ -1,4 +1,4 @@
-//! Key loading and persistence utilities.
+//! Key loading utilities.
 
 use eyre::{Result, WrapErr, eyre};
 use std::{
@@ -16,7 +16,7 @@ pub(crate) struct KeyArgs {
     pub(crate) key_seed: Option<String>,
 
     /// Path to a file containing the signing key seed (32 bytes, hex or raw).
-    /// If the file doesn't exist, a new key will be generated and saved.
+    /// The file must already exist.
     /// Mutually exclusive with --key-seed and --ephemeral-key.
     #[arg(long, conflicts_with_all = ["key_seed", "ephemeral_key"])]
     pub(crate) key_file: Option<PathBuf>,
@@ -31,9 +31,9 @@ pub(crate) struct KeyArgs {
 ///
 /// Requires one of:
 /// - `--key-seed`: Use the provided hex seed
-/// - `--key-file`: Load from file, or generate and save if file doesn't exist
+/// - `--key-file`: Load from an existing file
 /// - `--ephemeral-key`: Generate a random ephemeral key (lost on restart)
-pub(crate) fn load_or_create_signer(args: &KeyArgs) -> Result<MemorySigner> {
+pub(crate) fn load_signer(args: &KeyArgs) -> Result<MemorySigner> {
     if let Some(hex_seed) = &args.key_seed {
         let seed_bytes = crate::parse_32_bytes(hex_seed, "key seed")?;
         tracing::info!("Using signing key from --key-seed");
@@ -41,7 +41,7 @@ pub(crate) fn load_or_create_signer(args: &KeyArgs) -> Result<MemorySigner> {
     }
 
     if let Some(key_path) = &args.key_file {
-        return load_or_create_key_file(key_path);
+        return load_key_file(key_path);
     }
 
     if args.ephemeral_key {
@@ -51,40 +51,20 @@ pub(crate) fn load_or_create_signer(args: &KeyArgs) -> Result<MemorySigner> {
 
     Err(eyre!(
         "No key source specified. Use one of:\n  \
-         --key-file <PATH>   Persistent key file (recommended)\n  \
-         --key-seed <HEX>    Deterministic key from hex seed\n  \
+         --key-file <PATH>   Load key from file\n  \
+         --key-seed <HEX>    Key from hex seed\n  \
          --ephemeral-key     Random key (lost on restart)"
     ))
 }
 
-/// Load a signing key from a file, or create one if it doesn't exist.
-fn load_or_create_key_file(path: &Path) -> Result<MemorySigner> {
-    if path.exists() {
-        let contents = fs::read(path)
-            .wrap_err_with(|| format!("Failed to read key file: {}", path.display()))?;
+/// Load a signing key from an existing file.
+fn load_key_file(path: &Path) -> Result<MemorySigner> {
+    let contents =
+        fs::read(path).wrap_err_with(|| format!("Failed to read key file: {}", path.display()))?;
 
-        let seed_bytes = parse_key_file_contents(&contents, path)?;
-        tracing::info!("Loaded signing key from {}", path.display());
-        Ok(MemorySigner::from_bytes(&seed_bytes))
-    } else {
-        // Generate new key and save it
-        let signer = MemorySigner::generate();
-        let seed_bytes = signer.seed_bytes();
-
-        // Create parent directories if needed
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent)
-                .wrap_err_with(|| format!("Failed to create directory: {}", parent.display()))?;
-        }
-
-        // Write as hex for human readability
-        let hex_seed = hex::encode(seed_bytes);
-        fs::write(path, hex_seed.as_bytes())
-            .wrap_err_with(|| format!("Failed to write key file: {}", path.display()))?;
-
-        tracing::info!("Generated new signing key and saved to {}", path.display());
-        Ok(signer)
-    }
+    let seed_bytes = parse_key_file_contents(&contents, path)?;
+    tracing::info!("Loaded signing key from {}", path.display());
+    Ok(MemorySigner::from_bytes(&seed_bytes))
 }
 
 /// Parse key file contents as either hex or raw bytes.

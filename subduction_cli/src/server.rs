@@ -75,6 +75,8 @@ const DEFAULT_METRICS_REFRESH_SECS: u64 = 60;
 /// Run the WebSocket server.
 #[allow(clippy::too_many_lines)]
 pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()> {
+    tracing::warn!("Subduction server v{}", env!("CARGO_PKG_VERSION"));
+
     let addr: SocketAddr = args.socket.parse()?;
     let data_dir = args
         .data_dir
@@ -120,7 +122,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         });
     }
 
-    let signer = key::load_or_create_signer(&args.key)?;
+    let signer = key::load_signer(&args.key)?;
     let peer_id = PeerId::from(signer.verifying_key());
 
     // Default service name to socket address if not specified
