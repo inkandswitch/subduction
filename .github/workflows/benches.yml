@@ -27,6 +27,9 @@ jobs:
       - name: Run subduction_core benchmarks
         run: cargo bench --package subduction_core --features std --bench subduction -- --noplot
 
+      - name: Run e2e WebSocket benchmarks
+        run: cargo bench --package subduction_websocket --features tokio_client,tokio_server --bench e2e -- --noplot
+
       - name: Run heap allocation profiling
         run: cargo test --package sedimentree_core --test heap_profile -- --nocapture
 

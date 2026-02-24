@@ -77,6 +77,48 @@
   };
 
   bench = {
+    "bench" = cmd "Run all benchmarks (core + e2e)" ''
+      set -e
+
+      echo "===> Running sedimentree_core benchmarks..."
+      ${cargo} bench --package sedimentree_core --features std --bench sedimentree
+
+      echo ""
+      echo "===> Running subduction_core benchmarks..."
+      ${cargo} bench --package subduction_core --features std --bench subduction
+
+      echo ""
+      echo "===> Running e2e WebSocket benchmarks..."
+      ${cargo} bench --package subduction_websocket --features tokio_client,tokio_server --bench e2e
+
+      echo ""
+      echo "✓ All benchmarks complete — results in target/criterion/"
+    '';
+
+    "bench:core" = cmd "Run sedimentree + subduction core benchmarks" ''
+      set -e
+
+      echo "===> Running sedimentree_core benchmarks..."
+      ${cargo} bench --package sedimentree_core --features std --bench sedimentree
+
+      echo ""
+      echo "===> Running subduction_core benchmarks..."
+      ${cargo} bench --package subduction_core --features std --bench subduction
+
+      echo ""
+      echo "✓ Core benchmarks complete"
+    '';
+
+    "bench:e2e" = cmd "Run e2e WebSocket sync benchmarks" ''
+      set -e
+
+      echo "===> Running e2e WebSocket benchmarks..."
+      ${cargo} bench --package subduction_websocket --features tokio_client,tokio_server --bench e2e
+
+      echo ""
+      echo "✓ E2E benchmarks complete — results in target/criterion/"
+    '';
+
     "bench:heap" = cmd "Run heap allocation profiling" ''
       ${cargo} test --package sedimentree_core --test heap_profile -- --nocapture
       ${pkgs.jq}/bin/jq '.' sedimentree_core/dhat-heap.json | ${pkgs.moreutils}/bin/sponge sedimentree_core/dhat-heap.json
