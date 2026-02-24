@@ -7,9 +7,6 @@ on:
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: write
-
 env:
   CARGO_TERM_COLOR: always
 
@@ -108,16 +105,17 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Nix
-        uses: DeterminateSystems/nix-installer-action@main
+        uses: DeterminateSystems/nix-installer-action@v21
 
       - name: Setup Nix cache
-        uses: DeterminateSystems/magic-nix-cache-action@main
+        uses: DeterminateSystems/magic-nix-cache-action@v13
 
       - name: Setup Cachix
         uses: cachix/cachix-action@v15
         with:
           name: inkandswitch
           authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+        if: ${{ !github.event.pull_request.head.repo.fork }}
 
       - name: Install pnpm dependencies
         run: |
@@ -169,6 +167,8 @@ jobs:
     if: github.ref == 'refs/heads/main'
     needs: [version, build-cli, build-wasm]
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
 
     env:
       VERSION: ${{ needs.version.outputs.version }}
@@ -195,7 +195,10 @@ jobs:
             subduction-windows-x86_64 \
           ; do
             dir="artifacts/${name}-${VERSION}"
-            [ -d "$dir" ] || continue
+            if [ ! -d "$dir" ]; then
+              echo "::error::Expected artifact directory missing: $dir"
+              exit 1
+            fi
             find "$dir" -type f | while read -r file; do
               cp "$file" "release/$(basename "$file")"
               chmod +x "release/$(basename "$file")" 2>/dev/null || true
