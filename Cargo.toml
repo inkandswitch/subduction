@@ -130,3 +130,41 @@ codegen-units = 1
 lto = "fat"
 opt-level = "z"
 panic = "abort"
+strip = "symbols"
+
+# The workspace-wide opt-level="z" is tuned for Wasm bundle size.
+# The CLI is a native binary where throughput and latency matter,
+# so we override it and its hot-path dependencies to opt-level=3.
+[profile.release.package.subduction_cli]
+opt-level = 3
+
+[profile.release.package.subduction_core]
+opt-level = 3
+
+[profile.release.package.subduction_crypto]
+opt-level = 3
+
+[profile.release.package.subduction_websocket]
+opt-level = 3
+
+[profile.release.package.sedimentree_core]
+opt-level = 3
+
+[profile.release.package.sedimentree_fs_storage]
+opt-level = 3
+
+# Performance-critical third-party dependencies
+[profile.release.package.blake3]
+opt-level = 3
+
+[profile.release.package.ed25519-dalek]
+opt-level = 3
+
+[profile.release.package.curve25519-dalek]
+opt-level = 3
+
+[profile.release.package.tokio]
+opt-level = 3
+
+[profile.release.package.ahash]
+opt-level = 3
