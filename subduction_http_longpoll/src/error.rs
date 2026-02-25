@@ -1,7 +1,6 @@
 //! Error types for the HTTP long-poll transport.
 
 use futures::channel::oneshot;
-use subduction_core::connection::message::Message;
 use thiserror::Error;
 
 /// Outbound channel closed — no more messages can be sent to the client.
@@ -36,6 +35,7 @@ pub struct RecvError;
 pub struct DisconnectionError;
 
 /// Errors while processing an HTTP long-poll request on the server.
+#[cfg(feature = "server")]
 #[derive(Debug, Error)]
 pub enum ServerError {
     /// The session ID header is missing or malformed.
@@ -60,15 +60,11 @@ pub enum ServerError {
 
     /// Internal channel error.
     #[error("channel send error: {0}")]
-    ChanSend(Box<async_channel::SendError<Message>>),
+    ChanSend(Box<async_channel::SendError<subduction_core::connection::message::Message>>),
 
     /// Handshake protocol error.
     #[error("handshake error: {0}")]
     Handshake(alloc::string::String),
-
-    /// Hyper HTTP error.
-    #[error("HTTP error: {0}")]
-    Http(hyper::Error),
 }
 
 /// Errors while connecting as a client.

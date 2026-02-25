@@ -8,6 +8,7 @@ pub mod manager;
 pub mod message;
 pub mod nonce_cache;
 pub mod stats;
+pub mod timeout;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;

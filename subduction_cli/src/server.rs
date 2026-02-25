@@ -19,17 +19,17 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::metrics::{MetricsStorage, RefreshMetrics},
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;
 use subduction_websocket::{
+    DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
     timeout::FuturesTimerTimeout,
-    tokio::{unified::UnifiedWebSocket, TokioSpawn},
+    tokio::{TokioSpawn, unified::UnifiedWebSocket},
     websocket::WebSocket,
-    DEFAULT_MAX_MESSAGE_SIZE,
 };
 use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
@@ -471,18 +471,16 @@ async fn handle_http_longpoll(
 
             // After a successful handshake, register with Subduction
             if resp.status() == hyper::StatusCode::OK
-                && let Some(session_hdr) =
-                    resp.headers().get(subduction_http_longpoll::SESSION_ID_HEADER)
+                && let Some(session_hdr) = resp
+                    .headers()
+                    .get(subduction_http_longpoll::SESSION_ID_HEADER)
                 && let Ok(sid_str) = session_hdr.to_str()
-                && let Some(sid) =
-                    subduction_http_longpoll::session::SessionId::from_hex(sid_str)
+                && let Some(sid) = subduction_http_longpoll::session::SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
             {
                 let unified_auth = auth.map(UnifiedTransport::HttpLongPoll);
                 if let Err(e) = subduction.register(unified_auth).await {
-                    tracing::error!(
-                        "Failed to register HTTP long-poll connection: {e}"
-                    );
+                    tracing::error!("Failed to register HTTP long-poll connection: {e}");
                 }
             }
 

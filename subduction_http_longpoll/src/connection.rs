@@ -1,4 +1,4 @@
-//! HTTP long-poll connection implementing [`Connection<Sendable>`].
+//! HTTP long-poll connection implementing [`Connection<K>`].
 //!
 //! Unlike the WebSocket transport, there are no background listener/sender
 //! tasks. Instead, the HTTP server's request handlers directly push to and
@@ -20,13 +20,14 @@ use core::{
 };
 
 use async_lock::Mutex;
-use future_form::Sendable;
-use futures::{channel::oneshot, future::BoxFuture, FutureExt};
+use future_form::{FutureForm, Sendable};
+use futures::channel::oneshot;
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        timeout::{TimedOut, Timeout},
     },
     peer::id::PeerId,
 };
@@ -44,11 +45,12 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// This struct is wrapped in an `Arc` so that clones share the same channels
 /// and pending-request map — exactly like the WebSocket transport.
 #[derive(Debug)]
-struct Inner {
+struct Inner<O> {
     peer_id: PeerId,
     chan_id: u64,
     req_id_counter: AtomicU64,
     default_time_limit: Duration,
+    timeout: O,
 
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
 
@@ -60,22 +62,25 @@ struct Inner {
     inbound_reader: async_channel::Receiver<Message>,
 }
 
-/// An HTTP long-poll connection that implements [`Connection<Sendable>`].
+/// An HTTP long-poll connection that implements [`Connection<K>`].
 ///
 /// Created during handshake and stored in the [`SessionStore`](crate::session::SessionStore).
 /// The server's HTTP handlers interact with this connection's channels to
 /// bridge HTTP request-response pairs to Subduction's bidirectional protocol.
+///
+/// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio` for native,
+/// or a browser-based timeout for Wasm).
 #[derive(Debug, Clone)]
-pub struct HttpLongPollConnection {
-    inner: Arc<Inner>,
+pub struct HttpLongPollConnection<O> {
+    inner: Arc<Inner<O>>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
     outbound_rx: async_channel::Receiver<Message>,
 }
 
-impl HttpLongPollConnection {
+impl<O> HttpLongPollConnection<O> {
     /// Create a new HTTP long-poll connection for the given peer.
     #[must_use]
-    pub fn new(peer_id: PeerId, default_time_limit: Duration) -> Self {
+    pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let starting_counter = rand::random::<u64>();
@@ -87,6 +92,7 @@ impl HttpLongPollConnection {
                 chan_id,
                 req_id_counter: AtomicU64::new(starting_counter),
                 default_time_limit,
+                timeout,
                 pending: Mutex::new(Map::new()),
                 outbound_tx,
                 inbound_writer,
@@ -155,7 +161,10 @@ impl HttpLongPollConnection {
     }
 }
 
-impl Connection<Sendable> for HttpLongPollConnection {
+impl<K: FutureForm, O: Timeout<K> + Clone> Connection<K> for HttpLongPollConnection<O>
+where
+    Self: Clone + PartialEq,
+{
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -165,29 +174,27 @@ impl Connection<Sendable> for HttpLongPollConnection {
         self.inner.peer_id
     }
 
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async {
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
+        K::from_future(async {
             let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("generated request id {counter:?}");
             RequestId {
                 requestor: self.inner.peer_id,
                 nonce: counter,
             }
-        }
-        .boxed()
+        })
     }
 
-    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
         let conn = self.clone();
-        async move {
+        K::from_future(async move {
             conn.close();
             Ok(())
-        }
-        .boxed()
+        })
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "http-lp: sending outbound message id {:?} to peer {}",
             message.request_id(),
@@ -196,14 +203,13 @@ impl Connection<Sendable> for HttpLongPollConnection {
 
         let msg = message.clone();
         let tx = self.inner.outbound_tx.clone();
-        async move {
+        K::from_future(async move {
             tx.send(msg).await.map_err(|_| SendError)?;
             Ok(())
-        }
-        .boxed()
+        })
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
         tracing::debug!(
             chan_id = self.inner.chan_id,
@@ -211,7 +217,7 @@ impl Connection<Sendable> for HttpLongPollConnection {
             self.inner.peer_id
         );
 
-        async move {
+        K::from_future(async move {
             let msg = chan.recv().await.map_err(|_| {
                 tracing::error!("inbound channel closed unexpectedly");
                 RecvError
@@ -219,22 +225,25 @@ impl Connection<Sendable> for HttpLongPollConnection {
 
             tracing::debug!("recv: inbound message {msg:?}");
             Ok(msg)
-        }
-        .boxed()
+        })
     }
 
     fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         let outbound_tx = self.inner.outbound_tx.clone();
-        async move {
+        let timeout = self.inner.timeout.clone();
+        let default_time_limit = self.inner.default_time_limit;
+        let inner = self.inner.clone();
+
+        K::from_future(async move {
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
 
             let (tx, rx) = oneshot::channel();
-            self.inner.pending.lock().await.insert(req_id, tx);
+            inner.pending.lock().await.insert(req_id, tx);
 
             let msg = Message::BatchSyncRequest(req);
             outbound_tx
@@ -243,13 +252,14 @@ impl Connection<Sendable> for HttpLongPollConnection {
                 .map_err(|_| CallError::ChannelClosed)?;
 
             tracing::debug!(
-                chan_id = self.inner.chan_id,
+                chan_id = inner.chan_id,
                 "sent HTTP long-poll request {req_id:?}"
             );
 
-            let req_timeout = override_timeout.unwrap_or(self.inner.default_time_limit);
+            let req_timeout = override_timeout.unwrap_or(default_time_limit);
+            let rx_fut = K::from_future(async { rx.await });
 
-            match tokio::time::timeout(req_timeout, rx).await {
+            match timeout.timeout(req_timeout, rx_fut).await {
                 Ok(Ok(resp)) => {
                     tracing::info!("request {req_id:?} completed");
                     Ok(resp)
@@ -258,18 +268,17 @@ impl Connection<Sendable> for HttpLongPollConnection {
                     tracing::error!("request {req_id:?} failed: {e}");
                     Err(CallError::ResponseDropped(e))
                 }
-                Err(_elapsed) => {
+                Err(TimedOut) => {
                     tracing::error!("request {req_id:?} timed out");
-                    self.inner.pending.lock().await.remove(&req_id);
+                    inner.pending.lock().await.remove(&req_id);
                     Err(CallError::Timeout)
                 }
             }
-        }
-        .boxed()
+        })
     }
 }
 
-impl PartialEq for HttpLongPollConnection {
+impl<O> PartialEq for HttpLongPollConnection<O> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -278,16 +287,41 @@ impl PartialEq for HttpLongPollConnection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use subduction_core::peer::id::PeerId;
+    use subduction_core::{connection::timeout::Timeout, peer::id::PeerId};
+
+    /// A simple timer-based timeout for tests using `futures_timer::Delay`.
+    #[derive(Debug, Clone, Copy)]
+    struct TestTimeout;
+
+    impl Timeout<Sendable> for TestTimeout {
+        fn timeout<'a, T: 'a>(
+            &'a self,
+            dur: Duration,
+            fut: futures::future::BoxFuture<'a, T>,
+        ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::connection::timeout::TimedOut>>
+        {
+            use futures::{
+                FutureExt,
+                future::{Either, select},
+            };
+            async move {
+                match select(fut, futures_timer::Delay::new(dur)).await {
+                    Either::Left((val, _)) => Ok(val),
+                    Either::Right(_) => Err(subduction_core::connection::timeout::TimedOut),
+                }
+            }
+            .boxed()
+        }
+    }
 
     #[tokio::test]
     async fn next_request_id_increments() {
         let peer_id = PeerId::new([1u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30));
+        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
-        let id1 = conn.next_request_id().await;
-        let id2 = conn.next_request_id().await;
-        let id3 = conn.next_request_id().await;
+        let id1 = Connection::<Sendable>::next_request_id(&conn).await;
+        let id2 = Connection::<Sendable>::next_request_id(&conn).await;
+        let id3 = Connection::<Sendable>::next_request_id(&conn).await;
 
         assert_eq!(id1.requestor, peer_id);
         assert_eq!(id2.nonce, id1.nonce + 1);
@@ -300,14 +334,14 @@ mod tests {
         use subduction_core::connection::message::RemoveSubscriptions;
 
         let peer_id = PeerId::new([2u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30));
+        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
         });
 
         conn.push_inbound(msg.clone()).await.expect("push ok");
-        let received = conn.recv().await.expect("recv ok");
+        let received = Connection::<Sendable>::recv(&conn).await.expect("recv ok");
 
         assert!(matches!(received, Message::RemoveSubscriptions(_)));
     }
@@ -318,13 +352,15 @@ mod tests {
         use subduction_core::connection::message::RemoveSubscriptions;
 
         let peer_id = PeerId::new([3u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30));
+        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
         });
 
-        conn.send(&msg).await.expect("send ok");
+        Connection::<Sendable>::send(&conn, &msg)
+            .await
+            .expect("send ok");
         let pulled = conn.pull_outbound().await.expect("pull ok");
 
         assert!(matches!(pulled, Message::RemoveSubscriptions(_)));
@@ -333,7 +369,7 @@ mod tests {
     #[tokio::test]
     async fn clone_shares_channels() {
         let peer_id = PeerId::new([4u8; 32]);
-        let conn1 = HttpLongPollConnection::new(peer_id, Duration::from_secs(30));
+        let conn1 = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
         let conn2 = conn1.clone();
 
         assert_eq!(conn1, conn2);

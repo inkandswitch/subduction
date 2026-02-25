@@ -11,12 +11,12 @@ mod transport;
 
 use clap::{Parser, Subcommand};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use subduction_core::peer::id::PeerId;
 use tokio_util::sync::CancellationToken;
-use tracing_subscriber::{prelude::*, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, prelude::*, util::SubscriberInitExt};
 
 #[cfg(feature = "native-tls")]
 use url::Url;
@@ -131,7 +131,7 @@ fn setup_signal_handlers() -> CancellationToken {
 
     #[cfg(unix)]
     {
-        use tokio::signal::unix::{signal, SignalKind};
+        use tokio::signal::unix::{SignalKind, signal};
         let t = token.clone();
         tokio::spawn(async move {
             if let Ok(mut term) = signal(SignalKind::terminate()) {

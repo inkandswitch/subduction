@@ -31,7 +31,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
@@ -197,8 +197,9 @@ async fn serve_http_connection(
 
             // After a successful handshake, register with Subduction
             if resp.status() == hyper::StatusCode::OK
-                && let Some(session_hdr) =
-                    resp.headers().get(subduction_http_longpoll::SESSION_ID_HEADER)
+                && let Some(session_hdr) = resp
+                    .headers()
+                    .get(subduction_http_longpoll::SESSION_ID_HEADER)
                 && let Ok(sid_str) = session_hdr.to_str()
                 && let Some(sid) = SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await

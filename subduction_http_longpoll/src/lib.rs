@@ -63,8 +63,11 @@ extern crate alloc;
 pub mod client;
 pub mod connection;
 pub mod error;
-pub mod server;
+pub mod http_client;
 pub mod session;
+
+#[cfg(feature = "server")]
+pub mod server;
 
 /// Default long-poll timeout in seconds.
 ///

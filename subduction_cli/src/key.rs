@@ -1,6 +1,6 @@
 //! Key loading utilities.
 
-use eyre::{eyre, Result, WrapErr};
+use eyre::{Result, WrapErr, eyre};
 use std::{
     fs,
     path::{Path, PathBuf},

@@ -8,10 +8,8 @@ use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
 
 use async_lock::Mutex;
-use subduction_core::peer::id::PeerId;
-
-use future_form::Sendable;
-use subduction_core::connection::authenticated::Authenticated;
+use future_form::FutureForm;
+use subduction_core::{connection::authenticated::Authenticated, peer::id::PeerId};
 
 use crate::connection::HttpLongPollConnection;
 
@@ -51,8 +49,6 @@ impl SessionId {
         }
 
         let mut bytes = [0u8; 16];
-        // Safety: `chunks_exact(2)` guarantees each chunk has exactly 2 elements,
-        // and the length check above ensures exactly 16 chunks for a 32-char string.
         #[allow(clippy::indexing_slicing)]
         for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
             let hi = hex_digit(chunk[0])?;
@@ -82,24 +78,24 @@ const fn hex_digit(b: u8) -> Option<u8> {
 
 /// Thread-safe session store mapping [`SessionId`] to connection state.
 #[derive(Debug, Clone)]
-pub struct SessionStore {
-    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry>>>,
+pub struct SessionStore<K: FutureForm, O> {
+    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<K, O>>>>,
 }
 
 /// A single session entry containing the connection and peer identity.
 #[derive(Debug, Clone)]
-pub struct SessionEntry {
+pub struct SessionEntry<K: FutureForm, O> {
     /// The peer's identity.
     pub peer_id: PeerId,
 
     /// The connection channels for this session.
-    pub connection: HttpLongPollConnection,
+    pub connection: HttpLongPollConnection<O>,
 
     /// The authenticated wrapper, present until consumed by Subduction registration.
-    pub authenticated: Option<Authenticated<HttpLongPollConnection, Sendable>>,
+    pub authenticated: Option<Authenticated<HttpLongPollConnection<O>, K>>,
 }
 
-impl SessionStore {
+impl<K: FutureForm, O> SessionStore<K, O> {
     /// Create a new empty session store.
     #[must_use]
     pub fn new() -> Self {
@@ -109,22 +105,25 @@ impl SessionStore {
     }
 
     /// Insert a new session.
-    pub async fn insert(&self, id: SessionId, entry: SessionEntry) {
+    pub async fn insert(&self, id: SessionId, entry: SessionEntry<K, O>) {
         self.sessions.lock().await.insert(id, entry);
     }
 
     /// Look up a session by ID.
-    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry> {
+    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry<K, O>>
+    where
+        SessionEntry<K, O>: Clone,
+    {
         self.sessions.lock().await.get(id).cloned()
     }
 
     /// Remove a session, returning the entry if it existed.
-    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry> {
+    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry<K, O>> {
         self.sessions.lock().await.remove(id)
     }
 }
 
-impl Default for SessionStore {
+impl<K: FutureForm, O> Default for SessionStore<K, O> {
     fn default() -> Self {
         Self::new()
     }

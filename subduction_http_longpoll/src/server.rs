@@ -18,14 +18,15 @@ use core::time::Duration;
 use async_lock::Mutex;
 use http_body_util::{BodyExt, Full};
 use hyper::{
-    body::{Bytes, Incoming},
     Request, Response, StatusCode,
+    body::{Bytes, Incoming},
 };
 use subduction_core::{
     connection::{
         authenticated::Authenticated,
         handshake::{self, Audience},
         nonce_cache::NonceCache,
+        timeout::Timeout,
     },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
@@ -33,30 +34,33 @@ use subduction_core::{
 use subduction_crypto::signer::Signer;
 
 use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 
 use crate::{
+    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
     connection::HttpLongPollConnection,
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
-    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
 };
 
 /// Server-side handler state, shared across request handlers.
 #[derive(Debug, Clone)]
-pub struct LongPollHandler<Sig> {
-    sessions: SessionStore,
+pub struct LongPollHandler<Sig, O> {
+    sessions: SessionStore<Sendable, O>,
     signer: Sig,
     nonce_cache: Arc<NonceCache>,
     our_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     handshake_max_drift: Duration,
     default_time_limit: Duration,
+    timeout: O,
     max_body_size: usize,
     poll_timeout: Duration,
 }
 
-impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
+impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
+    LongPollHandler<Sig, O>
+{
     /// Create a new long-poll handler.
     #[must_use]
     pub fn new(
@@ -66,6 +70,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
         discovery_audience: Option<Audience>,
         handshake_max_drift: Duration,
         default_time_limit: Duration,
+        timeout: O,
     ) -> Self {
         Self {
             sessions: SessionStore::new(),
@@ -75,6 +80,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
             discovery_audience,
             handshake_max_drift,
             default_time_limit,
+            timeout,
             max_body_size: DEFAULT_MAX_BODY_SIZE,
             poll_timeout: Duration::from_secs(DEFAULT_POLL_TIMEOUT_SECS),
         }
@@ -96,7 +102,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
 
     /// Access the session store.
     #[must_use]
-    pub const fn sessions(&self) -> &SessionStore {
+    pub const fn sessions(&self) -> &SessionStore<Sendable, O> {
         &self.sessions
     }
 
@@ -146,11 +152,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
     ///
     /// The client sends `Signed<Challenge>` bytes in the request body.
     /// The server responds with `Signed<Response>` bytes and a session ID header.
-    ///
-    /// This uses a buffered [`HttpHandshake`] adapter that satisfies the
-    /// [`Handshake`](subduction_core::connection::handshake::Handshake) trait's
-    /// streaming interface by storing the challenge upfront and capturing the
-    /// response bytes for later extraction.
     #[allow(clippy::expect_used)]
     async fn handle_handshake(
         &self,
@@ -158,7 +159,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
     ) -> Result<Response<Full<Bytes>>, ServerError> {
         let body = read_body(req, self.max_body_size).await?;
 
-        // Shared slot for capturing the response bytes emitted by `respond()`.
         let response_slot: Arc<Mutex<Option<Vec<u8>>>> = Arc::new(Mutex::new(None));
 
         let http_handshake = HttpHandshake {
@@ -168,11 +168,13 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
 
         let now = TimestampSeconds::now();
         let default_time_limit = self.default_time_limit;
+        let timeout = self.timeout.clone();
 
         let result = handshake::respond::<Sendable, _, _, _, _>(
             http_handshake,
             |_handshake, peer_id| {
-                let conn = HttpLongPollConnection::new(peer_id, default_time_limit);
+                let conn =
+                    HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
                 (conn.clone(), conn)
             },
             &self.signer,
@@ -184,7 +186,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
         )
         .await;
 
-        // Extract the response bytes that `respond()` wrote via `handshake.send()`.
         let response_bytes = response_slot.lock().await.take();
 
         match result {
@@ -221,7 +222,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
                 tracing::warn!("handshake failed: {e}");
 
                 if let Some(response_bytes) = response_bytes {
-                    // The rejection was encoded and sent — return it to the client
                     Ok(Response::builder()
                         .status(StatusCode::UNAUTHORIZED)
                         .header("content-type", "application/octet-stream")
@@ -292,14 +292,12 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
 
         tracing::debug!("POST /lp/recv: peer {} waiting...", entry.peer_id);
 
-        match tokio::time::timeout(self.poll_timeout, entry.connection.pull_outbound()).await {
+        let pull_fut = Sendable::from_future(async move { entry.connection.pull_outbound().await });
+
+        match self.timeout.timeout(self.poll_timeout, pull_fut).await {
             Ok(Ok(msg)) => {
                 let encoded = msg.encode();
-                tracing::debug!(
-                    "POST /lp/recv: delivering message {:?} to peer {}",
-                    msg.request_id(),
-                    entry.peer_id
-                );
+                tracing::debug!("POST /lp/recv: delivering message {:?}", msg.request_id(),);
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("content-type", "application/octet-stream")
@@ -307,14 +305,14 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
                     .expect("valid response"))
             }
             Ok(Err(_)) => {
-                tracing::debug!("POST /lp/recv: channel closed for peer {}", entry.peer_id);
+                tracing::debug!("POST /lp/recv: channel closed");
                 Ok(Response::builder()
                     .status(StatusCode::GONE)
                     .body(Full::new(Bytes::from_static(b"session closed")))
                     .expect("valid response"))
             }
-            Err(_) => {
-                tracing::debug!("POST /lp/recv: poll timeout for peer {}", entry.peer_id);
+            Err(_timed_out) => {
+                tracing::debug!("POST /lp/recv: poll timeout");
                 Ok(Response::builder()
                     .status(StatusCode::NO_CONTENT)
                     .body(Full::new(Bytes::new()))
@@ -352,7 +350,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync> LongPollHandler<Sig> {
     pub async fn take_authenticated(
         &self,
         session_id: &SessionId,
-    ) -> Option<Authenticated<HttpLongPollConnection, Sendable>> {
+    ) -> Option<Authenticated<HttpLongPollConnection<O>, Sendable>> {
         let mut sessions = self.sessions.sessions.lock().await;
         sessions
             .get_mut(session_id)
