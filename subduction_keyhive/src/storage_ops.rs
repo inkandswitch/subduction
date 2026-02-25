@@ -51,7 +51,7 @@ pub async fn save_keyhive_archive<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef,
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(archive)?;
 
@@ -81,7 +81,7 @@ pub async fn save_event<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef,
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(event)?;
     save_event_bytes(storage, bytes).await
@@ -100,7 +100,7 @@ pub async fn save_event_bytes<S, K>(
 ) -> Result<StorageHash, StorageError>
 where
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     let hash = hash_event_bytes(&bytes);
 
@@ -129,7 +129,7 @@ pub async fn load_archives<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     let raw_archives = storage
         .load_archives()
@@ -157,7 +157,7 @@ pub async fn load_events<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     let raw_events = storage
         .load_events()
@@ -186,7 +186,7 @@ pub async fn load_event_bytes<S, K>(
 ) -> Result<Vec<(StorageHash, Vec<u8>)>, StorageError>
 where
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     storage
         .load_events()
@@ -215,7 +215,7 @@ where
     L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     // Load archives
     let archives: Vec<(StorageHash, Archive<T>)> = load_archives(storage).await?;
@@ -273,7 +273,7 @@ where
     L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage
@@ -379,7 +379,7 @@ mod tests {
         storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash},
         test_utils::{keyhive_peer_id, make_keyhive},
     };
-    use futures_kind::Local;
+    use future_form::Local;
 
     #[tokio::test(flavor = "current_thread")]
     async fn save_and_load_archive_roundtrip() {

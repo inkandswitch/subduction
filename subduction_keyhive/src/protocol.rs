@@ -57,7 +57,7 @@ where
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Store: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     keyhive: SharedKeyhive<Signer, T, P, C, L, R>,
     storage: Store,
@@ -78,7 +78,7 @@ where
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Store: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("KeyhiveProtocol")
@@ -99,7 +99,7 @@ where
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<K>,
-    K: futures_kind::FutureKind + ?Sized,
+    K: future_form::FutureForm + ?Sized,
 {
     /// Create a new protocol handler.
     pub fn new(
@@ -744,7 +744,7 @@ mod tests {
             serialize_contact_card,
         },
     };
-    use futures_kind::Local;
+    use future_form::Local;
     use keyhive_core::{
         access::Access,
         principal::{identifier::Identifier, membered::Membered, peer::Peer},

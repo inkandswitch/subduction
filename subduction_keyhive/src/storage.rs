@@ -13,11 +13,11 @@ use alloc::{string::String, sync::Arc, vec::Vec};
 use core::convert::Infallible;
 
 use async_lock::Mutex;
+use future_form::{FutureForm, Local, Sendable};
 use futures::{
     FutureExt,
     future::{BoxFuture, LocalBoxFuture},
 };
-use futures_kind::{FutureKind, Local, Sendable};
 
 use crate::collections::Map;
 
@@ -76,7 +76,7 @@ impl StorageHash {
 /// Archives contain the full keyhive state, while events are individual
 /// operations.
 #[allow(clippy::type_complexity)]
-pub trait KeyhiveStorage<K: FutureKind + ?Sized> {
+pub trait KeyhiveStorage<K: FutureForm + ?Sized> {
     /// The error type for storage operations.
     type Error: core::error::Error;
 

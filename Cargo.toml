@@ -63,7 +63,6 @@ future_form = "0.2.0"
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
-futures_kind = { version = "0.1", default-features = false }
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
 js-sys = { version = "0.3.81", default-features = false }
