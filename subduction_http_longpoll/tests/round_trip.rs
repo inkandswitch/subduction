@@ -35,12 +35,15 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection, server::LongPollHandler,
+    client::HttpLongPollClient,
+    connection::HttpLongPollConnection,
+    http_client::ReqwestHttpClient,
+    server::LongPollHandler,
     session::SessionId,
 };
+use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
 use tokio::net::TcpListener;
-use tokio_util::sync::CancellationToken;
 
 const POLL_TIMEOUT: Duration = Duration::from_secs(2);
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
@@ -52,7 +55,7 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        HttpLongPollConnection,
+        HttpLongPollConnection<FuturesTimerTimeout>,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -81,7 +84,8 @@ fn signer(seed: u8) -> MemorySigner {
 struct TestServer {
     subduction: TestSubduction,
     address: SocketAddr,
-    cancel: CancellationToken,
+    /// Dropping the sender signals cancellation to the accept loop.
+    _cancel: async_channel::Sender<()>,
 }
 
 impl TestServer {
@@ -113,43 +117,33 @@ impl TestServer {
             discovery_audience,
             HANDSHAKE_MAX_DRIFT,
             REQUEST_TIMEOUT,
+            FuturesTimerTimeout,
         )
         .with_poll_timeout(POLL_TIMEOUT);
 
         let tcp = TcpListener::bind("127.0.0.1:0").await.expect("bind");
         let address = tcp.local_addr().expect("local_addr");
 
-        let cancel = CancellationToken::new();
-        let accept_cancel = cancel.clone();
+        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
         let accept_subduction = subduction.clone();
 
         tokio::spawn(async move {
-            accept_loop(tcp, accept_subduction, handler, accept_cancel).await;
+            accept_loop(tcp, accept_subduction, handler, cancel_rx).await;
         });
 
         Self {
             subduction,
             address,
-            cancel,
+            _cancel: cancel_tx,
         }
-    }
-
-    fn stop(&self) {
-        self.cancel.cancel();
-    }
-}
-
-impl Drop for TestServer {
-    fn drop(&mut self) {
-        self.cancel.cancel();
     }
 }
 
 async fn accept_loop(
     tcp: TcpListener,
     subduction: TestSubduction,
-    handler: LongPollHandler<MemorySigner>,
-    cancel: CancellationToken,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    cancel: async_channel::Receiver<()>,
 ) {
     use tokio::task::JoinSet;
 
@@ -157,7 +151,7 @@ async fn accept_loop(
 
     loop {
         tokio::select! {
-            () = cancel.cancelled() => break,
+            _ = cancel.recv() => break,
             res = tcp.accept() => {
                 match res {
                     Ok((stream, addr)) => {
@@ -182,7 +176,7 @@ async fn accept_loop(
 async fn serve_http_connection(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
-    handler: LongPollHandler<MemorySigner>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
     subduction: TestSubduction,
 ) {
     use hyper_util::rt::TokioIo;
@@ -225,7 +219,6 @@ async fn serve_http_connection(
 
 async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     let client_signer = signer(seed);
-    let cancel = CancellationToken::new();
 
     let (client, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
         None,
@@ -243,10 +236,19 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     tokio::spawn(manager_fut);
 
     let base_url = format!("http://{server_addr}");
-    let lp_client = HttpLongPollClient::new(&base_url, REQUEST_TIMEOUT);
+    let lp_client = HttpLongPollClient::new(
+        &base_url,
+        ReqwestHttpClient::new(),
+        FuturesTimerTimeout,
+        TokioSpawn,
+        REQUEST_TIMEOUT,
+    );
+
+    // Use a future that never resolves — the test controls lifetime via drop.
+    let cancel_fut = futures::future::pending::<()>();
 
     let (auth, _session_id) = lp_client
-        .connect_discover(&client_signer, SERVICE_NAME, cancel)
+        .connect_discover(&client_signer, SERVICE_NAME, cancel_fut)
         .await
         .expect("client connect");
 
@@ -281,7 +283,6 @@ async fn handshake_connects_peers() -> TestResult {
         "client should see server as connected peer. client sees: {client_peers:?}, expected server {server_peer_id}"
     );
 
-    server.stop();
     Ok(())
 }
 
@@ -325,7 +326,6 @@ async fn client_to_server_sync() -> TestResult {
         "server should have at least one commit"
     );
 
-    server.stop();
     Ok(())
 }
 
@@ -376,7 +376,6 @@ async fn server_to_client_sync() -> TestResult {
         "client should have at least one commit"
     );
 
-    server.stop();
     Ok(())
 }
 
@@ -449,6 +448,5 @@ async fn bidirectional_sync() -> TestResult {
         client_commits.len()
     );
 
-    server.stop();
     Ok(())
 }

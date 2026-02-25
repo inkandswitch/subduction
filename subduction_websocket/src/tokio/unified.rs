@@ -12,8 +12,8 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -24,7 +24,7 @@ use tokio::net::TcpStream;
 /// This allows the server to use the same `Subduction` instance for both
 /// accepting incoming connections and dialing outgoing connections to peers.
 #[derive(Debug, Clone)]
-pub enum UnifiedWebSocket<O: Timeout<Sendable> + Clone + Send + Sync> {
+pub enum UnifiedWebSocket<O: Timeout<Sendable> + Send + Sync> {
     /// A connection we accepted (peer connected to us).
     Accepted(WebSocket<TokioAdapter<TcpStream>, Sendable, O>),
 
@@ -32,7 +32,7 @@ pub enum UnifiedWebSocket<O: Timeout<Sendable> + Clone + Send + Sync> {
     Dialed(WebSocket<ConnectStream, Sendable, O>),
 }
 
-impl<O: Timeout<Sendable> + Clone + Send + Sync> UnifiedWebSocket<O> {
+impl<O: Timeout<Sendable> + Send + Sync> UnifiedWebSocket<O> {
     /// Start listening for incoming messages.
     ///
     /// # Errors
@@ -46,7 +46,7 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> UnifiedWebSocket<O> {
     }
 }
 
-impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for UnifiedWebSocket<O> {
+impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedWebSocket<O> {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -107,7 +107,7 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for Unifie
 /// means a server could have two separate connections to the same peer (one where
 /// they connected to us, one where we connected to them). If this is undesirable,
 /// deduplication should be handled at a higher level using peer IDs.
-impl<O: Timeout<Sendable> + Clone + Send + Sync> PartialEq for UnifiedWebSocket<O> {
+impl<O: Timeout<Sendable> + Send + Sync> PartialEq for UnifiedWebSocket<O> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (UnifiedWebSocket::Accepted(a), UnifiedWebSocket::Accepted(b)) => a == b,

@@ -20,8 +20,8 @@ use core::{
 };
 
 use async_lock::Mutex;
-use future_form::{FutureForm, Sendable};
-use futures::channel::oneshot;
+use future_form::Sendable;
+use futures::{FutureExt, channel::oneshot, future::BoxFuture};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
@@ -161,10 +161,7 @@ impl<O> HttpLongPollConnection<O> {
     }
 }
 
-impl<K: FutureForm, O: Timeout<K> + Clone> Connection<K> for HttpLongPollConnection<O>
-where
-    Self: Clone + PartialEq,
-{
+impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for HttpLongPollConnection<O> {
     type SendError = SendError;
     type RecvError = RecvError;
     type CallError = CallError;
@@ -174,27 +171,29 @@ where
         self.inner.peer_id
     }
 
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        K::from_future(async {
+    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
+        async {
             let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("generated request id {counter:?}");
             RequestId {
                 requestor: self.inner.peer_id,
                 nonce: counter,
             }
-        })
+        }
+        .boxed()
     }
 
-    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
         let conn = self.clone();
-        K::from_future(async move {
+        async move {
             conn.close();
             Ok(())
-        })
+        }
+        .boxed()
     }
 
-    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "http-lp: sending outbound message id {:?} to peer {}",
             message.request_id(),
@@ -203,13 +202,14 @@ where
 
         let msg = message.clone();
         let tx = self.inner.outbound_tx.clone();
-        K::from_future(async move {
+        async move {
             tx.send(msg).await.map_err(|_| SendError)?;
             Ok(())
-        })
+        }
+        .boxed()
     }
 
-    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
         tracing::debug!(
             chan_id = self.inner.chan_id,
@@ -217,7 +217,7 @@ where
             self.inner.peer_id
         );
 
-        K::from_future(async move {
+        async move {
             let msg = chan.recv().await.map_err(|_| {
                 tracing::error!("inbound channel closed unexpectedly");
                 RecvError
@@ -225,20 +225,21 @@ where
 
             tracing::debug!("recv: inbound message {msg:?}");
             Ok(msg)
-        })
+        }
+        .boxed()
     }
 
     fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         let outbound_tx = self.inner.outbound_tx.clone();
         let timeout = self.inner.timeout.clone();
         let default_time_limit = self.inner.default_time_limit;
         let inner = self.inner.clone();
 
-        K::from_future(async move {
+        async move {
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
 
@@ -257,7 +258,7 @@ where
             );
 
             let req_timeout = override_timeout.unwrap_or(default_time_limit);
-            let rx_fut = K::from_future(async { rx.await });
+            let rx_fut: BoxFuture<'_, _> = Box::pin(async { rx.await });
 
             match timeout.timeout(req_timeout, rx_fut).await {
                 Ok(Ok(resp)) => {
@@ -274,7 +275,8 @@ where
                     Err(CallError::Timeout)
                 }
             }
-        })
+        }
+        .boxed()
     }
 }
 
@@ -287,6 +289,7 @@ impl<O> PartialEq for HttpLongPollConnection<O> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use future_form::Sendable;
     use subduction_core::{connection::timeout::Timeout, peer::id::PeerId};
 
     /// A simple timer-based timeout for tests using `futures_timer::Delay`.

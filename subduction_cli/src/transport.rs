@@ -7,24 +7,25 @@ use core::time::Duration;
 
 use future_form::Sendable;
 use futures::future::BoxFuture;
+use subduction_core::connection::timeout::Timeout;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
 use subduction_http_longpoll::connection::HttpLongPollConnection;
-use subduction_websocket::{timeout::Timeout, tokio::unified::UnifiedWebSocket};
+use subduction_websocket::tokio::unified::UnifiedWebSocket;
 
 /// A unified connection covering all transport types the CLI server supports.
 #[derive(Debug, Clone)]
-pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Clone + Send + Sync> {
+pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Send + Sync> {
     /// WebSocket transport (accepted or dialed).
     WebSocket(UnifiedWebSocket<O>),
 
     /// HTTP long-poll transport.
-    HttpLongPoll(HttpLongPollConnection),
+    HttpLongPoll(HttpLongPollConnection<O>),
 }
 
 /// Error type for send operations across transports.
@@ -75,7 +76,7 @@ pub(crate) enum TransportDisconnectionError {
     HttpLongPoll(#[from] subduction_http_longpoll::error::DisconnectionError),
 }
 
-impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for UnifiedTransport<O> {
+impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTransport<O> {
     type SendError = TransportSendError;
     type RecvError = TransportRecvError;
     type CallError = TransportCallError;
@@ -156,7 +157,7 @@ impl<O: Timeout<Sendable> + Clone + Send + Sync> Connection<Sendable> for Unifie
     }
 }
 
-impl<O: Timeout<Sendable> + Clone + Send + Sync> PartialEq for UnifiedTransport<O> {
+impl<O: Timeout<Sendable> + Send + Sync> PartialEq for UnifiedTransport<O> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::WebSocket(a), Self::WebSocket(b)) => a == b,

@@ -12,16 +12,16 @@ use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
+    FutureExt,
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -116,7 +116,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
     _phantom: PhantomData<K>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local> + Clone> Connection<Local>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Local>
     for WebSocket<T, Local, O>
 {
     type SendError = SendError;
@@ -462,8 +462,8 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sync>
-    Connection<Sendable> for WebSocket<T, Sendable, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Connection<Sendable>
+    for WebSocket<T, Sendable, O>
 {
     type SendError = SendError;
     type RecvError = RecvError;
@@ -578,9 +578,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Clone + Sy
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K> + Clone> Clone
-    for WebSocket<T, K, O>
-{
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for WebSocket<T, K, O> {
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,

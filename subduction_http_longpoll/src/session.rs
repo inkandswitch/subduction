@@ -8,10 +8,17 @@ use alloc::{collections::BTreeMap, sync::Arc};
 use core::fmt;
 
 use async_lock::Mutex;
-use future_form::FutureForm;
-use subduction_core::{connection::authenticated::Authenticated, peer::id::PeerId};
+use future_form::Sendable;
+use subduction_core::{
+    connection::{authenticated::Authenticated, timeout::Timeout},
+    peer::id::PeerId,
+};
 
 use crate::connection::HttpLongPollConnection;
+
+// NOTE: SessionStore and SessionEntry are concrete on `Sendable` (not generic
+// over `K: FutureForm`) because `HttpLongPollConnection<O>` only implements
+// `Connection<Sendable>`. This mirrors the `subduction_websocket` pattern.
 
 /// An opaque session identifier, assigned after successful handshake.
 ///
@@ -78,13 +85,13 @@ const fn hex_digit(b: u8) -> Option<u8> {
 
 /// Thread-safe session store mapping [`SessionId`] to connection state.
 #[derive(Debug, Clone)]
-pub struct SessionStore<K: FutureForm, O> {
-    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<K, O>>>>,
+pub struct SessionStore<O: Timeout<Sendable> + Send + Sync> {
+    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<O>>>>,
 }
 
 /// A single session entry containing the connection and peer identity.
 #[derive(Debug, Clone)]
-pub struct SessionEntry<K: FutureForm, O> {
+pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync> {
     /// The peer's identity.
     pub peer_id: PeerId,
 
@@ -92,10 +99,10 @@ pub struct SessionEntry<K: FutureForm, O> {
     pub connection: HttpLongPollConnection<O>,
 
     /// The authenticated wrapper, present until consumed by Subduction registration.
-    pub authenticated: Option<Authenticated<HttpLongPollConnection<O>, K>>,
+    pub authenticated: Option<Authenticated<HttpLongPollConnection<O>, Sendable>>,
 }
 
-impl<K: FutureForm, O> SessionStore<K, O> {
+impl<O: Timeout<Sendable> + Send + Sync> SessionStore<O> {
     /// Create a new empty session store.
     #[must_use]
     pub fn new() -> Self {
@@ -105,25 +112,25 @@ impl<K: FutureForm, O> SessionStore<K, O> {
     }
 
     /// Insert a new session.
-    pub async fn insert(&self, id: SessionId, entry: SessionEntry<K, O>) {
+    pub async fn insert(&self, id: SessionId, entry: SessionEntry<O>) {
         self.sessions.lock().await.insert(id, entry);
     }
 
     /// Look up a session by ID.
-    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry<K, O>>
+    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry<O>>
     where
-        SessionEntry<K, O>: Clone,
+        SessionEntry<O>: Clone,
     {
         self.sessions.lock().await.get(id).cloned()
     }
 
     /// Remove a session, returning the entry if it existed.
-    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry<K, O>> {
+    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry<O>> {
         self.sessions.lock().await.remove(id)
     }
 }
 
-impl<K: FutureForm, O> Default for SessionStore<K, O> {
+impl<O: Timeout<Sendable> + Send + Sync> Default for SessionStore<O> {
     fn default() -> Self {
         Self::new()
     }

@@ -1,11 +1,11 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    DEFAULT_MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
+    DEFAULT_MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
@@ -26,8 +26,8 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::traits::Storage,
     subduction::{
-        Subduction, error::RegistrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        error::RegistrationError, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        Subduction,
     },
     timestamp::TimestampSeconds,
 };
@@ -48,7 +48,7 @@ pub struct TokioWebSocketServer<
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     Sig: 'static + Send + Sync + Signer<Sendable>,
     M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
-    O: 'static + Send + Sync + Timeout<Sendable> + Clone = FuturesTimerTimeout,
+    O: 'static + Send + Sync + Timeout<Sendable> = FuturesTimerTimeout,
 > where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
@@ -68,7 +68,7 @@ where
     P::FetchDisallowed: Send + 'static,
     Sig: 'static + Send + Sync + Signer<Sendable>,
     M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
+    O: 'static + Send + Sync + Timeout<Sendable>,
     S::Error: 'static + Send + Sync,
 {
     fn clone(&self) -> Self {
@@ -82,12 +82,12 @@ where
 }
 
 impl<
-    S: 'static + Send + Sync + Storage<Sendable>,
-    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
-    M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable> + Clone,
-> TokioWebSocketServer<S, P, Sig, M, O>
+        S: 'static + Send + Sync + Storage<Sendable>,
+        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+        Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable>,
+    > TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,

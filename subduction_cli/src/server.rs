@@ -191,6 +191,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         discovery_audience,
         handshake_max_drift,
         default_time_limit,
+        FuturesTimerTimeout,
     );
 
     // Bind the TCP listener
@@ -290,7 +291,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 async fn accept_loop(
     tcp_listener: TcpListener,
     subduction: CliSubduction,
-    lp_handler: LongPollHandler<MemorySigner>,
+    lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
     cancel: CancellationToken,
     timeout: FuturesTimerTimeout,
     default_time_limit: Duration,
@@ -457,7 +458,7 @@ async fn handle_http_longpoll(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
     subduction: CliSubduction,
-    handler: LongPollHandler<MemorySigner>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
 ) {
     use hyper_util::rt::TokioIo;
 

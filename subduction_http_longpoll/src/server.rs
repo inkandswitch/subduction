@@ -18,8 +18,8 @@ use core::time::Duration;
 use async_lock::Mutex;
 use http_body_util::{BodyExt, Full};
 use hyper::{
-    Request, Response, StatusCode,
     body::{Bytes, Incoming},
+    Request, Response, StatusCode,
 };
 use subduction_core::{
     connection::{
@@ -33,20 +33,20 @@ use subduction_core::{
 };
 use subduction_crypto::signer::Signer;
 
-use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use future_form::{FutureForm, Sendable};
+use futures::{future::BoxFuture, FutureExt};
 
 use crate::{
-    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
     connection::HttpLongPollConnection,
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
+    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
 };
 
 /// Server-side handler state, shared across request handlers.
 #[derive(Debug, Clone)]
-pub struct LongPollHandler<Sig, O> {
-    sessions: SessionStore<Sendable, O>,
+pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync> {
+    sessions: SessionStore<O>,
     signer: Sig,
     nonce_cache: Arc<NonceCache>,
     our_peer_id: PeerId,
@@ -102,7 +102,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
     /// Access the session store.
     #[must_use]
-    pub const fn sessions(&self) -> &SessionStore<Sendable, O> {
+    pub const fn sessions(&self) -> &SessionStore<O> {
         &self.sessions
     }
 

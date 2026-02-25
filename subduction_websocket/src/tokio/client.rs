@@ -1,22 +1,22 @@
 //! # Subduction [`WebSocket`] client for Tokio
 
 use crate::{
-    DEFAULT_MAX_MESSAGE_SIZE,
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::Timeout,
     websocket::{ListenerTask, SenderTask, WebSocket},
+    DEFAULT_MAX_MESSAGE_SIZE,
 };
-use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
+use async_tungstenite::tokio::{connect_async_with_config, ConnectStream};
 use core::time::Duration;
 use future_form::{FutureForm, Sendable};
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use subduction_core::{
     connection::{
-        Connection, Reconnect,
         authenticated::Authenticated,
         handshake::{self, Audience, AuthenticateError},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Reconnect,
     },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
@@ -38,17 +38,14 @@ pub enum ClientConnectError {
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug, Clone)]
-pub struct TokioWebSocketClient<
-    R: Signer<Sendable> + Clone,
-    O: Timeout<Sendable> + Clone + Send + Sync,
-> {
+pub struct TokioWebSocketClient<R: Signer<Sendable> + Clone, O: Timeout<Sendable> + Send + Sync> {
     address: Uri,
     signer: R,
     audience: Audience,
     socket: WebSocket<ConnectStream, Sendable, O>,
 }
 
-impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
+impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
     TokioWebSocketClient<R, O>
 {
     /// Create a new [`WebSocketClient`] connection.
@@ -160,7 +157,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
     }
 }
 
-impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
+impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
     Connection<Sendable> for TokioWebSocketClient<R, O>
 {
     type SendError = SendError;
@@ -207,9 +204,9 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + S
 }
 
 impl<
-    R: 'static + Signer<Sendable> + Clone + Send + Sync,
-    O: 'static + Timeout<Sendable> + Clone + Send + Sync,
-> Reconnect<Sendable> for TokioWebSocketClient<R, O>
+        R: 'static + Signer<Sendable> + Clone + Send + Sync,
+        O: 'static + Timeout<Sendable> + Send + Sync,
+    > Reconnect<Sendable> for TokioWebSocketClient<R, O>
 {
     type ReconnectionError = ClientConnectError;
 
@@ -269,8 +266,8 @@ impl<
     }
 }
 
-impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
-    PartialEq for TokioWebSocketClient<R, O>
+impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync> PartialEq
+    for TokioWebSocketClient<R, O>
 {
     fn eq(&self, other: &Self) -> bool {
         self.address == other.address && self.socket.peer_id() == other.socket.peer_id()
