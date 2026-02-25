@@ -33,14 +33,20 @@ tracing = { workspace = true }
 tungstenite = { workspace = true }
 
 [dev-dependencies]
-eyre = { workspace = true }
 arbitrary = { workspace = true }
+criterion = { workspace = true }
+eyre = { workspace = true }
+rand = { workspace = true, features = ["std_rng"] }
 sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
 subduction_core = { workspace = true, features = ["test_utils"] }
 testresult = { workspace = true }
 tokio = { workspace = true }
 tokio-test = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"] }
+
+[[bench]]
+name = "e2e"
+harness = false
 
 [features]
 default = ["std"]
