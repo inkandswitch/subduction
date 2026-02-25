@@ -4,4 +4,4 @@
 rustflags = ["--cfg", "tokio_unstable"]
 
 [target.wasm32-unknown-unknown]
-rustflags = ["--cfg", 'getrandom_backend="wasm_js"']
+rustflags = ["--cfg", 'getrandom_backend="wasm_js"', "-C", "target-feature=+simd128"]
