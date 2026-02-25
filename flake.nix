@@ -69,7 +69,19 @@
         };
 
         # Nightly rustfmt for unstable formatting options (imports_granularity, etc.)
-        nightly-rustfmt = pkgs.rust-bin.nightly.latest.rustfmt;
+        # We need a combined nightly toolchain (rustc + rustfmt) because rustfmt
+        # links against librustc_driver, which lives in the rustc component.
+        # On macOS, symlinks break @rpath resolution, so we wrap the binary
+        # with DYLD_LIBRARY_PATH pointing to the combined toolchain's lib/.
+        nightly-rustfmt-unwrapped = pkgs.rust-bin.nightly.latest.minimal.override {
+          extensions = [ "rustfmt" ];
+        };
+
+        nightly-rustfmt = pkgs.writeShellScriptBin "rustfmt" ''
+          export DYLD_LIBRARY_PATH="${nightly-rustfmt-unwrapped}/lib''${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}"
+          export LD_LIBRARY_PATH="${nightly-rustfmt-unwrapped}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          exec "${nightly-rustfmt-unwrapped}/bin/rustfmt" "$@"
+        '';
 
         format-pkgs = with pkgs; [
           nixpkgs-fmt
