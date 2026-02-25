@@ -36,9 +36,9 @@
 
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use future_form::Sendable;
-use rand::{rngs::StdRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     connection::{handshake::Audience, nonce_cache::NonceCache},
@@ -46,12 +46,12 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
-    tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn},
     DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
