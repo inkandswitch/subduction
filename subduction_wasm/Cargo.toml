@@ -92,5 +92,8 @@ std = [
   "wasm-bindgen-futures/std"
 ]
 
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = ["-Oz", "--enable-bulk-memory", "--enable-bulk-memory-opt", "--enable-nontrapping-float-to-int", "--enable-sign-ext", "--enable-mutable-globals", "--enable-reference-types", "--enable-multivalue"]
+
 [lints]
 workspace = true
