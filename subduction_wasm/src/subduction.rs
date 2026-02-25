@@ -35,6 +35,7 @@ use crate::{
         longpoll::WasmLongPoll,
         transport::{TransportCallError, WasmUnifiedTransport},
         websocket::WasmWebSocket,
+        JsConnection,
     },
     error::{
         WasmAttachError, WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
@@ -640,7 +641,7 @@ impl WasmSubduction {
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: conn.into_inner(),
+                    conn: conn.into_inner().to_js_connection(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -683,7 +684,12 @@ impl WasmSubduction {
                             stats.into(),
                             conn_errs
                                 .into_iter()
-                                .map(|(conn, err)| (conn.into_inner(), WasmCallError::from(err)))
+                                .map(|(conn, err)| {
+                                    (
+                                        conn.into_inner().to_js_connection(),
+                                        WasmCallError::from(err),
+                                    )
+                                })
                                 .collect::<Vec<_>>(),
                         ),
                     )
@@ -708,7 +714,7 @@ impl WasmSubduction {
             conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: conn.into_inner(),
+                    conn: conn.into_inner().to_js_connection(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -803,13 +809,19 @@ impl PeerBatchSyncResult {
 #[wasm_bindgen(js_name = ConnErrorPair)]
 #[derive(Debug, Clone)]
 pub struct ConnErrPair {
-    #[allow(dead_code)]
-    conn: WasmUnifiedTransport,
+    conn: JsConnection,
     err: WasmCallError,
 }
 
 #[wasm_bindgen(js_class = ConnErrorPair)]
 impl ConnErrPair {
+    /// The connection that encountered the error.
+    #[must_use]
+    #[wasm_bindgen(getter)]
+    pub fn conn(&self) -> JsConnection {
+        self.conn.clone()
+    }
+
     /// The error that occurred during the call.
     #[must_use]
     #[wasm_bindgen(getter)]
@@ -823,14 +835,7 @@ impl ConnErrPair {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    Map<
-        PeerId,
-        (
-            bool,
-            WasmSyncStats,
-            Vec<(WasmUnifiedTransport, WasmCallError)>,
-        ),
-    >,
+    Map<PeerId, (bool, WasmSyncStats, Vec<(JsConnection, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]

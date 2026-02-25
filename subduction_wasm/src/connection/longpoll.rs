@@ -7,7 +7,11 @@ use alloc::string::{String, ToString};
 use core::time::Duration;
 
 use future_form::Local;
-use subduction_core::connection::authenticated::Authenticated;
+use subduction_core::connection::{
+    authenticated::Authenticated,
+    message::{BatchSyncRequest, Message},
+    Connection,
+};
 use subduction_http_longpoll::{
     connection::HttpLongPollConnection,
     session::SessionId,
@@ -16,10 +20,114 @@ use subduction_http_longpoll::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
+use super::{message::WasmMessage, WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId};
 use crate::{peer_id::WasmPeerId, signer::JsSigner};
 
 /// Type alias for the long-poll connection used in wasm.
 pub type WasmLongPollConnection = HttpLongPollConnection<WasmLongPollTimeout>;
+
+/// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
+/// [`Connection`](super::JsConnection) interface so it can be used as a
+/// duck-typed `JsConnection` from JavaScript.
+#[wasm_bindgen(js_name = SubductionLongPollConnection)]
+#[derive(Debug, Clone)]
+pub struct WasmLongPollConn(WasmLongPollConnection);
+
+impl WasmLongPollConn {
+    /// Wrap a raw long-poll connection for JS exposure.
+    pub(crate) fn new(conn: WasmLongPollConnection) -> Self {
+        Self(conn)
+    }
+
+    /// Access the inner connection.
+    #[allow(dead_code)]
+    pub(crate) fn inner(&self) -> &WasmLongPollConnection {
+        &self.0
+    }
+}
+
+/// Error from a long-poll connection method exposed to JS.
+#[derive(Debug, Error)]
+#[error("{0}")]
+pub struct WasmLongPollConnError(String);
+
+impl From<WasmLongPollConnError> for JsValue {
+    fn from(err: WasmLongPollConnError) -> Self {
+        let js_err = js_sys::Error::new(&err.to_string());
+        js_err.set_name("LongPollConnectionError");
+        js_err.into()
+    }
+}
+
+#[wasm_bindgen(js_class = SubductionLongPollConnection)]
+impl WasmLongPollConn {
+    /// Get the peer ID of the remote peer.
+    #[must_use]
+    #[wasm_bindgen(js_name = peerId)]
+    pub fn peer_id(&self) -> WasmPeerId {
+        Connection::<Local>::peer_id(&self.0).into()
+    }
+
+    /// Disconnect from the peer gracefully.
+    #[wasm_bindgen(js_name = disconnect)]
+    pub async fn disconnect(&self) -> Result<(), WasmLongPollConnError> {
+        Connection::<Local>::disconnect(&self.0)
+            .await
+            .map_err(|e| WasmLongPollConnError(e.to_string()))
+    }
+
+    /// Send a message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the outbound channel is closed.
+    #[wasm_bindgen(js_name = send)]
+    pub async fn send(&self, message: WasmMessage) -> Result<(), WasmLongPollConnError> {
+        let msg: Message = message.into();
+        Connection::<Local>::send(&self.0, &msg)
+            .await
+            .map_err(|e| WasmLongPollConnError(e.to_string()))
+    }
+
+    /// Receive a message.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the inbound channel is closed.
+    #[wasm_bindgen(js_name = recv)]
+    pub async fn recv(&self) -> Result<WasmMessage, WasmLongPollConnError> {
+        Connection::<Local>::recv(&self.0)
+            .await
+            .map(Into::into)
+            .map_err(|e| WasmLongPollConnError(e.to_string()))
+    }
+
+    /// Get the next request ID.
+    #[wasm_bindgen(js_name = nextRequestId)]
+    pub async fn next_request_id(&self) -> WasmRequestId {
+        Connection::<Local>::next_request_id(&self.0).await.into()
+    }
+
+    /// Make a synchronous call to the peer.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the call fails or times out.
+    #[wasm_bindgen(js_name = call)]
+    pub async fn call(
+        &self,
+        request: WasmBatchSyncRequest,
+        timeout_ms: Option<f64>,
+    ) -> Result<WasmBatchSyncResponse, WasmLongPollConnError> {
+        let req: BatchSyncRequest = request.into();
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let timeout = timeout_ms.map(|ms| Duration::from_millis(ms as u64));
+        Connection::<Local>::call(&self.0, req, timeout)
+            .await
+            .map(Into::into)
+            .map_err(|e| WasmLongPollConnError(e.to_string()))
+    }
+}
 
 /// An authenticated HTTP long-poll connection.
 ///
