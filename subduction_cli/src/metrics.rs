@@ -3,7 +3,7 @@
 //! Metrics are recorded by `subduction_core` when the `metrics` feature is enabled.
 //! This module provides the HTTP server that exposes metrics to Prometheus.
 
-use axum::{Router, routing::get};
+use axum::{routing::get, Router};
 use metrics_exporter_prometheus::{PrometheusBuilder, PrometheusHandle};
 use std::net::SocketAddr;
 use tokio::net::TcpListener;
