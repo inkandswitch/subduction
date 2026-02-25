@@ -46,13 +46,9 @@ pub enum ServerError {
     #[error("session not found")]
     SessionNotFound,
 
-    /// The request body exceeds the maximum allowed size.
+    /// The request body exceeds the maximum allowed size, or failed to read.
     #[error("request body too large")]
     BodyTooLarge,
-
-    /// Failed to read the request body.
-    #[error("failed to read request body: {0}")]
-    BodyRead(alloc::string::String),
 
     /// Failed to decode the message from the request body.
     #[error("message decode error: {0}")]

@@ -96,6 +96,14 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
     pub(crate) metrics_refresh_interval: u64,
 
+    /// Disable the WebSocket transport
+    #[arg(long, default_value_t = false)]
+    pub(crate) no_websocket: bool,
+
+    /// Disable the HTTP long-poll transport
+    #[arg(long, default_value_t = false)]
+    pub(crate) no_longpoll: bool,
+
     /// Peer WebSocket URLs to connect to on startup
     #[arg(long = "peer", value_name = "URL")]
     pub(crate) peers: Vec<String>,
@@ -198,7 +206,22 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let tcp_listener = TcpListener::bind(addr).await?;
     let assigned_address = tcp_listener.local_addr()?;
 
-    tracing::info!("Server started on {assigned_address} (WebSocket + HTTP long-poll)");
+    let ws_enabled = !args.no_websocket;
+    let lp_enabled = !args.no_longpoll;
+
+    if !ws_enabled && !lp_enabled {
+        eyre::bail!("At least one transport must be enabled (remove --no-websocket or --no-longpoll)");
+    }
+
+    let transports: Vec<&str> = [
+        ws_enabled.then_some("WebSocket"),
+        lp_enabled.then_some("HTTP long-poll"),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    tracing::info!("Server started on {assigned_address} ({})", transports.join(" + "));
     tracing::info!("Peer ID: {peer_id}");
 
     // Spawn background tasks
@@ -237,6 +260,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             max_message_size,
             server_peer_id,
             discovery_audience,
+            ws_enabled,
+            lp_enabled,
         )
         .await;
     });
@@ -299,6 +324,8 @@ async fn accept_loop(
     max_message_size: usize,
     server_peer_id: PeerId,
     discovery_audience: Option<Audience>,
+    ws_enabled: bool,
+    lp_enabled: bool,
 ) {
     let mut conns = JoinSet::new();
 
@@ -328,7 +355,7 @@ async fn accept_loop(
                                 }
                             }
 
-                            if peek_buf.starts_with(b"GET") {
+                            if peek_buf.starts_with(b"GET") && ws_enabled {
                                 handle_websocket(
                                     tcp,
                                     addr,
@@ -341,7 +368,7 @@ async fn accept_loop(
                                     task_discovery,
                                 )
                                 .await;
-                            } else if peek_buf.starts_with(b"POST") {
+                            } else if peek_buf.starts_with(b"POST") && lp_enabled {
                                 handle_http_longpoll(
                                     tcp,
                                     addr,
@@ -349,6 +376,10 @@ async fn accept_loop(
                                     task_handler,
                                 )
                                 .await;
+                            } else if peek_buf.starts_with(b"GET") {
+                                tracing::warn!("WebSocket connection from {addr} rejected (transport disabled)");
+                            } else if peek_buf.starts_with(b"POST") {
+                                tracing::warn!("HTTP long-poll connection from {addr} rejected (transport disabled)");
                             } else {
                                 tracing::warn!(
                                     "unknown protocol from {addr}: {:02x?}",

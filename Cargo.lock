@@ -3196,6 +3196,7 @@ dependencies = [
  "hyper-util",
  "metrics",
  "metrics-exporter-prometheus",
+ "reqwest",
  "sedimentree_core",
  "sedimentree_fs_storage",
  "subduction_core",
@@ -3270,9 +3271,11 @@ dependencies = [
  "futures 0.3.32",
  "futures-timer",
  "futures-util",
+ "getrandom 0.2.17",
  "http-body-util",
  "hyper",
  "hyper-util",
+ "js-sys",
  "rand 0.8.5",
  "reqwest",
  "sedimentree_core",
@@ -3284,6 +3287,9 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "wasm-bindgen",
+ "wasm-bindgen-futures 0.4.63",
+ "web-sys",
 ]
 
 [[package]]

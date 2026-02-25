@@ -16,7 +16,7 @@ use alloc::{string::ToString, sync::Arc, vec::Vec};
 use core::time::Duration;
 
 use async_lock::Mutex;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
     body::{Bytes, Incoming},
     Request, Response, StatusCode,
@@ -407,19 +407,17 @@ fn extract_session_id<T>(req: &Request<T>) -> Result<SessionId, ServerError> {
 }
 
 /// Read the request body up to `max_size` bytes.
+///
+/// Uses [`Limited`] to enforce the size limit at the streaming level,
+/// rejecting oversized bodies before they are fully buffered in memory.
 async fn read_body(req: Request<Incoming>, max_size: usize) -> Result<Vec<u8>, ServerError> {
-    let body = req.into_body();
-    let collected = body
+    let limited = Limited::new(req.into_body(), max_size);
+    let collected = limited
         .collect()
         .await
-        .map_err(|e| ServerError::BodyRead(e.to_string()))?;
+        .map_err(|_| ServerError::BodyTooLarge)?;
 
-    let bytes = collected.to_bytes();
-    if bytes.len() > max_size {
-        return Err(ServerError::BodyTooLarge);
-    }
-
-    Ok(bytes.to_vec())
+    Ok(collected.to_bytes().to_vec())
 }
 
 /// Build a simple error response.
