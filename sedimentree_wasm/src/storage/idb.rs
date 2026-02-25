@@ -285,7 +285,7 @@ impl WasmIndexedDbStorage {
             .map_err(WasmLoadAllSedimentreeIdsError::GetAllKeysError)?;
 
         let js_value = await_idb(&req).await?;
-        let array = js_sys::Array::try_from_js_value_ref(&js_value)
+        let array: js_sys::Array<JsValue> = js_sys::Array::try_from_js_value_ref(&js_value)
             .ok_or_else(|| WasmLoadAllSedimentreeIdsError::NotAnArray(js_value))?;
 
         let mut xs = Vec::new();
