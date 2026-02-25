@@ -1,8 +1,10 @@
 //! JS [`Connection`] interface for Subduction.
 
 mod handshake;
+pub mod longpoll;
 pub mod message;
 pub mod nonce;
+pub mod transport;
 pub mod websocket;
 
 use alloc::string::ToString;

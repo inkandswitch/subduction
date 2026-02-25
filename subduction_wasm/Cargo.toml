@@ -34,6 +34,7 @@ sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
+subduction_http_longpoll = { path = "../subduction_http_longpoll", default-features = false, features = ["wasm"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }

@@ -3349,6 +3349,7 @@ dependencies = [
  "sedimentree_wasm",
  "subduction_core",
  "subduction_crypto",
+ "subduction_http_longpoll",
  "thiserror 2.0.18",
  "tracing",
  "wasm-bindgen",

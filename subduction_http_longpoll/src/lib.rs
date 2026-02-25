@@ -69,6 +69,9 @@ pub mod session;
 #[cfg(feature = "server")]
 pub mod server;
 
+#[cfg(feature = "wasm")]
+pub mod wasm_client;
+
 /// Default long-poll timeout in seconds.
 ///
 /// If no message is available after this duration, the `/lp/recv`
