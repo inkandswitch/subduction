@@ -25,13 +25,20 @@
 //! - Incremental sync (pre-synced peers, one new commit)
 //! - Concurrent client fan-in (N clients syncing with one server)
 
-#![allow(missing_docs, unreachable_pub)]
+#![allow(
+    clippy::expect_used,
+    clippy::indexing_slicing,
+    clippy::panic,
+    clippy::unwrap_used,
+    missing_docs,
+    unreachable_pub
+)]
 
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
 use future_form::Sendable;
-use rand::{Rng, SeedableRng, rngs::StdRng};
+use rand::{rngs::StdRng, Rng, SeedableRng};
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     connection::{handshake::Audience, nonce_cache::NonceCache},
@@ -39,12 +46,12 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
+    tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn},
     DEFAULT_MAX_MESSAGE_SIZE,
-    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
@@ -138,6 +145,7 @@ impl std::ops::Deref for ServerGuard {
 }
 
 /// Assert that a `full_sync` call completed successfully.
+#[allow(clippy::type_complexity)]
 fn assert_full_sync(
     result: (
         bool,
