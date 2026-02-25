@@ -470,25 +470,19 @@ async fn handle_http_longpoll(
             let resp = handler.handle(req).await?;
 
             // After a successful handshake, register with Subduction
-            if resp.status() == hyper::StatusCode::OK {
-                if let Some(session_hdr) = resp
-                    .headers()
-                    .get(subduction_http_longpoll::SESSION_ID_HEADER)
-                {
-                    if let Ok(sid_str) = session_hdr.to_str() {
-                        if let Some(sid) =
-                            subduction_http_longpoll::session::SessionId::from_hex(sid_str)
-                        {
-                            if let Some(auth) = handler.take_authenticated(&sid).await {
-                                let unified_auth = auth.map(UnifiedTransport::HttpLongPoll);
-                                if let Err(e) = subduction.register(unified_auth).await {
-                                    tracing::error!(
-                                        "Failed to register HTTP long-poll connection: {e}"
-                                    );
-                                }
-                            }
-                        }
-                    }
+            if resp.status() == hyper::StatusCode::OK
+                && let Some(session_hdr) =
+                    resp.headers().get(subduction_http_longpoll::SESSION_ID_HEADER)
+                && let Ok(sid_str) = session_hdr.to_str()
+                && let Some(sid) =
+                    subduction_http_longpoll::session::SessionId::from_hex(sid_str)
+                && let Some(auth) = handler.take_authenticated(&sid).await
+            {
+                let unified_auth = auth.map(UnifiedTransport::HttpLongPoll);
+                if let Err(e) = subduction.register(unified_auth).await {
+                    tracing::error!(
+                        "Failed to register HTTP long-poll connection: {e}"
+                    );
                 }
             }
 

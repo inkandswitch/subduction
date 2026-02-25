@@ -129,9 +129,13 @@ impl HttpLongPollClient {
         let (authenticated, session_id) = handshake::initiate::<Sendable, _, _, _, _>(
             &mut client_handshake,
             |handshake, peer_id| {
+                // The session_id is always `Some` here: it was set by
+                // `ClientHttpHandshake::send()` which completes before this
+                // callback is invoked by `handshake::initiate`.
+                #[allow(clippy::expect_used)]
                 let session_id = handshake
                     .session_id
-                    .expect("session_id set after handshake");
+                    .expect("session_id set during handshake send");
 
                 let conn = HttpLongPollConnection::new(peer_id, default_time_limit);
 
@@ -251,29 +255,26 @@ async fn send_loop(
                 break;
             }
             result = conn.pull_outbound() => {
-                match result {
-                    Ok(msg) => {
-                        let encoded = msg.encode();
-                        match http.post(&url)
-                            .header(SESSION_ID_HEADER, session_id.to_hex())
-                            .header("content-type", "application/octet-stream")
-                            .body(encoded)
-                            .send()
-                            .await
-                        {
-                            Ok(resp) if resp.status().is_success() => {}
-                            Ok(resp) => {
-                                tracing::error!("send returned status {}", resp.status());
-                            }
-                            Err(e) => {
-                                tracing::error!("send request error: {e}");
-                            }
+                if let Ok(msg) = result {
+                    let encoded = msg.encode();
+                    match http.post(&url)
+                        .header(SESSION_ID_HEADER, session_id.to_hex())
+                        .header("content-type", "application/octet-stream")
+                        .body(encoded)
+                        .send()
+                        .await
+                    {
+                        Ok(resp) if resp.status().is_success() => {}
+                        Ok(resp) => {
+                            tracing::error!("send returned status {}", resp.status());
+                        }
+                        Err(e) => {
+                            tracing::error!("send request error: {e}");
                         }
                     }
-                    Err(_) => {
-                        tracing::debug!("outbound channel closed");
-                        break;
-                    }
+                } else {
+                    tracing::debug!("outbound channel closed");
+                    break;
                 }
             }
         }
@@ -313,10 +314,10 @@ impl subduction_core::connection::handshake::Handshake<Sendable> for &mut Client
             let status = resp.status().as_u16();
 
             // Extract session ID from response header before consuming body
-            if let Some(sid_header) = resp.headers().get(SESSION_ID_HEADER) {
-                if let Ok(sid_str) = sid_header.to_str() {
-                    self.session_id = SessionId::from_hex(sid_str);
-                }
+            if let Some(sid_header) = resp.headers().get(SESSION_ID_HEADER)
+                && let Ok(sid_str) = sid_header.to_str()
+            {
+                self.session_id = SessionId::from_hex(sid_str);
             }
 
             let body = resp

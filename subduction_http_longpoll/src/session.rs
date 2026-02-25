@@ -23,6 +23,7 @@ pub struct SessionId([u8; 16]);
 
 impl SessionId {
     /// Generate a new random session ID.
+    #[must_use]
     pub fn random() -> Self {
         Self(rand::random())
     }
@@ -50,6 +51,9 @@ impl SessionId {
         }
 
         let mut bytes = [0u8; 16];
+        // Safety: `chunks_exact(2)` guarantees each chunk has exactly 2 elements,
+        // and the length check above ensures exactly 16 chunks for a 32-char string.
+        #[allow(clippy::indexing_slicing)]
         for (i, chunk) in s.as_bytes().chunks_exact(2).enumerate() {
             let hi = hex_digit(chunk[0])?;
             let lo = hex_digit(chunk[1])?;

@@ -125,7 +125,13 @@ impl HttpLongPollConnection {
                         .await
                 }
             }
-            other => self.inner.inbound_writer.send(other).await,
+            other @ (Message::LooseCommit { .. }
+            | Message::Fragment { .. }
+            | Message::BlobsRequest { .. }
+            | Message::BlobsResponse { .. }
+            | Message::BatchSyncRequest(_)
+            | Message::RemoveSubscriptions(_)
+            | Message::DataRequestRejected(_)) => self.inner.inbound_writer.send(other).await,
         }
     }
 
