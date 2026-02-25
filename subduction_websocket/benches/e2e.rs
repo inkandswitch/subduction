@@ -67,21 +67,9 @@ fn runtime() -> tokio::runtime::Runtime {
         .expect("tokio runtime")
 }
 
-/// Spin up a fresh server with `MemoryStorage`.
-#[allow(clippy::type_complexity)]
-async fn fresh_server(
-    seed: u8,
-) -> (
-    TokioWebSocketServer<
-        MemoryStorage,
-        OpenPolicy,
-        MemorySigner,
-        CountLeadingZeroBytes,
-        TimeoutTokio,
-    >,
-    PeerId,
-    SocketAddr,
-) {
+/// Spin up a fresh server with `MemoryStorage`, wrapped in a [`ServerGuard`]
+/// for automatic cleanup on drop.
+async fn fresh_server(seed: u8) -> (ServerGuard, PeerId, SocketAddr) {
     let sig = signer(seed);
     let peer_id = PeerId::from(sig.verifying_key());
     let addr: SocketAddr = "127.0.0.1:0".parse().expect("valid addr");
@@ -103,7 +91,7 @@ async fn fresh_server(
     .expect("server setup");
 
     let bound = server.address();
-    (server, peer_id, bound)
+    (ServerGuard(server), peer_id, bound)
 }
 
 type ClientSubduction = Arc<
@@ -116,6 +104,72 @@ type ClientSubduction = Arc<
         MemorySigner,
     >,
 >;
+
+/// RAII guard that calls [`TokioWebSocketServer::stop`] on drop to ensure the
+/// accept loop and associated tasks are cleaned up between benchmark iterations.
+struct ServerGuard(
+    TokioWebSocketServer<
+        MemoryStorage,
+        OpenPolicy,
+        MemorySigner,
+        CountLeadingZeroBytes,
+        TimeoutTokio,
+    >,
+);
+
+impl Drop for ServerGuard {
+    fn drop(&mut self) {
+        self.0.stop();
+    }
+}
+
+impl std::ops::Deref for ServerGuard {
+    type Target = TokioWebSocketServer<
+        MemoryStorage,
+        OpenPolicy,
+        MemorySigner,
+        CountLeadingZeroBytes,
+        TimeoutTokio,
+    >;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+/// Assert that a `full_sync` call completed successfully.
+fn assert_full_sync(
+    result: (
+        bool,
+        subduction_core::connection::stats::SyncStats,
+        Vec<(
+            subduction_core::connection::authenticated::Authenticated<
+                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+                Sendable,
+            >,
+            subduction_websocket::error::CallError,
+        )>,
+        Vec<(
+            SedimentreeId,
+            subduction_core::subduction::error::IoError<
+                Sendable,
+                MemoryStorage,
+                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+            >,
+        )>,
+    ),
+) {
+    let (had_success, _stats, call_errs, io_errs) = result;
+    assert!(
+        call_errs.is_empty(),
+        "full_sync encountered call errors: {call_errs:?}"
+    );
+    assert!(
+        io_errs.is_empty(),
+        "full_sync encountered IO errors: {io_errs:?}"
+    );
+    assert!(had_success, "full_sync reported no successful syncs");
+}
 
 /// Create a `Subduction` client, connect to the server, start background tasks.
 async fn connected_client(
@@ -142,6 +196,8 @@ async fn connected_client(
         DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
+    // `listener_fut` already runs `Subduction::listen()` internally —
+    // do NOT spawn an additional `client.listen()` call.
     tokio::spawn(manager_fut);
     tokio::spawn(listener_fut);
 
@@ -160,19 +216,17 @@ async fn connected_client(
     .expect("client connect");
 
     tokio::spawn(async {
-        ws_listener.await.ok();
+        if let Err(e) = ws_listener.await {
+            tracing::error!("ws_listener task failed: {e:?}");
+        }
     });
     tokio::spawn(async {
-        ws_sender.await.ok();
+        if let Err(e) = ws_sender.await {
+            tracing::error!("ws_sender task failed: {e:?}");
+        }
     });
 
     client.register(client_ws).await.expect("register");
-
-    let listen_client = client.clone();
-    tokio::spawn(async move {
-        listen_client.listen().await.ok();
-    });
-
     client
 }
 
@@ -283,7 +337,7 @@ fn bench_batch_sync(c: &mut Criterion) {
                 },
                 |(_server, client)| {
                     rt.block_on(async {
-                        client.full_sync(Some(TIMEOUT)).await;
+                        assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
                     });
                 },
                 BatchSize::PerIteration,
@@ -327,7 +381,7 @@ fn bench_large_blob_sync(c: &mut Criterion) {
                 },
                 |(_server, client)| {
                     rt.block_on(async {
-                        client.full_sync(Some(TIMEOUT)).await;
+                        assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
                     });
                 },
                 BatchSize::PerIteration,
@@ -375,7 +429,7 @@ fn bench_bidirectional_sync(c: &mut Criterion) {
             },
             |(_server, client)| {
                 rt.block_on(async {
-                    client.full_sync(Some(TIMEOUT)).await;
+                    assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
                 });
             },
             BatchSize::PerIteration,
@@ -407,7 +461,7 @@ fn bench_incremental_sync(c: &mut Criterion) {
             }
 
             // Sync to get client up to date
-            client.full_sync(Some(TIMEOUT)).await;
+            assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             (server, client, sed_id)
@@ -480,7 +534,7 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                             for client in &clients {
                                 let c = client.clone();
                                 handles.push(tokio::spawn(async move {
-                                    c.full_sync(Some(TIMEOUT)).await;
+                                    assert_full_sync(c.full_sync(Some(TIMEOUT)).await);
                                 }));
                             }
 
