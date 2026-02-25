@@ -130,3 +130,19 @@ codegen-units = 1
 lto = "fat"
 opt-level = "z"
 panic = "abort"
+strip = "symbols"
+
+# The workspace-wide opt-level="z" is tuned for Wasm bundle size.
+# Override to opt-level=3 only for crates that are NOT shared with the
+# Wasm target, so Wasm bundles stay small while the native CLI is fast.
+[profile.release.package.subduction_cli]
+opt-level = 3
+
+[profile.release.package.subduction_websocket]
+opt-level = 3
+
+[profile.release.package.sedimentree_fs_storage]
+opt-level = 3
+
+[profile.release.package.tokio]
+opt-level = 3

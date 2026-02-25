@@ -34,12 +34,19 @@ graph TD
         subduction_core
     end
 
-    sedimentree_fs_storage
-    automerge_sedimentree
-    subduction_websocket
-    subduction_cli
-    subduction_keyhive
-    subduction_keyhive_policy
+    subgraph Storage
+        sedimentree_fs_storage
+    end
+
+    subgraph Transport
+        subduction_websocket
+    end
+
+    subgraph Integrations
+        automerge_sedimentree
+        subduction_keyhive
+        subduction_keyhive_policy
+    end
 
     subgraph Wasm
         sedimentree_wasm
@@ -48,26 +55,29 @@ graph TD
         automerge_subduction_wasm
     end
 
+    subduction_cli
+
     sedimentree_core --> subduction_crypto
     subduction_crypto --> subduction_core
-    sedimentree_core --> subduction_core
+
     sedimentree_core --> automerge_sedimentree
-    sedimentree_core --> sedimentree_fs_storage
-    sedimentree_core --> sedimentree_wasm
 
+    subduction_core --> sedimentree_fs_storage
     subduction_core --> subduction_websocket
-    subduction_core --> subduction_wasm
     subduction_core --> subduction_keyhive_policy
-    subduction_keyhive --> subduction_keyhive_policy
 
-    subduction_websocket --> subduction_cli
-    sedimentree_fs_storage --> subduction_cli
+    subduction_core --> sedimentree_wasm
+    subduction_core --> subduction_wasm
+    sedimentree_wasm --> subduction_wasm
 
-    automerge_sedimentree --> automerge_sedimentree_wasm
+    subduction_wasm --> automerge_sedimentree_wasm
     sedimentree_wasm --> automerge_sedimentree_wasm
 
     automerge_sedimentree_wasm --> automerge_subduction_wasm
     subduction_wasm --> automerge_subduction_wasm
+
+    subduction_websocket --> subduction_cli
+    sedimentree_fs_storage --> subduction_cli
 ```
 
 | Crate                   | Description                                                                             |
