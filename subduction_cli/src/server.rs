@@ -118,9 +118,23 @@ pub(crate) struct ServerArgs {
     #[arg(long = "iroh-peer", value_name = "NODE_ID")]
     pub(crate) iroh_peers: Vec<String>,
 
+    /// Direct socket addresses for iroh peers (e.g., `127.0.0.1:12345`).
+    /// Added to each `--iroh-peer` as a direct transport address hint.
+    #[arg(long = "iroh-peer-addr", value_name = "IP:PORT")]
+    pub(crate) iroh_peer_addrs: Vec<SocketAddr>,
+
     /// Custom iroh relay server URL (defaults to iroh's public relay servers)
     #[arg(long = "iroh-relay", value_name = "URL")]
     pub(crate) iroh_relay: Option<String>,
+
+    /// Disable iroh relay servers (direct connections only)
+    #[arg(long = "iroh-no-relay", default_value_t = false)]
+    pub(crate) iroh_no_relay: bool,
+
+    /// Write a JSON file on startup with the assigned port, peer ID, and iroh node ID.
+    /// Useful for integration tests that need to discover the server's address.
+    #[arg(long = "ready-file", value_name = "PATH")]
+    pub(crate) ready_file: Option<PathBuf>,
 }
 
 /// Default interval for refreshing storage metrics (1 minute).
@@ -286,14 +300,17 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     });
 
     // ── Iroh (QUIC) transport ────────────────────────────────────────────────
+    let mut iroh_node_id: Option<String> = None;
+    let mut iroh_addrs: Vec<SocketAddr> = Vec::new();
     let iroh_accept_task = if iroh_enabled {
-        let relay_mode = match &args.iroh_relay {
-            Some(url) => {
-                let relay_map =
-                    iroh::RelayMap::try_from_iter([url.as_str()]).map_err(|e| eyre::eyre!(e))?;
-                iroh::endpoint::RelayMode::Custom(relay_map)
-            }
-            None => iroh::endpoint::RelayMode::Default,
+        let relay_mode = if args.iroh_no_relay {
+            iroh::endpoint::RelayMode::Disabled
+        } else if let Some(url) = &args.iroh_relay {
+            let relay_map =
+                iroh::RelayMap::try_from_iter([url.as_str()]).map_err(|e| eyre::eyre!(e))?;
+            iroh::endpoint::RelayMode::Custom(relay_map)
+        } else {
+            iroh::endpoint::RelayMode::Default
         };
 
         let iroh_endpoint = iroh::Endpoint::builder()
@@ -303,6 +320,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             .await?;
 
         let iroh_addr = iroh_endpoint.addr();
+        iroh_node_id = Some(iroh_addr.id.to_string());
+        iroh_addrs = iroh_addr.ip_addrs().copied().collect();
         tracing::info!("Iroh endpoint bound: node ID = {}", iroh_addr.id);
         for addr in &iroh_addr.addrs {
             tracing::info!("  transport address: {addr:?}");
@@ -341,10 +360,10 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     tokio::spawn(accepted.sender_task);
 
                                     let auth = accepted.authenticated.map(UnifiedTransport::Iroh);
-                                    if let Err(e) = iroh_subduction.register(auth).await {
-                                        tracing::error!("failed to register iroh connection: {e}");
+                                    if let Err(e) = iroh_subduction.attach(auth).await {
+                                        tracing::error!("failed to attach iroh connection: {e}");
                                     } else {
-                                        tracing::info!("iroh: registered peer {remote}");
+                                        tracing::info!("iroh: attached peer {remote}");
                                     }
                                 }
                                 Err(e) => {
@@ -367,7 +386,10 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 }
             };
 
-            let peer_addr = EndpointAddr::new(node_id);
+            let mut peer_addr = EndpointAddr::new(node_id);
+            for addr in &args.iroh_peer_addrs {
+                peer_addr = peer_addr.with_ip_addr(*addr);
+            }
             let peer_ep = iroh_endpoint.clone();
             let peer_subduction = subduction.clone();
             let peer_signer = signer.clone();
@@ -397,6 +419,36 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 }
             });
         }
+
+        // Background sync task: periodically reconcile with all connected peers
+        let sync_subduction = subduction.clone();
+        let sync_cancel = token.child_token();
+        tokio::spawn(async move {
+            let mut interval = tokio::time::interval(Duration::from_secs(5));
+            interval.tick().await; // skip the first immediate tick
+            loop {
+                tokio::select! {
+                    () = sync_cancel.cancelled() => {
+                        tracing::debug!("iroh: background sync task canceled");
+                        break;
+                    }
+                    _ = interval.tick() => {
+                        let timeout = Some(Duration::from_secs(10));
+                        let (had_success, _stats, call_errs, io_errs) =
+                            sync_subduction.full_sync(timeout).await;
+                        if had_success {
+                            tracing::debug!("iroh: background full_sync completed");
+                        }
+                        for e in &call_errs {
+                            tracing::warn!("iroh: background sync call error: {e:?}");
+                        }
+                        for e in &io_errs {
+                            tracing::warn!("iroh: background sync io error: {e:?}");
+                        }
+                    }
+                }
+            }
+        });
 
         Some(task)
     } else {
@@ -438,6 +490,27 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 }
             }
         });
+    }
+
+    // Write ready file if requested (for integration tests)
+    if let Some(ref ready_path) = args.ready_file {
+        let iroh_line = iroh_node_id
+            .as_deref()
+            .map_or(String::new(), |id| format!("iroh_node_id={id}\n"));
+        let iroh_addrs_line = if iroh_addrs.is_empty() {
+            String::new()
+        } else {
+            let addrs: Vec<String> = iroh_addrs.iter().map(ToString::to_string).collect();
+            format!("iroh_addrs={}\n", addrs.join(","))
+        };
+        let content = format!(
+            "port={}\npeer_id={}\n{iroh_line}{iroh_addrs_line}",
+            assigned_address.port(),
+            peer_id,
+        );
+        std::fs::write(ready_path, content)
+            .map_err(|e| eyre::eyre!("failed to write ready file: {e}"))?;
+        tracing::info!("Ready file written to {}", ready_path.display());
     }
 
     // Wait for cancellation signal
@@ -877,8 +950,8 @@ async fn try_connect_iroh(
 
     let remote_id = authenticated.peer_id();
     let auth = authenticated.map(UnifiedTransport::Iroh);
-    subduction.register(auth).await?;
+    subduction.attach(auth).await?;
 
-    tracing::info!("iroh: connected to peer {node_id} (subduction ID: {remote_id})");
+    tracing::info!("iroh: attached peer {node_id} (subduction ID: {remote_id})");
     Ok(remote_id)
 }
