@@ -1,6 +1,6 @@
 [package]
 name = "subduction_cli"
-version = "0.4.1"
+version = "0.4.2"
 description = "CLI server and client for Subduction sync over WebSockets"
 
 categories = ["command-line-utilities", "web-programming"]
@@ -27,12 +27,17 @@ futures = { workspace = true }
 future_form = { workspace = true }
 futures-util = { workspace = true }
 hex = { workspace = true }
+http-body-util = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio", "http1", "server-auto"] }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+reqwest = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
 subduction_crypto = { workspace = true }
+subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
@@ -47,12 +52,16 @@ url = { workspace = true, features = ["std"] }
 default = ["native-tls"]
 native-tls = [
   "async-tungstenite/tokio-native-tls",
+  "reqwest/native-tls",
+  "subduction_http_longpoll/native-tls",
   "subduction_websocket/tokio_client",
   "subduction_websocket/tokio_server",
   "dep:tracing-loki",
 ]
 rustls = [
   "async-tungstenite/tokio-rustls-native-certs",
+  "reqwest/rustls-tls",
+  "subduction_http_longpoll/rustls-tls",
   "subduction_websocket/tokio_client_rustls",
   "subduction_websocket/tokio_server_rustls",
 ]

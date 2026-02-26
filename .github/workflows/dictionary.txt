@@ -110,6 +110,7 @@ HChaCha
 HSM
 HSMs
 html
+http
 http-server
 https
 Idempotency
@@ -137,6 +138,7 @@ lexicographically
 lifecycle
 linearizability
 localhost
+longpoll
 lookups
 LooseCommit
 macOS
@@ -224,6 +226,7 @@ SedimentreeId
 Sedimentrees
 sedimentrees
 Serde
+serverless
 ServerTimestamp
 sexualized
 SHA
@@ -252,6 +255,7 @@ SyncDiff
 systemd
 targetId
 TCP
+teardown
 TLS
 TODO
 TODOs

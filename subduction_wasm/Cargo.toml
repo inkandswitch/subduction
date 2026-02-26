@@ -1,6 +1,6 @@
 [package]
 name = "subduction_wasm"
-version = "0.4.1"
+version = "0.4.2"
 description = "Wasm/JavaScript bindings for Subduction (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
@@ -34,6 +34,8 @@ sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
+futures-timer = { workspace = true }
+subduction_http_longpoll = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -49,6 +51,7 @@ features = [
   "CryptoKey",
   "DomException",
   "DomStringList",
+  "Headers",
   "IdbDatabase",
   "IdbFactory",
   "IdbObjectStore",
@@ -58,11 +61,16 @@ features = [
   "IdbTransactionMode",
   "IdbVersionChangeEvent",
   "MessageEvent",
+  "Request",
+  "RequestInit",
+  "RequestMode",
+  "Response",
   "ServiceWorkerGlobalScope",
   "SubtleCrypto",
   "Url",
   "WebSocket",
-  "Window"
+  "Window",
+  "WorkerGlobalScope",
 ]
 
 [target.'cfg(target_family = "wasm")'.dependencies]

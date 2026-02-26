@@ -1,12 +1,14 @@
 //! Generic timeout strategies.
+//!
+//! The core [`Timeout`] trait and [`TimedOut`] error are re-exported from
+//! `subduction_core`. This module provides concrete implementations.
 
 use core::time::Duration;
 
-use future_form::FutureForm;
+pub use subduction_core::connection::timeout::{TimedOut, Timeout};
 
 #[cfg(feature = "futures-timer")]
 use future_form::{Local, Sendable};
-use thiserror::Error;
 
 #[cfg(feature = "futures-timer")]
 use futures::{
@@ -17,24 +19,12 @@ use futures::{
 #[cfg(feature = "futures-timer")]
 use futures_timer::Delay;
 
-/// A trait for time-limiting futures.
-pub trait Timeout<K: FutureForm + ?Sized> {
-    /// Wrap a future with a timeout.
-    fn timeout<'a, T: 'a>(
-        &'a self,
-        dur: Duration,
-        fut: K::Future<'a, T>,
-    ) -> K::Future<'a, Result<T, TimedOut>>;
-}
-
-/// An error indicating that an operation has timed out.
-#[derive(Debug, Clone, Copy, Error, PartialEq, Eq, Hash)]
-#[error("Operation timed out")]
-pub struct TimedOut;
-
+/// A timeout strategy using the [`futures-timer`] crate.
+///
+/// Works with both `Sendable` and `Local` future forms, making it
+/// suitable for native and Wasm environments.
 #[cfg(feature = "futures-timer")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-/// A timeout strategy using the [`futures-timer`] crate.
 pub struct FuturesTimerTimeout;
 
 #[cfg(feature = "futures-timer")]

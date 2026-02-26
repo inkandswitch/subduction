@@ -65,7 +65,7 @@ const CONSOLE_PORTS: Record<string, number> = {
 
 let subductionServer: ChildProcess | null = null;
 let currentPort: number;
-let currentUrl: string;
+let currentWsUrl: string;
 
 test.beforeAll(async ({ browserName }) => {
   // Skip peer connection tests in CI - they require building subduction_cli
@@ -75,11 +75,11 @@ test.beforeAll(async ({ browserName }) => {
   }
   // Assign port based on browser to avoid conflicts when running in parallel
   currentPort = WS_PORTS[browserName];
-  currentUrl = `ws://${WS_HOST}:${currentPort}`;
+  currentWsUrl = `ws://${WS_HOST}:${currentPort}`;
 
   const cliPath = path.join(__dirname, "../../target/release/subduction_cli");
 
-  subductionServer = spawn(cliPath, ["start", "--socket", `${WS_HOST}:${currentPort}`], {
+  subductionServer = spawn(cliPath, ["start", "--socket", `${WS_HOST}:${currentPort}`, "--ephemeral-key"], {
     cwd: path.join(__dirname, "../.."),
     stdio: "pipe",
     env: {
@@ -89,8 +89,8 @@ test.beforeAll(async ({ browserName }) => {
     },
   });
 
-  // Log server output in CI for debugging
-  if (process.env.CI) {
+  // Log server output for debugging
+  if (process.env.CI || process.env.DEBUG) {
     subductionServer.stdout?.on("data", (data) => {
       console.log(`[${browserName} stdout]:`, data.toString().trim());
     });
@@ -103,9 +103,9 @@ test.beforeAll(async ({ browserName }) => {
   const healthCheckTimeout = process.env.CI ? 15000 : 10000;
   try {
     await waitForPort(WS_HOST, currentPort, healthCheckTimeout);
-    console.log(`✓ Subduction WebSocket server started on ${currentUrl} for ${browserName}`);
+    console.log(`✓ Subduction WebSocket server started on ${currentWsUrl} for ${browserName}`);
   } catch (error) {
-    console.error(`Failed to start server on ${currentUrl}: ${error}`);
+    console.error(`Failed to start server on ${currentWsUrl}: ${error}`);
     throw error;
   }
 });
@@ -134,159 +134,155 @@ test.beforeEach(async ({ page }) => {
 test.describe.configure({ mode: 'serial' });
 
 test.describe("Peer Connection Tests", () => {
-  test("should connect to WebSocket server", async ({ page }) => {
+  test("should connect to WebSocket server via tryDiscover", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
-      const { SubductionWebSocket, PeerId } = window.subduction;
+      const { SubductionWebSocket, WebCryptoSigner } = window.subduction;
 
       try {
-        const ws = new WebSocket(wsUrl);
+        const signer = await WebCryptoSigner.setup();
+        const url = new URL(wsUrl);
 
-        await new Promise((resolve, reject) => {
-          ws.onopen = resolve;
-          ws.onerror = (event) => {
-            reject(new Error(`WebSocket error - readyState: ${ws.readyState}, url: ${ws.url}`));
-          };
-          setTimeout(() => reject(new Error("Connection timeout")), 5000);
-        });
-
-        const peerIdBytes = new Uint8Array(32);
-        peerIdBytes[0] = 1; // Unique peer ID
-        const peerId = new PeerId(peerIdBytes);
-
-        const subductionWs = await SubductionWebSocket.setup(
-          peerId,
-          ws,
-          5000
+        const authenticated = await SubductionWebSocket.tryDiscover(
+          url,
+          signer,
+          5000,
+          wsUrl.replace("ws://", "")
         );
+
+        const peerId = authenticated.peerId;
 
         return {
           connected: true,
-          hasWebSocket: !!subductionWs,
+          hasAuthenticated: !!authenticated,
+          hasPeerId: !!peerId,
+          peerIdStr: peerId.toString(),
           error: null,
         };
       } catch (error) {
         return {
           connected: false,
-          hasWebSocket: false,
+          hasAuthenticated: false,
+          hasPeerId: false,
+          peerIdStr: null,
           error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
     if (!result.connected && process.env.CI) {
       console.error(`WebSocket connection failed. Error: ${result.error}`);
     }
 
-    expect(result.connected).toBe(true);
-    expect(result.hasWebSocket).toBe(true);
     expect(result.error).toBeNull();
+    expect(result.connected).toBe(true);
+    expect(result.hasAuthenticated).toBe(true);
+    expect(result.hasPeerId).toBe(true);
   });
 
-  test("should register connection with Subduction instance", async ({ page }) => {
+  test("should attach connection to Subduction instance", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, SubductionWebSocket, PeerId } = window.subduction;
+      const { Subduction, MemoryStorage, SubductionWebSocket, WebCryptoSigner } = window.subduction;
 
       try {
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
+        const syncer = new Subduction(signer, storage);
 
-        const ws = new WebSocket(wsUrl);
-        await new Promise((resolve, reject) => {
-          ws.onopen = resolve;
-          ws.onerror = reject;
-          setTimeout(() => reject(new Error("Connection timeout")), 5000);
-        });
+        const url = new URL(wsUrl);
+        const authenticated = await SubductionWebSocket.tryDiscover(
+          url,
+          signer,
+          5000,
+          wsUrl.replace("ws://", "")
+        );
 
-        const peerIdBytes = new Uint8Array(32);
-        peerIdBytes[0] = 2;
-        const peerId = new PeerId(peerIdBytes);
+        const isNew = await syncer.attach(authenticated);
 
-        const subductionWs = await SubductionWebSocket.setup(peerId, ws, 5000);
-
-        const registered = await syncer.register(subductionWs);
-
-        const peerIds = await syncer.getPeerIds();
+        const peerIds = await syncer.getConnectedPeerIds();
 
         return {
-          registered: !!registered,
-          isNew: registered.is_new,
+          attached: true,
+          isNew,
           peerCount: peerIds.length,
           error: null,
         };
       } catch (error) {
         return {
-          registered: false,
+          attached: false,
           isNew: false,
           peerCount: 0,
-          error: error.message || String(error),
+          error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
-    expect(result.registered).toBe(true);
-    expect(result.peerCount).toBeGreaterThan(0);
     expect(result.error).toBeNull();
+    expect(result.attached).toBe(true);
+    expect(result.isNew).toBe(true);
+    expect(result.peerCount).toBeGreaterThan(0);
   });
 
-  test("should handle connection with SubductionWebSocket.connect", async ({ page }) => {
+  test("should connect via connectDiscover", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, SubductionWebSocket, PeerId } = window.subduction;
+      const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
 
       try {
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
-
-        const peerIdBytes = new Uint8Array(32);
-        peerIdBytes[0] = 3;
-        const peerId = new PeerId(peerIdBytes);
+        const syncer = new Subduction(signer, storage);
 
         const url = new URL(wsUrl);
-        const subductionWs = await SubductionWebSocket.connect(url, peerId, 5000);
+        const peerId = await syncer.connectDiscover(
+          url,
+          signer,
+          5000,
+          wsUrl.replace("ws://", "")
+        );
 
-        const registered = await syncer.register(subductionWs);
-        const peerIds = await syncer.getPeerIds();
+        const peerIds = await syncer.getConnectedPeerIds();
 
         return {
           connected: true,
-          registered: !!registered,
+          peerIdStr: peerId.toString(),
           peerCount: peerIds.length,
           error: null,
         };
       } catch (error) {
         return {
           connected: false,
-          registered: false,
+          peerIdStr: null,
           peerCount: 0,
-          error: error.message || String(error),
+          error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
-    expect(result.connected).toBe(true);
-    expect(result.registered).toBe(true);
-    expect(result.peerCount).toBeGreaterThan(0);
     expect(result.error).toBeNull();
+    expect(result.connected).toBe(true);
+    expect(result.peerCount).toBeGreaterThan(0);
+    expect(result.peerIdStr).toBeTruthy();
   });
 
   test("should disconnect from peer", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, SubductionWebSocket, PeerId } = window.subduction;
+      const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
 
       try {
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
-
-        const peerIdBytes = new Uint8Array(32);
-        peerIdBytes[0] = 4;
-        const peerId = new PeerId(peerIdBytes);
+        const syncer = new Subduction(signer, storage);
 
         const url = new URL(wsUrl);
-        const subductionWs = await SubductionWebSocket.connect(url, peerId, 5000);
-        await syncer.register(subductionWs);
+        await syncer.connectDiscover(
+          url,
+          signer,
+          5000,
+          wsUrl.replace("ws://", "")
+        );
 
-        const peerIdsBeforeDisconnect = await syncer.getPeerIds();
+        const peerIdsBeforeDisconnect = await syncer.getConnectedPeerIds();
         await syncer.disconnectAll();
-        const peerIdsAfterDisconnect = await syncer.getPeerIds();
+        const peerIdsAfterDisconnect = await syncer.getConnectedPeerIds();
 
         return {
           beforeCount: peerIdsBeforeDisconnect.length,
@@ -299,32 +295,33 @@ test.describe("Peer Connection Tests", () => {
           beforeCount: 0,
           afterCount: 0,
           disconnected: false,
-          error: error.message || String(error),
+          error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
+    expect(result.error).toBeNull();
     expect(result.beforeCount).toBeGreaterThan(0);
     expect(result.afterCount).toBe(0);
     expect(result.disconnected).toBe(true);
-    expect(result.error).toBeNull();
   });
 
   test("should request blobs from connected peer", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, SubductionWebSocket, PeerId, Digest, SedimentreeId } = window.subduction;
+      const { Subduction, MemoryStorage, WebCryptoSigner, Digest, SedimentreeId } = window.subduction;
 
       try {
+        const signer = await WebCryptoSigner.setup();
         const storage = new MemoryStorage();
-        const syncer = new Subduction(storage);
-
-        const peerIdBytes = new Uint8Array(32);
-        peerIdBytes[0] = 5;
-        const peerId = new PeerId(peerIdBytes);
+        const syncer = new Subduction(signer, storage);
 
         const url = new URL(wsUrl);
-        const subductionWs = await SubductionWebSocket.connect(url, peerId, 5000);
-        await syncer.register(subductionWs);
+        await syncer.connectDiscover(
+          url,
+          signer,
+          5000,
+          wsUrl.replace("ws://", "")
+        );
 
         const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const digest1 = new Digest(new Uint8Array(32).fill(1));
@@ -339,39 +336,37 @@ test.describe("Peer Connection Tests", () => {
       } catch (error) {
         return {
           requested: false,
-          error: error.message || String(error),
+          error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
-    expect(result.requested).toBe(true);
     expect(result.error).toBeNull();
+    expect(result.requested).toBe(true);
   });
 
   test("should handle multiple concurrent connections", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, SubductionWebSocket, PeerId } = window.subduction;
+      const { Subduction, MemoryStorage, WebCryptoSigner } = window.subduction;
 
       try {
-        const storage1 = new MemoryStorage();
-        const storage2 = new MemoryStorage();
+        const signer1 = await WebCryptoSigner.setup();
+        const signer2 = await WebCryptoSigner.setup();
 
-        const syncer1 = new Subduction(storage1);
-        const syncer2 = new Subduction(storage2);
+        const syncer1 = new Subduction(signer1, new MemoryStorage());
+        const syncer2 = new Subduction(signer2, new MemoryStorage());
+
+        const url = new URL(wsUrl);
+        const serviceName = wsUrl.replace("ws://", "");
 
         // Connect first syncer
-        const peerId1 = new PeerId(new Uint8Array(32).fill(6));
-        const url = new URL(wsUrl);
-        const ws1 = await SubductionWebSocket.connect(url, peerId1, 5000);
-        await syncer1.register(ws1);
+        await syncer1.connectDiscover(url, signer1, 5000, serviceName);
 
         // Connect second syncer
-        const peerId2 = new PeerId(new Uint8Array(32).fill(7));
-        const ws2 = await SubductionWebSocket.connect(url, peerId2, 5000);
-        await syncer2.register(ws2);
+        await syncer2.connectDiscover(url, signer2, 5000, serviceName);
 
-        const peers1 = await syncer1.getPeerIds();
-        const peers2 = await syncer2.getPeerIds();
+        const peers1 = await syncer1.getConnectedPeerIds();
+        const peers2 = await syncer2.getConnectedPeerIds();
 
         return {
           syncer1Connected: peers1.length > 0,
@@ -384,22 +379,21 @@ test.describe("Peer Connection Tests", () => {
           syncer1Connected: false,
           syncer2Connected: false,
           bothConnected: false,
-          error: error.message || String(error),
+          error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
+    expect(result.error).toBeNull();
     expect(result.syncer1Connected).toBe(true);
     expect(result.syncer2Connected).toBe(true);
     expect(result.bothConnected).toBe(true);
-    expect(result.error).toBeNull();
   });
 });
 
 test.describe("tryDiscover Optional Parameters", () => {
   // These tests verify that optional parameters can be omitted from JS calls.
-  // The connection will fail (handshake/internal error), but the call itself
-  // should not throw a "missing argument" error at the JS binding level.
+  // The connection will succeed since the server supports discovery mode.
 
   test("should accept tryDiscover with no optional parameters", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
@@ -420,7 +414,7 @@ test.describe("tryDiscover Optional Parameters", () => {
           error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
     // The function was callable (didn't throw at binding level)
     // Connection errors are expected since server may not support discovery
@@ -445,7 +439,7 @@ test.describe("tryDiscover Optional Parameters", () => {
           error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
     // The function was callable with partial optional parameters
     expect(true).toBe(true);
@@ -464,7 +458,7 @@ test.describe("tryDiscover Optional Parameters", () => {
           url,
           signer,
           10000,
-          "127.0.0.1"
+          wsUrl.replace("ws://", "")
         );
 
         return { connected: true, error: null };
@@ -474,7 +468,7 @@ test.describe("tryDiscover Optional Parameters", () => {
           error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
     // The function was callable with all parameters
     expect(true).toBe(true);
@@ -503,7 +497,7 @@ test.describe("tryDiscover Optional Parameters", () => {
           error: error instanceof Error ? error.message : String(error),
         };
       }
-    }, currentUrl);
+    }, currentWsUrl);
 
     // The function was callable with explicit undefined values
     expect(true).toBe(true);

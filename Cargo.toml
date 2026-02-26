@@ -10,6 +10,7 @@ members = [
   "subduction_cli",
   "subduction_core",
   "subduction_crypto",
+  "subduction_http_longpoll",
   "subduction_keyhive_policy",
   "subduction_keyhive",
   "subduction_wasm",
@@ -32,10 +33,11 @@ automerge_sedimentree_wasm = { version = "0.4.0", path = "automerge_sedimentree_
 sedimentree_core = { version = "0.4.0", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.4.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.4.0", path = "sedimentree_wasm", default-features = false }
-subduction_core = { version = "0.4.0", path = "subduction_core", default-features = false }
+subduction_core = { version = "0.4.1", path = "subduction_core", default-features = false }
 subduction_crypto = { version = "0.1.0", path = "subduction_crypto", default-features = false }
-subduction_wasm = { version = "0.4.0", path = "subduction_wasm", default-features = false }
-subduction_websocket = { version = "0.4.0", path = "subduction_websocket", default-features = false }
+subduction_http_longpoll = { version = "0.2.0", path = "subduction_http_longpoll", default-features = false }
+subduction_wasm = { version = "0.4.2", path = "subduction_wasm", default-features = false }
+subduction_websocket = { version = "0.4.2", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"
@@ -66,6 +68,9 @@ futures-timer = "3.0" # NOTE depends on `std`
 futures-util = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 getrandom = "0.2" # matches ed25519-dalek transitive dep
 hex = "0.4"
+http-body-util = "0.1"
+hyper = { version = "1.6", default-features = false }
+hyper-util = { version = "0.1", default-features = false }
 js-sys = { version = "0.3.81", default-features = false }
 keyhive_core = { version = "0.2.0-alpha.1", git = "https://github.com/inkandswitch/keyhive", branch = "main" }
 metrics = "0.24"
@@ -73,6 +78,7 @@ metrics-exporter-prometheus = "0.16"
 nonempty = { version = "0.12.0", default-features = false }
 num-bigint = { version = "0.4.6", default-features = false }
 rand = { version = "0.8.5", default-features = false }
+reqwest = { version = "0.12", default-features = false }
 serde = { version = "1.0", default-features = false }
 siphasher = { version = "1.0", default-features = false }
 testresult = "0.4.1"
@@ -136,6 +142,9 @@ strip = "symbols"
 # Override to opt-level=3 only for crates that are NOT shared with the
 # Wasm target, so Wasm bundles stay small while the native CLI is fast.
 [profile.release.package.subduction_cli]
+opt-level = 3
+
+[profile.release.package.subduction_http_longpoll]
 opt-level = 3
 
 [profile.release.package.subduction_websocket]

@@ -1,10 +1,10 @@
 [package]
-name = "subduction_websocket"
-version = "0.4.2"
-description = "WebSocket transport layer for the Subduction sync protocol"
+name = "subduction_http_longpoll"
+version = "0.2.0"
+description = "HTTP long-poll transport layer for the Subduction sync protocol"
 
 categories = ["web-programming"]
-keywords = ["websocket", "sync", "subduction"]
+keywords = ["http", "long-poll", "sync", "subduction"]
 readme = "./README.md"
 
 authors.workspace = true
@@ -16,48 +16,52 @@ rust-version.workspace = true
 [dependencies]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
-async-tungstenite = { workspace = true }
 blake3 = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
-futures-timer = { workspace = true, optional = true }
+futures-timer = { workspace = true }
 futures-util = { workspace = true }
-rand = { workspace = true }
+http-body-util = { workspace = true, optional = true }
+hyper = { workspace = true, features = ["http1", "server"], optional = true }
+rand = { workspace = true, features = ["getrandom"] }
+reqwest = { workspace = true, optional = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
-tokio = { workspace = true, optional = true, features = ["time"] }
-tokio-util = { workspace = true, optional = true }
 tracing = { workspace = true }
-tungstenite = { workspace = true }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }
 
 [dev-dependencies]
-arbitrary = { workspace = true }
-criterion = { workspace = true }
-criterion_pprof = { workspace = true }
+bolero = { workspace = true }
 eyre = { workspace = true }
+futures-timer = { workspace = true }
+hyper = { workspace = true, features = ["http1", "server"] }
+hyper-util = { workspace = true, features = ["http1", "server-auto", "tokio"] }
 rand = { workspace = true, features = ["std_rng"] }
+reqwest = { workspace = true, features = ["rustls-tls"] }
 sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
 subduction_core = { workspace = true, features = ["test_utils"] }
+subduction_crypto = { workspace = true }
+subduction_websocket = { workspace = true, features = ["futures-timer"] }
 testresult = { workspace = true }
 tokio = { workspace = true }
-tokio-test = { workspace = true }
 tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"] }
 
-[[bench]]
-name = "e2e"
-harness = false
-
 [features]
-default = ["std"]
-futures-timer = ["std", "dep:futures-timer"]
+default = ["std", "server", "reqwest", "rustls-tls"]
+bolero = []
+native-tls = ["reqwest", "reqwest/native-tls"]
+reqwest = ["dep:reqwest", "std"]
+rustls-tls = ["reqwest", "reqwest/rustls-tls"]
+server = ["dep:http-body-util", "dep:hyper", "std"]
 std = [
   "async-channel/std",
   "async-lock/std",
   "blake3/std",
   "futures/std",
-  "futures-util/io",
   "futures-util/std",
   "rand/std",
   "rand/std_rng",
@@ -66,18 +70,6 @@ std = [
   "thiserror/std",
   "tracing/std",
 ]
-tokio_base = [
-  "dep:tokio",
-  "dep:tokio-util",
-  "futures-timer",
-  "std"
-]
-tokio_client_any = ["tokio_base"]
-tokio_server_any = ["tokio_base"]
-tokio_client = ["tokio_client_any", "async-tungstenite/tokio-native-tls"]
-tokio_server = ["tokio_server_any", "async-tungstenite/tokio-native-tls"]
-tokio_client_rustls = ["tokio_client_any", "async-tungstenite/tokio-rustls-native-certs"]
-tokio_server_rustls = ["tokio_server_any", "async-tungstenite/tokio-rustls-native-certs"]
 
 [lints]
 workspace = true
