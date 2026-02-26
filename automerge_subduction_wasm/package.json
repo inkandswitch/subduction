@@ -3,7 +3,7 @@
   "version": "0.0.0-alpha.0",
   "description": "",
   "private": true,
-  "main": "pkg/automerge_subduction_wasm.js",
+  "main": "./dist/cjs/node.cjs",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
@@ -14,33 +14,43 @@
   "author": "",
   "license": "Apache-2.0",
   "type": "module",
-  "module": "pkg/automerge_subduction_wasm.js",
-  "types": "pkg/automerge_subduction_wasm.d.ts",
+  "module": "./dist/esm/bundler.js",
+  "types": "./dist/index.d.ts",
   "files": [
     "pkg/*",
     "pkg-node/*",
-    "pkg-slim/*"
+    "pkg-slim/*",
+    "dist"
   ],
   "exports": {
     ".": {
-      "types": "./pkg/automerge_subduction_wasm.d.ts",
-      "node": {
-        "types": "./pkg-node/automerge_subduction_wasm.d.ts",
-        "import": "./pkg-node/automerge_subduction_wasm.js",
-        "require": "./pkg-node/automerge_subduction_wasm.js"
+      "types": "./dist/index.d.ts",
+      "workerd": {
+        "import": "./dist/esm/workerd.js",
+        "require": "./dist/cjs/web.cjs"
       },
-      "import": "./pkg/automerge_subduction_wasm.js",
-      "require": "./pkg/automerge_subduction_wasm.js"
+      "node": {
+        "import": "./dist/esm/node.js",
+        "require": "./dist/cjs/node.cjs"
+      },
+      "browser": {
+        "import": "./dist/esm/bundler.js",
+        "require": "./dist/cjs/web.cjs"
+      },
+      "import": "./dist/esm/web.js",
+      "require": "./dist/cjs/web.cjs"
     },
     "./slim": {
-      "types": "./pkg-slim/index.d.ts",
-      "import": "./pkg-slim/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/esm/slim.js",
+      "require": "./dist/cjs/slim.cjs"
     },
-    "./automerge_subduction_wasm.wasm": "./pkg-slim/automerge_subduction_wasm_bg.wasm",
-    "./automerge_subduction_wasm.base64.js": {
-      "import": "./pkg-slim/automerge_subduction_wasm_bg.wasm.base64.js",
-      "types": "./pkg-slim/automerge_subduction_wasm_bg.wasm.base64.d.ts"
-    }
+    "./wasm": "./dist/@automerge/automerge-subduction.wasm",
+    "./wasm-base64": {
+      "import": "./dist/esm/wasm-base64.js",
+      "require": "./dist/cjs/wasm-base64.cjs"
+    },
+    "./iife": "./dist/iife/index.js"
   },
   "devDependencies": {
     "@playwright/test": "^1.55.0",
@@ -61,16 +71,3 @@
     }
   }
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
