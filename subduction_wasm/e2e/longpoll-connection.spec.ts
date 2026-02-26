@@ -75,12 +75,14 @@ test.beforeAll(async ({ browserName }) => {
     }
   );
 
-  subductionServer.stdout?.on("data", (data) => {
-    console.log(`[${browserName} lp stdout]:`, data.toString().trim());
-  });
-  subductionServer.stderr?.on("data", (data) => {
-    console.error(`[${browserName} lp stderr]:`, data.toString().trim());
-  });
+  if (process.env.CI || process.env.DEBUG) {
+    subductionServer.stdout?.on("data", (data) => {
+      console.log(`[${browserName} lp stdout]:`, data.toString().trim());
+    });
+    subductionServer.stderr?.on("data", (data) => {
+      console.error(`[${browserName} lp stderr]:`, data.toString().trim());
+    });
+  }
 
   const healthCheckTimeout = process.env.CI ? 15000 : 10000;
   try {
@@ -131,7 +133,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
         return {
           connected: true,
-          peerIdHex: peerId.toHex(),
+          peerIdHex: peerId.toString(),
           peerCount: connectedPeers.length,
           error: null,
         };

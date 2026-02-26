@@ -133,6 +133,9 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
     ) -> Self {
+        #[cfg(feature = "console_error_panic_hook")]
+        console_error_panic_hook::set_once();
+
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);

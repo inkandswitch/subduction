@@ -523,6 +523,10 @@ async fn handle_http_longpoll(
                         ACCESS_CONTROL_ALLOW_HEADERS,
                         "Content-Type, X-Session-Id",
                     )
+                    .header(
+                        hyper::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                        "X-Session-Id",
+                    )
                     .header(ACCESS_CONTROL_MAX_AGE, "86400")
                     .body(Full::new(Bytes::new()))
                     .expect("valid response");
@@ -557,6 +561,11 @@ async fn handle_http_longpoll(
             parts.headers.insert(
                 ACCESS_CONTROL_ALLOW_HEADERS,
                 "Content-Type, X-Session-Id".parse().expect("valid header"),
+            );
+            // Expose custom headers so the browser can read them
+            parts.headers.insert(
+                hyper::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                "X-Session-Id".parse().expect("valid header"),
             );
 
             Ok::<_, hyper::Error>(hyper::Response::from_parts(parts, body))
