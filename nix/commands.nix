@@ -488,6 +488,7 @@
 
       for crate in sedimentree_wasm subduction_wasm automerge_sedimentree_wasm automerge_subduction_wasm; do
         echo "===> wasm-bodge build $crate..."
+        rm -rf "$WORKSPACE_ROOT/$crate/dist"
         ensure_scope_dir "$WORKSPACE_ROOT/$crate/package.json" "$WORKSPACE_ROOT/$crate/dist"
         ${wasm-bodge-bin} build \
           --crate-path "$WORKSPACE_ROOT/$crate" \
@@ -521,6 +522,8 @@
         echo "Error: crate directory not found: $CRATE"
         exit 1
       fi
+
+      rm -rf "$WORKSPACE_ROOT/$CRATE/dist"
 
       # Workaround: wasm-bodge doesn't mkdir parents for scoped package names
       PKG_NAME=$(${pkgs.jq}/bin/jq -r '.name' "$WORKSPACE_ROOT/$CRATE/package.json")
