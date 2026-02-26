@@ -35,6 +35,7 @@ tungstenite = { workspace = true }
 [dev-dependencies]
 arbitrary = { workspace = true }
 criterion = { workspace = true }
+criterion_pprof = { workspace = true }
 eyre = { workspace = true }
 rand = { workspace = true, features = ["std_rng"] }
 sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }

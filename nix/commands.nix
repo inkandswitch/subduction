@@ -119,6 +119,128 @@
       echo "✓ E2E benchmarks complete — results in target/criterion/"
     '';
 
+    "bench:flame" = cmd "Profile a benchmark and open its flamegraph" ''
+      set -e
+
+      usage() {
+        echo "Usage: bench:flame <package> [filter] [seconds]"
+        echo ""
+        echo "  package  Crate to bench (sedimentree_core, subduction_core,"
+        echo "           subduction_websocket, automerge_sedimentree)"
+        echo "  filter   Benchmark name filter (default: all)"
+        echo "  seconds  Profile duration per benchmark (default: 10)"
+        echo ""
+        echo "Examples:"
+        echo "  bench:flame sedimentree_core minimize"
+        echo "  bench:flame subduction_core batch_sync 15"
+        echo "  bench:flame subduction_websocket handshake"
+        echo "  bench:flame automerge_sedimentree diff"
+      }
+
+      if [ -z "''${1:-}" ]; then
+        usage
+        exit 1
+      fi
+
+      PACKAGE="$1"
+      FILTER="''${2:-}"
+      SECONDS="''${3:-10}"
+
+      # Map package to bench target and required features
+      case "$PACKAGE" in
+        sedimentree_core)
+          BENCH="sedimentree"
+          FEATURES="--features std"
+          ;;
+        subduction_core)
+          BENCH="subduction"
+          FEATURES="--features std"
+          ;;
+        subduction_websocket)
+          BENCH="e2e"
+          FEATURES="--features tokio_client,tokio_server"
+          ;;
+        automerge_sedimentree)
+          BENCH="egwalker"
+          FEATURES=""
+          ;;
+        *)
+          echo "Unknown package: $PACKAGE"
+          echo ""
+          usage
+          exit 1
+          ;;
+      esac
+
+      FILTER_ARGS=""
+      if [ -n "$FILTER" ]; then
+        FILTER_ARGS="$FILTER"
+      fi
+
+      echo "===> Profiling $PACKAGE::$BENCH (filter: ''${FILTER:-all}, ''${SECONDS}s per benchmark)..."
+      ${cargo} bench --package "$PACKAGE" $FEATURES --bench "$BENCH" -- $FILTER_ARGS --profile-time "$SECONDS"
+
+      # Find and open the most recent flamegraph
+      LATEST=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -newer target/criterion/.bench-marker 2>/dev/null | head -1 || true)
+
+      if [ -z "$LATEST" ]; then
+        # No marker file yet; find any recent flamegraph
+        LATEST=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -type f 2>/dev/null | ${pkgs.coreutils}/bin/sort | tail -1 || true)
+      fi
+
+      if [ -n "$LATEST" ]; then
+        echo ""
+        echo "Flamegraphs generated. Opening: $LATEST"
+        ${pkgs.xdg-utils}/bin/xdg-open "$LATEST"
+        echo ""
+        echo "All flamegraphs:"
+        ${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" | ${pkgs.coreutils}/bin/sort
+      else
+        echo ""
+        echo "No flamegraphs found. Did the profiling complete?"
+      fi
+    '';
+
+    "bench:flame:open" = cmd "List and open an existing flamegraph" ''
+      set -e
+
+      SVGS=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -type f 2>/dev/null | ${pkgs.coreutils}/bin/sort)
+
+      if [ -z "$SVGS" ]; then
+        echo "No flamegraphs found in target/criterion/"
+        echo "Run 'bench:flame <package> [filter]' to generate one."
+        exit 1
+      fi
+
+      echo "Available flamegraphs:"
+      echo ""
+      i=1
+      echo "$SVGS" | while IFS= read -r svg; do
+        # Strip target/criterion/ prefix and /profile/flamegraph.svg suffix
+        name=$(echo "$svg" | ${pkgs.gnused}/bin/sed 's|target/criterion/||; s|/profile/flamegraph.svg||')
+        printf "  [%d] %s\n" "$i" "$name"
+        i=$((i + 1))
+      done
+
+      echo ""
+      printf "Open [number or Enter for latest]: "
+      read -r choice
+
+      if [ -z "$choice" ]; then
+        SELECTED=$(echo "$SVGS" | tail -1)
+      else
+        SELECTED=$(echo "$SVGS" | ${pkgs.gnused}/bin/sed -n "''${choice}p")
+      fi
+
+      if [ -z "$SELECTED" ]; then
+        echo "Invalid selection."
+        exit 1
+      fi
+
+      echo "Opening: $SELECTED"
+      ${pkgs.xdg-utils}/bin/xdg-open "$SELECTED"
+    '';
+
     "bench:heap" = cmd "Run heap allocation profiling" ''
       ${cargo} test --package sedimentree_core --test heap_profile -- --nocapture
       ${pkgs.jq}/bin/jq '.' sedimentree_core/dhat-heap.json | ${pkgs.moreutils}/bin/sponge sedimentree_core/dhat-heap.json

@@ -20,6 +20,7 @@ use std::{collections::BTreeSet, hint::black_box, num::NonZero};
 
 use automerge::Automerge;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion_pprof::criterion::{Output, PProfProfiler};
 use rand::{Rng, SeedableRng, rngs::SmallRng};
 use sedimentree_core::{
     blob::BlobMeta,
@@ -733,21 +734,23 @@ fn bench_minimal_hash_by_metric(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_document_stats,
-    bench_depth_metric_stats,
-    bench_load_document,
-    bench_minimize,
-    bench_minimize_by_metric,
-    bench_fingerprint_summarize,
-    bench_diff_remote_fingerprints,
-    bench_heads,
-    bench_heads_by_metric,
-    bench_diff,
-    bench_minimal_hash,
-    bench_minimal_hash_by_metric,
-    bench_merge,
-);
+criterion_group! {
+    name = benches;
+    config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
+    targets =
+        bench_document_stats,
+        bench_depth_metric_stats,
+        bench_load_document,
+        bench_minimize,
+        bench_minimize_by_metric,
+        bench_fingerprint_summarize,
+        bench_diff_remote_fingerprints,
+        bench_heads,
+        bench_heads_by_metric,
+        bench_diff,
+        bench_minimal_hash,
+        bench_minimal_hash_by_metric,
+        bench_merge,
+}
 
 criterion_main!(benches);

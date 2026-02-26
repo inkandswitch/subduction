@@ -90,9 +90,11 @@
         ];
 
         cargo-installs = with pkgs; [
+          cargo-component
           cargo-criterion
           cargo-deny
           cargo-expand
+          cargo-flamegraph
           cargo-nextest
           cargo-outdated
           cargo-sort
@@ -100,7 +102,6 @@
           cargo-watch
           # llvmPackages.bintools
           twiggy
-          cargo-component
           wasm-bindgen-cli
           wasm-tools
         ];
@@ -222,6 +223,7 @@
 
               pkgs.binaryen
               pkgs.chromedriver
+              pkgs.gnuplot
               grafana
               pkgs.http-server
               pkgs.nodePackages.pnpm
