@@ -345,7 +345,10 @@ async fn accept_loop(
                         let task_discovery = discovery_audience;
 
                         conns.spawn(async move {
-                            // Peek to determine transport: GET = WebSocket, POST = HTTP long-poll
+                            // Peek to determine transport:
+                            //   GET  → WebSocket upgrade
+                            //   POST → HTTP long-poll
+                            //   OPTI → CORS preflight (OPTIONS), routed to HTTP handler
                             let mut peek_buf = [0u8; 4];
                             match tcp.peek(&mut peek_buf).await {
                                 Ok(n) if n >= 3 => {}
@@ -354,6 +357,9 @@ async fn accept_loop(
                                     return;
                                 }
                             }
+
+                            let is_http = peek_buf.starts_with(b"POST")
+                                || peek_buf.starts_with(b"OPTI");
 
                             if peek_buf.starts_with(b"GET") && ws_enabled {
                                 handle_websocket(
@@ -368,7 +374,7 @@ async fn accept_loop(
                                     task_discovery,
                                 )
                                 .await;
-                            } else if peek_buf.starts_with(b"POST") && lp_enabled {
+                            } else if is_http && lp_enabled {
                                 handle_http_longpoll(
                                     tcp,
                                     addr,
@@ -378,7 +384,7 @@ async fn accept_loop(
                                 .await;
                             } else if peek_buf.starts_with(b"GET") {
                                 tracing::warn!("WebSocket connection from {addr} rejected (transport disabled)");
-                            } else if peek_buf.starts_with(b"POST") {
+                            } else if is_http {
                                 tracing::warn!("HTTP long-poll connection from {addr} rejected (transport disabled)");
                             } else {
                                 tracing::warn!(
@@ -491,6 +497,14 @@ async fn handle_http_longpoll(
     subduction: CliSubduction,
     handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
 ) {
+    use http_body_util::Full;
+    use hyper::{
+        body::Bytes,
+        header::{
+            ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
+            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE,
+        },
+    };
     use hyper_util::rt::TokioIo;
 
     let io = TokioIo::new(tcp);
@@ -499,6 +513,22 @@ async fn handle_http_longpoll(
         let handler = handler.clone();
         let subduction = subduction.clone();
         async move {
+            // Handle CORS preflight
+            if req.method() == hyper::Method::OPTIONS {
+                let resp = hyper::Response::builder()
+                    .status(204)
+                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
+                    .header(ACCESS_CONTROL_ALLOW_METHODS, "POST, OPTIONS")
+                    .header(
+                        ACCESS_CONTROL_ALLOW_HEADERS,
+                        "Content-Type, X-Session-Id",
+                    )
+                    .header(ACCESS_CONTROL_MAX_AGE, "86400")
+                    .body(Full::new(Bytes::new()))
+                    .expect("valid response");
+                return Ok::<_, hyper::Error>(resp);
+            }
+
             let resp = handler.handle(req).await?;
 
             // After a successful handshake, register with Subduction
@@ -516,7 +546,20 @@ async fn handle_http_longpoll(
                 }
             }
 
-            Ok::<_, hyper::Error>(resp)
+            // Add CORS headers to every response
+            let (mut parts, body) = resp.into_parts();
+            parts
+                .headers
+                .insert(ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().expect("valid header"));
+            parts
+                .headers
+                .insert(ACCESS_CONTROL_ALLOW_METHODS, "POST, OPTIONS".parse().expect("valid header"));
+            parts.headers.insert(
+                ACCESS_CONTROL_ALLOW_HEADERS,
+                "Content-Type, X-Session-Id".parse().expect("valid header"),
+            );
+
+            Ok::<_, hyper::Error>(hyper::Response::from_parts(parts, body))
         }
     });
 

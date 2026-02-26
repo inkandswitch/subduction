@@ -228,6 +228,15 @@ impl WasmHttpLongPollClient {
                 let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
                 let send_cancel_rx = cancel_rx.clone();
 
+                // Store the cancel guard in the connection so background tasks
+                // stay alive as long as the connection (and its clones) exist.
+                // When `close()` is called (via disconnect), the guard is cleared
+                // and the cancel channel closes, stopping poll/send tasks.
+                let guard_conn = conn.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    guard_conn.set_cancel_guard(cancel_tx).await;
+                });
+
                 // Spawn the recv polling task
                 let poll_conn = conn.clone();
                 let poll_url = format!("{base_url}/lp/recv");
@@ -246,10 +255,13 @@ impl WasmHttpLongPollClient {
                     send_loop(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
                 });
 
-                // Drive the external cancel signal into our internal channel
+                // Bridge the external cancel signal (if any) to connection close
+                let ext_cancel_conn = conn.clone();
                 wasm_bindgen_futures::spawn_local(async move {
+                    // Blocks until the external cancel sender is dropped.
+                    // If no external cancel is used, this task just parks forever.
                     cancel.recv().await.ok();
-                    drop(cancel_tx);
+                    ext_cancel_conn.close();
                 });
 
                 (conn, session_id)

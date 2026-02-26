@@ -140,6 +140,10 @@ impl WasmLongPollConn {
 pub struct WasmAuthenticatedLongPoll {
     inner: Authenticated<WasmLongPollConnection, Local>,
     session_id: SessionId,
+
+    /// Keeps the external cancel channel open so background poll/send tasks
+    /// are not prematurely killed. Dropped when this struct is freed.
+    _cancel_guard: async_channel::Sender<()>,
 }
 
 impl WasmAuthenticatedLongPoll {
@@ -195,8 +199,7 @@ impl WasmLongPoll {
         let default_time_limit = Duration::from_millis(timeout_ms.into());
         let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
 
-        // Cancel channel — in the future this could be tied to a close() method.
-        let (_cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
 
         let (authenticated, session_id) = client
             .connect(signer, expected_peer_id.clone().into(), cancel_rx)
@@ -206,6 +209,7 @@ impl WasmLongPoll {
         Ok(WasmAuthenticatedLongPoll {
             inner: authenticated,
             session_id,
+            _cancel_guard: cancel_tx,
         })
     }
 
@@ -229,7 +233,7 @@ impl WasmLongPoll {
         let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
-        let (_cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
 
         let (authenticated, session_id) = client
             .connect_discover(signer, &service_name, cancel_rx)
@@ -239,45 +243,68 @@ impl WasmLongPoll {
         Ok(WasmAuthenticatedLongPoll {
             inner: authenticated,
             session_id,
+            _cancel_guard: cancel_tx,
         })
     }
 
     /// Connect and return the raw `Authenticated` connection (for internal use).
+    ///
+    /// Returns the cancel guard alongside the connection — the caller _must_
+    /// keep it alive for as long as the background poll/send tasks should run.
     pub(crate) async fn connect_authenticated(
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<(Authenticated<WasmLongPollConnection, Local>, SessionId), LongPollConnectionError>
-    {
+    ) -> Result<
+        (
+            Authenticated<WasmLongPollConnection, Local>,
+            SessionId,
+            async_channel::Sender<()>,
+        ),
+        LongPollConnectionError,
+    > {
         let default_time_limit = Duration::from_millis(timeout_milliseconds.into());
         let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
-        let (_cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
 
-        client
+        let (authenticated, session_id) = client
             .connect(signer, expected_peer_id.clone().into(), cancel_rx)
             .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))
+            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+
+        Ok((authenticated, session_id, cancel_tx))
     }
 
     /// Connect using discovery and return the raw `Authenticated` connection.
+    ///
+    /// Returns the cancel guard alongside the connection — the caller _must_
+    /// keep it alive for as long as the background poll/send tasks should run.
     pub(crate) async fn connect_discover_authenticated(
         base_url: &str,
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<(Authenticated<WasmLongPollConnection, Local>, SessionId), LongPollConnectionError>
-    {
+    ) -> Result<
+        (
+            Authenticated<WasmLongPollConnection, Local>,
+            SessionId,
+            async_channel::Sender<()>,
+        ),
+        LongPollConnectionError,
+    > {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
         let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
-        let (_cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
 
-        client
+        let (authenticated, session_id) = client
             .connect_discover(signer, &service_name, cancel_rx)
             .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))
+            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+
+        Ok((authenticated, session_id, cancel_tx))
     }
 }
 

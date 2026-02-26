@@ -60,6 +60,11 @@ struct Inner<O> {
     /// Messages from `/lp/send` handler → picked up by `recv()`.
     inbound_writer: async_channel::Sender<Message>,
     inbound_reader: async_channel::Receiver<Message>,
+
+    /// Keeps background poll/send tasks alive. Dropping this closes the cancel
+    /// channel, which signals the tasks to exit. Set via
+    /// [`HttpLongPollConnection::set_cancel_guard`] after construction.
+    cancel_guard: Mutex<Option<async_channel::Sender<()>>>,
 }
 
 /// An HTTP long-poll connection that implements [`Connection<K>`].
@@ -97,9 +102,19 @@ impl<O> HttpLongPollConnection<O> {
                 outbound_tx,
                 inbound_writer,
                 inbound_reader,
+                cancel_guard: Mutex::new(None),
             }),
             outbound_rx,
         }
+    }
+
+    /// Store the cancel-channel sender so that background poll/send tasks stay
+    /// alive for as long as this connection (and its clones) exist.
+    ///
+    /// When the connection is closed via [`Self::close`] or all clones are
+    /// dropped, the guard is released and the tasks exit.
+    pub async fn set_cancel_guard(&self, guard: async_channel::Sender<()>) {
+        *self.inner.cancel_guard.lock().await = Some(guard);
     }
 
     /// Push a message from the client (via `POST /lp/send`) into the inbound channel.
@@ -152,12 +167,16 @@ impl<O> HttpLongPollConnection<O> {
         self.outbound_rx.recv().await
     }
 
-    /// Close the connection's channels.
+    /// Close the connection's channels and cancel background tasks.
     pub fn close(&self) {
         self.inner.inbound_writer.close();
         self.inner.outbound_tx.close();
         self.outbound_rx.close();
         self.inner.inbound_reader.close();
+        // Clear the cancel guard synchronously (try_lock avoids blocking close).
+        if let Some(mut guard) = self.inner.cancel_guard.try_lock() {
+            *guard = None;
+        }
     }
 }
 
