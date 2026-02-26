@@ -1,8 +1,7 @@
 {
-  "name": "@subduction/sedimentree",
-  "version": "0.0.0-alpha.0",
+  "name": "@automerge/sedimentree",
+  "version": "0.4.0-alpha.0",
   "description": "Wasm/JavaScript bindings for Sedimentree",
-  "private": true,
   "main": "./dist/cjs/node.cjs",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
@@ -11,26 +10,33 @@
     "build-slim": "node build_slim.js"
   },
   "keywords": [
+    "automerge",
+    "crdt",
     "sedimentree",
-    "wasm",
-    "crdt"
+    "wasm"
   ],
-  "author": "",
-  "license": "Apache-2.0",
+  "author": "Alex Good <alex@patternist.xyz>, Brooklyn Zelenka <hello@brooklynzelenka.com>",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inkandswitch/subduction",
+    "directory": "sedimentree_wasm"
+  },
+  "homepage": "https://github.com/inkandswitch/subduction",
+  "bugs": {
+    "url": "https://github.com/inkandswitch/subduction/issues"
+  },
   "type": "module",
   "module": "./dist/esm/bundler.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "pkg/*",
-    "pkg-node/*",
-    "pkg-slim/*",
-    "package.json",
-    "README.md",
-    "dist"
+    "dist",
+    "README.md"
   ],
   "sideEffects": [
-    "./pkg/sedimentree_wasm.js",
-    "./pkg/sedimentree_wasm_bg.js"
+    "./dist/esm/node.js",
+    "./dist/esm/web.js",
+    "./dist/esm/workerd.js"
   ],
   "exports": {
     ".": {
@@ -55,7 +61,7 @@
       "import": "./dist/esm/slim.js",
       "require": "./dist/cjs/slim.cjs"
     },
-    "./wasm": "./dist/@subduction/sedimentree.wasm",
+    "./wasm": "./dist/@automerge/sedimentree.wasm",
     "./wasm-base64": {
       "import": "./dist/esm/wasm-base64.js",
       "require": "./dist/cjs/wasm-base64.cjs"

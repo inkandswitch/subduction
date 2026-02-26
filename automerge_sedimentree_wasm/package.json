@@ -1,8 +1,7 @@
 {
   "name": "@automerge/automerge-sedimentree",
-  "version": "0.0.0-alpha.0",
-  "description": "",
-  "private": true,
+  "version": "0.4.1-alpha.0",
+  "description": "Wasm bindings for storing Automerge documents in Sedimentree",
   "main": "./dist/cjs/node.cjs",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
@@ -10,17 +9,35 @@
     "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
     "build-slim": "node build_slim.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "Apache-2.0",
+  "keywords": [
+    "automerge",
+    "crdt",
+    "sedimentree",
+    "sync",
+    "wasm"
+  ],
+  "author": "Alex Good <alex@patternist.xyz>, Brooklyn Zelenka <hello@brooklynzelenka.com>",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inkandswitch/subduction",
+    "directory": "automerge_sedimentree_wasm"
+  },
+  "homepage": "https://github.com/inkandswitch/subduction",
+  "bugs": {
+    "url": "https://github.com/inkandswitch/subduction/issues"
+  },
   "type": "module",
   "module": "./dist/esm/bundler.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "pkg/*",
-    "pkg-node/*",
-    "pkg-slim/*",
-    "dist"
+    "dist",
+    "README.md"
+  ],
+  "sideEffects": [
+    "./dist/esm/node.js",
+    "./dist/esm/web.js",
+    "./dist/esm/workerd.js"
   ],
   "exports": {
     ".": {

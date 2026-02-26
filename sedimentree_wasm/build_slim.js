@@ -1,6 +1,6 @@
 // This file builds the "slim" package
 //
-// The "slim" package is a subpath export of the "@subduction/sedimentree"
+// The "slim" package is a subpath export of the "@automerge/sedimentree"
 // package which is intended for use in environments where WebAssembly
 // imports are not supported. To support this we do a few things:
 //
