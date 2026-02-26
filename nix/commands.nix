@@ -3,6 +3,7 @@
   pkgs,
   system,
   cmd,
+  wasm-bodge,
 }: let
   cargo = "${pkgs.cargo}/bin/cargo";
   grafana-server = "${pkgs.grafana}/bin/grafana-server";
@@ -10,6 +11,7 @@
   pnpm = "${pkgs.pnpm}/bin/pnpm";
   playwright = "${pnpm} --dir=./subduction_wasm exec playwright";
   prometheus = "${pkgs.prometheus}/bin/prometheus";
+  wasm-bodge-bin = "${wasm-bodge}/bin/wasm-bodge";
   wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
 
   # Multi-crate wasm builds (project-specific)
@@ -466,6 +468,56 @@
       wait
     '';
   };
+  bodge = {
+    "bodge:all" = cmd "Build all wasm packages with wasm-bodge" ''
+      set -e
+
+      for crate in sedimentree_wasm subduction_wasm automerge_sedimentree_wasm automerge_subduction_wasm; do
+        echo "===> wasm-bodge build $crate..."
+        ${wasm-bodge-bin} build \
+          --crate-path "$WORKSPACE_ROOT/$crate" \
+          --package-json "$WORKSPACE_ROOT/$crate/package.json" \
+          --out-dir "$WORKSPACE_ROOT/$crate/dist"
+      done
+
+      echo ""
+      echo "✓ All wasm packages built with wasm-bodge"
+
+      wasm:sizes
+    '';
+
+    "bodge" = cmd "Build a single wasm package with wasm-bodge" ''
+      set -e
+
+      if [ -z "''${1:-}" ]; then
+        echo "Usage: bodge <crate>"
+        echo ""
+        echo "Available crates:"
+        echo "  sedimentree_wasm"
+        echo "  subduction_wasm"
+        echo "  automerge_sedimentree_wasm"
+        echo "  automerge_subduction_wasm"
+        exit 1
+      fi
+
+      CRATE="$1"
+
+      if [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
+        echo "Error: crate directory not found: $CRATE"
+        exit 1
+      fi
+
+      echo "===> wasm-bodge build $CRATE..."
+      ${wasm-bodge-bin} build \
+        --crate-path "$WORKSPACE_ROOT/$CRATE" \
+        --package-json "$WORKSPACE_ROOT/$CRATE/package.json" \
+        --out-dir "$WORKSPACE_ROOT/$CRATE/dist"
+
+      echo ""
+      echo "✓ $CRATE built with wasm-bodge"
+    '';
+  };
+
   ci = {
     "ci" = cmd "Run full CI suite (build, lint, test, wasm)" ''
       set -e
@@ -662,4 +714,4 @@
     '';
   };
 in
-  bench // build // ci // fmt // monitoring // release // test // wasm
+  bench // bodge // build // ci // fmt // monitoring // release // test // wasm

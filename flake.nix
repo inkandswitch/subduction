@@ -83,6 +83,27 @@
           exec "${nightly-rustfmt-unwrapped}/bin/rustfmt" "$@"
         '';
 
+        # wasm-bodge: universal npm package builder for wasm-bindgen crates
+        # Not yet in nixpkgs; edition 2024 requires our rust-overlay toolchain
+        wasm-bodge-rustPlatform = pkgs.makeRustPlatform {
+          cargo = rust-toolchain;
+          rustc = rust-toolchain;
+        };
+
+        wasm-bodge = wasm-bodge-rustPlatform.buildRustPackage rec {
+          pname = "wasm-bodge";
+          version = "0.1.1";
+          src = pkgs.fetchFromGitHub {
+            owner = "alexjg";
+            repo = "wasm-bodge";
+            rev = "v${version}";
+            hash = "sha256-MfbnMu5MY360/VQ/co0Miju22c5/ATSaim0VcP3aR3g=";
+          };
+          cargoHash = "sha256-MNvzP/72i6IOYdTnLDJO0uDaSZhlsR2/Iyo5vuOs4Eg=";
+          auditable = false; # cargo-auditable doesn't support edition 2024 yet
+          doCheck = false; # tests require npm/puppeteer infrastructure
+        };
+
         format-pkgs = with pkgs; [
           nixpkgs-fmt
           alejandra
@@ -114,7 +135,7 @@
 
         # Project-specific commands (monitoring, etc.)
         projectCommands = import ./nix/commands.nix {
-          inherit pkgs system cmd;
+          inherit pkgs system cmd wasm-bodge;
         };
 
         command_menu = command-utils.commands.${system} [
@@ -223,6 +244,7 @@
 
               pkgs.binaryen
               pkgs.chromedriver
+              pkgs.esbuild
               pkgs.gnuplot
               grafana
               pkgs.http-server
@@ -236,6 +258,7 @@
               pkgs.tokio-console
               pkgs.typescript
               pkgs.wasm-pack
+              wasm-bodge
               pkgs.websocat
             ]
             ++ format-pkgs
