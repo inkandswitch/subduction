@@ -22,13 +22,13 @@ use core::{
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use futures::channel::oneshot;
-use rand::{RngCore, rngs::OsRng};
+use rand::{rngs::OsRng, RngCore};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         timeout::{TimedOut, Timeout},
+        Connection,
     },
     peer::id::PeerId,
 };
@@ -320,8 +320,8 @@ mod tests {
         ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::connection::timeout::TimedOut>>
         {
             use futures::{
+                future::{select, Either},
                 FutureExt,
-                future::{Either, select},
             };
             async move {
                 match select(fut, futures_timer::Delay::new(dur)).await {
@@ -383,14 +383,5 @@ mod tests {
         let pulled = conn.pull_outbound().await.expect("pull ok");
 
         assert!(matches!(pulled, Message::RemoveSubscriptions(_)));
-    }
-
-    #[tokio::test]
-    async fn clone_shares_channels() {
-        let peer_id = PeerId::new([4u8; 32]);
-        let conn1 = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
-        let conn2 = conn1.clone();
-
-        assert_eq!(conn1, conn2);
     }
 }

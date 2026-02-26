@@ -33,11 +33,11 @@ automerge_sedimentree_wasm = { version = "0.4.0", path = "automerge_sedimentree_
 sedimentree_core = { version = "0.4.0", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.4.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.4.0", path = "sedimentree_wasm", default-features = false }
-subduction_core = { version = "0.4.0", path = "subduction_core", default-features = false }
+subduction_core = { version = "0.4.1", path = "subduction_core", default-features = false }
 subduction_crypto = { version = "0.1.0", path = "subduction_crypto", default-features = false }
-subduction_http_longpoll = { version = "0.1.0", path = "subduction_http_longpoll" }
-subduction_wasm = { version = "0.4.0", path = "subduction_wasm", default-features = false }
-subduction_websocket = { version = "0.4.0", path = "subduction_websocket", default-features = false }
+subduction_http_longpoll = { version = "0.2.0", path = "subduction_http_longpoll" }
+subduction_wasm = { version = "0.4.2", path = "subduction_wasm", default-features = false }
+subduction_websocket = { version = "0.4.2", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"

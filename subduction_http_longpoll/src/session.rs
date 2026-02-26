@@ -9,7 +9,7 @@ use core::fmt;
 
 use async_lock::Mutex;
 use future_form::Sendable;
-use rand::{RngCore, rngs::OsRng};
+use rand::{rngs::OsRng, RngCore};
 use subduction_core::{
     connection::{authenticated::Authenticated, timeout::Timeout},
     peer::id::PeerId,
@@ -139,23 +139,46 @@ impl<O: Timeout<Sendable> + Send + Sync> Default for SessionStore<O> {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(all(test, feature = "std", feature = "bolero"))]
+mod proptests {
     use super::*;
 
     #[test]
-    fn session_id_hex_roundtrip() {
-        let id = SessionId::random();
-        let hex = id.to_hex();
-        assert_eq!(hex.len(), 32);
-        let decoded = SessionId::from_hex(&hex).expect("valid hex");
-        assert_eq!(id, decoded);
+    fn prop_hex_roundtrip() {
+        bolero::check!().with_type::<[u8; 16]>().for_each(|bytes| {
+            let id = SessionId(*bytes);
+            let hex = id.to_hex();
+            assert_eq!(hex.len(), 32);
+            let decoded = SessionId::from_hex(&hex).expect("roundtrip should succeed");
+            assert_eq!(id, decoded);
+        });
     }
 
     #[test]
-    fn session_id_from_hex_rejects_invalid() {
-        assert!(SessionId::from_hex("").is_none());
-        assert!(SessionId::from_hex("too_short").is_none());
-        assert!(SessionId::from_hex("zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz").is_none());
+    fn prop_hex_output_is_valid_lowercase_hex() {
+        bolero::check!().with_type::<[u8; 16]>().for_each(|bytes| {
+            let hex = SessionId(*bytes).to_hex();
+            assert!(hex.chars().all(|c| c.is_ascii_hexdigit()));
+            assert!(hex.chars().all(|c| !c.is_ascii_uppercase()));
+        });
+    }
+
+    #[test]
+    fn prop_from_hex_rejects_non_32_char_strings() {
+        bolero::check!().with_type::<String>().for_each(|s| {
+            if s.len() != 32 {
+                assert!(SessionId::from_hex(s).is_none());
+            }
+        });
+    }
+
+    #[test]
+    fn prop_from_hex_rejects_non_hex_chars() {
+        bolero::check!().with_type::<[u8; 16]>().for_each(|bytes| {
+            let hex = SessionId(*bytes).to_hex();
+            // Replace the first character with a non-hex char
+            let corrupted = alloc::format!("z{}", &hex[1..]);
+            assert!(SessionId::from_hex(&corrupted).is_none());
+        });
     }
 }

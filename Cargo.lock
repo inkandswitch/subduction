@@ -3176,7 +3176,7 @@ checksum = "7da8b5736845d9f2fcb837ea5d9e2628564b3b043a70948a3f0b778838c5fb4f"
 
 [[package]]
 name = "subduction_cli"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "ahash",
  "async-lock",
@@ -3215,7 +3215,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -3261,11 +3261,12 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "async-channel",
  "async-lock",
  "blake3",
+ "bolero",
  "eyre",
  "future_form",
  "futures 0.3.32",
@@ -3326,7 +3327,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -3358,7 +3359,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "arbitrary",
  "async-channel",

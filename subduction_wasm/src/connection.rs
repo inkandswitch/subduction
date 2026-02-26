@@ -1,7 +1,8 @@
 //! JS [`Connection`] interface for Subduction.
 
-pub mod fetch_client;
 mod handshake;
+
+pub mod fetch_client;
 pub mod longpoll;
 pub mod message;
 pub mod nonce;
@@ -13,12 +14,12 @@ use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
 use future_form::Local;
-use futures::{FutureExt, future::LocalBoxFuture};
+use futures::{future::LocalBoxFuture, FutureExt};
 use js_sys::Promise;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection,
     },
     peer::id::PeerId,
 };
