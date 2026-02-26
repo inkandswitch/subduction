@@ -176,10 +176,6 @@ impl WasmLongPollConn {
 pub struct WasmAuthenticatedLongPoll {
     inner: Authenticated<WasmLongPollConnection, Local>,
     session_id: SessionId,
-
-    /// Dropping this signals background poll/send tasks to stop (kept alive
-    /// by the cancel guard stored inside the connection).
-    _cancel_guard: (),
 }
 
 impl WasmAuthenticatedLongPoll {
@@ -274,7 +270,6 @@ impl WasmLongPoll {
         Ok(WasmAuthenticatedLongPoll {
             inner: result.authenticated,
             session_id: result.session_id,
-            _cancel_guard: (),
         })
     }
 
@@ -314,7 +309,6 @@ impl WasmLongPoll {
         Ok(WasmAuthenticatedLongPoll {
             inner: result.authenticated,
             session_id: result.session_id,
-            _cancel_guard: (),
         })
     }
 
