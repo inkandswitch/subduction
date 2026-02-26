@@ -1,7 +1,8 @@
 //! Unified transport enum for the CLI server.
 //!
-//! Wraps both [`UnifiedWebSocket`] and [`HttpLongPollConnection`] so the
-//! server can use a single [`Subduction`] instance for all transport types.
+//! Wraps [`UnifiedWebSocket`], [`HttpLongPollConnection`], and
+//! [`IrohConnection`] so the server can use a single [`Subduction`]
+//! instance for all transport types.
 
 use core::time::Duration;
 
@@ -9,13 +10,14 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::{
     connection::{
-        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         timeout::Timeout,
+        Connection,
     },
     peer::id::PeerId,
 };
 use subduction_http_longpoll::connection::HttpLongPollConnection;
+use subduction_iroh::connection::IrohConnection;
 use subduction_websocket::tokio::unified::UnifiedWebSocket;
 
 /// A unified connection covering all transport types the CLI server supports.
@@ -26,6 +28,9 @@ pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Send + Sync> {
 
     /// HTTP long-poll transport.
     HttpLongPoll(HttpLongPollConnection<O>),
+
+    /// Iroh QUIC transport.
+    Iroh(IrohConnection<O>),
 }
 
 /// Error type for send operations across transports.
@@ -38,6 +43,10 @@ pub(crate) enum TransportSendError {
     /// HTTP long-poll send error.
     #[error(transparent)]
     HttpLongPoll(#[from] subduction_http_longpoll::error::SendError),
+
+    /// Iroh send error.
+    #[error(transparent)]
+    Iroh(#[from] subduction_iroh::error::SendError),
 }
 
 /// Error type for recv operations across transports.
@@ -50,6 +59,10 @@ pub(crate) enum TransportRecvError {
     /// HTTP long-poll recv error.
     #[error(transparent)]
     HttpLongPoll(#[from] subduction_http_longpoll::error::RecvError),
+
+    /// Iroh recv error.
+    #[error(transparent)]
+    Iroh(#[from] subduction_iroh::error::RecvError),
 }
 
 /// Error type for call operations across transports.
@@ -62,6 +75,10 @@ pub(crate) enum TransportCallError {
     /// HTTP long-poll call error.
     #[error(transparent)]
     HttpLongPoll(#[from] subduction_http_longpoll::error::CallError),
+
+    /// Iroh call error.
+    #[error(transparent)]
+    Iroh(#[from] subduction_iroh::error::CallError),
 }
 
 /// Error type for disconnect operations across transports.
@@ -74,6 +91,10 @@ pub(crate) enum TransportDisconnectionError {
     /// HTTP long-poll disconnection error.
     #[error(transparent)]
     HttpLongPoll(#[from] subduction_http_longpoll::error::DisconnectionError),
+
+    /// Iroh disconnection error.
+    #[error(transparent)]
+    Iroh(#[from] subduction_iroh::error::DisconnectionError),
 }
 
 impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTransport<O> {
@@ -86,6 +107,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
         match self {
             Self::WebSocket(ws) => Connection::<Sendable>::peer_id(ws),
             Self::HttpLongPoll(lp) => Connection::<Sendable>::peer_id(lp),
+            Self::Iroh(iroh) => Connection::<Sendable>::peer_id(iroh),
         }
     }
 
@@ -93,6 +115,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
         match self {
             Self::WebSocket(ws) => Connection::<Sendable>::next_request_id(ws),
             Self::HttpLongPoll(lp) => Connection::<Sendable>::next_request_id(lp),
+            Self::Iroh(iroh) => Connection::<Sendable>::next_request_id(iroh),
         }
     }
 
@@ -108,12 +131,15 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
                     .await
                     .map_err(Into::into)
             }),
+            Self::Iroh(iroh) => Box::pin(async {
+                Connection::<Sendable>::disconnect(iroh)
+                    .await
+                    .map_err(Into::into)
+            }),
         }
     }
 
     fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        // Delegate directly — the inner `send` captures `message` correctly
-        // because `Connection::send` encodes eagerly before awaiting.
         match self {
             Self::WebSocket(ws) => {
                 let fut = Connection::<Sendable>::send(ws, message);
@@ -121,6 +147,10 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
             }
             Self::HttpLongPoll(lp) => {
                 let fut = Connection::<Sendable>::send(lp, message);
+                Box::pin(async move { fut.await.map_err(Into::into) })
+            }
+            Self::Iroh(iroh) => {
+                let fut = Connection::<Sendable>::send(iroh, message);
                 Box::pin(async move { fut.await.map_err(Into::into) })
             }
         }
@@ -133,6 +163,9 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
             }
             Self::HttpLongPoll(lp) => {
                 Box::pin(async { Connection::<Sendable>::recv(lp).await.map_err(Into::into) })
+            }
+            Self::Iroh(iroh) => {
+                Box::pin(async { Connection::<Sendable>::recv(iroh).await.map_err(Into::into) })
             }
         }
     }
@@ -153,6 +186,11 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
                     .await
                     .map_err(Into::into)
             }),
+            Self::Iroh(iroh) => Box::pin(async move {
+                Connection::<Sendable>::call(iroh, req, timeout)
+                    .await
+                    .map_err(Into::into)
+            }),
         }
     }
 }
@@ -162,6 +200,7 @@ impl<O: Timeout<Sendable> + Send + Sync> PartialEq for UnifiedTransport<O> {
         match (self, other) {
             (Self::WebSocket(a), Self::WebSocket(b)) => a == b,
             (Self::HttpLongPoll(a), Self::HttpLongPoll(b)) => a == b,
+            (Self::Iroh(a), Self::Iroh(b)) => a == b,
             _ => false,
         }
     }

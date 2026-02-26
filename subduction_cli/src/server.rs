@@ -1,4 +1,4 @@
-//! Subduction server supporting both WebSocket and HTTP long-poll transports.
+//! Subduction server supporting WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
 
 extern crate alloc;
 
@@ -6,6 +6,7 @@ use alloc::sync::Arc;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use eyre::Result;
+use iroh::EndpointAddr;
 use sedimentree_core::{
     commit::CountLeadingZeroBytes, id::SedimentreeId, sedimentree::Sedimentree,
 };
@@ -52,6 +53,7 @@ type CliSubduction = Arc<
 
 /// Arguments for the server command.
 #[derive(Debug, clap::Parser)]
+#[allow(clippy::struct_excessive_bools)]
 pub(crate) struct ServerArgs {
     /// Socket address to bind to
     #[arg(short, long, default_value = "0.0.0.0:8080")]
@@ -107,6 +109,18 @@ pub(crate) struct ServerArgs {
     /// Peer WebSocket URLs to connect to on startup
     #[arg(long = "peer", value_name = "URL")]
     pub(crate) peers: Vec<String>,
+
+    /// Enable the Iroh (QUIC) transport for NAT-traversing P2P connections
+    #[arg(long, default_value_t = false)]
+    pub(crate) iroh: bool,
+
+    /// Iroh peer node IDs to connect to on startup (z32-encoded public key)
+    #[arg(long = "iroh-peer", value_name = "NODE_ID")]
+    pub(crate) iroh_peers: Vec<String>,
+
+    /// Custom iroh relay server URL (defaults to iroh's public relay servers)
+    #[arg(long = "iroh-relay", value_name = "URL")]
+    pub(crate) iroh_relay: Option<String>,
 }
 
 /// Default interval for refreshing storage metrics (1 minute).
@@ -208,14 +222,18 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
     let ws_enabled = args.websocket;
     let lp_enabled = args.longpoll;
+    let iroh_enabled = args.iroh;
 
-    if !ws_enabled && !lp_enabled {
-        eyre::bail!("At least one transport must be enabled (--websocket or --longpoll)");
+    if !ws_enabled && !lp_enabled && !iroh_enabled {
+        eyre::bail!(
+            "At least one transport must be enabled (--websocket, --longpoll, or --iroh)"
+        );
     }
 
     let transports: Vec<&str> = [
         ws_enabled.then_some("WebSocket"),
         lp_enabled.then_some("HTTP long-poll"),
+        iroh_enabled.then_some("Iroh (QUIC)"),
     ]
     .into_iter()
     .flatten()
@@ -269,7 +287,125 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         .await;
     });
 
-    // Connect to configured peers for bidirectional sync
+    // ── Iroh (QUIC) transport ────────────────────────────────────────────────
+    let iroh_accept_task = if iroh_enabled {
+        let relay_mode = match &args.iroh_relay {
+            Some(url) => {
+                let relay_map =
+                    iroh::RelayMap::try_from_iter([url.as_str()]).map_err(|e| eyre::eyre!(e))?;
+                iroh::endpoint::RelayMode::Custom(relay_map)
+            }
+            None => iroh::endpoint::RelayMode::Default,
+        };
+
+        let iroh_endpoint = iroh::Endpoint::builder()
+            .alpns(vec![subduction_iroh::ALPN.to_vec()])
+            .relay_mode(relay_mode)
+            .bind()
+            .await?;
+
+        let iroh_addr = iroh_endpoint.addr();
+        tracing::info!("Iroh endpoint bound: node ID = {}", iroh_addr.id);
+        for addr in &iroh_addr.addrs {
+            tracing::info!("  transport address: {addr:?}");
+        }
+
+        // Spawn iroh accept loop
+        let iroh_subduction = subduction.clone();
+        let iroh_signer = signer.clone();
+        let iroh_nonce_cache = NonceCache::default();
+        let iroh_ep = iroh_endpoint.clone();
+        let iroh_cancel = token.child_token();
+
+        let task = tokio::spawn({
+            let cancel = iroh_cancel.clone();
+            async move {
+                loop {
+                    tokio::select! {
+                        () = cancel.cancelled() => {
+                            tracing::info!("iroh accept loop canceled");
+                            break;
+                        }
+                        result = subduction_iroh::server::accept_one(
+                            &iroh_ep,
+                            default_time_limit,
+                            FuturesTimerTimeout,
+                            &iroh_signer,
+                            &iroh_nonce_cache,
+                            server_peer_id,
+                            discovery_audience,
+                            handshake_max_drift,
+                        ) => {
+                            match result {
+                                Ok(accepted) => {
+                                    let remote = accepted.peer_id;
+                                    tokio::spawn(accepted.listener_task);
+                                    tokio::spawn(accepted.sender_task);
+
+                                    let auth = accepted.authenticated.map(UnifiedTransport::Iroh);
+                                    if let Err(e) = iroh_subduction.register(auth).await {
+                                        tracing::error!("failed to register iroh connection: {e}");
+                                    } else {
+                                        tracing::info!("iroh: registered peer {remote}");
+                                    }
+                                }
+                                Err(e) => {
+                                    tracing::warn!("iroh accept error: {e}");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Connect to iroh peers
+        for iroh_peer_str in &args.iroh_peers {
+            let node_id: iroh::PublicKey = match iroh_peer_str.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("invalid iroh peer node ID '{iroh_peer_str}': {e}");
+                    continue;
+                }
+            };
+
+            let peer_addr = EndpointAddr::new(node_id);
+            let peer_ep = iroh_endpoint.clone();
+            let peer_subduction = subduction.clone();
+            let peer_signer = signer.clone();
+            let peer_cancel = token.clone();
+            let peer_service_name = service_name.clone();
+
+            tokio::spawn(async move {
+                match try_connect_iroh(
+                    &peer_ep,
+                    peer_addr,
+                    &peer_subduction,
+                    &peer_signer,
+                    &peer_service_name,
+                    default_time_limit,
+                    peer_cancel,
+                )
+                .await
+                {
+                    Ok(remote_id) => {
+                        tracing::info!(
+                            "iroh: connected to peer {node_id} (subduction ID: {remote_id})"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::error!("iroh: failed to connect to peer {node_id}: {e}");
+                    }
+                }
+            });
+        }
+
+        Some(task)
+    } else {
+        None
+    };
+
+    // Connect to configured WebSocket peers for bidirectional sync
     for peer_url in &args.peers {
         let uri: Uri = match peer_url.parse() {
             Ok(uri) => uri,
@@ -310,6 +446,9 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     token.cancelled().await;
     tracing::info!("Shutting down server...");
     accept_task.abort();
+    if let Some(iroh_task) = iroh_accept_task {
+        iroh_task.abort();
+    }
 
     Ok(())
 }
@@ -676,5 +815,72 @@ async fn try_connect_ws(
     subduction.register(authenticated).await?;
     tracing::info!("Connected to peer at {uri_str}");
 
+    Ok(remote_id)
+}
+
+/// Connect to a peer via Iroh (QUIC) transport (outbound).
+#[allow(clippy::too_many_arguments)]
+async fn try_connect_iroh(
+    endpoint: &iroh::Endpoint,
+    addr: EndpointAddr,
+    subduction: &CliSubduction,
+    signer: &MemorySigner,
+    service_name: &str,
+    default_time_limit: Duration,
+    cancel: CancellationToken,
+) -> Result<PeerId, eyre::Error> {
+    let node_id = addr.id;
+    tracing::info!("iroh: connecting to {node_id} via discovery ({service_name})");
+
+    let audience = Audience::discover(service_name.as_bytes());
+
+    let connect_result = subduction_iroh::client::connect(
+        endpoint,
+        addr,
+        default_time_limit,
+        FuturesTimerTimeout,
+        signer,
+        audience,
+    )
+    .await?;
+
+    let authenticated = connect_result.authenticated;
+    let listener_task = connect_result.listener_task;
+    let sender_task = connect_result.sender_task;
+
+    let listener_cancel = cancel.clone();
+    let sender_cancel = cancel;
+
+    tokio::spawn(async move {
+        tokio::select! {
+            () = listener_cancel.cancelled() => {
+                tracing::debug!("iroh: shutting down listener for peer {node_id}");
+            }
+            result = listener_task => {
+                if let Err(e) = result {
+                    tracing::error!("iroh: listener error for {node_id}: {e}");
+                }
+            }
+        }
+    });
+
+    tokio::spawn(async move {
+        tokio::select! {
+            () = sender_cancel.cancelled() => {
+                tracing::debug!("iroh: shutting down sender for peer {node_id}");
+            }
+            result = sender_task => {
+                if let Err(e) = result {
+                    tracing::error!("iroh: sender error for {node_id}: {e}");
+                }
+            }
+        }
+    });
+
+    let remote_id = authenticated.peer_id();
+    let auth = authenticated.map(UnifiedTransport::Iroh);
+    subduction.register(auth).await?;
+
+    tracing::info!("iroh: connected to peer {node_id} (subduction ID: {remote_id})");
     Ok(remote_id)
 }

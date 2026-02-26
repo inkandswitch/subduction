@@ -29,7 +29,7 @@ async fn main() -> eyre::Result<()> {
     let token = setup_signal_handlers();
 
     match args.command {
-        Command::Server(server_args) => server::run(server_args, token).await?,
+        Command::Server(server_args) => server::run(*server_args, token).await?,
         Command::Purge(purge_args) => purge::run(purge_args).await?,
     }
 
@@ -161,9 +161,9 @@ struct Arguments {
 
 #[derive(Debug, Subcommand)]
 enum Command {
-    /// Start a Subduction node with WebSocket server
+    /// Start a Subduction node (WebSocket, HTTP long-poll, and/or Iroh transport)
     #[command(name = "server", alias = "start")]
-    Server(server::ServerArgs),
+    Server(Box<server::ServerArgs>),
 
     /// Purge all storage data (destructive)
     #[command(name = "purge")]
