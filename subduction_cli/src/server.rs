@@ -225,9 +225,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let iroh_enabled = args.iroh;
 
     if !ws_enabled && !lp_enabled && !iroh_enabled {
-        eyre::bail!(
-            "At least one transport must be enabled (--websocket, --longpoll, or --iroh)"
-        );
+        eyre::bail!("At least one transport must be enabled (--websocket, --longpoll, or --iroh)");
     }
 
     let transports: Vec<&str> = [

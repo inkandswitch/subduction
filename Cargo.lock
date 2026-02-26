@@ -4967,6 +4967,7 @@ dependencies = [
  "subduction_http_longpoll",
  "subduction_iroh",
  "subduction_websocket",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",

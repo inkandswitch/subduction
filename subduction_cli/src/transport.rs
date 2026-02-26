@@ -10,9 +10,9 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::{
     connection::{
+        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         timeout::Timeout,
-        Connection,
     },
     peer::id::PeerId,
 };
