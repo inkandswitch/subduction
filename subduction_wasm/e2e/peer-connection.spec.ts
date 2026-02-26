@@ -79,7 +79,7 @@ test.beforeAll(async ({ browserName }) => {
 
   const cliPath = path.join(__dirname, "../../target/release/subduction_cli");
 
-  subductionServer = spawn(cliPath, ["start", "--socket", `${WS_HOST}:${currentPort}`], {
+  subductionServer = spawn(cliPath, ["start", "--socket", `${WS_HOST}:${currentPort}`, "--ephemeral-key"], {
     cwd: path.join(__dirname, "../.."),
     stdio: "pipe",
     env: {

@@ -5,6 +5,7 @@
 
 use core::time::Duration;
 
+use super::{longpoll::WasmLongPollConnection, websocket::WasmWebSocket};
 use future_form::Local;
 use futures::{future::LocalBoxFuture, FutureExt};
 use subduction_core::{
@@ -13,13 +14,6 @@ use subduction_core::{
         Connection,
     },
     peer::id::PeerId,
-};
-use wasm_bindgen::JsCast;
-
-use super::{
-    longpoll::{WasmLongPollConn, WasmLongPollConnection},
-    websocket::WasmWebSocket,
-    JsConnection,
 };
 
 /// A unified connection covering both WebSocket and HTTP long-poll transports.
@@ -41,28 +35,6 @@ impl From<WasmWebSocket> for WasmUnifiedTransport {
 impl From<WasmLongPollConnection> for WasmUnifiedTransport {
     fn from(lp: WasmLongPollConnection) -> Self {
         Self::LongPoll(lp)
-    }
-}
-
-impl WasmUnifiedTransport {
-    /// Convert to a [`JsConnection`] for exposing to JavaScript.
-    ///
-    /// Both `WasmWebSocket` and `WasmLongPollConn` expose the same
-    /// `peerId`, `disconnect`, `send`, `recv`, `nextRequestId`, `call`
-    /// JS methods, so the resulting object satisfies the `Connection`
-    /// TypeScript interface regardless of transport.
-    pub fn to_js_connection(&self) -> JsConnection {
-        use wasm_bindgen::JsValue;
-        match self {
-            Self::WebSocket(ws) => {
-                let js: JsValue = ws.clone().into();
-                js.unchecked_into()
-            }
-            Self::LongPoll(lp) => {
-                let js: JsValue = WasmLongPollConn::new(lp.clone()).into();
-                js.unchecked_into()
-            }
-        }
     }
 }
 

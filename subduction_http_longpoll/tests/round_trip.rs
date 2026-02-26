@@ -20,6 +20,7 @@ use std::{
 };
 
 use future_form::Sendable;
+use rand::RngCore;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     connection::{
@@ -286,48 +287,346 @@ async fn handshake_connects_peers() -> TestResult {
     Ok(())
 }
 
-#[tokio::test]
-async fn client_to_server_sync() -> TestResult {
-    init_tracing();
+// ─── Known-Peer Client Helper ────────────────────────────────────────────────
 
-    let server = TestServer::start(10).await;
-    let client = connected_client(11, server.address).await;
+/// Connect to a server using a known peer ID (non-discovery).
+async fn connected_client_known_peer(
+    seed: u8,
+    server_addr: SocketAddr,
+    server_peer_id: PeerId,
+) -> TestSubduction {
+    let client_signer = signer(seed);
 
-    // Give connection time to stabilize
-    tokio::time::sleep(Duration::from_millis(200)).await;
-
-    let sed_id = SedimentreeId::new([1u8; 32]);
-    let blob = Blob::new(b"hello from client".to_vec());
-    client
-        .add_commit(sed_id, BTreeSet::new(), blob)
-        .await
-        .expect("add commit");
-
-    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
-
-    assert!(call_errs.is_empty(), "full_sync call errors: {call_errs:?}");
-    assert!(io_errs.is_empty(), "full_sync IO errors: {io_errs:?}");
-    assert!(
-        had_success,
-        "full_sync should have had at least one success"
+    let (client, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
+        None,
+        client_signer.clone(),
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+        ShardedMap::new(),
+        TokioSpawn,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
-    // Give server time to process incoming data
+    tokio::spawn(listener_fut);
+    tokio::spawn(manager_fut);
+
+    let base_url = format!("http://{server_addr}");
+    let lp_client = HttpLongPollClient::new(
+        &base_url,
+        ReqwestHttpClient::new(),
+        FuturesTimerTimeout,
+        TokioSpawn,
+        REQUEST_TIMEOUT,
+    );
+
+    let cancel_fut = futures::future::pending::<()>();
+
+    let (auth, _session_id) = lp_client
+        .connect(&client_signer, server_peer_id, cancel_fut)
+        .await
+        .expect("client connect with known peer");
+
+    client.register(auth).await.expect("register");
+    client
+}
+
+fn random_blob() -> Blob {
+    let mut bytes = [0u8; 64];
+    rand::thread_rng().fill_bytes(&mut bytes);
+    Blob::new(bytes.to_vec())
+}
+
+// ─── Additional Tests ────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn known_peer_connect() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(40).await;
+    let server_peer_id = server.subduction.peer_id();
+    let client = connected_client_known_peer(41, server.address, server_peer_id).await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server_peers = server.subduction.connected_peer_ids().await;
+    let client_peers = client.connected_peer_ids().await;
+
+    assert!(
+        server_peers.contains(&client.peer_id()),
+        "server should see client as connected"
+    );
+    assert!(
+        client_peers.contains(&server_peer_id),
+        "client should see server as connected"
+    );
+
+    // Verify data flows over the known-peer connection
+    let sed_id = SedimentreeId::new([40u8; 32]);
+    client
+        .add_commit(sed_id, BTreeSet::new(), Blob::new(b"known-peer-data".to_vec()))
+        .await?;
+
+    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
+    assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
+    assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
+    assert!(had_success);
+
     tokio::time::sleep(Duration::from_millis(500)).await;
 
     let server_commits = server.subduction.get_commits(sed_id).await;
-    assert!(
-        server_commits.is_some(),
-        "server should have commits for sed_id"
+    assert!(server_commits.is_some(), "server should have the commit");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn multiple_concurrent_clients() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(50).await;
+    let sed_id = SedimentreeId::new([50u8; 32]);
+
+    // Server adds an initial commit
+    server
+        .subduction
+        .add_commit(sed_id, BTreeSet::new(), random_blob())
+        .await?;
+
+    let num_clients = 3;
+    let mut clients = Vec::new();
+
+    for i in 0..num_clients {
+        let client = connected_client(51 + i as u8, server.address).await;
+        clients.push(client);
+    }
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Verify server sees all clients
+    assert_eq!(
+        server.subduction.connected_peer_ids().await.len(),
+        num_clients,
+        "server should see all {num_clients} clients"
     );
-    let commits = server_commits.unwrap();
+
+    // Phase 1: Each client syncs to get the server's initial commit
+    for client in &clients {
+        client
+            .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
+            .await?;
+    }
+
+    // Phase 2: Each client adds its own commit
+    for client in &clients {
+        client
+            .add_commit(sed_id, BTreeSet::new(), random_blob())
+            .await?;
+    }
+
+    // Phase 3: All clients sync their commits to the server
+    for client in &clients {
+        client
+            .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
+            .await?;
+    }
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Phase 4: Verify server has all commits (1 server + 3 clients)
+    let expected = num_clients + 1;
+    let server_commits = server
+        .subduction
+        .get_commits(sed_id)
+        .await
+        .expect("server should have commits");
+    assert_eq!(
+        server_commits.len(),
+        expected,
+        "server should have all {expected} commits"
+    );
+
+    // Phase 5: All clients sync to pull the other clients' commits via server
+    for client in &clients {
+        client
+            .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
+            .await?;
+    }
+
+    // Phase 6: Verify all clients converged
+    for (i, client) in clients.iter().enumerate() {
+        let commits = client
+            .get_commits(sed_id)
+            .await
+            .expect("client should have commits");
+        assert_eq!(
+            commits.len(),
+            expected,
+            "client {i} should have all {expected} commits"
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn large_message_handling() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(60).await;
+    let client = connected_client(61, server.address).await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let sed_id = SedimentreeId::new([60u8; 32]);
+
+    // 1 MB blob
+    let mut large_data = vec![0u8; 1_000_000];
+    rand::thread_rng().fill_bytes(&mut large_data);
+    let blob = Blob::new(large_data);
+
+    client
+        .add_commit(sed_id, BTreeSet::new(), blob)
+        .await?;
+
+    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
+    assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
+    assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
+    assert!(had_success);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let server_commits = server
+        .subduction
+        .get_commits(sed_id)
+        .await
+        .expect("server should have commits");
+    assert!(!server_commits.is_empty());
+
+    // Verify blob data is intact on server
+    let server_blobs = server
+        .subduction
+        .get_blobs(sed_id)
+        .await?
+        .expect("server should have blobs");
     assert!(
-        !commits.is_empty(),
-        "server should have at least one commit"
+        server_blobs.iter().any(|b| b.as_slice().len() == 1_000_000),
+        "server should have the 1MB blob"
     );
 
     Ok(())
 }
+
+#[tokio::test]
+async fn message_ordering() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(70).await;
+    let client = connected_client(71, server.address).await;
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let sed_id = SedimentreeId::new([70u8; 32]);
+
+    // Add 5 sequential commits with deterministic data
+    for i in 0..5u8 {
+        let mut data = b"ordered-commit-".to_vec();
+        data.push(i);
+        client
+            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .await?;
+    }
+
+    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
+    assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
+    assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
+    assert!(had_success);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let server_commits = server
+        .subduction
+        .get_commits(sed_id)
+        .await
+        .expect("server should have commits");
+    assert_eq!(
+        server_commits.len(),
+        5,
+        "server should have all 5 commits"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn disconnect_and_reconnect() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(80).await;
+    let server_peer_id = server.subduction.peer_id();
+
+    // First connection
+    let client1 = connected_client(81, server.address).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let sed_id = SedimentreeId::new([80u8; 32]);
+    client1
+        .add_commit(
+            sed_id,
+            BTreeSet::new(),
+            Blob::new(b"before-disconnect".to_vec()),
+        )
+        .await?;
+
+    let (had_success, _, call_errs, io_errs) = client1.full_sync(Some(REQUEST_TIMEOUT)).await;
+    assert!(call_errs.is_empty());
+    assert!(io_errs.is_empty());
+    assert!(had_success);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // Disconnect
+    client1.disconnect_all().await?;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Server adds a commit while client is disconnected
+    server
+        .subduction
+        .add_commit(
+            sed_id,
+            BTreeSet::new(),
+            Blob::new(b"while-disconnected".to_vec()),
+        )
+        .await?;
+
+    // Reconnect with a fresh client that uses the same signer
+    let client2 = connected_client_known_peer(81, server.address, server_peer_id).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Sync: client2 should get both the original commit and the server's new commit
+    let result = client2
+        .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
+        .await?;
+
+    let had_success = result.values().any(|(success, _, _)| *success);
+    assert!(had_success, "sync should succeed after reconnect");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let client_commits = client2
+        .get_commits(sed_id)
+        .await
+        .expect("client should have commits after reconnect");
+    assert!(
+        client_commits.len() >= 2,
+        "client should have >= 2 commits (original + server's), got {}",
+        client_commits.len()
+    );
+
+    Ok(())
+}
+
 
 #[tokio::test]
 async fn server_to_client_sync() -> TestResult {

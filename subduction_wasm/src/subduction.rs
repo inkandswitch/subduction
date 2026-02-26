@@ -30,9 +30,11 @@ use subduction_core::{
 };
 use wasm_bindgen::prelude::*;
 
+use wasm_bindgen::JsCast;
+
 use crate::{
     connection::{
-        longpoll::WasmLongPoll,
+        longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
         websocket::WasmWebSocket,
         JsConnection,
@@ -641,7 +643,7 @@ impl WasmSubduction {
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: conn.into_inner().to_js_connection(),
+                    conn: to_js_connection(conn.into_inner()),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -686,7 +688,7 @@ impl WasmSubduction {
                                 .into_iter()
                                 .map(|(conn, err)| {
                                     (
-                                        conn.into_inner().to_js_connection(),
+                                        to_js_connection(conn.into_inner()),
                                         WasmCallError::from(err),
                                     )
                                 })
@@ -714,7 +716,7 @@ impl WasmSubduction {
             conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: conn.into_inner().to_js_connection(),
+                    conn: to_js_connection(conn.into_inner()),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -802,6 +804,19 @@ impl PeerBatchSyncResult {
     #[wasm_bindgen(getter, js_name = connErrors)]
     pub fn conn_errors(&self) -> Vec<ConnErrPair> {
         self.conn_errors.clone()
+    }
+}
+
+/// Convert a [`WasmUnifiedTransport`] to a [`JsConnection`] for the JS boundary.
+///
+/// Both `SubductionWebSocket` and `SubductionLongPollConnection` satisfy the
+/// `Connection` TypeScript interface, so the cast is safe by construction.
+fn to_js_connection(transport: WasmUnifiedTransport) -> JsConnection {
+    match transport {
+        WasmUnifiedTransport::WebSocket(ws) => JsValue::from(ws).unchecked_into(),
+        WasmUnifiedTransport::LongPoll(lp) => {
+            JsValue::from(WasmLongPollConn::new(lp)).unchecked_into()
+        }
     }
 }
 
