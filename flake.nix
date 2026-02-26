@@ -99,7 +99,7 @@
             rev = "v${version}";
             hash = "sha256-MfbnMu5MY360/VQ/co0Miju22c5/ATSaim0VcP3aR3g=";
           };
-          cargoHash = "sha256-MNvzP/72i6IOYdTnLDJO0uDaSZhlsR2/Iyo5vuOs4Eg=";
+          cargoHash = "sha256-7L8sVZVxGSwii8EMaxuDiodVxnZ5OKh+bmr2LeGR4M8=";
           auditable = false; # cargo-auditable doesn't support edition 2024 yet
           doCheck = false; # tests require npm/puppeteer infrastructure
         };

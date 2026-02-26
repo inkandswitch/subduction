@@ -23,14 +23,14 @@
   ],
   "exports": {
     ".": {
+      "types": "./pkg/automerge_sedimentree_wasm.d.ts",
       "node": {
+        "types": "./pkg-node/automerge_sedimentree_wasm.d.ts",
         "import": "./pkg-node/automerge_sedimentree_wasm.js",
-        "require": "./pkg-node/automerge_sedimentree_wasm.js",
-        "types": "./pkg-node/automerge_sedimentree_wasm.d.ts"
+        "require": "./pkg-node/automerge_sedimentree_wasm.js"
       },
       "import": "./pkg/automerge_sedimentree_wasm.js",
-      "require": "./pkg/automerge_sedimentree_wasm.js",
-      "types": "./pkg/automerge_sedimentree_wasm.d.ts"
+      "require": "./pkg/automerge_sedimentree_wasm.js"
     },
     "./slim": {
       "types": "./pkg-slim/index.d.ts",
