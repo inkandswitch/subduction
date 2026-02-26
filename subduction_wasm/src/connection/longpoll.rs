@@ -263,7 +263,7 @@ impl WasmLongPoll {
         let client = make_client(base_url, default_time_limit);
 
         let result = client
-            .connect_local(signer, expected_peer_id.clone().into(), js_now())
+            .connect(signer, expected_peer_id.clone().into(), js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 
@@ -303,7 +303,7 @@ impl WasmLongPoll {
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
         let result = client
-            .connect_discover_local(signer, &service_name, js_now())
+            .connect_discover(signer, &service_name, js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 
@@ -330,7 +330,7 @@ impl WasmLongPoll {
         let client = make_client(base_url, default_time_limit);
 
         let result = client
-            .connect_local(signer, expected_peer_id.clone().into(), js_now())
+            .connect(signer, expected_peer_id.clone().into(), js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 
@@ -355,7 +355,7 @@ impl WasmLongPoll {
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
         let result = client
-            .connect_discover_local(signer, &service_name, js_now())
+            .connect_discover(signer, &service_name, js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 

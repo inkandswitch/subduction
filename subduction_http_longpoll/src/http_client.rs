@@ -21,7 +21,7 @@ pub use reqwest_client::{ReqwestHttpClient, ReqwestHttpError};
 /// the long-poll transport needs.
 pub trait HttpClient<K: FutureForm>: Clone {
     /// The error type for HTTP operations.
-    type Error: core::error::Error + Send + 'static;
+    type Error: core::error::Error + 'static;
 
     /// Send an HTTP POST request and return the response.
     fn post(

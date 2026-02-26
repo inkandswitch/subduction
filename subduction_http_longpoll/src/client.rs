@@ -28,7 +28,6 @@ use core::time::Duration;
 
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    FutureExt,
     future::{Either, select},
     pin_mut,
 };
@@ -115,149 +114,166 @@ impl<H, O> HttpLongPollClient<H, O> {
 }
 
 // ---------------------------------------------------------------------------
-// Connect methods stamped out for Sendable and Local
+// Connect trait + future_form impl
 // ---------------------------------------------------------------------------
 
-/// Generates connect methods for a concrete [`FutureForm`] variant.
+/// Connect to a Subduction server via HTTP long-poll.
 ///
-/// The only differences between `Sendable` and `Local` are the concrete
-/// `K` type, `.boxed()` vs `.boxed_local()` for task futures, extra
-/// `Send + Sync` bounds for `Sendable`, and the public method names
-/// (`connect` / `connect_local`, `connect_discover` / `connect_discover_local`).
-macro_rules! impl_connect {
-    ($K:ty, $box_fn:ident, $connect:ident, $discover:ident, $inner:ident $(, $extra_bounds:tt)*) => {
-        impl<H, O> HttpLongPollClient<H, O>
-        where
-            H: HttpClient<$K> $(+ $extra_bounds)* + 'static,
-            O: Timeout<$K> $(+ $extra_bounds)* + 'static,
-        {
-            /// Connect to the server using discovery mode.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`ClientError`] if the handshake or connection setup fails.
-            pub async fn $discover<Sig: Signer<$K>>(
-                &self,
-                signer: &Sig,
-                service_name: &str,
-                now: TimestampSeconds,
-            ) -> Result<ConnectResult<$K, O>, ClientError> {
-                let audience = Audience::discover(service_name.as_bytes());
-                self.$inner(signer, audience, now).await
-            }
+/// This trait is implemented for [`HttpLongPollClient`] via
+/// [`#[future_form]`](future_form::future_form), generating concrete impls
+/// for both [`Sendable`](future_form::Sendable) and [`Local`](future_form::Local).
+///
+/// Prefer the convenience methods [`HttpLongPollClient::connect`] and
+/// [`HttpLongPollClient::connect_discover`] over calling this trait directly.
+pub trait Connect<K: FutureForm, Sig: Signer<K>> {
+    /// The timeout strategy for the resulting connection.
+    type Timeout;
 
-            /// Connect to the server with a known peer ID.
-            ///
-            /// # Errors
-            ///
-            /// Returns [`ClientError`] if the handshake or connection setup fails.
-            pub async fn $connect<Sig: Signer<$K>>(
-                &self,
-                signer: &Sig,
-                expected_peer_id: PeerId,
-                now: TimestampSeconds,
-            ) -> Result<ConnectResult<$K, O>, ClientError> {
-                let audience = Audience::known(expected_peer_id);
-                self.$inner(signer, audience, now).await
-            }
-
-            async fn $inner<Sig: Signer<$K>>(
-                &self,
-                signer: &Sig,
-                audience: Audience,
-                now: TimestampSeconds,
-            ) -> Result<ConnectResult<$K, O>, ClientError> {
-                let nonce = Nonce::random();
-
-                let mut client_handshake = ClientHttpHandshake::<$K, H> {
-                    http: self.http.clone(),
-                    base_url: self.base_url.clone(),
-                    session_id: None,
-                    response_bytes: None,
-                    _k: core::marker::PhantomData,
-                };
-
-                let default_time_limit = self.default_time_limit;
-                let timeout = self.timeout.clone();
-                let base_url = self.base_url.clone();
-                let http = self.http.clone();
-
-                let (authenticated, session_id) = handshake::initiate::<$K, _, _, _, _>(
-                    &mut client_handshake,
-                    |handshake, peer_id| {
-                        #[allow(clippy::expect_used)]
-                        let session_id = handshake
-                            .session_id
-                            .expect("session_id set during handshake send");
-
-                        let conn = HttpLongPollConnection::new(
-                            peer_id,
-                            default_time_limit,
-                            timeout.clone(),
-                        );
-
-                        (conn, session_id)
-                    },
-                    signer,
-                    audience,
-                    now,
-                    nonce,
-                )
-                .await
-                .map_err(|e| ClientError::Authentication(e.to_string()))?;
-
-                let conn = authenticated.inner().clone();
-
-                let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
-                let send_cancel_rx = cancel_rx.clone();
-
-                conn.set_cancel_guard(cancel_tx).await;
-
-                let poll_url = format!("{base_url}/lp/recv");
-                let poll_http = http.clone();
-                let poll_conn = conn.clone();
-
-                let poll_task = async move {
-                    poll_loop(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
-                }
-                .$box_fn();
-
-                let send_url = format!("{base_url}/lp/send");
-                let send_http = http;
-                let send_conn = conn;
-
-                let send_task = async move {
-                    send_loop(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
-                }
-                .$box_fn();
-
-                Ok(ConnectResult {
-                    authenticated,
-                    session_id,
-                    poll_task,
-                    send_task,
-                })
-            }
-        }
-    };
+    /// Connect with a specific [`Audience`] (known peer ID or service discovery).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the handshake or connection setup fails.
+    fn connect_with_audience<'a>(
+        &'a self,
+        signer: &'a Sig,
+        audience: Audience,
+        now: TimestampSeconds,
+    ) -> K::Future<'a, Result<ConnectResult<K, Self::Timeout>, ClientError>>
+    where
+        HttpLongPollConnection<Self::Timeout>: subduction_core::connection::Connection<K>;
 }
 
-impl_connect!(
-    Sendable,
-    boxed,
-    connect,
-    connect_discover,
-    connect_inner,
-    Send,
-    Sync
-);
-impl_connect!(
-    Local,
-    boxed_local,
-    connect_local,
-    connect_discover_local,
-    connect_inner_local
-);
+#[future_form::future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
+impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
+    Connect<K, Sig> for HttpLongPollClient<H, O>
+{
+    type Timeout = O;
+
+    fn connect_with_audience<'a>(
+        &'a self,
+        signer: &'a Sig,
+        audience: Audience,
+        now: TimestampSeconds,
+    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    where
+        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+    {
+        let http = self.http.clone();
+        let base_url = self.base_url.clone();
+        let timeout = self.timeout.clone();
+        let default_time_limit = self.default_time_limit;
+
+        K::from_future(async move {
+            let nonce = Nonce::random();
+
+            let mut client_handshake = ClientHttpHandshake::<K, H> {
+                http: http.clone(),
+                base_url: base_url.clone(),
+                session_id: None,
+                response_bytes: None,
+                _k: core::marker::PhantomData,
+            };
+
+            #[allow(clippy::expect_used)]
+            let (authenticated, session_id) = handshake::initiate::<K, _, _, _, _>(
+                &mut client_handshake,
+                |handshake, peer_id| {
+                    let session_id = handshake
+                        .session_id
+                        .expect("session_id set during handshake send");
+
+                    let conn =
+                        HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
+
+                    (conn, session_id)
+                },
+                signer,
+                audience,
+                now,
+                nonce,
+            )
+            .await
+            .map_err(|e| ClientError::Authentication(e.to_string()))?;
+
+            let conn = authenticated.inner().clone();
+
+            let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+            let send_cancel_rx = cancel_rx.clone();
+
+            conn.set_cancel_guard(cancel_tx).await;
+
+            let poll_url = format!("{base_url}/lp/recv");
+            let poll_http = http.clone();
+            let poll_conn = conn.clone();
+
+            let poll_task = K::from_future(async move {
+                poll_loop(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
+            });
+
+            let send_url = format!("{base_url}/lp/send");
+            let send_http = http;
+            let send_conn = conn;
+
+            let send_task = K::from_future(async move {
+                send_loop(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
+            });
+
+            Ok(ConnectResult {
+                authenticated,
+                session_id,
+                poll_task,
+                send_task,
+            })
+        })
+    }
+}
+
+impl<H, O> HttpLongPollClient<H, O> {
+    /// Connect to the server with a known peer ID.
+    ///
+    /// The [`FutureForm`] variant `K` is inferred from the HTTP client `H`:
+    /// [`Sendable`](future_form::Sendable) for native clients,
+    /// [`Local`](future_form::Local) for browser `fetch()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the handshake or connection setup fails.
+    pub fn connect<'a, K: FutureForm, Sig: Signer<K>>(
+        &'a self,
+        signer: &'a Sig,
+        expected_peer_id: PeerId,
+        now: TimestampSeconds,
+    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    where
+        Self: Connect<K, Sig, Timeout = O>,
+        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+    {
+        self.connect_with_audience(signer, Audience::known(expected_peer_id), now)
+    }
+
+    /// Connect to the server using service discovery.
+    ///
+    /// The [`FutureForm`] variant `K` is inferred from the HTTP client `H`:
+    /// [`Sendable`](future_form::Sendable) for native clients,
+    /// [`Local`](future_form::Local) for browser `fetch()`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the handshake or connection setup fails.
+    pub fn connect_discover<'a, K: FutureForm, Sig: Signer<K>>(
+        &'a self,
+        signer: &'a Sig,
+        service_name: &str,
+        now: TimestampSeconds,
+    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    where
+        Self: Connect<K, Sig, Timeout = O>,
+        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+    {
+        self.connect_with_audience(signer, Audience::discover(service_name.as_bytes()), now)
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Background tasks (single generic implementation)
