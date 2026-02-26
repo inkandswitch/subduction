@@ -18,7 +18,7 @@ use core::time::Duration;
 use async_lock::Mutex;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
-    Request, Response, StatusCode,
+    Method, Request, Response, StatusCode,
     body::{Bytes, Incoming},
 };
 use subduction_core::{
@@ -123,16 +123,16 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         &self,
         req: Request<Incoming>,
     ) -> Result<Response<Full<Bytes>>, hyper::Error> {
-        let path = req.uri().path();
         let method = req.method().clone();
+        let path = req.uri().path();
 
         tracing::debug!("HTTP long-poll: {method} {path}");
 
-        let response = match (method.as_str(), path) {
-            ("POST", "/lp/handshake") => self.handle_handshake(req).await,
-            ("POST", "/lp/send") => self.handle_send(req).await,
-            ("POST", "/lp/recv") => self.handle_recv(req).await,
-            ("POST", "/lp/disconnect") => self.handle_disconnect(req).await,
+        let response = match (&method, path) {
+            (&Method::POST, "/lp/handshake") => self.handle_handshake(req).await,
+            (&Method::POST, "/lp/send") => self.handle_send(req).await,
+            (&Method::POST, "/lp/recv") => self.handle_recv(req).await,
+            (&Method::POST, "/lp/disconnect") => self.handle_disconnect(req).await,
             _ => Ok(Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Full::new(Bytes::from_static(b"not found")))

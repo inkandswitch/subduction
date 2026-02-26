@@ -98,7 +98,8 @@ async fn run_ws(
 
     tracing::info!("Connecting via WebSocket to {uri}");
 
-    let (_, listener, sender) = TokioWebSocketClient::new(
+    // TODO: create a Subduction instance and call register(authenticated)
+    let (_auth, listener, sender) = TokioWebSocketClient::new(
         uri,
         FuturesTimerTimeout,
         timeout_duration,
@@ -107,8 +108,10 @@ async fn run_ws(
     )
     .await?;
 
+    let remote_id = _auth.peer_id();
     tracing::info!("WebSocket client connected");
     tracing::info!("Client Peer ID: {peer_id}");
+    tracing::info!("Server Peer ID: {remote_id}");
 
     let listener_token = token.clone();
     tokio::spawn(async move {
@@ -200,9 +203,7 @@ async fn run_longpoll(
         }
     });
 
-    // The authenticated connection is ready for registration with Subduction.
-    // For now, hold it alive until shutdown. A full client would create a
-    // Subduction instance and call register(authenticated.map(UnifiedTransport::HttpLongPoll)).
+    // TODO: create a Subduction instance and call register(authenticated.map(UnifiedTransport::HttpLongPoll))
     let _auth = result.authenticated;
 
     token.cancelled().await;
