@@ -37,7 +37,7 @@ sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
 subduction_crypto = { workspace = true }
-subduction_http_longpoll = { workspace = true }
+subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }

@@ -63,7 +63,7 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
         .clone()
         .unwrap_or_else(|| PathBuf::from("./client-data"));
 
-    tracing::info!("Initializing filesystem storage at {:?}", data_dir);
+    tracing::info!(?data_dir, "Initializing filesystem storage");
     let _storage = FsStorage::new(data_dir)?;
 
     let signer = key::load_signer(&args.key)?;
