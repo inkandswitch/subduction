@@ -100,7 +100,7 @@
             hash = "sha256-MfbnMu5MY360/VQ/co0Miju22c5/ATSaim0VcP3aR3g=";
           };
           cargoHash = "sha256-7L8sVZVxGSwii8EMaxuDiodVxnZ5OKh+bmr2LeGR4M8=";
-          auditable = false; # cargo-auditable doesn't support edition 2024 yet
+          nativeBuildInputs = [ unstable.cargo-auditable ];
           doCheck = false; # tests require npm/puppeteer infrastructure
         };
 
