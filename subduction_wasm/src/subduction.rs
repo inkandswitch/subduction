@@ -1,6 +1,11 @@
 //! Subduction node.
 
-use alloc::{collections::BTreeSet, string::String, sync::Arc, vec::Vec};
+use alloc::{
+    collections::BTreeSet,
+    string::{String, ToString},
+    sync::Arc,
+    vec::Vec,
+};
 use core::{fmt::Debug, time::Duration};
 use sedimentree_core::collections::Map;
 
