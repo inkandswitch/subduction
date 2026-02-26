@@ -32,7 +32,7 @@ hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio", "http1", "server-auto"] }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
-reqwest = { workspace = true, features = ["rustls-tls"] }
+reqwest = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
@@ -52,12 +52,16 @@ url = { workspace = true, features = ["std"] }
 default = ["native-tls"]
 native-tls = [
   "async-tungstenite/tokio-native-tls",
+  "reqwest/native-tls",
+  "subduction_http_longpoll/native-tls",
   "subduction_websocket/tokio_client",
   "subduction_websocket/tokio_server",
   "dep:tracing-loki",
 ]
 rustls = [
   "async-tungstenite/tokio-rustls-native-certs",
+  "reqwest/rustls-tls",
+  "subduction_http_longpoll/rustls-tls",
   "subduction_websocket/tokio_client_rustls",
   "subduction_websocket/tokio_server_rustls",
 ]

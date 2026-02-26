@@ -96,13 +96,13 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value_t = DEFAULT_METRICS_REFRESH_SECS)]
     pub(crate) metrics_refresh_interval: u64,
 
-    /// Disable the WebSocket transport
-    #[arg(long, default_value_t = false)]
-    pub(crate) no_websocket: bool,
+    /// Enable the WebSocket transport
+    #[arg(long, default_value_t = true)]
+    pub(crate) websocket: bool,
 
-    /// Disable the HTTP long-poll transport
-    #[arg(long, default_value_t = false)]
-    pub(crate) no_longpoll: bool,
+    /// Enable the HTTP long-poll transport
+    #[arg(long, default_value_t = true)]
+    pub(crate) longpoll: bool,
 
     /// Peer WebSocket URLs to connect to on startup
     #[arg(long = "peer", value_name = "URL")]
@@ -206,13 +206,11 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let tcp_listener = TcpListener::bind(addr).await?;
     let assigned_address = tcp_listener.local_addr()?;
 
-    let ws_enabled = !args.no_websocket;
-    let lp_enabled = !args.no_longpoll;
+    let ws_enabled = args.websocket;
+    let lp_enabled = args.longpoll;
 
     if !ws_enabled && !lp_enabled {
-        eyre::bail!(
-            "At least one transport must be enabled (remove --no-websocket or --no-longpoll)"
-        );
+        eyre::bail!("At least one transport must be enabled (--websocket or --longpoll)");
     }
 
     let transports: Vec<&str> = [
