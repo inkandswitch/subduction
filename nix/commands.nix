@@ -178,14 +178,16 @@
       fi
 
       echo "===> Profiling $PACKAGE::$BENCH (filter: ''${FILTER:-all}, ''${SECONDS}s per benchmark)..."
+      ${pkgs.coreutils}/bin/mkdir -p target/criterion
+      ${pkgs.coreutils}/bin/touch target/criterion/.bench-marker
       ${cargo} bench --package "$PACKAGE" $FEATURES --bench "$BENCH" -- $FILTER_ARGS --profile-time "$SECONDS"
 
-      # Find and open the most recent flamegraph
-      LATEST=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -newer target/criterion/.bench-marker 2>/dev/null | head -1 || true)
+      # Find the most recent flamegraph by mtime (prefer ones newer than marker)
+      LATEST=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -newer target/criterion/.bench-marker -printf '%T@ %p\n' 2>/dev/null | ${pkgs.coreutils}/bin/sort -nr | ${pkgs.coreutils}/bin/head -1 | ${pkgs.coreutils}/bin/cut -d' ' -f2- || true)
 
       if [ -z "$LATEST" ]; then
-        # No marker file yet; find any recent flamegraph
-        LATEST=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -type f 2>/dev/null | ${pkgs.coreutils}/bin/sort | tail -1 || true)
+        # Marker exists but nothing newer — fall back to newest by mtime
+        LATEST=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -type f -printf '%T@ %p\n' 2>/dev/null | ${pkgs.coreutils}/bin/sort -nr | ${pkgs.coreutils}/bin/head -1 | ${pkgs.coreutils}/bin/cut -d' ' -f2- || true)
       fi
 
       if [ -n "$LATEST" ]; then
@@ -204,7 +206,8 @@
     "bench:flame:open" = cmd "List and open an existing flamegraph" ''
       set -e
 
-      SVGS=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -type f 2>/dev/null | ${pkgs.coreutils}/bin/sort)
+      # Sort by mtime (newest last) so the list reads chronologically
+      SVGS=$(${pkgs.findutils}/bin/find target/criterion -name "flamegraph.svg" -type f -printf '%T@ %p\n' 2>/dev/null | ${pkgs.coreutils}/bin/sort -n | ${pkgs.coreutils}/bin/cut -d' ' -f2-)
 
       if [ -z "$SVGS" ]; then
         echo "No flamegraphs found in target/criterion/"
@@ -215,19 +218,20 @@
       echo "Available flamegraphs:"
       echo ""
       i=1
-      echo "$SVGS" | while IFS= read -r svg; do
+      while IFS= read -r svg; do
         # Strip target/criterion/ prefix and /profile/flamegraph.svg suffix
         name=$(echo "$svg" | ${pkgs.gnused}/bin/sed 's|target/criterion/||; s|/profile/flamegraph.svg||')
         printf "  [%d] %s\n" "$i" "$name"
         i=$((i + 1))
-      done
+      done <<< "$SVGS"
 
       echo ""
       printf "Open [number or Enter for latest]: "
       read -r choice
 
       if [ -z "$choice" ]; then
-        SELECTED=$(echo "$SVGS" | tail -1)
+        # Latest = last line = newest by mtime
+        SELECTED=$(echo "$SVGS" | ${pkgs.coreutils}/bin/tail -1)
       else
         SELECTED=$(echo "$SVGS" | ${pkgs.gnused}/bin/sed -n "''${choice}p")
       fi
@@ -330,6 +334,8 @@
     '';
 
     "test:ts:web" = cmd "Run subduction_wasm Typescript tests in Playwright" ''
+      set -e
+
       cd ./subduction_wasm
       ${pnpm} exec playwright install --with-deps
       cd ..
@@ -337,14 +343,14 @@
       ${pkgs.http-server}/bin/http-server --silent &
       bg_pid=$!
 
-      build:wasm:all
-      ${playwright} test ./subduction_wasm
-
       cleanup() {
         echo "Killing background process $bg_pid"
         kill "$bg_pid" 2>/dev/null || true
       }
-      trap cleanup EXIT
+      trap cleanup EXIT INT TERM
+
+      build:wasm:all
+      ${playwright} test ./subduction_wasm
     '';
 
     "test:ts:web:report:latest" = cmd "Open the latest Playwright report"
