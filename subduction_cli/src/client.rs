@@ -42,13 +42,13 @@ pub(crate) struct ClientArgs {
     pub(crate) key: key::KeyArgs,
 
     /// Expected server peer ID (64 hex characters).
-    /// If omitted, uses discovery mode with the server URL as service name.
-    #[arg(long)]
+    /// If omitted, uses discovery mode instead.
+    #[arg(long, conflicts_with = "service_name")]
     pub(crate) server_peer_id: Option<String>,
 
     /// Service name for discovery mode.
-    /// Defaults to the server URL's host if not specified.
-    #[arg(long)]
+    /// Defaults to the server URL if not specified.
+    #[arg(long, conflicts_with = "server_peer_id")]
     pub(crate) service_name: Option<String>,
 
     /// Request timeout in seconds
@@ -70,9 +70,18 @@ pub(crate) async fn run(args: ClientArgs, token: CancellationToken) -> Result<()
     let peer_id = PeerId::from(signer.verifying_key());
     let timeout_duration = Duration::from_secs(args.timeout);
 
+    let audience = if let Some(id_hex) = &args.server_peer_id {
+        Audience::known(crate::parse_peer_id(id_hex)?)
+    } else {
+        let service = args.service_name.as_deref().unwrap_or(args.server.as_str());
+        Audience::discover(service.as_bytes())
+    };
+
     match args.transport {
-        Transport::Ws => run_ws(&args, &signer, peer_id, timeout_duration, token).await,
-        Transport::Longpoll => run_longpoll(&args, &signer, peer_id, timeout_duration, token).await,
+        Transport::Ws => run_ws(&args, &signer, peer_id, timeout_duration, audience, token).await,
+        Transport::Longpoll => {
+            run_longpoll(&args, &signer, peer_id, timeout_duration, audience, token).await
+        }
     }
 }
 
@@ -82,16 +91,10 @@ async fn run_ws(
     signer: &MemorySigner,
     peer_id: PeerId,
     timeout_duration: Duration,
+    audience: Audience,
     token: CancellationToken,
 ) -> Result<()> {
     let uri: Uri = args.server.parse()?;
-
-    let audience = if let Some(id_hex) = &args.server_peer_id {
-        Audience::known(crate::parse_peer_id(id_hex)?)
-    } else {
-        let service = args.service_name.as_deref().unwrap_or(args.server.as_str());
-        Audience::discover(service.as_bytes())
-    };
 
     tracing::info!("Connecting via WebSocket to {uri}");
 
@@ -146,6 +149,7 @@ async fn run_longpoll(
     signer: &MemorySigner,
     peer_id: PeerId,
     timeout_duration: Duration,
+    audience: Audience,
     token: CancellationToken,
 ) -> Result<()> {
     let base_url = args.server.trim_end_matches('/');
@@ -155,18 +159,18 @@ async fn run_longpoll(
     let http = ReqwestHttpClient::with_timeout(Duration::from_secs(60));
     let lp_client = HttpLongPollClient::new(base_url, http, FuturesTimerTimeout, timeout_duration);
 
-    let result = if let Some(id_hex) = &args.server_peer_id {
-        let server_id = crate::parse_peer_id(id_hex)?;
-        lp_client
-            .connect(signer, server_id, TimestampSeconds::now())
+    let result = match &audience {
+        Audience::Known(server_id) => lp_client
+            .connect(signer, *server_id, TimestampSeconds::now())
             .await
-            .map_err(|e| eyre::eyre!("long-poll connect failed: {e}"))?
-    } else {
-        let service = args.service_name.as_deref().unwrap_or(args.server.as_str());
-        lp_client
-            .connect_discover(signer, service, TimestampSeconds::now())
-            .await
-            .map_err(|e| eyre::eyre!("long-poll discover failed: {e}"))?
+            .map_err(|e| eyre::eyre!("long-poll connect failed: {e}"))?,
+        Audience::Discover(_) => {
+            let service = args.service_name.as_deref().unwrap_or(args.server.as_str());
+            lp_client
+                .connect_discover(signer, service, TimestampSeconds::now())
+                .await
+                .map_err(|e| eyre::eyre!("long-poll discover failed: {e}"))?
+        }
     };
 
     let remote_id = result.authenticated.peer_id();

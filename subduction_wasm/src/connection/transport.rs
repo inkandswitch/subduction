@@ -63,7 +63,7 @@ pub enum TransportRecvError {
 }
 
 /// Error type for call operations across transports.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum TransportCallError {
     /// WebSocket call error.
     #[error("websocket call error: {0}")]

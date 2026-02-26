@@ -938,36 +938,13 @@ impl DepthMetric for WasmHashMetric {
 
 /// Wasm wrapper for call errors from the unified transport.
 #[wasm_bindgen(js_name = CallError)]
-#[derive(Debug, Clone)]
-pub struct WasmCallError(WasmCallErrorInner);
-
-/// Inner representation for transport call errors.
-#[derive(Debug, Clone)]
-enum WasmCallErrorInner {
-    WebSocket(String),
-    LongPoll(String),
-}
-
-impl From<TransportCallError> for WasmCallError {
-    fn from(err: TransportCallError) -> Self {
-        match err {
-            TransportCallError::WebSocket(e) => {
-                Self(WasmCallErrorInner::WebSocket(alloc::format!("{e:?}")))
-            }
-            TransportCallError::LongPoll(e) => {
-                Self(WasmCallErrorInner::LongPoll(alloc::format!("{e}")))
-            }
-        }
-    }
-}
+#[derive(Debug, Clone, thiserror::Error)]
+#[error(transparent)]
+pub struct WasmCallError(#[from] TransportCallError);
 
 impl From<WasmCallError> for js_sys::Error {
     fn from(err: WasmCallError) -> Self {
-        let msg = match &err.0 {
-            WasmCallErrorInner::WebSocket(e) => alloc::format!("WebSocket call error: {e}"),
-            WasmCallErrorInner::LongPoll(e) => alloc::format!("LongPoll call error: {e}"),
-        };
-        let js_err = js_sys::Error::new(&msg);
+        let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("CallError");
         js_err
     }
