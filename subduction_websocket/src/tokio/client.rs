@@ -1,22 +1,22 @@
 //! # Subduction [`WebSocket`] client for Tokio
 
 use crate::{
+    DEFAULT_MAX_MESSAGE_SIZE,
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::Timeout,
     websocket::{ListenerTask, SenderTask, WebSocket},
-    DEFAULT_MAX_MESSAGE_SIZE,
 };
-use async_tungstenite::tokio::{connect_async_with_config, ConnectStream};
+use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
 use core::time::Duration;
 use future_form::{FutureForm, Sendable};
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
+        Connection, Reconnect,
         authenticated::Authenticated,
         handshake::{self, Audience, AuthenticateError},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection, Reconnect,
     },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
@@ -204,9 +204,9 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
 }
 
 impl<
-        R: 'static + Signer<Sendable> + Clone + Send + Sync,
-        O: 'static + Timeout<Sendable> + Send + Sync,
-    > Reconnect<Sendable> for TokioWebSocketClient<R, O>
+    R: 'static + Signer<Sendable> + Clone + Send + Sync,
+    O: 'static + Timeout<Sendable> + Send + Sync,
+> Reconnect<Sendable> for TokioWebSocketClient<R, O>
 {
     type ReconnectionError = ClientConnectError;
 

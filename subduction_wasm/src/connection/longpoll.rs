@@ -8,9 +8,9 @@ use core::time::Duration;
 
 use future_form::Local;
 use subduction_core::connection::{
+    Connection,
     authenticated::Authenticated,
     message::{BatchSyncRequest, Message},
-    Connection,
 };
 use subduction_http_longpoll::{
     connection::HttpLongPollConnection,
@@ -20,7 +20,7 @@ use subduction_http_longpoll::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use super::{message::WasmMessage, WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId};
+use super::{WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, message::WasmMessage};
 use crate::{peer_id::WasmPeerId, signer::JsSigner};
 
 /// Type alias for the long-poll connection used in wasm.

@@ -7,11 +7,11 @@ use core::time::Duration;
 
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::connection::timeout::Timeout;
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        timeout::Timeout,
     },
     peer::id::PeerId,
 };

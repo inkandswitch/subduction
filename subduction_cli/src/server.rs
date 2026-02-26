@@ -210,7 +210,9 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let lp_enabled = !args.no_longpoll;
 
     if !ws_enabled && !lp_enabled {
-        eyre::bail!("At least one transport must be enabled (remove --no-websocket or --no-longpoll)");
+        eyre::bail!(
+            "At least one transport must be enabled (remove --no-websocket or --no-longpoll)"
+        );
     }
 
     let transports: Vec<&str> = [
@@ -221,7 +223,10 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     .flatten()
     .collect();
 
-    tracing::info!("Server started on {assigned_address} ({})", transports.join(" + "));
+    tracing::info!(
+        "Server started on {assigned_address} ({})",
+        transports.join(" + ")
+    );
     tracing::info!("Peer ID: {peer_id}");
 
     // Spawn background tasks
@@ -519,14 +524,8 @@ async fn handle_http_longpoll(
                     .status(204)
                     .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
                     .header(ACCESS_CONTROL_ALLOW_METHODS, "POST, OPTIONS")
-                    .header(
-                        ACCESS_CONTROL_ALLOW_HEADERS,
-                        "Content-Type, X-Session-Id",
-                    )
-                    .header(
-                        hyper::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                        "X-Session-Id",
-                    )
+                    .header(ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, X-Session-Id")
+                    .header(hyper::header::ACCESS_CONTROL_EXPOSE_HEADERS, "X-Session-Id")
                     .header(ACCESS_CONTROL_MAX_AGE, "86400")
                     .body(Full::new(Bytes::new()))
                     .expect("valid response");
@@ -552,12 +551,14 @@ async fn handle_http_longpoll(
 
             // Add CORS headers to every response
             let (mut parts, body) = resp.into_parts();
-            parts
-                .headers
-                .insert(ACCESS_CONTROL_ALLOW_ORIGIN, "*".parse().expect("valid header"));
-            parts
-                .headers
-                .insert(ACCESS_CONTROL_ALLOW_METHODS, "POST, OPTIONS".parse().expect("valid header"));
+            parts.headers.insert(
+                ACCESS_CONTROL_ALLOW_ORIGIN,
+                "*".parse().expect("valid header"),
+            );
+            parts.headers.insert(
+                ACCESS_CONTROL_ALLOW_METHODS,
+                "POST, OPTIONS".parse().expect("valid header"),
+            );
             parts.headers.insert(
                 ACCESS_CONTROL_ALLOW_HEADERS,
                 "Content-Type, X-Session-Id".parse().expect("valid header"),

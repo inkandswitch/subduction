@@ -9,8 +9,9 @@ use core::time::Duration;
 
 use future_form::Local;
 use futures::{
-    future::{select, Either, LocalBoxFuture},
-    pin_mut, FutureExt,
+    FutureExt,
+    future::{Either, LocalBoxFuture, select},
+    pin_mut,
 };
 use subduction_core::{
     connection::{
@@ -27,11 +28,11 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
+    SESSION_ID_HEADER,
     connection::HttpLongPollConnection,
     error::ClientError,
     http_client::{FetchHttpClient, HttpClient},
     session::SessionId,
-    SESSION_ID_HEADER,
 };
 
 // ---------------------------------------------------------------------------

@@ -7,11 +7,11 @@ use core::time::Duration;
 
 use super::{longpoll::WasmLongPollConnection, websocket::WasmWebSocket};
 use future_form::Local;
-use futures::{future::LocalBoxFuture, FutureExt};
+use futures::{FutureExt, future::LocalBoxFuture};
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         Connection,
+        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,
 };

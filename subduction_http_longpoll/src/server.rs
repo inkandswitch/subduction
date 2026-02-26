@@ -18,8 +18,8 @@ use core::time::Duration;
 use async_lock::Mutex;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
-    body::{Bytes, Incoming},
     Request, Response, StatusCode,
+    body::{Bytes, Incoming},
 };
 use subduction_core::{
     connection::{
@@ -34,13 +34,13 @@ use subduction_core::{
 use subduction_crypto::signer::Signer;
 
 use future_form::{FutureForm, Sendable};
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 
 use crate::{
+    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
     connection::HttpLongPollConnection,
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
-    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
 };
 
 /// Server-side handler state, shared across request handlers.

@@ -36,11 +36,8 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient,
-    connection::HttpLongPollConnection,
-    http_client::ReqwestHttpClient,
-    server::LongPollHandler,
-    session::SessionId,
+    client::HttpLongPollClient, connection::HttpLongPollConnection, http_client::ReqwestHttpClient,
+    server::LongPollHandler, session::SessionId,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
@@ -365,7 +362,11 @@ async fn known_peer_connect() -> TestResult {
     // Verify data flows over the known-peer connection
     let sed_id = SedimentreeId::new([40u8; 32]);
     client
-        .add_commit(sed_id, BTreeSet::new(), Blob::new(b"known-peer-data".to_vec()))
+        .add_commit(
+            sed_id,
+            BTreeSet::new(),
+            Blob::new(b"known-peer-data".to_vec()),
+        )
         .await?;
 
     let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
@@ -413,9 +414,7 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Phase 1: Each client syncs to get the server's initial commit
     for client in &clients {
-        client
-            .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
-            .await?;
+        client.sync_all(sed_id, true, Some(REQUEST_TIMEOUT)).await?;
     }
 
     // Phase 2: Each client adds its own commit
@@ -427,9 +426,7 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Phase 3: All clients sync their commits to the server
     for client in &clients {
-        client
-            .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
-            .await?;
+        client.sync_all(sed_id, true, Some(REQUEST_TIMEOUT)).await?;
     }
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -449,9 +446,7 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Phase 5: All clients sync to pull the other clients' commits via server
     for client in &clients {
-        client
-            .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
-            .await?;
+        client.sync_all(sed_id, true, Some(REQUEST_TIMEOUT)).await?;
     }
 
     // Phase 6: Verify all clients converged
@@ -486,9 +481,7 @@ async fn large_message_handling() -> TestResult {
     rand::thread_rng().fill_bytes(&mut large_data);
     let blob = Blob::new(large_data);
 
-    client
-        .add_commit(sed_id, BTreeSet::new(), blob)
-        .await?;
+    client.add_commit(sed_id, BTreeSet::new(), blob).await?;
 
     let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
@@ -550,11 +543,7 @@ async fn message_ordering() -> TestResult {
         .get_commits(sed_id)
         .await
         .expect("server should have commits");
-    assert_eq!(
-        server_commits.len(),
-        5,
-        "server should have all 5 commits"
-    );
+    assert_eq!(server_commits.len(), 5, "server should have all 5 commits");
 
     Ok(())
 }
@@ -626,7 +615,6 @@ async fn disconnect_and_reconnect() -> TestResult {
 
     Ok(())
 }
-
 
 #[tokio::test]
 async fn server_to_client_sync() -> TestResult {

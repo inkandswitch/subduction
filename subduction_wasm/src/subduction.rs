@@ -7,9 +7,9 @@ use sedimentree_core::collections::Map;
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -26,7 +26,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use wasm_bindgen::prelude::*;
 
@@ -34,10 +34,10 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
+        JsConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
         websocket::WasmWebSocket,
-        JsConnection,
     },
     error::{
         WasmAttachError, WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,

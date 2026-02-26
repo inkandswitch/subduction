@@ -13,7 +13,7 @@ use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{client::HttpLongPollClient, http_client::ReqwestHttpClient};
 use subduction_websocket::{
     timeout::FuturesTimerTimeout,
-    tokio::{client::TokioWebSocketClient, TokioSpawn},
+    tokio::{TokioSpawn, client::TokioWebSocketClient},
 };
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;

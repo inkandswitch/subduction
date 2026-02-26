@@ -21,13 +21,13 @@ use core::{
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
-use futures::{channel::oneshot, FutureExt};
+use futures::{FutureExt, channel::oneshot};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
+        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         timeout::{TimedOut, Timeout},
-        Connection,
     },
     peer::id::PeerId,
 };
@@ -339,8 +339,8 @@ mod tests {
         ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::connection::timeout::TimedOut>>
         {
             use futures::{
-                future::{select, Either},
                 FutureExt,
+                future::{Either, select},
             };
             async move {
                 match select(fut, futures_timer::Delay::new(dur)).await {
