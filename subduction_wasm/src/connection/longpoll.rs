@@ -11,20 +11,52 @@ use subduction_core::connection::{
     Connection,
     authenticated::Authenticated,
     message::{BatchSyncRequest, Message},
+    timeout::{TimedOut, Timeout},
 };
 use subduction_http_longpoll::{
-    connection::HttpLongPollConnection,
-    session::SessionId,
-    wasm_client::{WasmHttpLongPollClient, WasmLongPollTimeout},
+    client::HttpLongPollClient, connection::HttpLongPollConnection, session::SessionId,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use super::{WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, message::WasmMessage};
+use super::{
+    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, fetch_client::FetchHttpClient,
+    message::WasmMessage,
+};
 use crate::{peer_id::WasmPeerId, signer::JsSigner};
 
+// ---------------------------------------------------------------------------
+// Timeout: use FuturesTimerTimeout which works on both native and wasm
+// ---------------------------------------------------------------------------
+
+/// A [`Timeout<Local>`] implementation using [`futures_timer::Delay`].
+///
+/// On wasm targets, `futures-timer` uses browser `setTimeout` internally.
+#[derive(Debug, Clone, Copy)]
+pub struct FuturesTimerTimeout;
+
+impl Timeout<Local> for FuturesTimerTimeout {
+    fn timeout<'a, T: 'a>(
+        &'a self,
+        dur: Duration,
+        fut: futures::future::LocalBoxFuture<'a, T>,
+    ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
+        use futures::{
+            FutureExt,
+            future::{Either, select},
+        };
+        async move {
+            match select(fut, futures_timer::Delay::new(dur)).await {
+                Either::Left((val, _)) => Ok(val),
+                Either::Right(_) => Err(TimedOut),
+            }
+        }
+        .boxed_local()
+    }
+}
+
 /// Type alias for the long-poll connection used in wasm.
-pub type WasmLongPollConnection = HttpLongPollConnection<WasmLongPollTimeout>;
+pub type WasmLongPollConnection = HttpLongPollConnection<FuturesTimerTimeout>;
 
 /// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
 /// [`Connection`](super::JsConnection) interface so it can be used as a
@@ -141,9 +173,9 @@ pub struct WasmAuthenticatedLongPoll {
     inner: Authenticated<WasmLongPollConnection, Local>,
     session_id: SessionId,
 
-    /// Keeps the external cancel channel open so background poll/send tasks
-    /// are not prematurely killed. Dropped when this struct is freed.
-    _cancel_guard: async_channel::Sender<()>,
+    /// Dropping this signals background poll/send tasks to stop (kept alive
+    /// by the cancel guard stored inside the connection).
+    _cancel_guard: (),
 }
 
 impl WasmAuthenticatedLongPoll {
@@ -169,6 +201,29 @@ impl WasmAuthenticatedLongPoll {
     pub fn session_id(&self) -> String {
         self.session_id.to_hex()
     }
+}
+
+// ---------------------------------------------------------------------------
+// Connection factory
+// ---------------------------------------------------------------------------
+
+/// Build an [`HttpLongPollClient`] configured for the browser.
+fn make_client(
+    base_url: &str,
+    default_time_limit: Duration,
+) -> HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout> {
+    HttpLongPollClient::new(
+        base_url,
+        FetchHttpClient::new(),
+        FuturesTimerTimeout,
+        default_time_limit,
+    )
+}
+
+/// Get the current timestamp from JS `Date.now()`.
+fn js_now() -> subduction_core::timestamp::TimestampSeconds {
+    #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+    subduction_core::timestamp::TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64)
 }
 
 /// HTTP long-poll connection factory for browser/worker environments.
@@ -197,19 +252,21 @@ impl WasmLongPoll {
     ) -> Result<WasmAuthenticatedLongPoll, LongPollConnectionError> {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
-        let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
+        let client = make_client(base_url, default_time_limit);
 
-        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
-
-        let (authenticated, session_id) = client
-            .connect(signer, expected_peer_id.clone().into(), cancel_rx)
+        let result = client
+            .connect_local(signer, expected_peer_id.clone().into(), js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 
+        // Spawn background tasks
+        wasm_bindgen_futures::spawn_local(result.poll_task);
+        wasm_bindgen_futures::spawn_local(result.send_task);
+
         Ok(WasmAuthenticatedLongPoll {
-            inner: authenticated,
-            session_id,
-            _cancel_guard: cancel_tx,
+            inner: result.authenticated,
+            session_id: result.session_id,
+            _cancel_guard: (),
         })
     }
 
@@ -230,81 +287,71 @@ impl WasmLongPoll {
     ) -> Result<WasmAuthenticatedLongPoll, LongPollConnectionError> {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
-        let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
+        let client = make_client(base_url, default_time_limit);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
-        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
-
-        let (authenticated, session_id) = client
-            .connect_discover(signer, &service_name, cancel_rx)
+        let result = client
+            .connect_discover_local(signer, &service_name, js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 
+        // Spawn background tasks
+        wasm_bindgen_futures::spawn_local(result.poll_task);
+        wasm_bindgen_futures::spawn_local(result.send_task);
+
         Ok(WasmAuthenticatedLongPoll {
-            inner: authenticated,
-            session_id,
-            _cancel_guard: cancel_tx,
+            inner: result.authenticated,
+            session_id: result.session_id,
+            _cancel_guard: (),
         })
     }
 
     /// Connect and return the raw `Authenticated` connection (for internal use).
-    ///
-    /// Returns the cancel guard alongside the connection — the caller _must_
-    /// keep it alive for as long as the background poll/send tasks should run.
     pub(crate) async fn connect_authenticated(
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<
-        (
-            Authenticated<WasmLongPollConnection, Local>,
-            SessionId,
-            async_channel::Sender<()>,
-        ),
-        LongPollConnectionError,
-    > {
+    ) -> Result<(Authenticated<WasmLongPollConnection, Local>, SessionId), LongPollConnectionError>
+    {
         let default_time_limit = Duration::from_millis(timeout_milliseconds.into());
-        let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
-        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
+        let client = make_client(base_url, default_time_limit);
 
-        let (authenticated, session_id) = client
-            .connect(signer, expected_peer_id.clone().into(), cancel_rx)
+        let result = client
+            .connect_local(signer, expected_peer_id.clone().into(), js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 
-        Ok((authenticated, session_id, cancel_tx))
+        // Spawn background tasks
+        wasm_bindgen_futures::spawn_local(result.poll_task);
+        wasm_bindgen_futures::spawn_local(result.send_task);
+
+        Ok((result.authenticated, result.session_id))
     }
 
     /// Connect using discovery and return the raw `Authenticated` connection.
-    ///
-    /// Returns the cancel guard alongside the connection — the caller _must_
-    /// keep it alive for as long as the background poll/send tasks should run.
     pub(crate) async fn connect_discover_authenticated(
         base_url: &str,
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<
-        (
-            Authenticated<WasmLongPollConnection, Local>,
-            SessionId,
-            async_channel::Sender<()>,
-        ),
-        LongPollConnectionError,
-    > {
+    ) -> Result<(Authenticated<WasmLongPollConnection, Local>, SessionId), LongPollConnectionError>
+    {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
-        let client = WasmHttpLongPollClient::new(base_url, default_time_limit);
+        let client = make_client(base_url, default_time_limit);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
-        let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
 
-        let (authenticated, session_id) = client
-            .connect_discover(signer, &service_name, cancel_rx)
+        let result = client
+            .connect_discover_local(signer, &service_name, js_now())
             .await
             .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
 
-        Ok((authenticated, session_id, cancel_tx))
+        // Spawn background tasks
+        wasm_bindgen_futures::spawn_local(result.poll_task);
+        wasm_bindgen_futures::spawn_local(result.send_task);
+
+        Ok((result.authenticated, result.session_id))
     }
 }
 

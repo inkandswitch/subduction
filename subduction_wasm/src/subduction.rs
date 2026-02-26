@@ -96,18 +96,12 @@ pub struct WasmSubduction {
         >,
     >,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
-
-    /// Keeps HTTP long-poll background tasks alive. Each entry corresponds to
-    /// the external cancel channel sender for one long-poll connection. Cleared
-    /// on `disconnectAll`.
-    lp_cancel_guards: alloc::rc::Rc<async_lock::Mutex<alloc::vec::Vec<async_channel::Sender<()>>>>,
 }
 
 impl core::fmt::Debug for WasmSubduction {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("WasmSubduction")
             .field("js_storage", &self.js_storage)
-            .field("lp_cancel_guards", &"[..]")
             .finish_non_exhaustive()
     }
 }
@@ -173,11 +167,7 @@ impl WasmSubduction {
             }
         });
 
-        Self {
-            core,
-            js_storage,
-            lp_cancel_guards: alloc::rc::Rc::new(async_lock::Mutex::new(alloc::vec::Vec::new())),
-        }
+        Self { core, js_storage }
     }
 
     /// Hydrate a [`Subduction`] instance from external storage.
@@ -240,11 +230,7 @@ impl WasmSubduction {
             }
         });
 
-        Ok(Self {
-            core,
-            js_storage,
-            lp_cancel_guards: alloc::rc::Rc::new(async_lock::Mutex::new(alloc::vec::Vec::new())),
-        })
+        Ok(Self { core, js_storage })
     }
 
     /// Add a Sedimentree.
@@ -382,15 +368,13 @@ impl WasmSubduction {
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
-        let (authenticated, _session_id, cancel_guard) = WasmLongPoll::connect_authenticated(
+        let (authenticated, _session_id) = WasmLongPoll::connect_authenticated(
             base_url,
             signer,
             expected_peer_id,
             timeout_milliseconds.unwrap_or(30_000),
         )
         .await?;
-
-        self.lp_cancel_guards.lock().await.push(cancel_guard);
 
         let peer_id = authenticated.peer_id();
         self.core
@@ -421,16 +405,13 @@ impl WasmSubduction {
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
-        let (authenticated, _session_id, cancel_guard) =
-            WasmLongPoll::connect_discover_authenticated(
-                base_url,
-                signer,
-                timeout_milliseconds,
-                service_name,
-            )
-            .await?;
-
-        self.lp_cancel_guards.lock().await.push(cancel_guard);
+        let (authenticated, _session_id) = WasmLongPoll::connect_discover_authenticated(
+            base_url,
+            signer,
+            timeout_milliseconds,
+            service_name,
+        )
+        .await?;
 
         let peer_id = authenticated.peer_id();
         self.core
@@ -446,8 +427,6 @@ impl WasmSubduction {
     /// Returns a [`WasmDisconnectionError`] if disconnection was not graceful.
     #[wasm_bindgen(js_name = disconnectAll)]
     pub async fn disconnect_all(&self) -> Result<(), WasmDisconnectionError> {
-        // Clear long-poll cancel guards so background tasks stop
-        self.lp_cancel_guards.lock().await.clear();
         Ok(self.core.disconnect_all().await?)
     }
 

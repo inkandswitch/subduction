@@ -1,7 +1,7 @@
 //! Generic HTTP long-poll client.
 //!
 //! Connects to a Subduction server via HTTP long-poll, performing the
-//! Ed25519 handshake and spawning background tasks for send and recv.
+//! Ed25519 handshake and returning background task futures for send and recv.
 //!
 //! # Architecture
 //!
@@ -19,21 +19,22 @@
 //! │  pending map, and request ID generation.                 │
 //! └──────────────────────────────────────────────────────────┘
 //! ```
+//!
+//! The client returns background futures rather than spawning them, leaving
+//! the caller to decide how to run them (e.g., `tokio::spawn`, `spawn_local`).
 
 use alloc::{format, string::String, vec::Vec};
 use core::time::Duration;
 
-use future_form::Sendable;
+use future_form::{FutureForm, Local, Sendable};
 use futures::{
     FutureExt,
-    future::{BoxFuture, Either, select},
+    future::{Either, select},
     pin_mut,
 };
 use subduction_core::{
     connection::{
-        authenticated::Authenticated,
         handshake::{self, Audience, HandshakeMessage},
-        manager::Spawn,
         message::Message,
         timeout::Timeout,
     },
@@ -47,200 +48,224 @@ use crate::{
     http_client::HttpClient, session::SessionId,
 };
 
+/// Result of a successful connection, containing the authenticated connection
+/// and background task futures that the caller must spawn.
+pub struct ConnectResult<K: future_form::FutureForm, O>
+where
+    HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+{
+    /// The authenticated connection, ready for registration with Subduction.
+    pub authenticated:
+        subduction_core::connection::authenticated::Authenticated<HttpLongPollConnection<O>, K>,
+
+    /// The session ID assigned by the server.
+    pub session_id: SessionId,
+
+    /// Background recv-polling task. Must be spawned to drive inbound messages.
+    pub poll_task: K::Future<'static, ()>,
+
+    /// Background send task. Must be spawned to drive outbound messages.
+    pub send_task: K::Future<'static, ()>,
+}
+
+impl<K: future_form::FutureForm, O> core::fmt::Debug for ConnectResult<K, O>
+where
+    HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+{
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("ConnectResult")
+            .field("session_id", &self.session_id)
+            .finish_non_exhaustive()
+    }
+}
+
 /// An HTTP long-poll client that connects to a Subduction server.
 ///
-/// After connecting, use the returned [`HttpLongPollConnection`] which
-/// implements [`Connection<Sendable>`](subduction_core::connection::Connection).
+/// After connecting, spawn the returned [`ConnectResult::poll_task`] and
+/// [`ConnectResult::send_task`] futures to drive the connection.
 ///
 /// # Type Parameters
 ///
 /// - `H`: The HTTP client implementation
 /// - `O`: The timeout strategy
-/// - `S`: The task spawner
 #[derive(Debug, Clone)]
-pub struct HttpLongPollClient<H, O, S> {
+pub struct HttpLongPollClient<H, O> {
     base_url: String,
     http: H,
     timeout: O,
-    spawner: S,
     default_time_limit: Duration,
 }
 
-impl<H, O, S> HttpLongPollClient<H, O, S> {
+impl<H, O> HttpLongPollClient<H, O> {
     /// Create a new HTTP long-poll client.
     ///
     /// - `base_url`: The server's base URL, e.g., `http://localhost:8080`.
     /// - `http`: The HTTP client implementation.
     /// - `timeout`: The timeout strategy.
-    /// - `spawner`: The task spawner for background send/recv loops.
     /// - `default_time_limit`: Default timeout for call operations.
     #[must_use]
-    pub fn new(
-        base_url: &str,
-        http: H,
-        timeout: O,
-        spawner: S,
-        default_time_limit: Duration,
-    ) -> Self {
+    pub fn new(base_url: &str, http: H, timeout: O, default_time_limit: Duration) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
             timeout,
-            spawner,
             default_time_limit,
         }
     }
 }
 
-impl<H, O, S> HttpLongPollClient<H, O, S>
-where
-    H: HttpClient<Sendable> + Send + Sync + 'static,
-    O: Timeout<Sendable> + Send + Sync + 'static,
-    S: Spawn<Sendable> + Clone + Send + Sync + 'static,
-{
-    /// Connect to the server using discovery mode.
-    ///
-    /// Performs the Ed25519 handshake, then spawns background tasks for
-    /// sending and receiving messages.
-    ///
-    /// The `cancel` future resolves when the client should shut down.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ClientError`] if the handshake or connection setup fails.
-    pub async fn connect_discover<Sig, Cancel>(
-        &self,
-        signer: &Sig,
-        service_name: &str,
-        cancel: Cancel,
-    ) -> Result<
-        (
-            Authenticated<HttpLongPollConnection<O>, Sendable>,
-            SessionId,
-        ),
-        ClientError,
-    >
-    where
-        Sig: Signer<Sendable>,
-        Cancel: core::future::Future<Output = ()> + Send + 'static,
-    {
-        let audience = Audience::discover(service_name.as_bytes());
-        self.connect_inner(signer, audience, cancel).await
-    }
+// ---------------------------------------------------------------------------
+// Connect methods stamped out for Sendable and Local
+// ---------------------------------------------------------------------------
 
-    /// Connect to the server with a known peer ID.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`ClientError`] if the handshake or connection setup fails.
-    pub async fn connect<Sig, Cancel>(
-        &self,
-        signer: &Sig,
-        expected_peer_id: PeerId,
-        cancel: Cancel,
-    ) -> Result<
-        (
-            Authenticated<HttpLongPollConnection<O>, Sendable>,
-            SessionId,
-        ),
-        ClientError,
-    >
-    where
-        Sig: Signer<Sendable>,
-        Cancel: core::future::Future<Output = ()> + Send + 'static,
-    {
-        let audience = Audience::known(expected_peer_id);
-        self.connect_inner(signer, audience, cancel).await
-    }
+/// Generates connect methods for a concrete [`FutureForm`] variant.
+///
+/// The only differences between `Sendable` and `Local` are the concrete
+/// `K` type, `.boxed()` vs `.boxed_local()` for task futures, extra
+/// `Send + Sync` bounds for `Sendable`, and the public method names
+/// (`connect` / `connect_local`, `connect_discover` / `connect_discover_local`).
+macro_rules! impl_connect {
+    ($K:ty, $box_fn:ident, $connect:ident, $discover:ident, $inner:ident $(, $extra_bounds:tt)*) => {
+        impl<H, O> HttpLongPollClient<H, O>
+        where
+            H: HttpClient<$K> $(+ $extra_bounds)* + 'static,
+            O: Timeout<$K> $(+ $extra_bounds)* + 'static,
+        {
+            /// Connect to the server using discovery mode.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`ClientError`] if the handshake or connection setup fails.
+            pub async fn $discover<Sig: Signer<$K>>(
+                &self,
+                signer: &Sig,
+                service_name: &str,
+                now: TimestampSeconds,
+            ) -> Result<ConnectResult<$K, O>, ClientError> {
+                let audience = Audience::discover(service_name.as_bytes());
+                self.$inner(signer, audience, now).await
+            }
 
-    async fn connect_inner<Sig, Cancel>(
-        &self,
-        signer: &Sig,
-        audience: Audience,
-        cancel: Cancel,
-    ) -> Result<
-        (
-            Authenticated<HttpLongPollConnection<O>, Sendable>,
-            SessionId,
-        ),
-        ClientError,
-    >
-    where
-        Sig: Signer<Sendable>,
-        Cancel: core::future::Future<Output = ()> + Send + 'static,
-    {
-        let now = TimestampSeconds::now();
-        let nonce = Nonce::random();
+            /// Connect to the server with a known peer ID.
+            ///
+            /// # Errors
+            ///
+            /// Returns [`ClientError`] if the handshake or connection setup fails.
+            pub async fn $connect<Sig: Signer<$K>>(
+                &self,
+                signer: &Sig,
+                expected_peer_id: PeerId,
+                now: TimestampSeconds,
+            ) -> Result<ConnectResult<$K, O>, ClientError> {
+                let audience = Audience::known(expected_peer_id);
+                self.$inner(signer, audience, now).await
+            }
 
-        let mut client_handshake = ClientHttpHandshake {
-            http: self.http.clone(),
-            base_url: self.base_url.clone(),
-            session_id: None,
-            response_bytes: None,
-        };
+            async fn $inner<Sig: Signer<$K>>(
+                &self,
+                signer: &Sig,
+                audience: Audience,
+                now: TimestampSeconds,
+            ) -> Result<ConnectResult<$K, O>, ClientError> {
+                let nonce = Nonce::random();
 
-        let default_time_limit = self.default_time_limit;
-        let timeout = self.timeout.clone();
-        let base_url = self.base_url.clone();
-        let http = self.http.clone();
-        let spawner = self.spawner.clone();
+                let mut client_handshake = ClientHttpHandshake::<$K, H> {
+                    http: self.http.clone(),
+                    base_url: self.base_url.clone(),
+                    session_id: None,
+                    response_bytes: None,
+                    _k: core::marker::PhantomData,
+                };
 
-        let (authenticated, session_id) = handshake::initiate::<Sendable, _, _, _, _>(
-            &mut client_handshake,
-            |handshake, peer_id| {
-                #[allow(clippy::expect_used)]
-                let session_id = handshake
-                    .session_id
-                    .expect("session_id set during handshake send");
+                let default_time_limit = self.default_time_limit;
+                let timeout = self.timeout.clone();
+                let base_url = self.base_url.clone();
+                let http = self.http.clone();
 
-                let conn =
-                    HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
+                let (authenticated, session_id) = handshake::initiate::<$K, _, _, _, _>(
+                    &mut client_handshake,
+                    |handshake, peer_id| {
+                        #[allow(clippy::expect_used)]
+                        let session_id = handshake
+                            .session_id
+                            .expect("session_id set during handshake send");
 
-                // Use a shared channel for cancellation — lightweight and runtime-agnostic.
+                        let conn = HttpLongPollConnection::new(
+                            peer_id,
+                            default_time_limit,
+                            timeout.clone(),
+                        );
+
+                        (conn, session_id)
+                    },
+                    signer,
+                    audience,
+                    now,
+                    nonce,
+                )
+                .await
+                .map_err(|e| ClientError::Authentication(e.to_string()))?;
+
+                let conn = authenticated.inner().clone();
+
                 let (cancel_tx, cancel_rx) = async_channel::bounded::<()>(1);
                 let send_cancel_rx = cancel_rx.clone();
 
-                // Spawn the recv polling task
-                let poll_conn = conn.clone();
+                conn.set_cancel_guard(cancel_tx).await;
+
                 let poll_url = format!("{base_url}/lp/recv");
                 let poll_http = http.clone();
+                let poll_conn = conn.clone();
 
-                spawner.spawn(Box::pin(async move {
+                let poll_task = async move {
                     poll_loop(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
-                }));
+                }
+                .$box_fn();
 
-                // Spawn the send task
-                let send_conn = conn.clone();
                 let send_url = format!("{base_url}/lp/send");
                 let send_http = http;
+                let send_conn = conn;
 
-                spawner.spawn(Box::pin(async move {
+                let send_task = async move {
                     send_loop(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
-                }));
+                }
+                .$box_fn();
 
-                // Drive the external cancel signal into our internal channel
-                spawner.spawn(Box::pin(async move {
-                    cancel.await;
-                    drop(cancel_tx);
-                }));
-
-                (conn, session_id)
-            },
-            signer,
-            audience,
-            now,
-            nonce,
-        )
-        .await
-        .map_err(|e| ClientError::Authentication(e.to_string()))?;
-
-        Ok((authenticated, session_id))
-    }
+                Ok(ConnectResult {
+                    authenticated,
+                    session_id,
+                    poll_task,
+                    send_task,
+                })
+            }
+        }
+    };
 }
+
+impl_connect!(
+    Sendable,
+    boxed,
+    connect,
+    connect_discover,
+    connect_inner,
+    Send,
+    Sync
+);
+impl_connect!(
+    Local,
+    boxed_local,
+    connect_local,
+    connect_discover_local,
+    connect_inner_local
+);
+
+// ---------------------------------------------------------------------------
+// Background tasks (single generic implementation)
+// ---------------------------------------------------------------------------
 
 /// Background task that continuously polls `POST /lp/recv` and pushes
 /// messages into the connection's inbound channel.
-async fn poll_loop<H: HttpClient<Sendable>, O: Timeout<Sendable>>(
+async fn poll_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
     http: H,
     url: String,
     session_id: SessionId,
@@ -298,7 +323,7 @@ async fn poll_loop<H: HttpClient<Sendable>, O: Timeout<Sendable>>(
 
 /// Background task that drains the connection's outbound channel and sends
 /// each message via `POST /lp/send`.
-async fn send_loop<H: HttpClient<Sendable>, O: Timeout<Sendable>>(
+async fn send_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
     http: H,
     url: String,
     session_id: SessionId,
@@ -346,6 +371,10 @@ async fn send_loop<H: HttpClient<Sendable>, O: Timeout<Sendable>>(
     }
 }
 
+// ---------------------------------------------------------------------------
+// Handshake adapter (single generic implementation)
+// ---------------------------------------------------------------------------
+
 /// Client-side handshake adapter for HTTP.
 ///
 /// In the `initiate` flow:
@@ -353,29 +382,30 @@ async fn send_loop<H: HttpClient<Sendable>, O: Timeout<Sendable>>(
 /// 2. `recv()` — returns the response bytes captured during `send()`
 ///
 /// This maps the streaming `Handshake` interface to a single HTTP round-trip.
-struct ClientHttpHandshake<H: HttpClient<Sendable>> {
+struct ClientHttpHandshake<K: future_form::FutureForm, H: HttpClient<K>> {
     http: H,
     base_url: String,
     session_id: Option<SessionId>,
     response_bytes: Option<Vec<u8>>,
+    _k: core::marker::PhantomData<K>,
 }
 
-impl<H: HttpClient<Sendable> + Send> subduction_core::connection::handshake::Handshake<Sendable>
-    for &mut ClientHttpHandshake<H>
+#[future_form::future_form(Sendable where H: Send, Local)]
+impl<K: future_form::FutureForm, H: HttpClient<K>> handshake::Handshake<K>
+    for &mut ClientHttpHandshake<K, H>
 {
     type Error = ClientError;
 
-    fn send(&mut self, bytes: Vec<u8>) -> BoxFuture<'_, Result<(), Self::Error>> {
+    fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>> {
         let url = format!("{}/lp/handshake", self.base_url);
         let http = self.http.clone();
 
-        async move {
+        K::from_future(async move {
             let resp = http
                 .post(&url, &[("content-type", "application/octet-stream")], bytes)
                 .await
                 .map_err(|e| ClientError::Request(e.to_string()))?;
 
-            // Extract session ID from response header
             if let Some(sid_str) = resp.header(SESSION_ID_HEADER) {
                 self.session_id = SessionId::from_hex(sid_str);
             }
@@ -383,7 +413,9 @@ impl<H: HttpClient<Sendable> + Send> subduction_core::connection::handshake::Han
             if resp.status == 401 {
                 return Err(ClientError::HandshakeRejected {
                     reason: match HandshakeMessage::try_decode(&resp.body) {
-                        Ok(HandshakeMessage::Rejection(r)) => format!("{:?}", r.reason),
+                        Ok(HandshakeMessage::Rejection(r)) => {
+                            format!("{:?}", r.reason)
+                        }
                         _ => String::from_utf8_lossy(&resp.body).into_owned(),
                     },
                 });
@@ -396,23 +428,19 @@ impl<H: HttpClient<Sendable> + Send> subduction_core::connection::handshake::Han
                 });
             }
 
-            // Stash the response bytes for the subsequent recv() call
             self.response_bytes = Some(resp.body);
-
             Ok(())
-        }
-        .boxed()
+        })
     }
 
-    fn recv(&mut self) -> BoxFuture<'_, Result<Vec<u8>, Self::Error>> {
+    fn recv(&mut self) -> K::Future<'_, Result<Vec<u8>, Self::Error>> {
         let bytes = self.response_bytes.take();
-        async move {
+        K::from_future(async move {
             bytes.ok_or_else(|| {
                 ClientError::HandshakeDecode(
                     "no response bytes available (send not called?)".into(),
                 )
             })
-        }
-        .boxed()
+        })
     }
 }

@@ -23,30 +23,13 @@ futures-timer = { workspace = true }
 futures-util = { workspace = true }
 http-body-util = { workspace = true, optional = true }
 hyper = { workspace = true, features = ["http1", "server"], optional = true }
-js-sys = { workspace = true, optional = true }
-rand = { workspace = true }
+rand = { workspace = true, features = ["getrandom"] }
 reqwest = { workspace = true, features = ["rustls-tls"], optional = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
-wasm-bindgen = { workspace = true, optional = true }
-wasm-bindgen-futures = { workspace = true, optional = true }
-
-[dependencies.web-sys]
-version = "0.3.81"
-default-features = false
-optional = true
-features = [
-  "Headers",
-  "Request",
-  "RequestInit",
-  "RequestMode",
-  "Response",
-  "Window",
-  "WorkerGlobalScope",
-]
 
 [target.'cfg(target_family = "wasm")'.dependencies]
 getrandom = { version = "0.2", features = ["js"] }
@@ -70,15 +53,6 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"]
 default = ["std", "server", "reqwest"]
 reqwest = ["dep:reqwest", "std"]
 server = ["dep:http-body-util", "dep:hyper", "std"]
-wasm = [
-  "dep:js-sys",
-  "dep:wasm-bindgen",
-  "dep:wasm-bindgen-futures",
-  "dep:web-sys",
-  "rand/std",
-  "rand/std_rng",
-  "subduction_core/std",
-]
 std = [
   "async-channel/std",
   "async-lock/std",

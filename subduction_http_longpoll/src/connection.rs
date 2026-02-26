@@ -21,7 +21,8 @@ use core::{
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
-use futures::{FutureExt, channel::oneshot};
+use futures::channel::oneshot;
+use rand::{RngCore, rngs::OsRng};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
@@ -88,8 +89,8 @@ impl<O> HttpLongPollConnection<O> {
     pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
-        let starting_counter = rand::random::<u64>();
-        let chan_id = rand::random::<u64>();
+        let starting_counter = OsRng.next_u64();
+        let chan_id = OsRng.next_u64();
 
         Self {
             inner: Arc::new(Inner {
@@ -180,140 +181,120 @@ impl<O> HttpLongPollConnection<O> {
     }
 }
 
-/// Macro to avoid duplicating the Connection impl body for Sendable and Local.
-macro_rules! impl_connection {
-    ($kind:ty, $box_fn:ident $(, $extra_bounds:tt)*) => {
-        impl<O: Timeout<$kind> $(+ $extra_bounds)*> Connection<$kind> for HttpLongPollConnection<O> {
-            type SendError = SendError;
-            type RecvError = RecvError;
-            type CallError = CallError;
-            type DisconnectionError = DisconnectionError;
+#[future_form::future_form(Sendable where O: Send + Sync, Local)]
+impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type CallError = CallError;
+    type DisconnectionError = DisconnectionError;
 
-            fn peer_id(&self) -> PeerId {
-                self.inner.peer_id
+    fn peer_id(&self) -> PeerId {
+        self.inner.peer_id
+    }
+
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
+        K::from_future(async {
+            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated request id {counter:?}");
+            RequestId {
+                requestor: self.inner.peer_id,
+                nonce: counter,
             }
+        })
+    }
 
-            fn next_request_id(&self) -> <$kind as FutureForm>::Future<'_, RequestId> {
-                async {
-                    let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
-                    tracing::debug!("generated request id {counter:?}");
-                    RequestId {
-                        requestor: self.inner.peer_id,
-                        nonce: counter,
-                    }
+    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+        tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
+        let conn = self.clone();
+        K::from_future(async move {
+            conn.close();
+            Ok(())
+        })
+    }
+
+    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
+        tracing::debug!(
+            "http-lp: sending outbound message id {:?} to peer {}",
+            message.request_id(),
+            self.inner.peer_id
+        );
+
+        let msg = message.clone();
+        let tx = self.inner.outbound_tx.clone();
+        K::from_future(async move {
+            tx.send(msg).await.map_err(|_| SendError)?;
+            Ok(())
+        })
+    }
+
+    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
+        let chan = self.inner.inbound_reader.clone();
+        tracing::debug!(
+            chan_id = self.inner.chan_id,
+            "waiting on recv {:?}",
+            self.inner.peer_id
+        );
+
+        K::from_future(async move {
+            let msg = chan.recv().await.map_err(|_| {
+                tracing::error!("inbound channel closed unexpectedly");
+                RecvError
+            })?;
+
+            tracing::debug!("recv: inbound message {msg:?}");
+            Ok(msg)
+        })
+    }
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        override_timeout: Option<Duration>,
+    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+        let outbound_tx = self.inner.outbound_tx.clone();
+        let timeout = self.inner.timeout.clone();
+        let default_time_limit = self.inner.default_time_limit;
+        let inner = self.inner.clone();
+
+        K::from_future(async move {
+            tracing::debug!("making call with request id {:?}", req.req_id);
+            let req_id = req.req_id;
+
+            let (tx, rx) = oneshot::channel();
+            inner.pending.lock().await.insert(req_id, tx);
+
+            let msg = Message::BatchSyncRequest(req);
+            outbound_tx
+                .send(msg)
+                .await
+                .map_err(|_| CallError::ChannelClosed)?;
+
+            tracing::debug!(
+                chan_id = inner.chan_id,
+                "sent HTTP long-poll request {req_id:?}"
+            );
+
+            let req_timeout = override_timeout.unwrap_or(default_time_limit);
+            let rx_fut = K::from_future(async { rx.await });
+
+            match timeout.timeout(req_timeout, rx_fut).await {
+                Ok(Ok(resp)) => {
+                    tracing::info!("request {req_id:?} completed");
+                    Ok(resp)
                 }
-                .$box_fn()
-            }
-
-            fn disconnect(
-                &self,
-            ) -> <$kind as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
-                tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
-                let conn = self.clone();
-                async move {
-                    conn.close();
-                    Ok(())
+                Ok(Err(e)) => {
+                    tracing::error!("request {req_id:?} failed: {e}");
+                    Err(CallError::ResponseDropped(e))
                 }
-                .$box_fn()
-            }
-
-            fn send(
-                &self,
-                message: &Message,
-            ) -> <$kind as FutureForm>::Future<'_, Result<(), Self::SendError>> {
-                tracing::debug!(
-                    "http-lp: sending outbound message id {:?} to peer {}",
-                    message.request_id(),
-                    self.inner.peer_id
-                );
-
-                let msg = message.clone();
-                let tx = self.inner.outbound_tx.clone();
-                async move {
-                    tx.send(msg).await.map_err(|_| SendError)?;
-                    Ok(())
+                Err(TimedOut) => {
+                    tracing::error!("request {req_id:?} timed out");
+                    inner.pending.lock().await.remove(&req_id);
+                    Err(CallError::Timeout)
                 }
-                .$box_fn()
             }
-
-            fn recv(
-                &self,
-            ) -> <$kind as FutureForm>::Future<'_, Result<Message, Self::RecvError>> {
-                let chan = self.inner.inbound_reader.clone();
-                tracing::debug!(
-                    chan_id = self.inner.chan_id,
-                    "waiting on recv {:?}",
-                    self.inner.peer_id
-                );
-
-                async move {
-                    let msg = chan.recv().await.map_err(|_| {
-                        tracing::error!("inbound channel closed unexpectedly");
-                        RecvError
-                    })?;
-
-                    tracing::debug!("recv: inbound message {msg:?}");
-                    Ok(msg)
-                }
-                .$box_fn()
-            }
-
-            fn call(
-                &self,
-                req: BatchSyncRequest,
-                override_timeout: Option<Duration>,
-            ) -> <$kind as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>>
-            {
-                let outbound_tx = self.inner.outbound_tx.clone();
-                let timeout = self.inner.timeout.clone();
-                let default_time_limit = self.inner.default_time_limit;
-                let inner = self.inner.clone();
-
-                async move {
-                    tracing::debug!("making call with request id {:?}", req.req_id);
-                    let req_id = req.req_id;
-
-                    let (tx, rx) = oneshot::channel();
-                    inner.pending.lock().await.insert(req_id, tx);
-
-                    let msg = Message::BatchSyncRequest(req);
-                    outbound_tx
-                        .send(msg)
-                        .await
-                        .map_err(|_| CallError::ChannelClosed)?;
-
-                    tracing::debug!(
-                        chan_id = inner.chan_id,
-                        "sent HTTP long-poll request {req_id:?}"
-                    );
-
-                    let req_timeout = override_timeout.unwrap_or(default_time_limit);
-                    let rx_fut = async { rx.await }.$box_fn();
-
-                    match timeout.timeout(req_timeout, rx_fut).await {
-                        Ok(Ok(resp)) => {
-                            tracing::info!("request {req_id:?} completed");
-                            Ok(resp)
-                        }
-                        Ok(Err(e)) => {
-                            tracing::error!("request {req_id:?} failed: {e}");
-                            Err(CallError::ResponseDropped(e))
-                        }
-                        Err(TimedOut) => {
-                            tracing::error!("request {req_id:?} timed out");
-                            inner.pending.lock().await.remove(&req_id);
-                            Err(CallError::Timeout)
-                        }
-                    }
-                }
-                .$box_fn()
-            }
-        }
-    };
+        })
+    }
 }
-
-impl_connection!(Sendable, boxed, Send, Sync);
-impl_connection!(Local, boxed_local);
 
 impl<O> PartialEq for HttpLongPollConnection<O> {
     fn eq(&self, other: &Self) -> bool {

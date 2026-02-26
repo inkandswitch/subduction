@@ -1,5 +1,6 @@
 //! JS [`Connection`] interface for Subduction.
 
+pub mod fetch_client;
 mod handshake;
 pub mod longpoll;
 pub mod message;

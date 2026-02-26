@@ -9,6 +9,7 @@ use core::fmt;
 
 use async_lock::Mutex;
 use future_form::Sendable;
+use rand::{RngCore, rngs::OsRng};
 use subduction_core::{
     connection::{authenticated::Authenticated, timeout::Timeout},
     peer::id::PeerId,
@@ -30,7 +31,9 @@ impl SessionId {
     /// Generate a new random session ID.
     #[must_use]
     pub fn random() -> Self {
-        Self(rand::random())
+        let mut bytes = [0u8; 16];
+        OsRng.fill_bytes(&mut bytes);
+        Self(bytes)
     }
 
     /// Encode the session ID as a hex string.

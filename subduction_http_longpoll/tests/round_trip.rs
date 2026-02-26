@@ -33,6 +33,7 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
     subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
@@ -238,19 +239,22 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
         &base_url,
         ReqwestHttpClient::new(),
         FuturesTimerTimeout,
-        TokioSpawn,
         REQUEST_TIMEOUT,
     );
 
-    // Use a future that never resolves — the test controls lifetime via drop.
-    let cancel_fut = futures::future::pending::<()>();
-
-    let (auth, _session_id) = lp_client
-        .connect_discover(&client_signer, SERVICE_NAME, cancel_fut)
+    let result = lp_client
+        .connect_discover(&client_signer, SERVICE_NAME, TimestampSeconds::now())
         .await
         .expect("client connect");
 
-    client.register(auth).await.expect("register");
+    // Spawn background tasks
+    tokio::spawn(result.poll_task);
+    tokio::spawn(result.send_task);
+
+    client
+        .register(result.authenticated)
+        .await
+        .expect("register");
     client
 }
 
@@ -314,18 +318,22 @@ async fn connected_client_known_peer(
         &base_url,
         ReqwestHttpClient::new(),
         FuturesTimerTimeout,
-        TokioSpawn,
         REQUEST_TIMEOUT,
     );
 
-    let cancel_fut = futures::future::pending::<()>();
-
-    let (auth, _session_id) = lp_client
-        .connect(&client_signer, server_peer_id, cancel_fut)
+    let result = lp_client
+        .connect(&client_signer, server_peer_id, TimestampSeconds::now())
         .await
         .expect("client connect with known peer");
 
-    client.register(auth).await.expect("register");
+    // Spawn background tasks
+    tokio::spawn(result.poll_task);
+    tokio::spawn(result.send_task);
+
+    client
+        .register(result.authenticated)
+        .await
+        .expect("register");
     client
 }
 

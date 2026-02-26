@@ -3275,7 +3275,6 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
- "js-sys",
  "rand 0.8.5",
  "reqwest",
  "sedimentree_core",
@@ -3287,9 +3286,6 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
- "wasm-bindgen",
- "wasm-bindgen-futures 0.4.63",
- "web-sys",
 ]
 
 [[package]]
@@ -3340,6 +3336,7 @@ dependencies = [
  "from_js_ref",
  "future_form",
  "futures 0.3.32",
+ "futures-timer",
  "futures-util",
  "getrandom 0.2.17",
  "getrandom 0.3.4",

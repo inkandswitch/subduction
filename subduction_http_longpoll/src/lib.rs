@@ -60,6 +60,8 @@
 
 extern crate alloc;
 
+pub use future_form::Sendable;
+
 pub mod client;
 pub mod connection;
 pub mod error;
@@ -68,9 +70,6 @@ pub mod session;
 
 #[cfg(feature = "server")]
 pub mod server;
-
-#[cfg(feature = "wasm")]
-pub mod wasm_client;
 
 /// Default long-poll timeout in seconds.
 ///

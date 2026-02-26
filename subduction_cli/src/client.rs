@@ -8,13 +8,11 @@ use std::{path::PathBuf, time::Duration};
 use subduction_core::{
     connection::{authenticated::Authenticated, handshake::Audience},
     peer::id::PeerId,
+    timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{client::HttpLongPollClient, http_client::ReqwestHttpClient};
-use subduction_websocket::{
-    timeout::FuturesTimerTimeout,
-    tokio::{TokioSpawn, client::TokioWebSocketClient},
-};
+use subduction_websocket::{timeout::FuturesTimerTimeout, tokio::client::TokioWebSocketClient};
 use tokio_util::sync::CancellationToken;
 use tungstenite::http::Uri;
 
@@ -166,22 +164,13 @@ async fn run_longpoll(
     tracing::info!("Connecting via HTTP long-poll to {base_url}");
 
     let http = ReqwestHttpClient::with_timeout(Duration::from_secs(60));
-    let lp_client = HttpLongPollClient::new(
-        base_url,
-        http,
-        FuturesTimerTimeout,
-        TokioSpawn,
-        timeout_duration,
-    );
+    let lp_client = HttpLongPollClient::new(base_url, http, FuturesTimerTimeout, timeout_duration);
 
-    let cancel = token.clone();
-    let cancel_fut = async move { cancel.cancelled().await };
-
-    let (authenticated, session_id) = match &args.server_peer_id {
+    let result = match &args.server_peer_id {
         Some(id_hex) => {
             let server_id = crate::parse_peer_id(id_hex)?;
             lp_client
-                .connect(signer, server_id, cancel_fut)
+                .connect(signer, server_id, TimestampSeconds::now())
                 .await
                 .map_err(|e| eyre::eyre!("long-poll connect failed: {e}"))?
         }
@@ -191,22 +180,43 @@ async fn run_longpoll(
                 .as_deref()
                 .unwrap_or_else(|| args.server.as_str());
             lp_client
-                .connect_discover(signer, service, cancel_fut)
+                .connect_discover(signer, service, TimestampSeconds::now())
                 .await
                 .map_err(|e| eyre::eyre!("long-poll discover failed: {e}"))?
         }
     };
 
-    let remote_id = authenticated.peer_id();
+    let remote_id = result.authenticated.peer_id();
     tracing::info!("HTTP long-poll connected");
     tracing::info!("Client Peer ID: {peer_id}");
     tracing::info!("Server Peer ID: {remote_id}");
-    tracing::info!("Session: {session_id}");
+    tracing::info!("Session: {}", result.session_id);
+
+    // Spawn background tasks
+    let poll_token = token.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            () = result.poll_task => {}
+            () = poll_token.cancelled() => {
+                tracing::info!("Poll task shutting down...");
+            }
+        }
+    });
+
+    let send_token = token.clone();
+    tokio::spawn(async move {
+        tokio::select! {
+            () = result.send_task => {}
+            () = send_token.cancelled() => {
+                tracing::info!("Send task shutting down...");
+            }
+        }
+    });
 
     // The authenticated connection is ready for registration with Subduction.
     // For now, hold it alive until shutdown. A full client would create a
     // Subduction instance and call register(authenticated.map(UnifiedTransport::HttpLongPoll)).
-    let _auth = authenticated;
+    let _auth = result.authenticated;
 
     token.cancelled().await;
     tracing::info!("Shutting down HTTP long-poll client...");
