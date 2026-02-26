@@ -58,9 +58,17 @@ pub enum ServerError {
     #[error("channel send error: {0}")]
     ChanSend(Box<async_channel::SendError<subduction_core::connection::message::Message>>),
 
-    /// Handshake protocol error.
-    #[error("handshake error: {0}")]
-    Handshake(alloc::string::String),
+    /// The HTTP handshake adapter produced no response bytes.
+    #[error("handshake produced no response")]
+    HandshakeNoResponse,
+
+    /// The HTTP handshake adapter had no challenge bytes to yield.
+    #[error("handshake has no challenge bytes")]
+    HandshakeNoChallenge,
+
+    /// Failed to build an HTTP response.
+    #[error(transparent)]
+    HttpBuild(#[from] hyper::http::Error),
 }
 
 /// Errors while connecting as a client.

@@ -2,7 +2,6 @@
 
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
-mod client;
 mod key;
 pub mod metrics;
 mod purge;
@@ -14,7 +13,6 @@ use std::sync::{
     Arc,
     atomic::{AtomicUsize, Ordering},
 };
-use subduction_core::peer::id::PeerId;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{EnvFilter, prelude::*, util::SubscriberInitExt};
 
@@ -32,7 +30,6 @@ async fn main() -> eyre::Result<()> {
 
     match args.command {
         Command::Server(server_args) => server::run(server_args, token).await?,
-        Command::Client(client_args) => client::run(client_args, token).await?,
         Command::Purge(purge_args) => purge::run(purge_args).await?,
     }
 
@@ -145,11 +142,6 @@ fn setup_signal_handlers() -> CancellationToken {
     token
 }
 
-pub(crate) fn parse_peer_id(s: &str) -> eyre::Result<PeerId> {
-    let arr = parse_32_bytes(s, "Peer ID")?;
-    Ok(PeerId::new(arr))
-}
-
 pub(crate) fn parse_32_bytes(s: &str, name: &str) -> eyre::Result<[u8; 32]> {
     let bytes = hex::decode(s)?;
     if bytes.len() != 32 {
@@ -172,10 +164,6 @@ enum Command {
     /// Start a Subduction node with WebSocket server
     #[command(name = "server", alias = "start")]
     Server(server::ServerArgs),
-
-    /// Start a Subduction node connecting to a WebSocket server
-    #[command(name = "client", alias = "connect")]
-    Client(client::ClientArgs),
 
     /// Purge all storage data (destructive)
     #[command(name = "purge")]

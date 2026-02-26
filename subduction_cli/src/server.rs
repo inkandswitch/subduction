@@ -539,7 +539,13 @@ async fn handle_http_longpoll(
                 return Ok::<_, hyper::Error>(resp);
             }
 
-            let resp = handler.handle(req).await?;
+            let resp = match handler.handle(req).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tracing::error!("fatal handler error: {e}");
+                    hyper::Response::new(Full::new(Bytes::from(e.to_string())))
+                }
+            };
 
             // After a successful handshake, register with Subduction
             if resp.status() == hyper::StatusCode::OK

@@ -11,9 +11,43 @@ use thiserror::Error;
 use wasm_bindgen::JsCast;
 
 /// Error type for the `web_sys::fetch`-backed HTTP client.
+///
+/// Variants capture the phase at which the fetch failed. Inner values are
+/// stringified `JsValue`s because `JsValue` is `!Send`.
 #[derive(Debug, Error)]
-#[error("{0}")]
-pub struct FetchHttpError(String);
+pub enum FetchHttpError {
+    /// Failed to create the `Headers` object.
+    #[error("Headers::new failed: {0}")]
+    HeadersInit(String),
+
+    /// Failed to set a header on the request.
+    #[error("header set failed: {0}")]
+    HeaderSet(String),
+
+    /// Failed to construct the `Request` object.
+    #[error("Request::new failed: {0}")]
+    RequestInit(String),
+
+    /// The `fetch()` call could not be dispatched (no global scope).
+    #[error("fetch dispatch failed: {0}")]
+    FetchDispatch(String),
+
+    /// The `fetch()` promise was rejected.
+    #[error("fetch rejected: {0}")]
+    FetchRejected(String),
+
+    /// The JS value returned by fetch was not a `Response`.
+    #[error("response is not a Response object")]
+    NotAResponse,
+
+    /// Failed to start reading the response body.
+    #[error("arrayBuffer() failed: {0}")]
+    BodyInit(String),
+
+    /// Failed to read the response body to completion.
+    #[error("body read failed: {0}")]
+    BodyRead(String),
+}
 
 /// A [`web_sys::fetch`]-backed implementation of [`HttpClient`] for browser
 /// and service-worker environments.
@@ -64,28 +98,28 @@ impl HttpClient<future_form::Local> for FetchHttpClient {
 
             // Set headers
             let js_headers = web_sys::Headers::new()
-                .map_err(|e| FetchHttpError(format!("Headers::new failed: {e:?}")))?;
+                .map_err(|e| FetchHttpError::HeadersInit(format!("{e:?}")))?;
             for (name, value) in &headers {
                 js_headers
                     .set(name, value)
-                    .map_err(|e| FetchHttpError(format!("header set failed: {e:?}")))?;
+                    .map_err(|e| FetchHttpError::HeaderSet(format!("{e:?}")))?;
             }
             opts.set_headers(&js_headers);
 
             let request = web_sys::Request::new_with_str_and_init(&url, &opts)
-                .map_err(|e| FetchHttpError(format!("Request::new failed: {e:?}")))?;
+                .map_err(|e| FetchHttpError::RequestInit(format!("{e:?}")))?;
 
             // Call fetch — works in both Window and WorkerGlobalScope
             let promise = fetch_global(&request)
-                .map_err(|e| FetchHttpError(format!("fetch failed: {e:?}")))?;
+                .map_err(|e| FetchHttpError::FetchDispatch(format!("{e:?}")))?;
 
             let resp_value = wasm_bindgen_futures::JsFuture::from(promise)
                 .await
-                .map_err(|e| FetchHttpError(format!("fetch rejected: {e:?}")))?;
+                .map_err(|e| FetchHttpError::FetchRejected(format!("{e:?}")))?;
 
             let resp: web_sys::Response = resp_value
                 .dyn_into()
-                .map_err(|_| FetchHttpError("response is not a Response".into()))?;
+                .map_err(|_| FetchHttpError::NotAResponse)?;
 
             let status = resp.status();
 
@@ -104,11 +138,11 @@ impl HttpClient<future_form::Local> for FetchHttpClient {
             // Read body as ArrayBuffer
             let body_promise = resp
                 .array_buffer()
-                .map_err(|e| FetchHttpError(format!("arrayBuffer() failed: {e:?}")))?;
+                .map_err(|e| FetchHttpError::BodyInit(format!("{e:?}")))?;
 
             let body_value = wasm_bindgen_futures::JsFuture::from(body_promise)
                 .await
-                .map_err(|e| FetchHttpError(format!("body read failed: {e:?}")))?;
+                .map_err(|e| FetchHttpError::BodyRead(format!("{e:?}")))?;
 
             let body_array = js_sys::Uint8Array::new(&body_value);
             let body_bytes = body_array.to_vec();

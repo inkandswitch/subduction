@@ -108,21 +108,18 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
     /// Route an incoming HTTP request to the appropriate handler.
     ///
-    /// Returns an HTTP response. Errors are mapped to appropriate status codes.
+    /// Returns an HTTP response. Application errors are mapped to
+    /// appropriate status codes — the only way this returns `Err` is if
+    /// hyper's response builder itself fails (a bug, not a runtime condition).
     ///
     /// # Errors
     ///
-    /// Returns `hyper::Error` if the underlying HTTP transport fails.
-    ///
-    /// # Panics
-    ///
-    /// Panics if `Response::builder()` fails, which cannot happen with
-    /// the static headers used here.
-    #[allow(clippy::expect_used)]
+    /// Returns `ServerError` if neither the handler nor the fallback
+    /// error response could be built.
     pub async fn handle(
         &self,
         req: Request<Incoming>,
-    ) -> Result<Response<Full<Bytes>>, hyper::Error> {
+    ) -> Result<Response<Full<Bytes>>, ServerError> {
         let method = req.method().clone();
         let path = req.uri().path();
 
@@ -133,17 +130,17 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
             (&Method::POST, "/lp/send") => self.handle_send(req).await,
             (&Method::POST, "/lp/recv") => self.handle_recv(req).await,
             (&Method::POST, "/lp/disconnect") => self.handle_disconnect(req).await,
-            _ => Ok(Response::builder()
+            _ => Response::builder()
                 .status(StatusCode::NOT_FOUND)
                 .body(Full::new(Bytes::from_static(b"not found")))
-                .expect("static response")),
+                .map_err(ServerError::from),
         };
 
         match response {
             Ok(resp) => Ok(resp),
             Err(e) => {
                 tracing::error!("handler error: {e}");
-                Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, &e))
+                Ok(error_response(StatusCode::INTERNAL_SERVER_ERROR, &e)?)
             }
         }
     }
@@ -152,7 +149,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     ///
     /// The client sends `Signed<Challenge>` bytes in the request body.
     /// The server responds with `Signed<Response>` bytes and a session ID header.
-    #[allow(clippy::expect_used)]
     async fn handle_handshake(
         &self,
         req: Request<Incoming>,
@@ -208,15 +204,13 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
                     )
                     .await;
 
-                let response_bytes = response_bytes
-                    .ok_or_else(|| ServerError::Handshake("no response generated".into()))?;
+                let response_bytes = response_bytes.ok_or(ServerError::HandshakeNoResponse)?;
 
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header(SESSION_ID_HEADER, session_id.to_hex())
                     .header("content-type", "application/octet-stream")
-                    .body(Full::new(Bytes::from(response_bytes)))
-                    .expect("valid response"))
+                    .body(Full::new(Bytes::from(response_bytes)))?)
             }
             Err(e) => {
                 tracing::warn!("handshake failed: {e}");
@@ -225,13 +219,11 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
                     Ok(Response::builder()
                         .status(StatusCode::UNAUTHORIZED)
                         .header("content-type", "application/octet-stream")
-                        .body(Full::new(Bytes::from(response_bytes)))
-                        .expect("valid response"))
+                        .body(Full::new(Bytes::from(response_bytes)))?)
                 } else {
                     Ok(Response::builder()
                         .status(StatusCode::UNAUTHORIZED)
-                        .body(Full::new(Bytes::from(e.to_string())))
-                        .expect("valid response"))
+                        .body(Full::new(Bytes::from(e.to_string())))?)
                 }
             }
         }
@@ -240,7 +232,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     /// Handle `POST /lp/send`.
     ///
     /// The client sends a binary-encoded `Message` in the body.
-    #[allow(clippy::expect_used)]
     async fn handle_send(
         &self,
         req: Request<Incoming>,
@@ -271,14 +262,12 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
         Ok(Response::builder()
             .status(StatusCode::NO_CONTENT)
-            .body(Full::new(Bytes::new()))
-            .expect("valid response"))
+            .body(Full::new(Bytes::new()))?)
     }
 
     /// Handle `POST /lp/recv`.
     ///
     /// Long-polls until an outbound message is available or the poll timeout expires.
-    #[allow(clippy::expect_used)]
     async fn handle_recv(
         &self,
         req: Request<Incoming>,
@@ -301,28 +290,24 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("content-type", "application/octet-stream")
-                    .body(Full::new(Bytes::from(encoded)))
-                    .expect("valid response"))
+                    .body(Full::new(Bytes::from(encoded)))?)
             }
             Ok(Err(_)) => {
                 tracing::debug!("POST /lp/recv: channel closed");
                 Ok(Response::builder()
                     .status(StatusCode::GONE)
-                    .body(Full::new(Bytes::from_static(b"session closed")))
-                    .expect("valid response"))
+                    .body(Full::new(Bytes::from_static(b"session closed")))?)
             }
             Err(_timed_out) => {
                 tracing::debug!("POST /lp/recv: poll timeout");
                 Ok(Response::builder()
                     .status(StatusCode::NO_CONTENT)
-                    .body(Full::new(Bytes::new()))
-                    .expect("valid response"))
+                    .body(Full::new(Bytes::new()))?)
             }
         }
     }
 
     /// Handle `POST /lp/disconnect`.
-    #[allow(clippy::expect_used)]
     async fn handle_disconnect(
         &self,
         req: Request<Incoming>,
@@ -339,8 +324,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
         Ok(Response::builder()
             .status(StatusCode::NO_CONTENT)
-            .body(Full::new(Bytes::new()))
-            .expect("valid response"))
+            .body(Full::new(Bytes::new()))?)
     }
 
     /// Take the authenticated connection for a session (for Subduction registration).
@@ -385,10 +369,7 @@ impl subduction_core::connection::handshake::Handshake<Sendable> for HttpHandsha
 
     fn recv(&mut self) -> BoxFuture<'_, Result<Vec<u8>, Self::Error>> {
         let bytes = self.challenge_bytes.take();
-        async move {
-            bytes.ok_or_else(|| ServerError::Handshake("no challenge bytes available".into()))
-        }
-        .boxed()
+        async move { bytes.ok_or(ServerError::HandshakeNoChallenge) }.boxed()
     }
 }
 
@@ -421,10 +402,11 @@ async fn read_body(req: Request<Incoming>, max_size: usize) -> Result<Vec<u8>, S
 }
 
 /// Build a simple error response.
-#[allow(clippy::expect_used)]
-fn error_response(status: StatusCode, err: &ServerError) -> Response<Full<Bytes>> {
+fn error_response(
+    status: StatusCode,
+    err: &ServerError,
+) -> Result<Response<Full<Bytes>>, hyper::http::Error> {
     Response::builder()
         .status(status)
         .body(Full::new(Bytes::from(err.to_string())))
-        .expect("valid error response")
 }

@@ -186,7 +186,15 @@ async fn serve_http_connection(
         let handler = handler.clone();
         let subduction = subduction.clone();
         async move {
-            let resp = handler.handle(req).await?;
+            let resp = match handler.handle(req).await {
+                Ok(resp) => resp,
+                Err(e) => {
+                    tracing::error!("fatal handler error: {e}");
+                    hyper::Response::new(http_body_util::Full::new(hyper::body::Bytes::from(
+                        e.to_string(),
+                    )))
+                }
+            };
 
             // After a successful handshake, register with Subduction
             if resp.status() == hyper::StatusCode::OK
