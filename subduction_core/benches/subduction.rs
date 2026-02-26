@@ -22,7 +22,8 @@
 
 #![allow(missing_docs, unreachable_pub)]
 
-use criterion::{criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use criterion_pprof::criterion::{Output, PProfProfiler};
 
 mod generators {
     use future_form::Sendable;
@@ -985,17 +986,19 @@ mod display {
     }
 }
 
-criterion_group!(
-    benches,
-    id::bench_id_micros,
-    id::bench_storage_key,
-    message::bench_message_construction,
-    message::bench_message_request_id,
-    sync::bench_sync_diff,
-    sync::bench_batch_sync,
-    collections::bench_collections,
-    cloning::bench_cloning,
-    display::bench_display,
-);
+criterion_group! {
+    name = benches;
+    config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
+    targets =
+        id::bench_id_micros,
+        id::bench_storage_key,
+        message::bench_message_construction,
+        message::bench_message_request_id,
+        sync::bench_sync_diff,
+        sync::bench_batch_sync,
+        collections::bench_collections,
+        cloning::bench_cloning,
+        display::bench_display,
+}
 
 criterion_main!(benches);

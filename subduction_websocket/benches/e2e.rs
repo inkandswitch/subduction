@@ -37,6 +37,7 @@
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
+use criterion_pprof::criterion::{Output, PProfProfiler};
 use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
@@ -560,15 +561,17 @@ fn bench_concurrent_clients(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_handshake,
-    bench_single_commit_sync,
-    bench_batch_sync,
-    bench_large_blob_sync,
-    bench_bidirectional_sync,
-    bench_incremental_sync,
-    bench_concurrent_clients,
-);
+criterion_group! {
+    name = benches;
+    config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
+    targets =
+        bench_handshake,
+        bench_single_commit_sync,
+        bench_batch_sync,
+        bench_large_blob_sync,
+        bench_bidirectional_sync,
+        bench_incremental_sync,
+        bench_concurrent_clients,
+}
 
 criterion_main!(benches);
