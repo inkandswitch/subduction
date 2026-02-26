@@ -26,7 +26,7 @@
 use alloc::{format, string::String, vec::Vec};
 use core::time::Duration;
 
-use future_form::{FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
     future::{Either, select},
     pin_mut,
@@ -144,7 +144,7 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
         HttpLongPollConnection<Self::Timeout>: subduction_core::connection::Connection<K>;
 }
 
-#[future_form::future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
+#[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
 impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
     Connect<K, Sig> for HttpLongPollClient<H, O>
 {
@@ -406,7 +406,7 @@ struct ClientHttpHandshake<K: future_form::FutureForm, H: HttpClient<K>> {
     _k: core::marker::PhantomData<K>,
 }
 
-#[future_form::future_form(Sendable where H: Send, Local)]
+#[future_form(Sendable where H: Send, Local)]
 impl<K: future_form::FutureForm, H: HttpClient<K>> handshake::Handshake<K>
     for &mut ClientHttpHandshake<K, H>
 {

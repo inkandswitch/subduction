@@ -20,7 +20,7 @@ use core::{
 };
 
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::channel::oneshot;
 use rand::{RngCore, rngs::OsRng};
 use sedimentree_core::collections::Map;
@@ -181,7 +181,7 @@ impl<O> HttpLongPollConnection<O> {
     }
 }
 
-#[future_form::future_form(Sendable where O: Send + Sync, Local)]
+#[future_form(Sendable where O: Send + Sync, Local)]
 impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
     type SendError = SendError;
     type RecvError = RecvError;
