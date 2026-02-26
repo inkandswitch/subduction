@@ -13,7 +13,8 @@
 
 #![allow(missing_docs, unreachable_pub)]
 
-use criterion::{criterion_group, criterion_main};
+use criterion::{Criterion, criterion_group, criterion_main};
+use criterion_pprof::criterion::{Output, PProfProfiler};
 
 mod generators {
     use std::collections::BTreeSet;
@@ -957,22 +958,24 @@ mod topology {
     }
 }
 
-criterion_group!(
-    benches,
-    digest::bench_digest_hashing,
-    digest::bench_depth_metric,
-    sedimentree::bench_construction,
-    sedimentree::bench_merge,
-    sedimentree::bench_diff,
-    sedimentree::bench_fingerprint_summarize,
-    sedimentree::bench_diff_remote_fingerprints,
-    sedimentree::bench_minimize,
-    sedimentree::bench_heads,
-    sedimentree::bench_add_operations,
-    sedimentree::bench_minimal_hash,
-    fragment::bench_supports,
-    topology::bench_dag_topology_comparison,
-    topology::bench_deep_chains,
-);
+criterion_group! {
+    name = benches;
+    config = Criterion::default().with_profiler(PProfProfiler::new(997, Output::Flamegraph(None)));
+    targets =
+        digest::bench_digest_hashing,
+        digest::bench_depth_metric,
+        sedimentree::bench_construction,
+        sedimentree::bench_merge,
+        sedimentree::bench_diff,
+        sedimentree::bench_fingerprint_summarize,
+        sedimentree::bench_diff_remote_fingerprints,
+        sedimentree::bench_minimize,
+        sedimentree::bench_heads,
+        sedimentree::bench_add_operations,
+        sedimentree::bench_minimal_hash,
+        fragment::bench_supports,
+        topology::bench_dag_topology_comparison,
+        topology::bench_deep_chains,
+}
 
 criterion_main!(benches);

@@ -19,6 +19,7 @@ sedimentree_core = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }
+criterion_pprof = { workspace = true }
 rand = { workspace = true, features = ["small_rng"] }
 
 [[bench]]

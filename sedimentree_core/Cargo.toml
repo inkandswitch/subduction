@@ -33,6 +33,7 @@ tracing = { workspace = true }
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
 bolero = { workspace = true, features = ["arbitrary"] }
 criterion = { workspace = true }
+criterion_pprof = { workspace = true }
 dhat = { workspace = true }
 sedimentree_core = { path = ".", features = ["bolero", "getrandom", "test_utils"] }
 testresult = { workspace = true }
