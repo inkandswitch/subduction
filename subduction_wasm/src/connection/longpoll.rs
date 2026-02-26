@@ -101,6 +101,10 @@ impl WasmLongPollConn {
     }
 
     /// Disconnect from the peer gracefully.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`WasmLongPollConnError`] if the disconnect fails.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn disconnect(&self) -> Result<(), WasmLongPollConnError> {
         Connection::<Local>::disconnect(&self.0)
@@ -243,6 +247,10 @@ impl WasmLongPoll {
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LongPollConnectionError`] if connection or handshake fails.
     #[wasm_bindgen(js_name = tryConnect)]
     pub async fn try_connect(
         base_url: &str,
@@ -278,6 +286,10 @@ impl WasmLongPoll {
     /// * `signer` - The client's signer for authentication
     /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     /// * `service_name` - The service name for discovery. If omitted, the base URL is used.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`LongPollConnectionError`] if connection or handshake fails.
     #[wasm_bindgen(js_name = tryDiscover)]
     pub async fn try_discover(
         base_url: &str,

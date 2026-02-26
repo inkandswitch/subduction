@@ -507,7 +507,7 @@ async fn handle_http_longpoll(
         body::Bytes,
         header::{
             ACCESS_CONTROL_ALLOW_HEADERS, ACCESS_CONTROL_ALLOW_METHODS,
-            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE,
+            ACCESS_CONTROL_ALLOW_ORIGIN, ACCESS_CONTROL_MAX_AGE, HeaderValue,
         },
     };
     use hyper_util::rt::TokioIo;
@@ -520,15 +520,24 @@ async fn handle_http_longpoll(
         async move {
             // Handle CORS preflight
             if req.method() == hyper::Method::OPTIONS {
-                let resp = hyper::Response::builder()
-                    .status(204)
-                    .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
-                    .header(ACCESS_CONTROL_ALLOW_METHODS, "POST, OPTIONS")
-                    .header(ACCESS_CONTROL_ALLOW_HEADERS, "Content-Type, X-Session-Id")
-                    .header(hyper::header::ACCESS_CONTROL_EXPOSE_HEADERS, "X-Session-Id")
-                    .header(ACCESS_CONTROL_MAX_AGE, "86400")
-                    .body(Full::new(Bytes::new()))
-                    .expect("valid response");
+                let mut resp = hyper::Response::new(Full::new(Bytes::new()));
+                *resp.status_mut() = hyper::StatusCode::NO_CONTENT;
+                resp.headers_mut()
+                    .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
+                resp.headers_mut().insert(
+                    ACCESS_CONTROL_ALLOW_METHODS,
+                    HeaderValue::from_static("POST, OPTIONS"),
+                );
+                resp.headers_mut().insert(
+                    ACCESS_CONTROL_ALLOW_HEADERS,
+                    HeaderValue::from_static("Content-Type, X-Session-Id"),
+                );
+                resp.headers_mut().insert(
+                    hyper::header::ACCESS_CONTROL_EXPOSE_HEADERS,
+                    HeaderValue::from_static("X-Session-Id"),
+                );
+                resp.headers_mut()
+                    .insert(ACCESS_CONTROL_MAX_AGE, HeaderValue::from_static("86400"));
                 return Ok::<_, hyper::Error>(resp);
             }
 
@@ -551,22 +560,21 @@ async fn handle_http_longpoll(
 
             // Add CORS headers to every response
             let (mut parts, body) = resp.into_parts();
-            parts.headers.insert(
-                ACCESS_CONTROL_ALLOW_ORIGIN,
-                "*".parse().expect("valid header"),
-            );
+            parts
+                .headers
+                .insert(ACCESS_CONTROL_ALLOW_ORIGIN, HeaderValue::from_static("*"));
             parts.headers.insert(
                 ACCESS_CONTROL_ALLOW_METHODS,
-                "POST, OPTIONS".parse().expect("valid header"),
+                HeaderValue::from_static("POST, OPTIONS"),
             );
             parts.headers.insert(
                 ACCESS_CONTROL_ALLOW_HEADERS,
-                "Content-Type, X-Session-Id".parse().expect("valid header"),
+                HeaderValue::from_static("Content-Type, X-Session-Id"),
             );
             // Expose custom headers so the browser can read them
             parts.headers.insert(
                 hyper::header::ACCESS_CONTROL_EXPOSE_HEADERS,
-                "X-Session-Id".parse().expect("valid header"),
+                HeaderValue::from_static("X-Session-Id"),
             );
 
             Ok::<_, hyper::Error>(hyper::Response::from_parts(parts, body))

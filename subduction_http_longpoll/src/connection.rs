@@ -22,13 +22,13 @@ use core::{
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use futures::channel::oneshot;
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
+        Connection,
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
         timeout::{TimedOut, Timeout},
-        Connection,
     },
     peer::id::PeerId,
 };
@@ -275,7 +275,7 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
             );
 
             let req_timeout = override_timeout.unwrap_or(default_time_limit);
-            let rx_fut = K::from_future(async { rx.await });
+            let rx_fut = K::from_future(rx);
 
             match timeout.timeout(req_timeout, rx_fut).await {
                 Ok(Ok(resp)) => {
@@ -303,6 +303,7 @@ impl<O> PartialEq for HttpLongPollConnection<O> {
 }
 
 #[cfg(test)]
+#[allow(clippy::expect_used)]
 mod tests {
     use super::*;
     use future_form::Sendable;
@@ -320,8 +321,8 @@ mod tests {
         ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::connection::timeout::TimedOut>>
         {
             use futures::{
-                future::{select, Either},
                 FutureExt,
+                future::{Either, select},
             };
             async move {
                 match select(fut, futures_timer::Delay::new(dur)).await {

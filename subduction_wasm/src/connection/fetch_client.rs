@@ -123,7 +123,7 @@ impl HttpClient<future_form::Local> for FetchHttpClient {
     }
 }
 
-/// Call `fetch()` on the appropriate global scope (Window or WorkerGlobalScope).
+/// Call `fetch()` on the appropriate global scope (`Window` or `WorkerGlobalScope`).
 fn fetch_global(request: &web_sys::Request) -> Result<js_sys::Promise, wasm_bindgen::JsValue> {
     let global: js_sys::Object = js_sys::global().unchecked_into();
 

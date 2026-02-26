@@ -407,7 +407,8 @@ async fn multiple_concurrent_clients() -> TestResult {
     let mut clients = Vec::new();
 
     for i in 0..num_clients {
-        let client = connected_client(51 + i as u8, server.address).await;
+        let client =
+            connected_client(51 + u8::try_from(i).expect("< 256 clients"), server.address).await;
         clients.push(client);
     }
 

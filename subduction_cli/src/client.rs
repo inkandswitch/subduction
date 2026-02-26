@@ -2,13 +2,10 @@
 
 use crate::key;
 use eyre::Result;
-use future_form::Sendable;
 use sedimentree_fs_storage::FsStorage;
 use std::{path::PathBuf, time::Duration};
 use subduction_core::{
-    connection::{authenticated::Authenticated, handshake::Audience},
-    peer::id::PeerId,
-    timestamp::TimestampSeconds,
+    connection::handshake::Audience, peer::id::PeerId, timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{client::HttpLongPollClient, http_client::ReqwestHttpClient};
@@ -89,31 +86,23 @@ async fn run_ws(
 ) -> Result<()> {
     let uri: Uri = args.server.parse()?;
 
-    let audience = match &args.server_peer_id {
-        Some(id_hex) => Audience::known(crate::parse_peer_id(id_hex)?),
-        None => {
-            let service = args
-                .service_name
-                .as_deref()
-                .unwrap_or_else(|| args.server.as_str());
-            Audience::discover(service.as_bytes())
-        }
+    let audience = if let Some(id_hex) = &args.server_peer_id {
+        Audience::known(crate::parse_peer_id(id_hex)?)
+    } else {
+        let service = args.service_name.as_deref().unwrap_or(args.server.as_str());
+        Audience::discover(service.as_bytes())
     };
 
     tracing::info!("Connecting via WebSocket to {uri}");
 
-    type AuthenticatedClient =
-        Authenticated<TokioWebSocketClient<MemorySigner, FuturesTimerTimeout>, Sendable>;
-
-    let (_authenticated_client, listener, sender): (AuthenticatedClient, _, _) =
-        TokioWebSocketClient::new(
-            uri,
-            FuturesTimerTimeout,
-            timeout_duration,
-            signer.clone(),
-            audience,
-        )
-        .await?;
+    let (_, listener, sender) = TokioWebSocketClient::new(
+        uri,
+        FuturesTimerTimeout,
+        timeout_duration,
+        signer.clone(),
+        audience,
+    )
+    .await?;
 
     tracing::info!("WebSocket client connected");
     tracing::info!("Client Peer ID: {peer_id}");
@@ -166,24 +155,18 @@ async fn run_longpoll(
     let http = ReqwestHttpClient::with_timeout(Duration::from_secs(60));
     let lp_client = HttpLongPollClient::new(base_url, http, FuturesTimerTimeout, timeout_duration);
 
-    let result = match &args.server_peer_id {
-        Some(id_hex) => {
-            let server_id = crate::parse_peer_id(id_hex)?;
-            lp_client
-                .connect(signer, server_id, TimestampSeconds::now())
-                .await
-                .map_err(|e| eyre::eyre!("long-poll connect failed: {e}"))?
-        }
-        None => {
-            let service = args
-                .service_name
-                .as_deref()
-                .unwrap_or_else(|| args.server.as_str());
-            lp_client
-                .connect_discover(signer, service, TimestampSeconds::now())
-                .await
-                .map_err(|e| eyre::eyre!("long-poll discover failed: {e}"))?
-        }
+    let result = if let Some(id_hex) = &args.server_peer_id {
+        let server_id = crate::parse_peer_id(id_hex)?;
+        lp_client
+            .connect(signer, server_id, TimestampSeconds::now())
+            .await
+            .map_err(|e| eyre::eyre!("long-poll connect failed: {e}"))?
+    } else {
+        let service = args.service_name.as_deref().unwrap_or(args.server.as_str());
+        lp_client
+            .connect_discover(signer, service, TimestampSeconds::now())
+            .await
+            .map_err(|e| eyre::eyre!("long-poll discover failed: {e}"))?
     };
 
     let remote_id = result.authenticated.peer_id();

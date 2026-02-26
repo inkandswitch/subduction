@@ -392,7 +392,7 @@ impl WasmSubduction {
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
     /// * `signer` - The client's signer for authentication
     /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
-    /// * `service_name` - The service name for discovery (defaults to base_url)
+    /// * `service_name` - The service name for discovery (defaults to `base_url`)
     ///
     /// # Errors
     ///
