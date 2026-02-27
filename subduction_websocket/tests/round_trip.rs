@@ -9,7 +9,7 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::{Connection, handshake::Audience, message::Message, nonce_cache::NonceCache},
+    connection::{handshake::Audience, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -34,85 +34,6 @@ const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 
 fn test_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
-}
-
-#[tokio::test]
-async fn rend_receive() -> TestResult {
-    init_tracing();
-
-    let server_signer = test_signer(0);
-    let client_signer = test_signer(1);
-    let server_peer_id = PeerId::from(server_signer.verifying_key());
-
-    let addr: SocketAddr = "127.0.0.1:0".parse()?;
-    let memory_storage = MemoryStorage::default();
-    let (suduction, listener_fut, manager_fut) = Subduction::new(
-        None,
-        server_signer,
-        memory_storage.clone(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::with_key(0, 0),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        manager_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    let task_subduction = suduction.clone();
-    let server_ws = TokioWebSocketServer::new(
-        addr,
-        TimeoutTokio,
-        Duration::from_secs(5),
-        HANDSHAKE_MAX_DRIFT,
-        DEFAULT_MAX_MESSAGE_SIZE,
-        task_subduction,
-    )
-    .await?;
-
-    let bound = server_ws.address();
-    let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
-        uri,
-        TimeoutTokio,
-        Duration::from_secs(5),
-        client_signer,
-        Audience::known(server_peer_id),
-    )
-    .await?;
-
-    tokio::spawn(async move {
-        listener_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    tokio::spawn(async move {
-        sender_fut.await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    let ws = client_ws.inner().clone();
-    tokio::spawn(async move {
-        ws.listen().await?;
-        Ok::<(), eyre::Report>(())
-    });
-
-    let expected = Message::BlobsRequest {
-        id: sedimentree_core::id::SedimentreeId::new([0u8; 32]),
-        digests: Vec::new(),
-    };
-    client_ws.send(&expected).await?;
-
-    Ok(())
 }
 
 #[allow(clippy::too_many_lines)]

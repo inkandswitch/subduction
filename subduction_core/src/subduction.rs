@@ -1155,7 +1155,10 @@ impl<
                         if matches!(e, SendRequestedDataError::Unauthorized(_)) {
                             let msg: Message = DataRequestRejected { id }.into();
                             if let Err(send_err) = conn.send(&msg).await {
-                                tracing::error!("failed to send DataRequestRejected: {send_err}");
+                                tracing::info!(
+                                    "peer {} disconnected while sending DataRequestRejected: {send_err}",
+                                    conn.peer_id()
+                                );
                             }
                         }
                         tracing::warn!(
@@ -1378,9 +1381,12 @@ impl<
                 );
 
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
+                    tracing::info!(
+                        "peer {} disconnected: {}",
+                        peer_id,
+                        IoError::<F, S, C>::ConnSend(e)
+                    );
                     self.unregister(&conn).await;
-                    tracing::info!("unregistered failed connection from peer {}", peer_id);
                 }
             }
         }
@@ -1470,9 +1476,12 @@ impl<
                 peer_id
             );
             if let Err(e) = conn.send(&msg).await {
-                tracing::error!("{}", IoError::<F, S, C>::ConnSend(e));
+                tracing::info!(
+                    "peer {} disconnected: {}",
+                    peer_id,
+                    IoError::<F, S, C>::ConnSend(e)
+                );
                 self.unregister(&conn).await;
-                tracing::info!("unregistered failed connection from peer {}", peer_id);
             }
         }
 
@@ -1557,9 +1566,8 @@ impl<
             for conn in conns {
                 let peer_id = conn.peer_id();
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::error!("{e}");
+                    tracing::info!("peer {peer_id} disconnected: {e}");
                     self.unregister(&conn).await;
-                    tracing::info!("unregistered failed connection from peer {}", peer_id);
                 }
             }
         }
@@ -1644,9 +1652,8 @@ impl<
             for conn in conns {
                 let peer_id = conn.peer_id();
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::error!("{e}");
+                    tracing::info!("peer {peer_id} disconnected: {e}");
                     self.unregister(&conn).await;
-                    tracing::info!("unregistered failed connection from peer {}", peer_id);
                 }
             }
         }
@@ -1691,7 +1698,10 @@ impl<
                 }
                 .into();
                 if let Err(e) = conn.send(&msg).await {
-                    tracing::error!("failed to send unauthorized response: {e}");
+                    tracing::info!(
+                        "peer {} disconnected while sending unauthorized response: {e}",
+                        conn.peer_id()
+                    );
                 }
                 return Ok(());
             }
@@ -1810,7 +1820,7 @@ impl<
         }
         .into();
         if let Err(e) = conn.send(&msg).await {
-            tracing::error!("{e}");
+            tracing::info!("peer {} disconnected: {e}", conn.peer_id());
         }
 
         // With compound storage, blobs are always available with commits/fragments
@@ -1905,14 +1915,8 @@ impl<
         for conn in conns {
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
-                tracing::error!(
-                    "Error requesting blobs {:?} from peer {}: {:?}",
-                    msg,
-                    peer_id,
-                    e
-                );
+                tracing::info!("peer {peer_id} disconnected: {e}");
                 self.unregister(&conn).await;
-                tracing::info!("unregistered failed connection from peer {}", peer_id);
             }
         }
     }
@@ -2306,7 +2310,7 @@ impl<
                                         Err(ref e @ SendRequestedDataError::Unauthorized(_)) => {
                                             let msg: Message = DataRequestRejected { id }.into();
                                             if let Err(send_err) = conn.send(&msg).await {
-                                                tracing::error!("failed to send DataRequestRejected: {send_err}");
+                                                tracing::info!("peer {peer_id} disconnected while sending DataRequestRejected: {send_err}");
                                             }
                                             tracing::warn!(
                                                 "failed to send requested data to peer {:?}: {e}",

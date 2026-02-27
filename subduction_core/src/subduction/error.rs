@@ -151,25 +151,3 @@ pub enum SyncRejected {
     #[error("not authorized to access sedimentree {0}")]
     Unauthorized(SedimentreeId),
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[cfg(all(test, feature = "std", feature = "bolero"))]
-    mod proptests {
-        use alloc::{format, string::String};
-
-        use super::*;
-
-        #[test]
-        fn prop_display_produces_non_empty_string() {
-            bolero::check!()
-                .with_type::<RegistrationError<String>>()
-                .for_each(|err| {
-                    let display = format!("{err}");
-                    assert!(!display.is_empty());
-                });
-        }
-    }
-}

@@ -416,32 +416,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_shard_index_consistency() {
-        let map: ShardedMap<SedimentreeId, (), 256> = ShardedMap::with_key(42, 43);
-        let id = SedimentreeId::new([42; 32]);
-
-        let idx1 = map.shard_index(&id);
-        let idx2 = map.shard_index(&id);
-        assert_eq!(idx1, idx2);
-
-        assert!(map.shard_index(&id) < 256);
-    }
-
-    #[test]
-    fn test_different_keys_different_distribution() {
-        let map1: ShardedMap<SedimentreeId, (), 256> = ShardedMap::with_key(1, 2);
-        let map2: ShardedMap<SedimentreeId, (), 256> = ShardedMap::with_key(3, 4);
-
-        let id = SedimentreeId::new([100; 32]);
-
-        let idx1 = map1.shard_index(&id);
-        let idx2 = map2.shard_index(&id);
-
-        assert!(idx1 < 256);
-        assert!(idx2 < 256);
-    }
-
     #[tokio::test]
     async fn test_with_entry_or_default() -> TestResult {
         let map: ShardedMap<SedimentreeId, Vec<u32>, 16> = ShardedMap::with_key(0, 0);

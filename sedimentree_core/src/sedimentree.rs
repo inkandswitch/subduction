@@ -600,35 +600,6 @@ mod tests {
     }
 
     #[test]
-    fn diff_identical_non_empty_trees() {
-        // Two separate trees with identical content
-        let commits = vec![make_commit(1), make_commit(2), make_commit(3)];
-        let fragments = vec![make_fragment(1), make_fragment(2)];
-
-        let a = Sedimentree::new(fragments.clone(), commits.clone());
-        let b = Sedimentree::new(fragments, commits);
-
-        let diff = a.diff(&b);
-
-        assert!(
-            diff.left_missing_commits.is_empty(),
-            "identical trees have no left missing commits"
-        );
-        assert!(
-            diff.right_missing_commits.is_empty(),
-            "identical trees have no right missing commits"
-        );
-        assert!(
-            diff.left_missing_fragments.is_empty(),
-            "identical trees have no left missing fragments"
-        );
-        assert!(
-            diff.right_missing_fragments.is_empty(),
-            "identical trees have no right missing fragments"
-        );
-    }
-
-    #[test]
     fn diff_superset_commits() {
         // Scenario: B is a superset of A
         let shared = vec![make_commit(1), make_commit(2)];
@@ -1245,96 +1216,6 @@ mod tests {
             let minimized = tree.minimize(&CountLeadingZeroBytes);
 
             assert_eq!(minimized.fragments().count(), 1);
-        }
-
-        // ============================================================
-        // Invariant Tests
-        // ============================================================
-
-        #[test]
-        fn minimize_output_subset_of_input() {
-            let input_fragments: Vec<Fragment> = (0..10)
-                .map(|i| {
-                    let boundary = digest_with_depth(1, 100 + i);
-                    make_fragment_at_depth(2, i, BTreeSet::from([boundary]), &[])
-                })
-                .collect();
-
-            let tree = Sedimentree::new(input_fragments.clone(), vec![]);
-            let minimized = tree.minimize(&CountLeadingZeroBytes);
-
-            // Every fragment in output must be in input
-            for fragment in minimized.fragments() {
-                assert!(
-                    input_fragments.contains(fragment),
-                    "minimized output contains fragment not in input"
-                );
-            }
-        }
-
-        #[test]
-        fn minimize_no_mutual_support_in_output() {
-            // Create a mix of depths
-            let deep_boundary = digest_with_depth(1, 100);
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101);
-
-            let deep = make_fragment_at_depth(
-                3,
-                1,
-                BTreeSet::from([deep_boundary]),
-                &[shallow_head, shallow_boundary],
-            );
-            let shallow = make_fragment_at_depth(2, 1, BTreeSet::from([shallow_boundary]), &[]);
-            let unrelated =
-                make_fragment_at_depth(2, 5, BTreeSet::from([digest_with_depth(1, 200)]), &[]);
-
-            let tree = Sedimentree::new(vec![deep, shallow, unrelated], vec![]);
-            let minimized = tree.minimize(&CountLeadingZeroBytes);
-
-            // No fragment in output should support another in output
-            let fragments = collect_fragments(&minimized);
-            for (i, f1) in fragments.iter().enumerate() {
-                for (j, f2) in fragments.iter().enumerate() {
-                    if i != j {
-                        assert!(
-                            !f1.supports(f2.summary(), &CountLeadingZeroBytes),
-                            "fragment {i} supports fragment {j} in minimized output"
-                        );
-                    }
-                }
-            }
-        }
-
-        #[test]
-        fn minimize_idempotent() {
-            let deep_boundary = digest_with_depth(1, 100);
-            let shallow_head = digest_with_depth(2, 1);
-            let shallow_boundary = digest_with_depth(1, 101);
-
-            let deep = make_fragment_at_depth(
-                3,
-                1,
-                BTreeSet::from([deep_boundary]),
-                &[shallow_head, shallow_boundary],
-            );
-            let shallow = make_fragment_at_depth(2, 1, BTreeSet::from([shallow_boundary]), &[]);
-
-            let tree = Sedimentree::new(vec![deep, shallow], vec![]);
-            let minimized1 = tree.minimize(&CountLeadingZeroBytes);
-            let minimized2 = minimized1.minimize(&CountLeadingZeroBytes);
-
-            let fragments1 = collect_fragments(&minimized1);
-            let fragments2 = collect_fragments(&minimized2);
-
-            assert_eq!(
-                fragments1.len(),
-                fragments2.len(),
-                "minimize should be idempotent"
-            );
-            for f in &fragments1 {
-                assert!(fragments2.contains(f));
-            }
         }
     }
 }

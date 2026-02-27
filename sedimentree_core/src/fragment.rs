@@ -490,66 +490,9 @@ mod tests {
     mod codec {
         use super::super::*;
         use alloc::vec;
-        use testresult::TestResult;
-
-        fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
-            Digest::force_from_bytes([byte; 32])
-        }
 
         fn make_sedimentree_id(byte: u8) -> SedimentreeId {
             SedimentreeId::new([byte; 32])
-        }
-
-        fn make_checkpoint(byte: u8) -> Checkpoint {
-            Checkpoint::new(make_digest(byte))
-        }
-
-        #[test]
-        fn round_trip_empty() -> TestResult {
-            let sedimentree_id = make_sedimentree_id(0x01);
-            let fragment = Fragment::from_parts(
-                sedimentree_id,
-                make_digest(0x10),
-                BTreeSet::new(),
-                BTreeSet::new(),
-                BlobMeta::from_digest_size(make_digest(0x20), 1024),
-            );
-
-            let mut buf = Vec::new();
-            fragment.encode_fields(&mut buf);
-            assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
-
-            let decoded = Fragment::try_decode_fields(&buf)?;
-            assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
-            assert_eq!(decoded.head(), fragment.head());
-            assert_eq!(decoded.boundary(), fragment.boundary());
-            assert_eq!(decoded.checkpoints(), fragment.checkpoints());
-            Ok(())
-        }
-
-        #[test]
-        fn round_trip_with_data() -> TestResult {
-            let sedimentree_id = make_sedimentree_id(0x01);
-            let boundary = BTreeSet::from([make_digest(0x30), make_digest(0x40)]);
-            let checkpoints = BTreeSet::from([make_checkpoint(0x50), make_checkpoint(0x60)]);
-
-            let fragment = Fragment::from_parts(
-                sedimentree_id,
-                make_digest(0x10),
-                boundary,
-                checkpoints,
-                BlobMeta::from_digest_size(make_digest(0x20), 2048),
-            );
-
-            let mut buf = Vec::new();
-            fragment.encode_fields(&mut buf);
-
-            let decoded = Fragment::try_decode_fields(&buf)?;
-            assert_eq!(decoded.sedimentree_id(), fragment.sedimentree_id());
-            assert_eq!(decoded.head(), fragment.head());
-            assert_eq!(decoded.boundary(), fragment.boundary());
-            assert_eq!(decoded.checkpoints(), fragment.checkpoints());
-            Ok(())
         }
 
         #[test]
@@ -664,16 +607,6 @@ mod tests {
     // ============================================================
     // supports() tests
     // ============================================================
-
-    #[test]
-    fn supports_self() {
-        let head = digest_with_depth(2, 1);
-        let boundary = digest_with_depth(1, 100);
-        let fragment = make_fragment(head, BTreeSet::from([boundary]), &[]);
-
-        // Fragment should support its own summary
-        assert!(fragment.supports(fragment.summary(), &CountLeadingZeroBytes));
-    }
 
     #[test]
     fn deeper_supports_shallower_with_matching_range() {

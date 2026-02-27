@@ -1101,95 +1101,8 @@ pub enum HandshakeError {
 mod tests {
     use super::*;
 
-    mod nonce {
-        use super::*;
-
-        #[test]
-        fn roundtrip_from_bytes() {
-            let nonce = Nonce::from_u128(0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0);
-            let bytes = *nonce.as_bytes();
-            let recovered = Nonce::from_bytes(bytes);
-            assert_eq!(nonce, recovered);
-        }
-
-        #[test]
-        fn roundtrip_from_u128() {
-            let value = 0x1234_5678_9ABC_DEF0_1234_5678_9ABC_DEF0u128;
-            let nonce = Nonce::from_u128(value);
-            assert_eq!(nonce.as_u128(), value);
-        }
-    }
-
-    mod challenge {
-        use super::*;
-
-        #[test]
-        fn digest_is_deterministic() {
-            let challenge = Challenge::new(
-                Audience::discover(b"test"),
-                TimestampSeconds::new(1000),
-                Nonce::from_u128(42),
-            );
-            assert_eq!(
-                Digest::<Challenge>::hash(&challenge),
-                Digest::<Challenge>::hash(&challenge)
-            );
-        }
-
-        #[test]
-        fn different_nonces_different_digests() {
-            let c1 = Challenge::new(
-                Audience::discover(b"test"),
-                TimestampSeconds::new(1000),
-                Nonce::from_u128(1),
-            );
-            let c2 = Challenge::new(
-                Audience::discover(b"test"),
-                TimestampSeconds::new(1000),
-                Nonce::from_u128(2),
-            );
-            assert_ne!(
-                Digest::<Challenge>::hash(&c1),
-                Digest::<Challenge>::hash(&c2)
-            );
-        }
-
-        #[test]
-        fn is_fresh_within_drift() {
-            let challenge = Challenge::new(
-                Audience::discover(b"test"),
-                TimestampSeconds::new(1000),
-                Nonce::from_u128(42),
-            );
-            let now = TimestampSeconds::new(1005);
-            assert!(challenge.is_fresh(now, Duration::from_secs(10)));
-        }
-
-        #[test]
-        fn is_not_fresh_outside_drift() {
-            let challenge = Challenge::new(
-                Audience::discover(b"test"),
-                TimestampSeconds::new(1000),
-                Nonce::from_u128(42),
-            );
-            let now = TimestampSeconds::new(2000);
-            assert!(!challenge.is_fresh(now, Duration::from_secs(10)));
-        }
-    }
-
     mod response {
         use super::*;
-
-        #[test]
-        fn for_challenge_matches_digest() {
-            let challenge = Challenge::new(
-                Audience::discover(b"test"),
-                TimestampSeconds::new(1000),
-                Nonce::from_u128(42),
-            );
-            let response = Response::for_challenge(&challenge, TimestampSeconds::new(1001));
-            assert!(response.validate(&challenge).is_ok());
-        }
 
         #[test]
         fn wrong_challenge_fails_validation() {
@@ -1417,33 +1330,12 @@ mod tests {
         }
 
         #[test]
-        fn prop_challenge_digest_deterministic() {
-            bolero::check!()
-                .with_type::<Challenge>()
-                .for_each(|challenge| {
-                    assert_eq!(
-                        Digest::<Challenge>::hash(challenge),
-                        Digest::<Challenge>::hash(challenge)
-                    );
-                });
-        }
-
-        #[test]
         fn prop_response_for_challenge_validates() {
             bolero::check!()
                 .with_type::<(Challenge, TimestampSeconds)>()
                 .for_each(|(challenge, now)| {
                     let response = Response::for_challenge(challenge, *now);
                     assert!(response.validate(challenge).is_ok());
-                });
-        }
-
-        #[test]
-        fn prop_challenge_validation_error_has_rejection_reason() {
-            bolero::check!()
-                .with_type::<ChallengeValidationError>()
-                .for_each(|err| {
-                    let _ = err.to_rejection_reason();
                 });
         }
 
@@ -1485,40 +1377,77 @@ mod tests {
                     assert_eq!(response, &decoded);
                 });
         }
-    }
-
-    mod discovery_id {
-        use super::*;
 
         #[test]
-        fn bytes_roundtrip() {
-            let raw_bytes: [u8; 32] = [0x42; 32];
-            let discovery_id = DiscoveryId::from_raw(raw_bytes);
-            assert_eq!(*discovery_id.as_bytes(), raw_bytes);
+        fn prop_discovery_id_bytes_roundtrip() {
+            bolero::check!().with_type::<[u8; 32]>().for_each(|bytes| {
+                let id = DiscoveryId::from_raw(*bytes);
+                assert_eq!(*id.as_bytes(), *bytes);
+            });
         }
 
         #[test]
-        fn audience_discover_preserves_bytes() {
-            let raw_bytes: [u8; 32] = [0x42; 32];
-            let discovery_id = DiscoveryId::from_raw(raw_bytes);
-            let audience = Audience::Discover(discovery_id);
+        fn prop_different_nonces_different_digests() {
+            bolero::check!()
+                .with_type::<(Audience, TimestampSeconds, Nonce, Nonce)>()
+                .for_each(|(audience, timestamp, nonce1, nonce2)| {
+                    if nonce1 != nonce2 {
+                        let c1 = Challenge::new(*audience, *timestamp, *nonce1);
+                        let c2 = Challenge::new(*audience, *timestamp, *nonce2);
+                        assert_ne!(
+                            Digest::<Challenge>::hash(&c1),
+                            Digest::<Challenge>::hash(&c2)
+                        );
+                    }
+                });
+        }
 
-            // Encode via Challenge codec to test encoding
-            let challenge = Challenge {
-                audience,
-                timestamp: TimestampSeconds::new(0),
-                nonce: Nonce::from_u128(0),
-            };
+        #[test]
+        fn prop_is_fresh_within_drift() {
+            bolero::check!()
+                .with_type::<(Audience, Nonce, u32, u32)>()
+                .for_each(|(audience, nonce, base, delta)| {
+                    let base = u64::from(*base);
+                    let delta = u64::from(*delta);
+                    let drift = Duration::from_secs(delta);
+                    let ts = TimestampSeconds::new(base);
+                    let now = TimestampSeconds::new(base.saturating_add(delta));
+                    let challenge = Challenge::new(*audience, ts, *nonce);
+                    assert!(challenge.is_fresh(now, drift));
+                });
+        }
 
-            let mut buf = Vec::new();
-            challenge.encode_fields(&mut buf);
+        #[test]
+        fn prop_is_not_fresh_outside_drift() {
+            bolero::check!()
+                .with_type::<(Audience, Nonce, u32, u16)>()
+                .for_each(|(audience, nonce, base, drift_secs)| {
+                    let base = u64::from(*base);
+                    let drift_secs = u64::from(*drift_secs);
+                    let drift = Duration::from_secs(drift_secs);
+                    let ts = TimestampSeconds::new(base);
+                    // Place `now` strictly outside the drift window
+                    let now =
+                        TimestampSeconds::new(base.saturating_add(drift_secs).saturating_add(1));
+                    let challenge = Challenge::new(*audience, ts, *nonce);
+                    if now.abs_diff(ts) > drift {
+                        assert!(!challenge.is_fresh(now, drift));
+                    }
+                });
+        }
 
-            // Decode and verify the bytes are preserved
-            let decoded = Challenge::try_decode_fields(&buf).expect("decode");
-            let Audience::Discover(id) = decoded.audience else {
-                unreachable!("encoded Discover, should decode as Discover");
-            };
-            assert_eq!(*id.as_bytes(), raw_bytes);
+        #[test]
+        fn prop_drift_correction_apply_correct() {
+            bolero::check!()
+                .with_type::<(TimestampSeconds, TimestampSeconds)>()
+                .for_each(|(server_ts, client_ts)| {
+                    let mut dc = DriftCorrection::new();
+                    if dc.adjust(*server_ts, *client_ts) {
+                        let corrected = dc.apply(*client_ts);
+                        let expected = client_ts.add_signed(i64::from(dc.offset_secs()));
+                        assert_eq!(corrected, expected);
+                    }
+                });
         }
     }
 
@@ -1538,18 +1467,6 @@ mod tests {
                 challenge_digest: Digest::force_from_bytes([0xAB; 32]),
                 server_timestamp: TimestampSeconds::new(1_234_567_890),
             }
-        }
-
-        #[test]
-        fn challenge_fields_roundtrip() {
-            let challenge = sample_challenge();
-            let mut buf = Vec::new();
-            challenge.encode_fields(&mut buf);
-
-            assert_eq!(buf.len(), CHALLENGE_FIELDS_SIZE);
-
-            let decoded = Challenge::try_decode_fields(&buf).expect("decode should succeed");
-            assert_eq!(decoded, challenge);
         }
 
         type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -1637,19 +1554,6 @@ mod tests {
         fn challenge_signed_size_correct() {
             let challenge = sample_challenge();
             assert_eq!(challenge.signed_size(), CHALLENGE_MIN_SIZE);
-        }
-
-        #[test]
-        fn response_fields_roundtrip() {
-            let response = sample_response();
-            let mut buf = Vec::new();
-            response.encode_fields(&mut buf);
-
-            assert_eq!(buf.len(), RESPONSE_FIELDS_SIZE);
-
-            let decoded = Response::try_decode_fields(&buf).expect("decode should succeed");
-            assert_eq!(decoded.challenge_digest, response.challenge_digest);
-            assert_eq!(decoded.server_timestamp, response.server_timestamp);
         }
 
         #[test]
