@@ -399,11 +399,11 @@
 
       rows=""
       for dir in automerge_sedimentree_wasm automerge_subduction_wasm sedimentree_wasm subduction_wasm; do
-        wasm_file="$WORKSPACE_ROOT/$dir/pkg-slim/"*.wasm 2>/dev/null || continue
-        if [ -f $wasm_file ]; then
+        wasm_file=$(ls "$WORKSPACE_ROOT/$dir/dist/wasm_bindgen/web/"*_bg.wasm 2>/dev/null | head -1)
+        if [ -n "$wasm_file" ] && [ -f "$wasm_file" ]; then
           name=$(basename "$dir")
-          raw_size=$(${pkgs.coreutils}/bin/stat -c%s $wasm_file 2>/dev/null || echo "0")
-          gzip_size=$(${pkgs.gzip}/bin/gzip -c $wasm_file | ${pkgs.coreutils}/bin/wc -c)
+          raw_size=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file" 2>/dev/null || echo "0")
+          gzip_size=$(${pkgs.gzip}/bin/gzip -c "$wasm_file" | ${pkgs.coreutils}/bin/wc -c)
           raw_fmt=$(format_size "$raw_size")
           gz_fmt=$(format_size "$gzip_size")
           rows="$rows$name|$raw_fmt|$gz_fmt\n"
