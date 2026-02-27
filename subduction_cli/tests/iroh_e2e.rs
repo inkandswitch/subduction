@@ -300,7 +300,7 @@ async fn iroh_sync_between_two_cli_servers() {
     let mut client_seed: u8 = 0xE0;
 
     loop {
-        tokio::time::sleep(Duration::from_secs(3)).await;
+        tokio::time::sleep(Duration::from_millis(500)).await;
 
         let verify_a = connect_to_server(&url_a, client_seed, service_name).await;
         client_seed = client_seed.wrapping_add(1);
