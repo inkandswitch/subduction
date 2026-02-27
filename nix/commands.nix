@@ -3,6 +3,7 @@
   pkgs,
   system,
   cmd,
+  wasm-bodge,
 }: let
   cargo = "${pkgs.cargo}/bin/cargo";
   grafana-server = "${pkgs.grafana}/bin/grafana-server";
@@ -10,6 +11,7 @@
   pnpm = "${pkgs.pnpm}/bin/pnpm";
   playwright = "${pnpm} --dir=./subduction_wasm exec playwright";
   prometheus = "${pkgs.prometheus}/bin/prometheus";
+  wasm-bodge-bin = "${wasm-bodge}/bin/wasm-bodge";
   wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
 
   # Multi-crate wasm builds (project-specific)
@@ -397,11 +399,11 @@
 
       rows=""
       for dir in automerge_sedimentree_wasm automerge_subduction_wasm sedimentree_wasm subduction_wasm; do
-        wasm_file="$WORKSPACE_ROOT/$dir/pkg-slim/"*.wasm 2>/dev/null || continue
-        if [ -f $wasm_file ]; then
+        wasm_file=$(ls "$WORKSPACE_ROOT/$dir/dist/wasm_bindgen/web/"*_bg.wasm 2>/dev/null | head -1)
+        if [ -n "$wasm_file" ] && [ -f "$wasm_file" ]; then
           name=$(basename "$dir")
-          raw_size=$(${pkgs.coreutils}/bin/stat -c%s $wasm_file 2>/dev/null || echo "0")
-          gzip_size=$(${pkgs.gzip}/bin/gzip -c $wasm_file | ${pkgs.coreutils}/bin/wc -c)
+          raw_size=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file" 2>/dev/null || echo "0")
+          gzip_size=$(${pkgs.gzip}/bin/gzip -c "$wasm_file" | ${pkgs.coreutils}/bin/wc -c)
           raw_fmt=$(format_size "$raw_size")
           gz_fmt=$(format_size "$gzip_size")
           rows="$rows$name|$raw_fmt|$gz_fmt\n"
@@ -466,6 +468,103 @@
       wait
     '';
   };
+  bodge = let
+    wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
+  in {
+    "bodge:all" = cmd "Build all wasm packages with wasm-bodge" ''
+      set -e
+
+      # Workaround: wasm-bodge doesn't mkdir parents for scoped package names
+      # (e.g. dist/@automerge/ for @automerge/subduction.wasm).
+      # Pre-create the scope directory so the .wasm copy succeeds.
+      ensure_scope_dir() {
+        local pkg_json="$1"
+        local out_dir="$2"
+        local pkg_name
+        pkg_name=$(${pkgs.jq}/bin/jq -r '.name' "$pkg_json")
+        if [[ "$pkg_name" == @*/* ]]; then
+          local scope="''${pkg_name%%/*}"
+          mkdir -p "$out_dir/$scope"
+        fi
+      }
+
+      # wasm-bodge doesn't run wasm-opt; do it ourselves
+      optimize_wasm() {
+        local dist_dir="$1"
+        ${pkgs.findutils}/bin/find "$dist_dir" -name '*.wasm' -type f | while read -r wasm_file; do
+          local before=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+          ${wasm-opt} -O --all-features "$wasm_file" -o "$wasm_file"
+          local after=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+          echo "  wasm-opt: $(basename "$wasm_file") $before -> $after bytes"
+        done
+      }
+
+      for crate in sedimentree_wasm subduction_wasm automerge_sedimentree_wasm automerge_subduction_wasm; do
+        echo "===> wasm-bodge build $crate..."
+        rm -rf "$WORKSPACE_ROOT/$crate/dist"
+        ensure_scope_dir "$WORKSPACE_ROOT/$crate/package.json" "$WORKSPACE_ROOT/$crate/dist"
+        ${wasm-bodge-bin} build \
+          --crate-path "$WORKSPACE_ROOT/$crate" \
+          --package-json "$WORKSPACE_ROOT/$crate/package.json" \
+          --out-dir "$WORKSPACE_ROOT/$crate/dist"
+        optimize_wasm "$WORKSPACE_ROOT/$crate/dist"
+      done
+
+      echo ""
+      echo "✓ All wasm packages built with wasm-bodge"
+
+      wasm:sizes
+    '';
+
+    "bodge" = cmd "Build a single wasm package with wasm-bodge" ''
+      set -e
+
+      if [ -z "''${1:-}" ]; then
+        echo "Usage: bodge <crate>"
+        echo ""
+        echo "Available crates:"
+        echo "  sedimentree_wasm"
+        echo "  subduction_wasm"
+        echo "  automerge_sedimentree_wasm"
+        echo "  automerge_subduction_wasm"
+        exit 1
+      fi
+
+      CRATE="$1"
+
+      if [ ! -d "$WORKSPACE_ROOT/$CRATE" ]; then
+        echo "Error: crate directory not found: $CRATE"
+        exit 1
+      fi
+
+      rm -rf "$WORKSPACE_ROOT/$CRATE/dist"
+
+      # Workaround: wasm-bodge doesn't mkdir parents for scoped package names
+      PKG_NAME=$(${pkgs.jq}/bin/jq -r '.name' "$WORKSPACE_ROOT/$CRATE/package.json")
+      if [[ "$PKG_NAME" == @*/* ]]; then
+        SCOPE="''${PKG_NAME%%/*}"
+        mkdir -p "$WORKSPACE_ROOT/$CRATE/dist/$SCOPE"
+      fi
+
+      echo "===> wasm-bodge build $CRATE..."
+      ${wasm-bodge-bin} build \
+        --crate-path "$WORKSPACE_ROOT/$CRATE" \
+        --package-json "$WORKSPACE_ROOT/$CRATE/package.json" \
+        --out-dir "$WORKSPACE_ROOT/$CRATE/dist"
+
+      # wasm-bodge doesn't run wasm-opt; do it ourselves
+      ${pkgs.findutils}/bin/find "$WORKSPACE_ROOT/$CRATE/dist" -name '*.wasm' -type f | while read -r wasm_file; do
+        local_before=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+        ${wasm-opt} -O --all-features "$wasm_file" -o "$wasm_file"
+        local_after=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+        echo "  wasm-opt: $(basename "$wasm_file") $local_before -> $local_after bytes"
+      done
+
+      echo ""
+      echo "✓ $CRATE built with wasm-bodge"
+    '';
+  };
+
   ci = {
     "ci" = cmd "Run full CI suite (build, lint, test, wasm)" ''
       set -e
@@ -662,4 +761,4 @@
     '';
   };
 in
-  bench // build // ci // fmt // monitoring // release // test // wasm
+  bench // bodge // build // ci // fmt // monitoring // release // test // wasm

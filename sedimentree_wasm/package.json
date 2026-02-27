@@ -1,51 +1,72 @@
 {
-  "name": "@subduction/sedimentree",
-  "version": "0.0.0-alpha.0",
+  "name": "@automerge/sedimentree",
+  "version": "0.4.0-alpha.0",
   "description": "Wasm/JavaScript bindings for Sedimentree",
-  "private": true,
-  "main": "pkg/sedimentree_wasm.js",
+  "main": "./dist/cjs/node.cjs",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
     "build-node": "wasm-pack build --out-dir pkg-node --target nodejs --release",
     "build-bundler": "wasm-pack build --out-dir pkg --target bundler --release",
     "build-slim": "node build_slim.js"
   },
-  "keywords": ["sedimentree", "wasm", "crdt"],
-  "author": "",
-  "license": "Apache-2.0",
+  "keywords": [
+    "automerge",
+    "crdt",
+    "sedimentree",
+    "wasm"
+  ],
+  "author": "Alex Good <alex@patternist.xyz>, Brooklyn Zelenka <hello@brooklynzelenka.com>",
+  "license": "MIT OR Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/inkandswitch/subduction",
+    "directory": "sedimentree_wasm"
+  },
+  "homepage": "https://github.com/inkandswitch/subduction",
+  "bugs": {
+    "url": "https://github.com/inkandswitch/subduction/issues"
+  },
   "type": "module",
-  "module": "pkg/sedimentree_wasm.js",
-  "types": "pkg/sedimentree_wasm.d.ts",
+  "module": "./dist/esm/bundler.js",
+  "types": "./dist/index.d.ts",
   "files": [
-    "pkg/*",
-    "pkg-node/*",
-    "pkg-slim/*",
-    "package.json",
+    "dist",
     "README.md"
   ],
-  "sideEffects": ["./pkg/sedimentree_wasm.js", "./pkg/sedimentree_wasm_bg.js"],
+  "sideEffects": [
+    "./dist/esm/node.js",
+    "./dist/esm/web.js",
+    "./dist/esm/workerd.js"
+  ],
   "exports": {
     ".": {
-      "browser": "./pkg/sedimentree_wasm.js",
-      "node": {
-        "import": "./pkg-node/sedimentree_wasm.js",
-        "require": "./pkg-node/sedimentree_wasm.js",
-        "types": "./pkg-node/sedimentree_wasm.d.ts"
+      "types": "./dist/index.d.ts",
+      "workerd": {
+        "import": "./dist/esm/workerd.js",
+        "require": "./dist/cjs/web.cjs"
       },
-      "import": "./pkg/sedimentree_wasm.js",
-      "require": "./pkg/sedimentree_wasm.js",
-      "types": "./pkg/sedimentree_wasm.d.ts"
+      "node": {
+        "import": "./dist/esm/node.js",
+        "require": "./dist/cjs/node.cjs"
+      },
+      "browser": {
+        "import": "./dist/esm/bundler.js",
+        "require": "./dist/cjs/web.cjs"
+      },
+      "import": "./dist/esm/web.js",
+      "require": "./dist/cjs/web.cjs"
     },
     "./slim": {
-      "types": "./pkg-slim/index.d.ts",
-      "import": "./pkg-slim/index.js"
+      "types": "./dist/index.d.ts",
+      "import": "./dist/esm/slim.js",
+      "require": "./dist/cjs/slim.cjs"
     },
-    "./sedimentree_wasm-slim.wasm": "./pkg-slim/sedimentree_wasm_bg.wasm",
-    "./sedimentree_wasm_bg.wasm": "./pkg/sedimentree_wasm_bg.wasm",
-    "./sedimentree_wasm-slim.base64.js": {
-      "import": "./pkg-slim/sedimentree_wasm_bg.wasm.base64.js",
-      "types": "./pkg-slim/sedimentree_wasm_bg.wasm.base64.d.ts"
-    }
+    "./wasm": "./dist/@automerge/sedimentree.wasm",
+    "./wasm-base64": {
+      "import": "./dist/esm/wasm-base64.js",
+      "require": "./dist/cjs/wasm-base64.cjs"
+    },
+    "./iife": "./dist/iife/index.js"
   },
   "devDependencies": {
     "@types/node": "^22.17.2",

@@ -13,8 +13,12 @@ target
 # Contains mutation testing data
 **/mutants.out*/
 
+**/dist/
 **/node_modules/
 **/.pnpm-store/
+**/pkg/
+**/pkg-node/
+**/pkg-slim/
 **/test-results/
 **/playwright-report/
 data
