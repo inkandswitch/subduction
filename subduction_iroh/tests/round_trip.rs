@@ -31,7 +31,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_iroh::connection::IrohConnection;

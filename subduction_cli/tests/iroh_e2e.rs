@@ -35,7 +35,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -147,9 +147,7 @@ async fn spawn_server(
             && let Ok(content) = std::fs::read_to_string(ready_file)
         {
             let map = parse_ready_file(&content);
-            if let (Some(port_str), Some(node_id)) =
-                (map.get("port"), map.get("iroh_node_id"))
-            {
+            if let (Some(port_str), Some(node_id)) = (map.get("port"), map.get("iroh_node_id")) {
                 let port: u16 = port_str
                     .parse()
                     .expect("ready file port should be a valid u16");
@@ -167,7 +165,6 @@ async fn spawn_server(
         }
         tokio::time::sleep(READY_POLL_INTERVAL).await;
     }
-
 }
 
 /// Wait for the HTTP long-poll endpoint to be ready.

@@ -9,18 +9,18 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        handshake::Audience, message::Message, nonce_cache::NonceCache, Connection, Reconnect,
+        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
+    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
-    tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn},
     DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
