@@ -126,7 +126,7 @@ impl From<Map<WasmDigest, Set<WasmDigest>>> for WasmBoundary {
 #[wasm_bindgen(js_name = FragmentStateStore)]
 pub struct WasmFragmentStateStore(
     #[allow(clippy::type_complexity)]
-    pub(crate) RefCell<Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>>,
+    pub(crate)  RefCell<Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>>,
 );
 
 #[wasm_bindgen(js_class = FragmentStateStore)]
