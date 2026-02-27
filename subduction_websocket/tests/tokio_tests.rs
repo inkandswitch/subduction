@@ -9,18 +9,18 @@ use sedimentree_core::{
 use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
 use subduction_core::{
     connection::{
-        Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,
+        handshake::Audience, message::Message, nonce_cache::NonceCache, Connection, Reconnect,
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
+    tokio::{client::TokioWebSocketClient, server::TokioWebSocketServer, TimeoutTokio, TokioSpawn},
     DEFAULT_MAX_MESSAGE_SIZE,
-    tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 use testresult::TestResult;
 use tungstenite::http::Uri;
@@ -951,6 +951,154 @@ async fn server_try_connect_discover_wrong_service_name() -> TestResult {
     assert!(
         result.is_err(),
         "Should fail to connect with mismatched service name"
+    );
+
+    Ok(())
+}
+
+/// Server adds 3 commits, client adds 3 commits, both converge to >= 6.
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn bidirectional_sync_multiple_commits() -> TestResult {
+    init_tracing();
+
+    let server_signer = test_signer(0);
+    let client_signer = test_signer(1);
+    let server_peer_id = PeerId::from(server_signer.verifying_key());
+
+    let addr: SocketAddr = "127.0.0.1:0".parse()?;
+    let sed_id = SedimentreeId::new([3u8; 32]);
+
+    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
+        None,
+        server_signer,
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    );
+
+    tokio::spawn(async move {
+        listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    tokio::spawn(async move {
+        manager_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    let server = TokioWebSocketServer::new(
+        addr,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        HANDSHAKE_MAX_DRIFT,
+        DEFAULT_MAX_MESSAGE_SIZE,
+        server_subduction.clone(),
+    )
+    .await?;
+
+    let bound = server.address();
+
+    let (client, client_listener_fut, client_actor_fut) = Subduction::<
+        Sendable,
+        MemoryStorage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        OpenPolicy,
+        MemorySigner,
+    >::new(
+        None,
+        client_signer.clone(),
+        MemoryStorage::default(),
+        OpenPolicy,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+        ShardedMap::with_key(0, 0),
+        TokioSpawn,
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    );
+
+    tokio::spawn(client_actor_fut);
+    tokio::spawn(client_listener_fut);
+
+    let uri: Uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
+    let (client_ws, ws_listener_fut, ws_sender_fut) = TokioWebSocketClient::new(
+        uri,
+        TimeoutTokio,
+        Duration::from_secs(5),
+        client_signer,
+        Audience::known(server_peer_id),
+    )
+    .await?;
+
+    tokio::spawn(async {
+        ws_listener_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    tokio::spawn(async {
+        ws_sender_fut.await?;
+        Ok::<(), eyre::Report>(())
+    });
+
+    client.register(client_ws).await?;
+
+    tokio::spawn({
+        let inner_client = client.clone();
+        async move {
+            inner_client.listen().await?;
+            Ok::<(), eyre::Report>(())
+        }
+    });
+
+    // Server adds 3 commits
+    for i in 0..3u8 {
+        let mut data = b"server-commit-".to_vec();
+        data.push(i);
+        server_subduction
+            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .await?;
+    }
+
+    // Client adds 3 commits
+    for i in 0..3u8 {
+        let mut data = b"client-commit-".to_vec();
+        data.push(i);
+        client
+            .add_commit(sed_id, BTreeSet::new(), Blob::new(data))
+            .await?;
+    }
+
+    // Client syncs (pushes its commits, pulls server's commits)
+    let (had_success, _stats, call_errs, io_errs) =
+        client.full_sync(Some(Duration::from_secs(5))).await;
+    assert!(call_errs.is_empty(), "full_sync call errors: {call_errs:?}");
+    assert!(io_errs.is_empty(), "full_sync IO errors: {io_errs:?}");
+    assert!(had_success);
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let server_commits = server_subduction
+        .get_commits(sed_id)
+        .await
+        .ok_or("server should have commits")?;
+    let client_commits = client
+        .get_commits(sed_id)
+        .await
+        .ok_or("client should have commits")?;
+
+    assert!(
+        server_commits.len() >= 6,
+        "server should have >= 6 commits, got {}",
+        server_commits.len()
+    );
+    assert!(
+        client_commits.len() >= 6,
+        "client should have >= 6 commits, got {}",
+        client_commits.len()
     );
 
     Ok(())
