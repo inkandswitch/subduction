@@ -1,6 +1,7 @@
 //! Fragment-related wrappers.
 
 use alloc::vec::Vec;
+use core::cell::RefCell;
 use sedimentree_core::collections::{Map, Set};
 
 use sedimentree_core::{commit::FragmentState, crypto::digest::Digest, loose_commit::LooseCommit};
@@ -117,10 +118,14 @@ impl From<Map<WasmDigest, Set<WasmDigest>>> for WasmBoundary {
 }
 
 /// A store for fragment states.
+///
+/// Uses interior mutability (`RefCell`) so that wasm_bindgen only takes
+/// a shared borrow across the JS boundary, avoiding "recursive use of
+/// an object" panics when JS callbacks re-enter during `buildFragmentStore`.
 #[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
 pub struct WasmFragmentStateStore(
-    pub(crate) Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>,
+    pub(crate) RefCell<Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>>,
 );
 
 #[wasm_bindgen(js_class = FragmentStateStore)]
@@ -129,17 +134,18 @@ impl WasmFragmentStateStore {
     #[wasm_bindgen(constructor)]
     #[must_use]
     pub fn new() -> Self {
-        Self(Map::new())
+        Self(RefCell::new(Map::new()))
     }
 
     /// Insert a fragment state into the store.
-    pub fn insert(&mut self, digest: &WasmDigest, state: &WasmFragmentState) {
-        self.0.insert(digest.clone().into(), state.0.clone());
+    pub fn insert(&self, digest: &WasmDigest, state: &WasmFragmentState) {
+        self.0.borrow_mut().insert(digest.clone().into(), state.0.clone());
     }
 
     /// Get a fragment state from the store.
     pub fn get(&self, digest: &WasmDigest) -> Option<WasmFragmentState> {
         self.0
+            .borrow()
             .get(&digest.clone().into())
             .cloned()
             .map(WasmFragmentState)
@@ -151,6 +157,6 @@ impl From<WasmFragmentStateStore>
     for Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>
 {
     fn from(store: WasmFragmentStateStore) -> Self {
-        store.0
+        store.0.into_inner()
     }
 }
