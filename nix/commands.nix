@@ -468,7 +468,9 @@
       wait
     '';
   };
-  bodge = {
+  bodge = let
+    wasm-opt = "${pkgs.binaryen}/bin/wasm-opt";
+  in {
     "bodge:all" = cmd "Build all wasm packages with wasm-bodge" ''
       set -e
 
@@ -486,6 +488,17 @@
         fi
       }
 
+      # wasm-bodge doesn't run wasm-opt; do it ourselves
+      optimize_wasm() {
+        local dist_dir="$1"
+        ${pkgs.findutils}/bin/find "$dist_dir" -name '*.wasm' -type f | while read -r wasm_file; do
+          local before=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+          ${wasm-opt} -O --all-features "$wasm_file" -o "$wasm_file"
+          local after=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+          echo "  wasm-opt: $(basename "$wasm_file") $before -> $after bytes"
+        done
+      }
+
       for crate in sedimentree_wasm subduction_wasm automerge_sedimentree_wasm automerge_subduction_wasm; do
         echo "===> wasm-bodge build $crate..."
         rm -rf "$WORKSPACE_ROOT/$crate/dist"
@@ -494,6 +507,7 @@
           --crate-path "$WORKSPACE_ROOT/$crate" \
           --package-json "$WORKSPACE_ROOT/$crate/package.json" \
           --out-dir "$WORKSPACE_ROOT/$crate/dist"
+        optimize_wasm "$WORKSPACE_ROOT/$crate/dist"
       done
 
       echo ""
@@ -537,6 +551,14 @@
         --crate-path "$WORKSPACE_ROOT/$CRATE" \
         --package-json "$WORKSPACE_ROOT/$CRATE/package.json" \
         --out-dir "$WORKSPACE_ROOT/$CRATE/dist"
+
+      # wasm-bodge doesn't run wasm-opt; do it ourselves
+      ${pkgs.findutils}/bin/find "$WORKSPACE_ROOT/$CRATE/dist" -name '*.wasm' -type f | while read -r wasm_file; do
+        local_before=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+        ${wasm-opt} -O --all-features "$wasm_file" -o "$wasm_file"
+        local_after=$(${pkgs.coreutils}/bin/stat -c%s "$wasm_file")
+        echo "  wasm-opt: $(basename "$wasm_file") $local_before -> $local_after bytes"
+      done
 
       echo ""
       echo "✓ $CRATE built with wasm-bodge"
