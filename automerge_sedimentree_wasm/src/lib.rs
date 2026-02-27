@@ -55,7 +55,7 @@ impl WasmSedimentreeAutomerge {
         hash_metric: &WasmHashMetric,
     ) -> Result<WasmFragmentState, WasmFragmentError> {
         Ok(self
-            .fragment(head.clone().into(), &known_states.0, hash_metric)
+            .fragment(head.clone().into(), &known_states.0.borrow(), hash_metric)
             .map(WasmFragmentState)?)
     }
 
@@ -69,7 +69,7 @@ impl WasmSedimentreeAutomerge {
     pub fn js_build_fragment_store(
         &self,
         head_digests: Vec<JsDigest>,
-        known_fragment_states: &mut WasmFragmentStateStore,
+        known_fragment_states: &WasmFragmentStateStore,
         strategy: &WasmHashMetric,
     ) -> Result<Vec<WasmFragmentState>, WasmFragmentError> {
         let heads: Vec<Digest<LooseCommit>> = head_digests
@@ -78,7 +78,7 @@ impl WasmSedimentreeAutomerge {
             .collect();
 
         let fresh = self
-            .build_fragment_store(&heads, &mut known_fragment_states.0, strategy)?
+            .build_fragment_store(&heads, &mut known_fragment_states.0.borrow_mut(), strategy)?
             .into_iter()
             .cloned()
             .map(WasmFragmentState)

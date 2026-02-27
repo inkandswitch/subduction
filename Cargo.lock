@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree_wasm"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "automerge",
  "base58",
@@ -268,7 +268,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",

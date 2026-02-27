@@ -37,3 +37,6 @@ jobs:
 
     - name: Clippy
       run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+    - name: Lint wasm_bindgen &mut boundaries
+      run: ./scripts/lint-wasm-mut.sh --github-annotations
