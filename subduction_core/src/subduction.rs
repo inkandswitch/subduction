@@ -805,10 +805,12 @@ impl<
         let peer_conns = { self.connections.lock().await.remove(peer_id) };
 
         if let Some(conns) = peer_conns {
-            for conn in conns {
-                #[cfg(feature = "metrics")]
+            #[cfg(feature = "metrics")]
+            for _ in &conns {
                 crate::metrics::connection_closed();
+            }
 
+            for conn in conns {
                 if let Err(e) = conn.disconnect().await {
                     tracing::error!("{e}");
                     return Err(e);

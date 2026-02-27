@@ -60,8 +60,8 @@ fn setup_tracing() {
     let (loki_layer, loki_task) = match std::env::var("LOKI_URL") {
         Ok(loki_url) => match setup_loki(&loki_url) {
             Ok((layer, task)) => {
-                let loki_filter = EnvFilter::try_from_env("LOKI_LOG")
-                    .unwrap_or_else(|_| EnvFilter::new("info"));
+                let loki_filter =
+                    EnvFilter::try_from_env("LOKI_LOG").unwrap_or_else(|_| EnvFilter::new("info"));
                 eprintln!("Loki tracing enabled: {loki_url}");
                 (Some(layer.with_filter(loki_filter)), Some(task))
             }
