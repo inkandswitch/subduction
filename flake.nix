@@ -187,12 +187,12 @@
             pname = "subduction_cli";
             version = "0.4.0";
             meta = {
-              description = "CLI tool for running Subduction with WebSockets";
+              description = "CLI for running a Subduction sync server";
               longDescription = ''
                 Subduction is a peer-to-peer synchronization protocol built on top of
                 Sedimentree, providing efficient data synchronization with support for
-                multiple transports. This CLI tool provides WebSocket-based
-                server and client implementations for running Subduction nodes.
+                multiple transports. This CLI runs a Subduction sync server supporting
+                WebSocket, HTTP long-poll, and Iroh (QUIC) transports.
               '';
               homepage = "https://github.com/inkandswitch/subduction";
               license = [

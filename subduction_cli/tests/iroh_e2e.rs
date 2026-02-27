@@ -117,7 +117,7 @@ async fn spawn_server(
         .arg("--service-name")
         .arg(service_name)
         .arg("--iroh")
-        .arg("--iroh-no-relay")
+        .arg("--iroh-direct-only")
         .arg("--data-dir")
         .arg(data_dir)
         .arg("--ready-file")

@@ -73,7 +73,7 @@ in {
 
       handshakeMaxDrift = lib.mkOption {
         type = lib.types.int;
-        default = 60;
+        default = 600;
         description = "Maximum clock drift allowed during handshake (in seconds).";
       };
 
@@ -119,27 +119,48 @@ in {
         description = "Interval in seconds for refreshing storage metrics from disk.";
       };
 
-      peers = lib.mkOption {
+      wsPeers = lib.mkOption {
         type = lib.types.listOf lib.types.str;
         default = [];
         example = ["ws://192.168.1.100:8080" "ws://192.168.1.101:8080"];
-        description = "List of peer WebSocket URLs to connect to on startup for bidirectional sync.";
-      };
-    };
-
-    relay = {
-      enable = lib.mkEnableOption "Subduction ephemeral message relay";
-
-      socket = lib.mkOption {
-        type = lib.types.str;
-        default = "0.0.0.0:8081";
-        description = "Socket address for the ephemeral relay server.";
+        description = "WebSocket peer URLs to connect to on startup for bidirectional sync.";
       };
 
-      maxMessageSize = lib.mkOption {
-        type = lib.types.int;
-        default = 1048576; # 1 MB
-        description = "Maximum message size in bytes.";
+      iroh = {
+        enable = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Enable the Iroh (QUIC) transport for NAT-traversing P2P connections.";
+        };
+
+        peers = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [];
+          example = ["abc123..."];
+          description = "Iroh peer node IDs (z32-encoded public keys) to connect to on startup.";
+        };
+
+        peerAddrs = lib.mkOption {
+          type = lib.types.listOf lib.types.str;
+          default = [];
+          example = ["192.168.1.100:12345"];
+          description = "Direct socket addresses for iroh peers, added as transport hints.";
+        };
+
+        directOnly = lib.mkOption {
+          type = lib.types.bool;
+          default = false;
+          description = "Skip iroh relay servers and only use direct connections.";
+        };
+
+        relayUrl = lib.mkOption {
+          type = lib.types.nullOr lib.types.str;
+          default = null;
+          description = ''
+            URL of an iroh relay server to route through instead of the public
+            default (e.g. a self-hosted iroh-relay instance).
+          '';
+        };
       };
     };
 
@@ -157,7 +178,7 @@ in {
   };
 
   config = let
-    anyEnabled = cfg.server.enable || cfg.relay.enable;
+    anyEnabled = cfg.server.enable;
     hasKeySource = cfg.server.keySeed != null || cfg.server.keyFile != null || cfg.server.ephemeralKey;
   in
     lib.mkMerge [
@@ -232,7 +253,12 @@ in {
                 ++ lib.optionals (cfg.server.keyFile != null) ["--key-file" (toString cfg.server.keyFile)]
                 ++ lib.optionals cfg.server.ephemeralKey ["--ephemeral-key"]
                 ++ lib.optionals (cfg.server.serviceName != null) ["--service-name" cfg.server.serviceName]
-                ++ lib.concatMap (peer: ["--peer" peer]) cfg.server.peers;
+                ++ lib.concatMap (peer: ["--ws-peer" peer]) cfg.server.wsPeers
+                ++ lib.optionals cfg.server.iroh.enable ["--iroh"]
+                ++ lib.optionals (cfg.server.iroh.enable && cfg.server.iroh.directOnly) ["--iroh-direct-only"]
+                ++ lib.optionals (cfg.server.iroh.relayUrl != null) ["--iroh-relay-url" cfg.server.iroh.relayUrl]
+                ++ lib.concatMap (peer: ["--iroh-peer" peer]) cfg.server.iroh.peers
+                ++ lib.concatMap (addr: ["--iroh-peer-addr" addr]) cfg.server.iroh.peerAddrs;
             in
               lib.escapeShellArgs args;
             Restart = "on-failure";
@@ -246,47 +272,15 @@ in {
           };
         };
 
-        systemd.services.subduction-relay = lib.mkIf cfg.relay.enable {
-          description = "Subduction Ephemeral Message Relay";
-          wantedBy = ["multi-user.target"];
-          after = ["network.target"];
-
-          serviceConfig = {
-            Type = "simple";
-            User = cfg.user;
-            Group = cfg.group;
-            ExecStart = lib.escapeShellArgs [
-              "${cfg.package}/bin/subduction_cli"
-              "ephemeral-relay"
-              "--socket"
-              cfg.relay.socket
-              "--max-message-size"
-              (toString cfg.relay.maxMessageSize)
-            ];
-            Restart = "on-failure";
-            RestartSec = 5;
-
-            NoNewPrivileges = true;
-            ProtectSystem = "strict";
-            ProtectHome = true;
-            PrivateTmp = true;
-            ReadOnlyPaths = ["/"];
-          };
-        };
-
         networking.firewall = lib.mkIf cfg.openFirewall {
           allowedTCPPorts = let
-            # Match the port after the last colon (handles IPv6 bracket notation)
             getPort = socket:
               let
                 matched = builtins.match ".*:([0-9]+)$" socket;
               in
                 lib.toInt (lib.head matched);
-            serverPort = getPort cfg.server.socket;
-            relayPort = getPort cfg.relay.socket;
           in
-            (lib.optional cfg.server.enable serverPort)
-            ++ (lib.optional cfg.relay.enable relayPort);
+            lib.optional cfg.server.enable (getPort cfg.server.socket);
         };
       })
 

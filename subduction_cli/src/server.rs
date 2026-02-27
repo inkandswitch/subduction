@@ -106,9 +106,9 @@ pub(crate) struct ServerArgs {
     #[arg(long, default_value_t = true)]
     pub(crate) longpoll: bool,
 
-    /// Peer WebSocket URLs to connect to on startup
-    #[arg(long = "peer", value_name = "URL")]
-    pub(crate) peers: Vec<String>,
+    /// WebSocket peer URLs to connect to on startup
+    #[arg(long = "ws-peer", value_name = "URL")]
+    pub(crate) ws_peers: Vec<String>,
 
     /// Enable the Iroh (QUIC) transport for NAT-traversing P2P connections
     #[arg(long, default_value_t = false)]
@@ -123,13 +123,14 @@ pub(crate) struct ServerArgs {
     #[arg(long = "iroh-peer-addr", value_name = "IP:PORT")]
     pub(crate) iroh_peer_addrs: Vec<SocketAddr>,
 
-    /// Custom iroh relay server URL (defaults to iroh's public relay servers)
-    #[arg(long = "iroh-relay", value_name = "URL")]
-    pub(crate) iroh_relay: Option<String>,
+    /// Skip iroh relay servers and only use direct connections
+    #[arg(long = "iroh-direct-only")]
+    pub(crate) iroh_direct_only: bool,
 
-    /// Disable iroh relay servers (direct connections only)
-    #[arg(long = "iroh-no-relay", default_value_t = false)]
-    pub(crate) iroh_no_relay: bool,
+    /// URL of an iroh relay server to route through instead of the public default
+    /// (e.g. a self-hosted `iroh-relay` instance)
+    #[arg(long = "iroh-relay-url", value_name = "URL")]
+    pub(crate) iroh_relay_url: Option<String>,
 
     /// Write a JSON file on startup with the assigned port, peer ID, and iroh node ID.
     /// Useful for integration tests that need to discover the server's address.
@@ -303,9 +304,9 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let mut iroh_node_id: Option<String> = None;
     let mut iroh_addrs: Vec<SocketAddr> = Vec::new();
     let iroh_accept_task = if iroh_enabled {
-        let relay_mode = if args.iroh_no_relay {
+        let relay_mode = if args.iroh_direct_only {
             iroh::endpoint::RelayMode::Disabled
-        } else if let Some(url) = &args.iroh_relay {
+        } else if let Some(url) = &args.iroh_relay_url {
             let relay_map =
                 iroh::RelayMap::try_from_iter([url.as_str()]).map_err(|e| eyre::eyre!(e))?;
             iroh::endpoint::RelayMode::Custom(relay_map)
@@ -456,7 +457,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     };
 
     // Connect to configured WebSocket peers for bidirectional sync
-    for peer_url in &args.peers {
+    for peer_url in &args.ws_peers {
         let uri: Uri = match peer_url.parse() {
             Ok(uri) => uri,
             Err(e) => {
