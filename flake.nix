@@ -209,7 +209,7 @@
             cargoLock = {
               lockFile = ./Cargo.lock;
               outputHashes = {
-                "keyhive_core-0.2.0-alpha.1" = "sha256-DhnAqMRL+9851XXLPGgLEWFe4WKIlzJhnfrHIuvEdiU=";
+                "keyhive_core-0.2.0-alpha.1" = "sha256-lsDhv65bdo/Y1ar6oxVI+RRzFmUI8+nDjZ35crnD4aE=";
                 "wasm-tracing-3.0.0-alpha.0" = "sha256-b5XSxRM601ID/uT2aLMb0WrP3lSGALrh0bPB+7Va/6s=";
               };
             };
