@@ -27,6 +27,13 @@ if [[ -z "$workspace_root" ]]; then
   workspace_root="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 
+# Prefer gawk, fall back to awk (works on macOS and ubuntu-latest)
+if command -v gawk &>/dev/null; then
+  AWK=gawk
+else
+  AWK=awk
+fi
+
 rc=0
 
 for crate_dir in "$workspace_root"/*_wasm; do
@@ -44,7 +51,7 @@ for crate_dir in "$workspace_root"/*_wasm; do
   # a wasm_bindgen impl block. That's fine — the fix (RefCell) is always safe,
   # and false negatives (missing a real problem) are worse.
   while IFS= read -r src_file; do
-    gawk -v github="$github_annotations" '
+    $AWK -v github="$github_annotations" '
       BEGIN { in_wb_impl = 0; brace_depth = 0; wb_attr = 0; found = 0 }
 
       /^[[:space:]]*#\[wasm_bindgen/ { wb_attr = 1 }

@@ -119,12 +119,13 @@ impl From<Map<WasmDigest, Set<WasmDigest>>> for WasmBoundary {
 
 /// A store for fragment states.
 ///
-/// Uses interior mutability (`RefCell`) so that wasm_bindgen only takes
+/// Uses interior mutability (`RefCell`) so that `wasm_bindgen` only takes
 /// a shared borrow across the JS boundary, avoiding "recursive use of
 /// an object" panics when JS callbacks re-enter during `buildFragmentStore`.
 #[derive(Debug, Default, Clone)]
 #[wasm_bindgen(js_name = FragmentStateStore)]
 pub struct WasmFragmentStateStore(
+    #[allow(clippy::type_complexity)]
     pub(crate) RefCell<Map<Digest<LooseCommit>, FragmentState<Set<Digest<LooseCommit>>>>>,
 );
 
