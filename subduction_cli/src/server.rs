@@ -663,13 +663,13 @@ async fn handle_websocket(
             let listen_ws = ws.clone();
             tokio::spawn(async move {
                 if let Err(e) = listen_ws.listen().await {
-                    tracing::error!("WebSocket listen error: {e}");
+                    tracing::info!("WebSocket listener disconnected: {e}");
                 }
             });
 
             tokio::spawn(async move {
                 if let Err(e) = sender_fut.await {
-                    tracing::error!("WebSocket sender error: {e}");
+                    tracing::info!("WebSocket sender disconnected: {e}");
                 }
             });
 
@@ -852,7 +852,7 @@ async fn try_connect_ws(
                     }
                     result = listen_ws.listen() => {
                         if let Err(e) = result {
-                            tracing::error!("WebSocket listen error for {listen_uri}: {e}");
+                            tracing::info!("WebSocket listener disconnected for {listen_uri}: {e}");
                         }
                     }
                 }
@@ -866,7 +866,7 @@ async fn try_connect_ws(
                     }
                     result = sender_fut => {
                         if let Err(e) = result {
-                            tracing::error!("WebSocket sender error for {sender_uri}: {e}");
+                            tracing::info!("WebSocket sender disconnected for {sender_uri}: {e}");
                         }
                     }
                 }
@@ -930,7 +930,7 @@ async fn try_connect_iroh(
             }
             result = listener_task => {
                 if let Err(e) = result {
-                    tracing::error!("iroh: listener error for {node_id}: {e}");
+                    tracing::info!("iroh: listener disconnected for {node_id}: {e}");
                 }
             }
         }
@@ -943,7 +943,7 @@ async fn try_connect_iroh(
             }
             result = sender_task => {
                 if let Err(e) = result {
-                    tracing::error!("iroh: sender error for {node_id}: {e}");
+                    tracing::info!("iroh: sender disconnected for {node_id}: {e}");
                 }
             }
         }

@@ -225,12 +225,12 @@ impl<
             *self = authenticated.into_inner();
             tokio::spawn(async move {
                 if let Err(e) = listener.await {
-                    tracing::error!("WebSocket client listener error after reconnect: {e:?}");
+                    tracing::info!("WebSocket client listener disconnected after reconnect: {e:?}");
                 }
             });
             tokio::spawn(async move {
                 if let Err(e) = sender.await {
-                    tracing::error!("WebSocket client sender error after reconnect: {e:?}");
+                    tracing::info!("WebSocket client sender disconnected after reconnect: {e:?}");
                 }
             });
 

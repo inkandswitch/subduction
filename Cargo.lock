@@ -4515,7 +4515,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "arbitrary",
  "async-lock",
@@ -4938,7 +4938,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.4.2"
+version = "0.5.0"
 dependencies = [
  "ahash",
  "async-lock",
@@ -4980,7 +4980,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5027,7 +5027,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5148,7 +5148,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "arbitrary",
  "async-channel",

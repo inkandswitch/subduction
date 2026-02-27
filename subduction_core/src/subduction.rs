@@ -2913,7 +2913,7 @@ impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C,
         Abortable::new(
             K::from_future(async move {
                 if let Err(e) = subduction.listen().await {
-                    tracing::error!("Subduction listen error: {}", e.to_string());
+                    tracing::info!("Subduction listener disconnected: {}", e.to_string());
                 }
             }),
             abort_reg,
