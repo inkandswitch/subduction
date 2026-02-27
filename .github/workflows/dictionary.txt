@@ -1,6 +1,7 @@
 acyclic
 AHash
 al
+ALPN
 APIs
 assignees
 async
@@ -119,6 +120,9 @@ impl
 IndexedDB
 instantiation
 instantiations
+Iroh
+iroh
+iroh's
 Integrations
 invariant
 Invariants
@@ -199,6 +203,7 @@ PRF
 priori
 probabilistically
 pseudorandom
+QUIC
 README
 Reconnection
 reconnection
