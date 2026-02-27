@@ -32,7 +32,7 @@ authors = [
 # Internal crates
 automerge_sedimentree_wasm = { version = "0.4.0", path = "automerge_sedimentree_wasm" }
 sedimentree_core = { version = "0.4.2", path = "sedimentree_core", default-features = false }
-sedimentree_fs_storage = { version = "0.4.0", path = "sedimentree_fs_storage" }
+sedimentree_fs_storage = { version = "0.4.1", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.4.0", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.4.2", path = "subduction_core", default-features = false }
 subduction_crypto = { version = "0.1.1", path = "subduction_crypto", default-features = false }
