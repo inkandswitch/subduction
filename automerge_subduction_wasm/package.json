@@ -2,6 +2,9 @@
   "name": "@automerge/automerge-subduction",
   "version": "0.2.1-alpha.0",
   "description": "Wasm bindings for syncing Automerge documents via Subduction",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/cjs/node.cjs",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",

@@ -2,6 +2,9 @@
   "name": "@automerge/sedimentree",
   "version": "0.4.0-alpha.0",
   "description": "Wasm/JavaScript bindings for Sedimentree",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/cjs/node.cjs",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",

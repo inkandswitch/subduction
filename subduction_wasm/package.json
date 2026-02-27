@@ -2,6 +2,9 @@
   "name": "@automerge/subduction",
   "version": "0.4.2-alpha.0",
   "description": "Wasm/JavaScript bindings for Subduction (browser and Node.js)",
+  "publishConfig": {
+    "access": "public"
+  },
   "main": "./dist/cjs/node.cjs",
   "scripts": {
     "build": "pnpm run build-node && pnpm run build-bundler && pnpm run build-slim",
