@@ -139,7 +139,9 @@ impl WasmFragmentStateStore {
 
     /// Insert a fragment state into the store.
     pub fn insert(&self, digest: &WasmDigest, state: &WasmFragmentState) {
-        self.0.borrow_mut().insert(digest.clone().into(), state.0.clone());
+        self.0
+            .borrow_mut()
+            .insert(digest.clone().into(), state.0.clone());
     }
 
     /// Get a fragment state from the store.

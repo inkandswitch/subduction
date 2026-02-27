@@ -565,6 +565,14 @@
     '';
   };
 
+  lint = {
+    # Detect `&mut self` or `&mut T` parameters on #[wasm_bindgen] boundaries.
+    # These cause "recursive use of an object" runtime panics when JS re-enters
+    # during the call. Use RefCell for interior mutability instead.
+    "lint:wasm-mut" = cmd "Lint for &mut on wasm_bindgen boundaries"
+      ''${pkgs.bash}/bin/bash "$WORKSPACE_ROOT/scripts/lint-wasm-mut.sh" --workspace-root "$WORKSPACE_ROOT"'';
+  };
+
   ci = {
     "ci" = cmd "Run full CI suite (build, lint, test, wasm)" ''
       set -e
@@ -574,32 +582,36 @@
       echo "========================================"
       echo ""
 
-      echo "===> [1/6] Checking formatting..."
+      echo "===> [1/7] Checking formatting..."
       ${cargo} fmt --check
       echo "✓ Formatting OK"
       echo ""
 
-      echo "===> [2/6] Running Clippy..."
+      echo "===> [2/7] Running Clippy..."
       ${cargo} clippy --workspace --all-targets -- -D warnings
       echo "✓ Clippy OK"
       echo ""
 
-      echo "===> [3/6] Building host target..."
+      echo "===> [3/7] Checking for &mut on wasm_bindgen boundaries..."
+      lint:wasm-mut
+      echo ""
+
+      echo "===> [4/7] Building host target..."
       ${cargo} build --workspace
       echo "✓ Host build OK"
       echo ""
 
-      echo "===> [4/6] Running host tests..."
+      echo "===> [5/7] Running host tests..."
       ${cargo} test --workspace
       echo "✓ Host tests OK"
       echo ""
 
-      echo "===> [5/6] Building wasm packages..."
+      echo "===> [6/7] Building wasm packages..."
       ${wasm-pack} build --target web subduction_wasm
       echo "✓ Wasm build OK"
       echo ""
 
-      echo "===> [6/6] Running wasm tests..."
+      echo "===> [7/7] Running wasm tests..."
       ${wasm-pack} test --node subduction_wasm
       echo "✓ Wasm tests OK"
       echo ""
@@ -761,4 +773,4 @@
     '';
   };
 in
-  bench // bodge // build // ci // fmt // monitoring // release // test // wasm
+  bench // bodge // build // ci // fmt // lint // monitoring // release // test // wasm
