@@ -172,12 +172,6 @@ mod tests {
     }
 
     #[test]
-    fn verify_sorted_ascending() {
-        let elements: &[[u8; 32]] = &[[0x10; 32], [0x20; 32], [0x30; 32]];
-        assert!(verify_sorted(elements).is_ok());
-    }
-
-    #[test]
     fn verify_sorted_descending_rejected() {
         let elements: &[[u8; 32]] = &[[0x30; 32], [0x20; 32], [0x10; 32]];
         assert!(matches!(

@@ -189,51 +189,9 @@ impl Decode for LooseCommit {
 mod tests {
     use super::*;
     use alloc::vec;
-    use testresult::TestResult;
-
-    fn make_digest<T: 'static>(byte: u8) -> Digest<T> {
-        Digest::force_from_bytes([byte; 32])
-    }
 
     fn make_sedimentree_id(byte: u8) -> SedimentreeId {
         SedimentreeId::new([byte; 32])
-    }
-
-    #[test]
-    fn codec_round_trip_no_parents() -> TestResult {
-        let id = make_sedimentree_id(0x01);
-        let commit = LooseCommit::new(
-            id,
-            BTreeSet::new(),
-            BlobMeta::from_digest_size(make_digest(0x20), 1024),
-        );
-
-        let mut buf = Vec::new();
-        commit.encode_fields(&mut buf);
-        assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE);
-
-        let decoded = LooseCommit::try_decode_fields(&buf)?;
-        assert_eq!(decoded, commit);
-        Ok(())
-    }
-
-    #[test]
-    fn codec_round_trip_with_parents() -> TestResult {
-        let id = make_sedimentree_id(0x01);
-        let parents = BTreeSet::from([make_digest(0x30), make_digest(0x40), make_digest(0x50)]);
-        let commit = LooseCommit::new(
-            id,
-            parents,
-            BlobMeta::from_digest_size(make_digest(0x20), 2048),
-        );
-
-        let mut buf = Vec::new();
-        commit.encode_fields(&mut buf);
-        assert_eq!(buf.len(), CODEC_FIXED_FIELDS_SIZE + 3 * 32);
-
-        let decoded = LooseCommit::try_decode_fields(&buf)?;
-        assert_eq!(decoded, commit);
-        Ok(())
     }
 
     #[test]

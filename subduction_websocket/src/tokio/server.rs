@@ -190,13 +190,13 @@ where
                                                 let listen_ws = ws.clone();
                                                 tokio::spawn(async move {
                                                     if let Err(e) = listen_ws.listen().await {
-                                                        tracing::error!("WebSocket listen error: {e}");
+                                                        tracing::info!("WebSocket listener disconnected: {e}");
                                                     }
                                                 });
 
                                                 tokio::spawn(async move {
                                                     if let Err(e) = sender_fut.await {
-                                                        tracing::error!("WebSocket sender error: {e}");
+                                                        tracing::info!("WebSocket sender disconnected: {e}");
                                                     }
                                                 });
 
@@ -409,7 +409,7 @@ where
                         }
                         result = listen_ws.listen() => {
                             if let Err(e) = result {
-                                tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                                tracing::info!("WebSocket listener disconnected for peer {listen_uri_str}: {e}");
                             }
                         }
                     }
@@ -423,7 +423,7 @@ where
                         }
                         result = sender_fut => {
                             if let Err(e) = result {
-                                tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
+                                tracing::info!("WebSocket sender disconnected for peer {sender_uri_str}: {e}");
                             }
                         }
                     }
@@ -522,7 +522,7 @@ where
                         }
                         result = listen_ws.listen() => {
                             if let Err(e) = result {
-                                tracing::error!("WebSocket listen error for peer {listen_uri_str}: {e}");
+                                tracing::info!("WebSocket listener disconnected for peer {listen_uri_str}: {e}");
                             }
                         }
                     }
@@ -536,7 +536,7 @@ where
                         }
                         result = sender_fut => {
                             if let Err(e) = result {
-                                tracing::error!("WebSocket sender error for peer {sender_uri_str}: {e}");
+                                tracing::info!("WebSocket sender disconnected for peer {sender_uri_str}: {e}");
                             }
                         }
                     }

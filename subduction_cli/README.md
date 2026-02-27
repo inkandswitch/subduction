@@ -5,16 +5,16 @@
 
 ## Overview
 
-The Subduction CLI provides multiple server modes:
+The Subduction CLI runs a document sync server with three transport layers:
 
-- **`server`** - Subduction document sync server (persistent CRDT storage)
-- **`client`** - Subduction client connecting to a server
-- **`ephemeral-relay`** - Simple relay for ephemeral messages (presence, awareness)
+- **WebSocket** — browser-compatible, enabled by default
+- **HTTP Long Poll** — fallback for restrictive networks, enabled by default
+- **Iroh (QUIC)** — NAT-traversing P2P via [iroh](https://iroh.computer), opt-in
 
 ## Installation
 
 <details>
-<summary><h3>Using Nix ❄️</h3></summary>
+<summary><h3>Using Nix</h3></summary>
 
 ```bash
 # Run directly without installing
@@ -24,7 +24,7 @@ nix run github:inkandswitch/subduction -- --help
 nix profile install github:inkandswitch/subduction
 
 # Then run
-subduction_cli server --socket 0.0.0.0:8080
+subduction_cli server --socket 0.0.0.0:8080 --ephemeral-key
 ```
 
 #### Adding to a Flake
@@ -57,7 +57,7 @@ subduction_cli server --socket 0.0.0.0:8080
 
 </details>
 
-### Using Cargo 🦀
+### Using Cargo
 
 ```bash
 # Build from source
@@ -67,204 +67,161 @@ cargo build --release
 ./target/release/subduction_cli --help
 ```
 
+## Key Management
+
+The server requires an **Ed25519 signing key seed** (32 bytes). The seed is used to deterministically derive both the signing key and the public verifying key. The verifying key becomes the server's **peer ID**.
+
+### Generating a Key
+
+Any source of 32 cryptographically random bytes works. The CLI accepts either 64 hex characters or 32 raw bytes.
+
+```bash
+# OpenSSL
+openssl rand -hex 32
+
+# /dev/urandom
+head -c 32 /dev/urandom | xxd -p -c 64
+
+# Python
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+### Providing the Key
+
+| Flag | Description |
+|------|-------------|
+| `--key-seed <HEX>` | 64 hex characters on the command line |
+| `--key-file <PATH>` | Path to a file containing 64 hex characters or 32 raw bytes |
+| `--ephemeral-key` | Generate a random key (lost on restart) |
+
+These are mutually exclusive. Exactly one must be provided.
+
+`--key-file` is recommended for production. The file must contain either:
+- 64 hex characters (with optional trailing newline), or
+- Exactly 32 raw bytes
+
+```bash
+# Create a persistent key file
+openssl rand -hex 32 > /var/lib/subduction/key
+chmod 600 /var/lib/subduction/key
+
+# Start with key file
+subduction_cli server --key-file /var/lib/subduction/key
+```
+
+> [!WARNING]
+> The key seed is equivalent to a private key. Do not commit it to version control or expose it in logs.
+
 ## Commands
 
-### Server Mode
+### `server`
 
-Start a Subduction server for document synchronization:
-
-```bash
-# With Nix
-nix run .#subduction_cli -- server --socket 0.0.0.0:8080
-
-# With Cargo
-cargo run --release -- server --socket 0.0.0.0:8080
-```
-
-Options:
-- `--socket <ADDR>` - Socket address to bind to (default: `0.0.0.0:8080`)
-- `--data-dir <PATH>` - Data directory for storage (default: `./data`)
-- `--peer-id <ID>` - Peer ID as 64 hex characters (default: auto-generated)
-- `--timeout <SECS>` - Request timeout in seconds (default: `5`)
-- `--peer <URL>` - Peer WebSocket URL to connect to on startup (can be specified multiple times)
-- `--metrics` - Enable Prometheus metrics server (disabled by default)
-- `--metrics-port <PORT>` - Port for Prometheus metrics endpoint (default: `9090`, only used if `--metrics` is enabled)
-
-### Client Mode
-
-Connect as a client to a Subduction server:
+Start a Subduction sync node.
 
 ```bash
-# With Nix
-nix run .#subduction_cli -- client --server ws://127.0.0.1:8080
-
-# With Cargo
-cargo run --release -- client --server ws://127.0.0.1:8080
+subduction_cli server --socket 0.0.0.0:8080 --key-file ./key
 ```
 
-Options:
-- `--server <URL>` - WebSocket server URL to connect to
-- `--data-dir <PATH>` - Data directory for local storage (default: `./client-data`)
-- `--peer-id <ID>` - Peer ID as 64 hex characters (default: auto-generated)
-- `--timeout <SECS>` - Request timeout in seconds (default: `5`)
+#### General Options
 
-### Ephemeral Relay Mode
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-s, --socket <ADDR>` | `0.0.0.0:8080` | Socket address to bind to |
+| `-d, --data-dir <PATH>` | `./data` | Data directory for filesystem storage |
+| `-t, --timeout <SECS>` | `5` | Request timeout in seconds |
+| `--handshake-max-drift <SECS>` | `600` | Maximum clock drift allowed during handshake |
+| `--service-name <NAME>` | socket address | Service name for discovery mode handshake |
+| `--max-message-size <BYTES>` | `52428800` (50 MB) | Maximum WebSocket message size |
 
-Start a relay server for ephemeral messages (presence, awareness):
+#### Transport Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--websocket` | enabled | Enable the WebSocket transport |
+| `--longpoll` | enabled | Enable the HTTP long-poll transport |
+| `--iroh` | disabled | Enable the Iroh (QUIC) transport |
+
+At least one transport must be enabled.
+
+#### WebSocket Peer Options
+
+| Flag | Description |
+|------|-------------|
+| `--ws-peer <URL>` | WebSocket peer URL to connect to on startup (repeatable) |
+
+#### Iroh Peer Options
+
+| Flag | Description |
+|------|-------------|
+| `--iroh-peer <NODE_ID>` | Iroh peer node ID to connect to (z32-encoded, repeatable) |
+| `--iroh-peer-addr <IP:PORT>` | Direct address hint for iroh peers (repeatable) |
+| `--iroh-direct-only` | Skip relay servers, direct connections only |
+| `--iroh-relay-url <URL>` | Route through a specific relay instead of the public default |
+
+By default, iroh routes traffic through [iroh's public relay infrastructure](https://iroh.computer) for NAT traversal. Use `--iroh-direct-only` for LAN-only deployments, or `--iroh-relay-url` to point at a self-hosted [`iroh-relay`](https://docs.rs/iroh-relay) instance.
+
+#### Metrics Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--metrics` | disabled | Enable the Prometheus metrics server |
+| `--metrics-port <PORT>` | `9090` | Port for Prometheus metrics endpoint |
+| `--metrics-refresh-interval <SECS>` | `60` | Interval for refreshing storage metrics |
+
+#### Other Options
+
+| Flag | Description |
+|------|-------------|
+| `--ready-file <PATH>` | Write a file on startup with assigned port, peer ID, and iroh node ID |
+
+### `purge`
+
+Delete all stored data.
 
 ```bash
-# With Nix
-nix run .#subduction_cli -- ephemeral-relay --socket 0.0.0.0:8081
-
-# With Cargo
-cargo run --release -- ephemeral-relay --socket 0.0.0.0:8081
+subduction_cli purge --data-dir ./data
 ```
 
-Alias: `relay`
-
-Options:
-- `--socket <ADDR>` - Socket address to bind to (default: `0.0.0.0:8081`)
-- `--max-message-size <BYTES>` - Maximum message size in bytes (default: `1048576` = 1 MB)
-
-#### Architecture
-
-The ephemeral relay server provides a simple broadcast mechanism for ephemeral messages like presence, awareness, cursor positions, etc.
-
-```
-┌────────────────────────────────────────┐
-│      Client (e.g. automerge-repo)      │
-│  ┌──────────────┐    ┌──────────────┐  │
-│  │   WS :8080   │    │   WS :8081   │  │
-│  │ (subduction) │    │ (ephemeral)  │  │
-│  └──────┬───────┘    └──────┬───────┘  │
-└─────────┼───────────────────┼──────────┘
-          │                   │
-          ▼                   ▼
-   ┌──────────────┐    ┌──────────────┐
-   │ Subduction   │    │ Ephemeral    │
-   │ Server       │    │ Relay Server │
-   │ Port 8080    │    │ Port 8081    │
-   └──────────────┘    └──────────────┘
-    Document Sync     Presence/Awareness
-    (persistent)         (ephemeral)
-```
-
-#### How It Works
-
-**Subduction Server (default port 8080)**
-- Handles document synchronization
-- Persists changes to storage
-- Uses Subduction protocol (CBOR-encoded Messages)
-- For CRDTs, fragments, commits, batch sync
-
-**Ephemeral Relay (default port 8081)**
-- Implements automerge-repo NetworkSubsystem protocol handshake
-- Responds to "join" messages with "peer" messages
-- Broadcasts ephemeral messages between connected peers
-- Does NOT persist messages
-- For presence, awareness, cursors, temporary state
-- Uses sharded deduplication with AHash for DoS-resistant message filtering
-
-#### Client Configuration
-
-In your automerge-repo client:
-
-```typescript
-const repo = new Repo({
-  network: [
-    // Document sync via Subduction
-    new WebSocketClientAdapter("ws://127.0.0.1:8080", 5000, { subductionMode: true }),
-
-    // Ephemeral messages via relay server
-    new WebSocketClientAdapter("ws://127.0.0.1:8081"),
-  ],
-  subduction: await Subduction.hydrate(db),
-})
-```
-
-#### Message Flow
-
-**Document Changes**
-```
-Client → WebSocket:8080 → Subduction Server → Storage
-                         ↓
-                    Other Clients
-```
-
-**Presence Updates**
-```
-Client → WebSocket:8081 → Relay Server → Other Clients
-                         (broadcast)
-```
-
-#### Benefits
-
-- **Clean separation**: Document sync and ephemeral messages use different protocols
-- **No Subduction changes**: Relay server is independent
-- **Simple relay**: Just broadcasts messages, no processing
-- **Stateless**: Relay server doesn't persist anything
-- **Scalable**: Can run relay on different machine/port as needed
-- **DoS-resistant**: Sharded deduplication prevents duplicate message floods
-
-#### Production Considerations
-
-For production use, you might want to:
-
-1. **Add authentication** - Verify peer identities
-2. **Add rate limiting** - Prevent spam
-3. **Add targeted relay** - Parse targetId and relay specifically (vs broadcast)
-4. **Add metrics** - Track connections, message rates
-5. **Use single port** - Multiplex both protocols on one WebSocket (more complex)
-6. **Add message authentication** - Prevent forged ephemeral messages (see code TODOs)
-7. **Add timestamp validation** - Prevent replay attacks (see code TODOs)
-
-## Typical Setup
-
-For a complete setup supporting both document sync and presence:
-
-**Terminal 1: Document Sync Server**
-```bash
-nix run .#subduction_cli -- server --socket 0.0.0.0:8080
-```
-
-**Terminal 2: Ephemeral Relay Server**
-```bash
-nix run .#subduction_cli -- relay --socket 0.0.0.0:8081
-```
-
-Your clients can then connect to:
-- Port 8080 for document synchronization
-- Port 8081 for ephemeral messages (presence, awareness, etc.)
-
-## Environment Variables
-
-- `RUST_LOG` - Set log level (e.g., `RUST_LOG=debug`)
-- `TOKIO_CONSOLE` - Enable tokio console for debugging async tasks
+| Flag | Default | Description |
+|------|---------|-------------|
+| `-d, --data-dir <PATH>` | `./data` | Data directory to purge |
+| `-y, --yes` | | Skip confirmation prompt |
 
 ## Examples
 
 ```bash
-# Server with debug logging
-RUST_LOG=debug nix run .#subduction_cli -- server
+# Minimal server with an ephemeral key
+subduction_cli server --ephemeral-key
 
-# Server connecting to peers on startup for bidirectional sync
-nix run .#subduction_cli -- server --peer ws://192.168.1.100:8080 --peer ws://192.168.1.101:8080
+# Server with persistent key and custom data directory
+subduction_cli server --key-file ./key --data-dir /var/lib/subduction
 
-# Server with metrics enabled
-nix run .#subduction_cli -- server --metrics --metrics-port 9090
+# Two WebSocket servers syncing bidirectionally
+subduction_cli server --key-file ./key1 --socket 0.0.0.0:8080 \
+  --ws-peer ws://192.168.1.101:8080
+subduction_cli server --key-file ./key2 --socket 0.0.0.0:8080 \
+  --ws-peer ws://192.168.1.100:8080
 
-# Client connecting to remote server
-nix run .#subduction_cli -- client --server ws://sync.example.com:8080
+# Iroh P2P (NAT-traversing, no WebSocket peers needed)
+subduction_cli server --key-file ./key --iroh \
+  --iroh-peer <remote-node-id>
 
-# Ephemeral relay on custom port
-nix run .#subduction_cli -- relay --socket 0.0.0.0:9000
+# Iroh direct only (LAN, no relay)
+subduction_cli server --key-file ./key --iroh --iroh-direct-only \
+  --iroh-peer <node-id> --iroh-peer-addr 192.168.1.50:12345
 
-# Ephemeral relay with 5 MB message size limit
-nix run .#subduction_cli -- relay --max-message-size 5242880
+# Discovery mode (clients connect by service name instead of peer ID)
+subduction_cli server --key-file ./key --service-name sync.example.com
+
+# Enable Prometheus metrics
+subduction_cli server --key-file ./key --metrics --metrics-port 9090
+
+# Debug logging
+RUST_LOG=debug subduction_cli server --ephemeral-key
 ```
 
 <details>
-<summary><h2>Running as a System Service ❄️</h2></summary>
+<summary><h2>Running as a System Service</h2></summary>
 
 The flake provides NixOS and Home Manager modules for running Subduction as a managed service.
 
@@ -281,36 +238,36 @@ The flake provides NixOS and Home Manager modules for running Subduction as a ma
         subduction.nixosModules.default
         {
           services.subduction = {
-            # Document sync server
             server = {
               enable = true;
               socket = "0.0.0.0:8080";
               dataDir = "/var/lib/subduction";
+              keyFile = "/var/lib/subduction/key";
               timeout = 5;
-              # peerId = "...";  # optional: 64 hex chars
 
-              # Connect to other peers on startup for bidirectional sync
-              peers = [
+              # WebSocket peers for bidirectional sync
+              wsPeers = [
                 "ws://192.168.1.100:8080"
                 "ws://192.168.1.101:8080"
               ];
 
-              # Prometheus metrics (disabled by default)
+              # Iroh P2P transport
+              iroh = {
+                enable = true;
+                peers = ["<remote-node-id>"];
+                # directOnly = true;      # LAN only, no relay
+                # relayUrl = "https://..."; # self-hosted relay
+              };
+
+              # Prometheus metrics
               enableMetrics = true;
               metricsPort = 9090;
-            };
-
-            # Ephemeral message relay
-            relay = {
-              enable = true;
-              socket = "0.0.0.0:8081";
-              maxMessageSize = 1048576;  # 1 MB
             };
 
             # Shared settings
             user = "subduction";
             group = "subduction";
-            openFirewall = true;  # opens server + relay ports
+            openFirewall = true;
           };
         }
       ];
@@ -319,14 +276,10 @@ The flake provides NixOS and Home Manager modules for running Subduction as a ma
 }
 ```
 
-This creates two systemd services:
-- `subduction.service` - Document sync server
-- `subduction-relay.service` - Ephemeral message relay
+This creates a systemd service: `subduction.service`
 
-Manage with:
 ```bash
 systemctl status subduction
-systemctl status subduction-relay
 journalctl -u subduction -f
 ```
 
@@ -347,15 +300,12 @@ Works on both Linux (systemd user service) and macOS (launchd agent):
             server = {
               enable = true;
               socket = "127.0.0.1:8080";
+              keyFile = "/home/myuser/.config/subduction/key";
               # dataDir defaults to ~/.local/share/subduction
 
-              # Connect to other peers on startup
-              peers = ["ws://sync.example.com:8080"];
-            };
+              wsPeers = ["ws://sync.example.com:8080"];
 
-            relay = {
-              enable = true;
-              socket = "127.0.0.1:8081";
+              iroh.enable = true;
             };
           };
         }
@@ -365,13 +315,12 @@ Works on both Linux (systemd user service) and macOS (launchd agent):
 }
 ```
 
-On Linux, manage with:
+On Linux:
 ```bash
 systemctl --user status subduction
-systemctl --user status subduction-relay
 ```
 
-On macOS, manage with:
+On macOS:
 ```bash
 launchctl list | grep subduction
 tail -f ~/.cache/subduction/server.log
@@ -382,25 +331,16 @@ tail -f ~/.cache/subduction/server.log
 When running behind Caddy or another reverse proxy, bind to localhost:
 
 ```nix
-services.subduction = {
-  server = {
-    enable = true;
-    socket = "127.0.0.1:8080";
-  };
-  relay = {
-    enable = true;
-    socket = "127.0.0.1:8081";
-  };
-  openFirewall = false;  # Caddy handles external access
+services.subduction.server = {
+  enable = true;
+  socket = "127.0.0.1:8080";
+  keyFile = "/var/lib/subduction/key";
 };
 
 services.caddy = {
   enable = true;
   virtualHosts."sync.example.com".extraConfig = ''
     reverse_proxy localhost:8080
-  '';
-  virtualHosts."relay.example.com".extraConfig = ''
-    reverse_proxy localhost:8081
   '';
 };
 ```
@@ -411,39 +351,15 @@ Caddy automatically handles WebSocket upgrades and TLS certificates.
 
 ## Monitoring
 
-The Subduction server exposes Prometheus metrics on a configurable port (default: `9090`).
+### Prometheus
 
-### Server Metrics Options
-
-```bash
-# Enable metrics
-subduction_cli server --metrics --metrics-port 9090
-
-# Metrics are disabled by default
-subduction_cli server
-```
-
-### Development Monitoring Stack
-
-When developing locally with Nix, use the `monitoring:start` command to launch Prometheus and Grafana with pre-configured dashboards:
+Enable the metrics endpoint:
 
 ```bash
-# Enter the dev shell
-nix develop
-
-# Start the monitoring stack
-monitoring:start
+subduction_cli server --key-file ./key --metrics --metrics-port 9090
 ```
 
-This starts:
-- **Prometheus** at `http://localhost:9092` - scrapes metrics from the server
-- **Grafana** at `http://localhost:3939` - pre-configured dashboards
-
-The Grafana dashboard includes panels for connections, messages, sync operations, and storage.
-
-### Production Monitoring
-
-For production, configure your Prometheus instance to scrape the metrics endpoint:
+Configure Prometheus to scrape:
 
 ```yaml
 # prometheus.yml
@@ -453,5 +369,28 @@ scrape_configs:
       - targets: ['localhost:9090']
 ```
 
-Import the Grafana dashboard from `subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json`.
+### Development Monitoring Stack
 
+With Nix, use the built-in command to launch Prometheus and Grafana with pre-configured dashboards:
+
+```bash
+nix develop
+monitoring:start
+```
+
+This starts:
+- **Prometheus** at `http://localhost:9092`
+- **Grafana** at `http://localhost:3939` with pre-configured dashboards
+
+### Grafana Dashboard
+
+Import the dashboard from `subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json`. It includes panels for connections, messages, sync operations, and storage.
+
+## Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `RUST_LOG` | Log level filter (e.g. `debug`, `info`, `subduction_core=trace`) |
+| `TOKIO_CONSOLE` | Set to any value to enable [tokio-console](https://github.com/tokio-rs/console) |
+| `LOKI_URL` | Grafana Loki endpoint for log shipping (e.g. `http://localhost:3100`) |
+| `LOKI_SERVICE_NAME` | Service label for Loki (default: `subduction`) |

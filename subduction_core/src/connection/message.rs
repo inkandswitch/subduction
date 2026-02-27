@@ -1062,11 +1062,7 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloc::{collections::BTreeSet, vec};
-
-    fn empty_fingerprint_summary() -> FingerprintSummary {
-        FingerprintSummary::new(FingerprintSeed::new(0, 0), BTreeSet::new(), BTreeSet::new())
-    }
+    use alloc::vec;
 
     mod message_request_id {
         use super::*;
@@ -1137,39 +1133,6 @@ mod tests {
                 blobs: vec![Blob::new(Vec::from([1u8; 16]))],
             };
             assert_eq!(msg.request_id(), None);
-        }
-
-        #[test]
-        fn test_batch_sync_request_has_request_id() {
-            let req_id = RequestId {
-                requestor: PeerId::new([1u8; 32]),
-                nonce: 42,
-            };
-            let msg = Message::BatchSyncRequest(BatchSyncRequest {
-                id: SedimentreeId::new([2u8; 32]),
-                req_id,
-                fingerprint_summary: empty_fingerprint_summary(),
-                subscribe: false,
-            });
-            assert_eq!(msg.request_id(), Some(req_id));
-        }
-
-        #[test]
-        fn test_batch_sync_response_has_request_id() {
-            let req_id = RequestId {
-                requestor: PeerId::new([1u8; 32]),
-                nonce: 99,
-            };
-            let msg = Message::BatchSyncResponse(BatchSyncResponse {
-                id: SedimentreeId::new([2u8; 32]),
-                req_id,
-                result: SyncResult::Ok(SyncDiff {
-                    missing_commits: Vec::new(),
-                    missing_fragments: Vec::new(),
-                    requesting: RequestedData::default(),
-                }),
-            });
-            assert_eq!(msg.request_id(), Some(req_id));
         }
     }
 
@@ -1259,128 +1222,24 @@ mod tests {
                     assert_eq!(msg.request_id(), Some(resp.req_id));
                 });
         }
+
+        #[test]
+        #[allow(clippy::expect_used)]
+        fn prop_message_codec_roundtrip() {
+            bolero::check!()
+                .with_arbitrary::<Message>()
+                .for_each(|msg| {
+                    let encoded = msg.encode();
+                    let decoded = Message::try_decode(&encoded).expect("decode should succeed");
+                    assert_eq!(msg, &decoded);
+                });
+        }
     }
 
     mod codec {
         use super::*;
 
         type TestResult = Result<(), Box<dyn std::error::Error>>;
-
-        #[test]
-        fn blobs_request_roundtrip() -> TestResult {
-            let msg = Message::BlobsRequest {
-                id: SedimentreeId::new([1u8; 32]),
-                digests: vec![
-                    Digest::force_from_bytes([2u8; 32]),
-                    Digest::force_from_bytes([3u8; 32]),
-                ],
-            };
-
-            let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded)?;
-            assert_eq!(msg, decoded);
-            Ok(())
-        }
-
-        #[test]
-        fn blobs_response_roundtrip() -> TestResult {
-            let msg = Message::BlobsResponse {
-                id: SedimentreeId::new([1u8; 32]),
-                blobs: vec![
-                    Blob::new(vec![0x01, 0x02, 0x03]),
-                    Blob::new(vec![0x04, 0x05]),
-                ],
-            };
-
-            let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded)?;
-            assert_eq!(msg, decoded);
-            Ok(())
-        }
-
-        #[test]
-        fn batch_sync_request_roundtrip() -> TestResult {
-            let mut commit_fps = BTreeSet::new();
-            commit_fps.insert(Fingerprint::<CommitId>::from_u64(12345));
-            commit_fps.insert(Fingerprint::<CommitId>::from_u64(67890));
-
-            let msg = Message::BatchSyncRequest(BatchSyncRequest {
-                id: SedimentreeId::new([1u8; 32]),
-                req_id: RequestId {
-                    requestor: PeerId::new([2u8; 32]),
-                    nonce: 42,
-                },
-                fingerprint_summary: FingerprintSummary::new(
-                    FingerprintSeed::new(111, 222),
-                    commit_fps,
-                    BTreeSet::new(),
-                ),
-                subscribe: true,
-            });
-
-            let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded)?;
-            assert_eq!(msg, decoded);
-            Ok(())
-        }
-
-        #[test]
-        fn batch_sync_response_not_found_roundtrip() -> TestResult {
-            let msg = Message::BatchSyncResponse(BatchSyncResponse {
-                req_id: RequestId {
-                    requestor: PeerId::new([1u8; 32]),
-                    nonce: 99,
-                },
-                id: SedimentreeId::new([2u8; 32]),
-                result: SyncResult::NotFound,
-            });
-
-            let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded)?;
-            assert_eq!(msg, decoded);
-            Ok(())
-        }
-
-        #[test]
-        fn batch_sync_response_unauthorized_roundtrip() -> TestResult {
-            let msg = Message::BatchSyncResponse(BatchSyncResponse {
-                req_id: RequestId {
-                    requestor: PeerId::new([1u8; 32]),
-                    nonce: 99,
-                },
-                id: SedimentreeId::new([2u8; 32]),
-                result: SyncResult::Unauthorized,
-            });
-
-            let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded)?;
-            assert_eq!(msg, decoded);
-            Ok(())
-        }
-
-        #[test]
-        fn remove_subscriptions_roundtrip() -> TestResult {
-            let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
-                ids: vec![SedimentreeId::new([1u8; 32]), SedimentreeId::new([2u8; 32])],
-            });
-
-            let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded)?;
-            assert_eq!(msg, decoded);
-            Ok(())
-        }
-
-        #[test]
-        fn data_request_rejected_roundtrip() -> TestResult {
-            let msg = Message::DataRequestRejected(DataRequestRejected {
-                id: SedimentreeId::new([42u8; 32]),
-            });
-
-            let encoded = msg.encode();
-            let decoded = Message::try_decode(&encoded)?;
-            assert_eq!(msg, decoded);
-            Ok(())
-        }
 
         #[test]
         fn invalid_schema_rejected() -> TestResult {

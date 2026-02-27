@@ -1,7 +1,7 @@
 [package]
 name = "subduction_cli"
-version = "0.4.2"
-description = "CLI server and client for Subduction sync over WebSockets"
+version = "0.5.0"
+description = "CLI server for Subduction sync over WebSocket, HTTP long-poll, and Iroh (QUIC)"
 
 categories = ["command-line-utilities", "web-programming"]
 keywords = ["subduction"]
@@ -30,6 +30,7 @@ hex = { workspace = true }
 http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio", "http1", "server-auto"] }
+iroh = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
 reqwest = { workspace = true }
@@ -38,6 +39,7 @@ sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
 subduction_crypto = { workspace = true }
 subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
+subduction_iroh = { workspace = true }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
@@ -47,6 +49,17 @@ tracing-loki = { workspace = true, optional = true }
 tracing-subscriber = { workspace = true, default-features = true }
 tungstenite = { workspace = true }
 url = { workspace = true, features = ["std"] }
+
+[dev-dependencies]
+future_form = { workspace = true }
+reqwest = { workspace = true, features = ["native-tls"] }
+sedimentree_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
+subduction_crypto = { workspace = true }
+subduction_http_longpoll = { workspace = true, features = ["std", "native-tls"] }
+subduction_websocket = { workspace = true, features = ["futures-timer"] }
+tempfile = "3"
+tokio = { workspace = true, features = ["full"] }
 
 [features]
 default = ["native-tls"]

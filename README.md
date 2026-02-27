@@ -14,7 +14,7 @@
 
 - **Efficient Sync Protocol**: Uses [Sedimentree] for history sharding, diffing, and efficient incremental synchronization
 - **Encryption-Friendly**: Designed to work with encrypted data partitions without requiring decryption during sync
-- **No Central Server**: True peer-to-peer synchronization via WebSocket connections
+- **No Central Server**: True peer-to-peer synchronization via pluggable transports (WebSocket, HTTP long-poll, Iroh/QUIC)
 - **Multi-Platform**: Runs on native Rust, WebAssembly (browser & Node.js), and provides a CLI tool
 - **Automerge Integration**: While not the only data that can be synced via Subduction, [Automerge] was the original target.
 
@@ -39,6 +39,8 @@ graph TD
     end
 
     subgraph Transport
+        subduction_http_longpoll
+        subduction_iroh
         subduction_websocket
     end
 
@@ -63,6 +65,8 @@ graph TD
     sedimentree_core --> automerge_sedimentree
 
     subduction_core --> sedimentree_fs_storage
+    subduction_core --> subduction_http_longpoll
+    subduction_core --> subduction_iroh
     subduction_core --> subduction_websocket
     subduction_core --> subduction_keyhive_policy
 
@@ -76,17 +80,21 @@ graph TD
     automerge_sedimentree_wasm --> automerge_subduction_wasm
     subduction_wasm --> automerge_subduction_wasm
 
+    subduction_http_longpoll --> subduction_cli
+    subduction_iroh --> subduction_cli
     subduction_websocket --> subduction_cli
     sedimentree_fs_storage --> subduction_cli
 ```
 
-| Crate                   | Description                                                                             |
-|-------------------------|-----------------------------------------------------------------------------------------|
-| `sedimentree_core`      | The core data partitioning scheme that enables efficient metadata-based synchronization |
-| `sedimentree_fs_storage`| Filesystem-based persistent storage for Sedimentree                                     |
-| `subduction_crypto`     | Cryptographic types: signed payloads and verification witnesses                         |
-| `subduction_core`       | The main synchronization protocol implementation                                        |
-| `subduction_websocket`  | WebSocket transport layer for peer-to-peer connections                                  |
+| Crate                      | Description                                                                            |
+|----------------------------|----------------------------------------------------------------------------------------|
+| `sedimentree_core`         | The core data partitioning scheme that enables efficient metadata-based synchronization |
+| `sedimentree_fs_storage`   | Filesystem-based persistent storage for Sedimentree                                    |
+| `subduction_crypto`        | Cryptographic types: signed payloads and verification witnesses                        |
+| `subduction_core`          | The main synchronization protocol implementation                                       |
+| `subduction_http_longpoll` | HTTP long-poll transport for restricted network environments                           |
+| `subduction_iroh`          | Iroh (QUIC) transport for direct peer-to-peer connections                              |
+| `subduction_websocket`     | WebSocket transport layer for peer-to-peer connections                                 |
 
 ### Platform Bindings
 
@@ -107,9 +115,9 @@ graph TD
 
 ### Tools
 
-| Crate            | Description                                                  |
-|------------------|--------------------------------------------------------------|
-| `subduction_cli` | Command-line tool for running Subduction servers and clients |
+| Crate            | Description                                                      |
+|------------------|------------------------------------------------------------------|
+| `subduction_cli` | Command-line tool for running Subduction servers and purging data |
 
 ## Sedimentree
 
@@ -131,9 +139,6 @@ If you use Nix, the Subduction server is wrapped in a flake:
 # Run the server directly
 nix run github:inkandswitch/subduction -- server --socket 0.0.0.0:8080
 
-# Run the ephemeral relay
-nix run github:inkandswitch/subduction -- relay --socket 0.0.0.0:8081
-
 # Install to your profile
 nix profile install github:inkandswitch/subduction
 ```
@@ -150,7 +155,6 @@ The flake also provides NixOS and Home Manager modules for running Subduction as
         subduction.nixosModules.default
         {
           services.subduction.server.enable = true;
-          services.subduction.relay.enable = true;
         }
       ];
     };
@@ -204,7 +208,7 @@ npx playwright test
 Start a WebSocket server:
 
 ```bash
-cargo run --release -p subduction_cli -- start --socket 127.0.0.1:8080
+cargo run --release -p subduction_cli -- server --socket 127.0.0.1:8080
 ```
 
 ## Usage Examples
@@ -257,9 +261,11 @@ subduction/
 ├── sedimentree_wasm/           # Wasm bindings for Sedimentree
 ├── subduction_crypto/          # Signed payloads and verification witnesses
 ├── subduction_core/            # Sync protocol implementation
+├── subduction_http_longpoll/   # HTTP long-poll transport
+├── subduction_iroh/            # Iroh (QUIC) transport
 ├── subduction_websocket/       # WebSocket transport
 ├── subduction_wasm/            # Wasm bindings for Subduction
-├── subduction_cli/             # CLI for server & client nodes
+├── subduction_cli/             # CLI server and data management
 ├── subduction_keyhive/         # Keyhive integration types
 ├── subduction_keyhive_policy/  # Keyhive authorization policy
 ├── automerge_sedimentree/      # Automerge integration
@@ -276,7 +282,7 @@ The project uses several testing strategies:
 | Unit Tests           | Standard `cargo test` for Rust code                             |
 | Property-based Tests | [`bolero`] for fuzz testing                                     |
 | E2E Tests            | Playwright tests for Wasm bindings (see `subduction_wasm/e2e/`) |
-| Integration Tests    | WebSocket connection tests with real peer interactions          |
+| Integration Tests    | Transport connection tests (WebSocket, HTTP long-poll, Iroh)   |
 
 <!-- Internal Links -->
 

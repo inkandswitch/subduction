@@ -1,0 +1,47 @@
+[package]
+name = "subduction_iroh"
+version = "0.1.0"
+description = "Iroh (QUIC) transport layer for the Subduction sync protocol"
+
+categories = ["network-programming"]
+keywords = ["iroh", "quic", "p2p", "sync", "subduction"]
+readme = "./README.md"
+
+authors.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+async-lock = { workspace = true }
+futures = { workspace = true }
+future_form = { workspace = true }
+iroh = { workspace = true }
+rand = { workspace = true, features = ["getrandom"] }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true, features = ["std"] }
+subduction_crypto = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+eyre = { workspace = true }
+futures-timer = { workspace = true }
+rand = { workspace = true, features = ["std_rng"] }
+sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
+subduction_core = { workspace = true, features = ["test_utils"] }
+subduction_crypto = { workspace = true }
+subduction_websocket = { workspace = true, features = ["futures-timer"] }
+testresult = { workspace = true }
+tokio = { workspace = true }
+tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"] }
+
+[features]
+default = ["server"]
+server = []
+
+[lints]
+workspace = true

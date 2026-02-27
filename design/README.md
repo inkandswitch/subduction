@@ -21,7 +21,7 @@ block-beta
     Application
     Sync["Sync<br/>(Batch + Incremental)"]
     Connection["Connection<br/>(Handshake + Policy)"]
-    Transport["Transport<br/>(WebSocket)"]
+    Transport["Transport<br/>(WebSocket · HTTP Long-Poll · Iroh/QUIC)"]
 ```
 
 ## Typical Flow

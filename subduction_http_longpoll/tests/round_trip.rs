@@ -754,3 +754,114 @@ async fn bidirectional_sync() -> TestResult {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn server_shutdown_rejects_new_connections() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(90).await;
+    let address = server.address;
+
+    // Verify a client can connect before shutdown
+    let client = connected_client(91, address).await;
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    let server_peers = server.subduction.connected_peer_ids().await;
+    assert!(
+        !server_peers.is_empty(),
+        "server should have at least one connected peer before shutdown"
+    );
+
+    // Shut down the server by dropping the cancel sender and the server itself,
+    // which drops the TcpListener via the accept loop exiting.
+    drop(server);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    // A new client attempting to connect should fail.
+    // Use a short timeout to avoid hanging if the TCP socket is lingering.
+    let client_signer = signer(92);
+    let base_url = format!("http://{address}");
+    let lp_client = HttpLongPollClient::new(
+        &base_url,
+        ReqwestHttpClient::new(),
+        FuturesTimerTimeout,
+        Duration::from_secs(2),
+    );
+
+    let connect_fut =
+        lp_client.connect_discover(&client_signer, SERVICE_NAME, TimestampSeconds::now());
+
+    let result = tokio::time::timeout(Duration::from_secs(3), connect_fut).await;
+
+    assert!(
+        result.is_err() || result.unwrap().is_err(),
+        "should not be able to connect to a shut-down server"
+    );
+
+    // The pre-existing client reference is still valid (just disconnected)
+    drop(client);
+
+    Ok(())
+}
+
+/// Client connects with a wrong known `PeerId`. The server should reject the
+/// handshake because the audience doesn't match.
+#[tokio::test]
+async fn connect_wrong_known_peer_rejected() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(95).await;
+
+    // Fabricate a PeerId that doesn't match the server's identity
+    let wrong_peer_id = PeerId::from(signer(255).verifying_key());
+
+    let client_signer = signer(96);
+    let base_url = format!("http://{}", server.address);
+    let lp_client = HttpLongPollClient::new(
+        &base_url,
+        ReqwestHttpClient::new(),
+        FuturesTimerTimeout,
+        REQUEST_TIMEOUT,
+    );
+
+    let result = lp_client
+        .connect(&client_signer, wrong_peer_id, TimestampSeconds::now())
+        .await;
+
+    assert!(result.is_err(), "connection with wrong peer ID should fail");
+
+    Ok(())
+}
+
+/// Client connects via discovery with a wrong service name. The server should
+/// reject the handshake because the discovery audience doesn't match.
+#[tokio::test]
+async fn connect_wrong_discovery_service_rejected() -> TestResult {
+    init_tracing();
+
+    let server = TestServer::start(97).await;
+
+    let client_signer = signer(98);
+    let base_url = format!("http://{}", server.address);
+    let lp_client = HttpLongPollClient::new(
+        &base_url,
+        ReqwestHttpClient::new(),
+        FuturesTimerTimeout,
+        REQUEST_TIMEOUT,
+    );
+
+    let result = lp_client
+        .connect_discover(
+            &client_signer,
+            "wrong-service-name",
+            TimestampSeconds::now(),
+        )
+        .await;
+
+    assert!(
+        result.is_err(),
+        "connection with wrong service name should fail"
+    );
+
+    Ok(())
+}
