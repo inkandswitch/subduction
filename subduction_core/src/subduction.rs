@@ -455,6 +455,9 @@ impl<
             }
         }
 
+        #[cfg(feature = "metrics")]
+        crate::metrics::connection_opened();
+
         Ok(())
     }
 
@@ -731,10 +734,18 @@ impl<
                 RemoveResult::Removed(remaining) => {
                     // Put the remaining connections back
                     connections.insert(peer_id, remaining);
+
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::connection_closed();
+
                     conn.disconnect().await.map(|()| true)
                 }
                 RemoveResult::WasLast(_) => {
                     // Don't put anything back, peer entry stays removed
+
+                    #[cfg(feature = "metrics")]
+                    crate::metrics::connection_closed();
+
                     conn.disconnect().await.map(|()| true)
                 }
                 RemoveResult::NotFound(original) => {
@@ -761,6 +772,11 @@ impl<
                 .flat_map(NonEmpty::into_iter)
                 .collect()
         };
+
+        #[cfg(feature = "metrics")]
+        for _ in &all_conns {
+            crate::metrics::connection_closed();
+        }
 
         try_join_all(
             all_conns
@@ -790,6 +806,9 @@ impl<
 
         if let Some(conns) = peer_conns {
             for conn in conns {
+                #[cfg(feature = "metrics")]
+                crate::metrics::connection_closed();
+
                 if let Err(e) = conn.disconnect().await {
                     tracing::error!("{e}");
                     return Err(e);
