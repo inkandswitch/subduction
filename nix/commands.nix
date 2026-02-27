@@ -10,6 +10,7 @@
   grafana-homepath = "${pkgs.grafana}/share/grafana";
   pnpm = "${pkgs.pnpm}/bin/pnpm";
   playwright = "${pnpm} --dir=./subduction_wasm exec playwright";
+  loki = "${pkgs.grafana-loki}/bin/loki";
   prometheus = "${pkgs.prometheus}/bin/prometheus";
   wasm-bodge-bin = "${wasm-bodge}/bin/wasm-bodge";
   wasm-pack = "${pkgs.wasm-pack}/bin/wasm-pack";
@@ -425,16 +426,23 @@
   };
 
   monitoring = {
-    "monitoring:start" = cmd "Start Prometheus and Grafana for metrics" ''
+    "monitoring:start" = cmd "Start Loki, Prometheus, and Grafana for metrics + logs" ''
       set -e
 
       echo "Starting monitoring stack..."
+      echo "  Loki:       http://localhost:3100"
       echo "  Prometheus: http://localhost:9092"
       echo "  Grafana:    http://localhost:3939"
       echo ""
 
-      mkdir -p /tmp/grafana-data /tmp/grafana-dashboards
+      mkdir -p /tmp/grafana-data /tmp/grafana-dashboards /tmp/loki
       cp "$WORKSPACE_ROOT/subduction_cli/monitoring/grafana/provisioning/dashboards/subduction.json" /tmp/grafana-dashboards/
+
+      ${loki} \
+        -config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/loki.yaml" \
+        &
+      LOKI_PID=$!
+      echo "Loki started (PID: $LOKI_PID)"
 
       ${prometheus} \
         --config.file="$WORKSPACE_ROOT/subduction_cli/monitoring/prometheus.yml" \
@@ -455,10 +463,12 @@
 
       echo ""
       echo "Monitoring stack running. Press Ctrl+C to stop."
+      echo "  Tip: run the server with LOKI_URL=http://localhost:3100 to ship logs"
 
       cleanup() {
         echo ""
         echo "Stopping monitoring stack..."
+        kill $LOKI_PID 2>/dev/null || true
         kill $PROM_PID 2>/dev/null || true
         kill $GRAF_PID 2>/dev/null || true
         echo "Done."

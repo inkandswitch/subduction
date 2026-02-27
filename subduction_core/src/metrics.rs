@@ -14,8 +14,6 @@ pub mod names {
     pub const MESSAGES_TOTAL: &str = "subduction_messages_total";
     /// Message dispatch duration in seconds.
     pub const DISPATCH_DURATION_SECONDS: &str = "subduction_dispatch_duration_seconds";
-    /// Number of active sedimentrees.
-    pub const SEDIMENTREES_ACTIVE: &str = "subduction_sedimentrees_active";
     /// Total batch sync requests received.
     pub const BATCH_SYNC_REQUESTS_TOTAL: &str = "subduction_batch_sync_requests_total";
     /// Total batch sync responses received.
