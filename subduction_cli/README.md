@@ -371,7 +371,7 @@ scrape_configs:
 
 ### Development Monitoring Stack
 
-With Nix, use the built-in command to launch Prometheus and Grafana with pre-configured dashboards:
+With Nix, use the built-in command to launch Loki, Prometheus, and Grafana with pre-configured datasources and dashboards:
 
 ```bash
 nix develop
@@ -379,8 +379,21 @@ monitoring:start
 ```
 
 This starts:
-- **Prometheus** at `http://localhost:9092`
-- **Grafana** at `http://localhost:3939` with pre-configured dashboards
+- **Loki** at `http://localhost:3100` (log aggregation)
+- **Prometheus** at `http://localhost:9092` (metrics)
+- **Grafana** at `http://localhost:3939` with pre-configured datasources and dashboards
+
+To ship logs from the Subduction server to Loki, run it with `LOKI_URL`:
+
+```bash
+LOKI_URL=http://localhost:3100 cargo run -p subduction_cli -- server
+```
+
+Then query logs in Grafana via the Explore tab with the Loki datasource:
+
+```
+{service="subduction"} |= ""
+```
 
 ### Grafana Dashboard
 
@@ -390,7 +403,8 @@ Import the dashboard from `subduction_cli/monitoring/grafana/provisioning/dashbo
 
 | Variable | Description |
 |----------|-------------|
-| `RUST_LOG` | Log level filter (e.g. `debug`, `info`, `subduction_core=trace`) |
-| `TOKIO_CONSOLE` | Set to any value to enable [tokio-console](https://github.com/tokio-rs/console) |
+| `RUST_LOG` | Log level filter for console output (e.g. `debug`, `info`, `subduction_core=trace`) |
 | `LOKI_URL` | Grafana Loki endpoint for log shipping (e.g. `http://localhost:3100`) |
+| `LOKI_LOG` | Log level filter for Loki (default: `info`). Same syntax as `RUST_LOG`. |
 | `LOKI_SERVICE_NAME` | Service label for Loki (default: `subduction`) |
+| `TOKIO_CONSOLE` | Set to any value to enable [tokio-console](https://github.com/tokio-rs/console) |

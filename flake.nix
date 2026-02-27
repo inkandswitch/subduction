@@ -247,6 +247,7 @@
               pkgs.esbuild
               pkgs.gnuplot
               grafana
+              pkgs.grafana-loki
               pkgs.http-server
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
