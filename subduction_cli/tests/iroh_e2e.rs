@@ -277,8 +277,9 @@ async fn iroh_sync_between_two_cli_servers() {
     wait_for_http(&url_a).await;
     wait_for_http(&url_b).await;
 
-    // Give iroh time to establish the QUIC connection + handshake
-    tokio::time::sleep(Duration::from_secs(3)).await;
+    // Give iroh time to establish the QUIC connection + handshake.
+    // On slower machines or under load this can take longer than expected.
+    tokio::time::sleep(Duration::from_secs(5)).await;
 
     let sed_id = SedimentreeId::new([42u8; 32]);
 
@@ -291,32 +292,44 @@ async fn iroh_sync_between_two_cli_servers() {
     let client_b = connect_to_server(&url_b, 0xDD, service_name).await;
     push_commit(&client_b, sed_id, b"commit from server B").await;
 
-    // ── Wait for background sync to reconcile via iroh ───────────────────
-    // The server runs full_sync every 5 seconds. Wait long enough for at
-    // least one cycle to complete.
-    tokio::time::sleep(Duration::from_secs(12)).await;
+    // ── Poll until both servers have both commits ────────────────────────
+    // The server runs full_sync every 5 seconds. Rather than guessing how
+    // long to sleep, we retry with fresh verify clients until both servers
+    // report >= 2 commits, or we hit an overall timeout.
+    let sync_deadline = tokio::time::Instant::now() + Duration::from_secs(60);
+    let mut client_seed: u8 = 0xE0;
 
-    // ── Verify both servers have both commits ────────────────────────────
-    // Connect fresh clients to pull the latest state from each server.
-    let verify_a = connect_to_server(&url_a, 0xEE, service_name).await;
-    let _result_a = verify_a.sync_all(sed_id, true, Some(SYNC_TIMEOUT)).await;
-    let commits_a = verify_a.get_commits(sed_id).await;
+    loop {
+        tokio::time::sleep(Duration::from_secs(3)).await;
 
-    let verify_b = connect_to_server(&url_b, 0xFF, service_name).await;
-    let _result_b = verify_b.sync_all(sed_id, true, Some(SYNC_TIMEOUT)).await;
-    let commits_b = verify_b.get_commits(sed_id).await;
+        let verify_a = connect_to_server(&url_a, client_seed, service_name).await;
+        client_seed = client_seed.wrapping_add(1);
+        let _result_a = verify_a.sync_all(sed_id, true, Some(SYNC_TIMEOUT)).await;
+        let count_a = verify_a
+            .get_commits(sed_id)
+            .await
+            .as_ref()
+            .map_or(0, Vec::len);
 
-    let count_a = commits_a.as_ref().map_or(0, Vec::len);
-    let count_b = commits_b.as_ref().map_or(0, Vec::len);
+        let verify_b = connect_to_server(&url_b, client_seed, service_name).await;
+        client_seed = client_seed.wrapping_add(1);
+        let _result_b = verify_b.sync_all(sed_id, true, Some(SYNC_TIMEOUT)).await;
+        let count_b = verify_b
+            .get_commits(sed_id)
+            .await
+            .as_ref()
+            .map_or(0, Vec::len);
 
-    assert!(
-        count_a >= 2,
-        "server A should have both commits after iroh sync (got {count_a})"
-    );
-    assert!(
-        count_b >= 2,
-        "server B should have both commits after iroh sync (got {count_b})"
-    );
+        if count_a >= 2 && count_b >= 2 {
+            break;
+        }
+
+        assert!(
+            tokio::time::Instant::now() < sync_deadline,
+            "timed out waiting for iroh sync: server A has {count_a} commits, \
+             server B has {count_b} commits (expected >= 2 each)"
+        );
+    }
 
     // ── Cleanup ──────────────────────────────────────────────────────────
     server_a.child.kill().ok();
