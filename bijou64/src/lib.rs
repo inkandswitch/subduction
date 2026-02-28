@@ -1,10 +1,10 @@
 //! Bijective variable-length encoding for unsigned 64-bit integers.
 //!
-//! `bivu64` encodes `u64` values into 1–9 bytes using a tag-byte prefix scheme
-//! derived from [VARU64], modified with per-tier offsets to achieve
-//! **structural canonicality** — each value has exactly one encoding, and each
-//! encoding has exactly one value. This is [bijective numeration] applied to
-//! VARU64's tag-byte framing.
+//! bijou64 (**bij**ective **o**ffset **u64**) encodes `u64` values into 1–9
+//! bytes using a tag-byte prefix scheme derived from [VARU64], modified with
+//! per-tier offsets to achieve **structural canonicality** — each value has
+//! exactly one encoding, and each encoding has exactly one value. This is
+//! [bijective numeration] applied to VARU64's tag-byte framing.
 //!
 //! # Encoding
 //!
@@ -36,7 +36,7 @@
 //! # Canonicality
 //!
 //! Unlike [VARU64], which requires a runtime check to reject overlong
-//! encodings, `bivu64` achieves canonicality structurally: each tier's value
+//! encodings, bijou64 achieves canonicality structurally: each tier's value
 //! range is disjoint, so no byte sequence can decode to a value representable
 //! in a shorter form. The only decoder error conditions are buffer underflow
 //! and arithmetic overflow on tier 8.
@@ -45,10 +45,10 @@
 //!
 //! ```
 //! let mut buf = Vec::new();
-//! bivu64::encode(300, &mut buf);
+//! bijou64::encode(300, &mut buf);
 //! assert_eq!(buf, [0xF8, 0x34]); // tag 248, payload 300 - 248 = 52
 //!
-//! let (value, len) = bivu64::decode(&buf).unwrap();
+//! let (value, len) = bijou64::decode(&buf).unwrap();
 //! assert_eq!(value, 300);
 //! assert_eq!(len, 2);
 //! ```
@@ -65,7 +65,7 @@ extern crate alloc;
 #[allow(unused_imports)] // vec! macro used in tests
 use alloc::{vec, vec::Vec};
 
-/// Maximum number of bytes a `bivu64` encoding can occupy.
+/// Maximum number of bytes a `bijou64` encoding can occupy.
 pub const MAX_BYTES: usize = 9;
 
 /// Tag byte threshold: values below this are encoded as a single byte.
@@ -131,29 +131,17 @@ const BOUNDS: [u64; NUM_TIERS + 1] = [
     u64::MAX, // tier 8 extends to u64::MAX
 ];
 
-/// Errors that can occur when decoding a `bivu64`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-pub enum DecodeError {
-    /// The input buffer is shorter than the encoding requires.
-    #[error("buffer too short for bivu64 encoding")]
-    BufferTooShort,
-
-    /// The decoded value exceeds `u64::MAX` (tier 8 only).
-    #[error("bivu64 tier 8 payload overflows u64")]
-    Overflow,
-}
-
 /// Returns the encoded length of `value` in bytes (1–9).
 ///
 /// # Examples
 ///
 /// ```
-/// assert_eq!(bivu64::encoded_len(0), 1);
-/// assert_eq!(bivu64::encoded_len(247), 1);
-/// assert_eq!(bivu64::encoded_len(248), 2);
-/// assert_eq!(bivu64::encoded_len(503), 2);
-/// assert_eq!(bivu64::encoded_len(504), 3);
-/// assert_eq!(bivu64::encoded_len(u64::MAX), 9);
+/// assert_eq!(bijou64::encoded_len(0), 1);
+/// assert_eq!(bijou64::encoded_len(247), 1);
+/// assert_eq!(bijou64::encoded_len(248), 2);
+/// assert_eq!(bijou64::encoded_len(503), 2);
+/// assert_eq!(bijou64::encoded_len(504), 3);
+/// assert_eq!(bijou64::encoded_len(u64::MAX), 9);
 /// ```
 #[must_use]
 pub const fn encoded_len(value: u64) -> usize {
@@ -178,33 +166,34 @@ pub const fn encoded_len(value: u64) -> usize {
     }
 }
 
-/// Encodes `value` as a `bivu64`, appending bytes to `buf`.
+/// Encodes `value` as a `bijou64`, appending bytes to `buf`.
 ///
 /// # Panics
 ///
-/// Cannot panic. The internal `expect` guards an invariant of
-/// [`encode_array`] (returned length is always 1–9).
+/// Cannot panic in practice: [`encode_array`]'s exhaustive `if`/`else`
+/// chain guarantees the returned length is in `1..=MAX_BYTES`.
 ///
 /// # Examples
 ///
 /// ```
 /// let mut buf = Vec::new();
-/// bivu64::encode(42, &mut buf);
+/// bijou64::encode(42, &mut buf);
 /// assert_eq!(buf, [0x2A]);
 ///
 /// buf.clear();
-/// bivu64::encode(248, &mut buf);
+/// bijou64::encode(248, &mut buf);
 /// assert_eq!(buf, [0xF8, 0x00]);
 /// ```
+#[allow(clippy::expect_used)] // Invariant: encode_array's exhaustive if/else guarantees len ∈ 1..=MAX_BYTES
 pub fn encode(value: u64, buf: &mut Vec<u8>) {
     let (arr, len) = encode_array(value);
     buf.extend_from_slice(
         arr.get(..len)
-            .expect("encode_array returns len in 1..=MAX_BYTES"),
+            .expect("encode_array returned out-of-range len"),
     );
 }
 
-/// Encodes `value` as a `bivu64` into a fixed-size array.
+/// Encodes `value` as a `bijou64` into a fixed-size array.
 ///
 /// Returns `(bytes, len)` where `bytes` is a 9-byte array with the
 /// encoding in `bytes[..len]`.
@@ -212,7 +201,7 @@ pub fn encode(value: u64, buf: &mut Vec<u8>) {
 /// # Examples
 ///
 /// ```
-/// let (bytes, len) = bivu64::encode_array(300);
+/// let (bytes, len) = bijou64::encode_array(300);
 /// assert_eq!(&bytes[..len], &[0xF8, 0x34]);
 /// ```
 #[must_use]
@@ -258,7 +247,7 @@ pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
     }
 }
 
-/// Decodes a `bivu64` from the front of `buf`.
+/// Decodes a `bijou64` from the front of `buf`.
 ///
 /// Returns `(value, bytes_consumed)` on success.
 ///
@@ -273,11 +262,11 @@ pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
 ///
 /// ```
 /// // Single-byte value
-/// let (v, n) = bivu64::decode(&[0x2A]).unwrap();
+/// let (v, n) = bijou64::decode(&[0x2A]).unwrap();
 /// assert_eq!((v, n), (42, 1));
 ///
 /// // Multi-byte value with trailing data
-/// let (v, n) = bivu64::decode(&[0xF8, 0x34, 0xFF]).unwrap();
+/// let (v, n) = bijou64::decode(&[0xF8, 0x34, 0xFF]).unwrap();
 /// assert_eq!((v, n), (300, 2));
 /// ```
 #[allow(clippy::many_single_char_names)] // byte destructuring in slice patterns
@@ -341,13 +330,28 @@ pub const fn decode(buf: &[u8]) -> Result<(u64, usize), DecodeError> {
     }
 }
 
+/// Errors that can occur when decoding a `bijou64`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum DecodeError {
+    /// The input buffer is shorter than the encoding requires.
+    #[error("buffer too short for bijou64 encoding")]
+    BufferTooShort,
+
+    /// The decoded value exceeds `u64::MAX` (tier 8 only).
+    #[error("bijou64 tier 8 payload overflows u64")]
+    Overflow,
+}
+
 // ============================================================
 // Tests
 // ============================================================
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing, clippy::needless_range_loop, clippy::panic)]
 mod tests {
     use super::*;
+
+    type TestResult = Result<(), DecodeError>;
 
     mod offset_table {
         use super::*;
@@ -399,88 +403,96 @@ mod tests {
         use super::*;
 
         #[test]
-        fn zero() {
+        fn zero() -> TestResult {
             let mut buf = Vec::new();
             encode(0, &mut buf);
             assert_eq!(buf, [0x00]);
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (0, 1));
+            Ok(())
         }
 
         #[test]
-        fn max_single_byte() {
+        fn max_single_byte() -> TestResult {
             let mut buf = Vec::new();
             encode(247, &mut buf);
             assert_eq!(buf, [0xF7]);
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (247, 1));
+            Ok(())
         }
 
         #[test]
-        fn tier1_min() {
+        fn tier1_min() -> TestResult {
             let mut buf = Vec::new();
             encode(248, &mut buf);
             assert_eq!(buf, [0xF8, 0x00]);
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (248, 2));
+            Ok(())
         }
 
         #[test]
-        fn tier1_max() {
+        fn tier1_max() -> TestResult {
             let mut buf = Vec::new();
             encode(503, &mut buf);
             assert_eq!(buf, [0xF8, 0xFF]);
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (503, 2));
+            Ok(())
         }
 
         #[test]
-        fn tier2_min() {
+        fn tier2_min() -> TestResult {
             let mut buf = Vec::new();
             encode(504, &mut buf);
             assert_eq!(buf, [0xF9, 0x00, 0x00]);
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (504, 3));
+            Ok(())
         }
 
         #[test]
-        fn value_300() {
+        fn value_300() -> TestResult {
             let mut buf = Vec::new();
             encode(300, &mut buf);
             assert_eq!(buf, [0xF8, 0x34]); // 300 - 248 = 52 = 0x34
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (300, 2));
+            Ok(())
         }
 
         #[test]
-        fn value_1000() {
+        fn value_1000() -> TestResult {
             let mut buf = Vec::new();
             encode(1000, &mut buf);
             assert_eq!(buf, [0xF9, 0x01, 0xF0]); // 1000 - 504 = 496 = 0x01F0
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (1000, 3));
+            Ok(())
         }
 
         #[test]
-        fn u64_max() {
+        fn u64_max() -> TestResult {
             let mut buf = Vec::new();
             encode(u64::MAX, &mut buf);
             assert_eq!(buf.len(), 9);
             assert_eq!(buf[0], 0xFF); // tag 255 = tier 8
 
-            let (v, n) = decode(&buf).expect("decode failed");
+            let (v, n) = decode(&buf)?;
             assert_eq!((v, n), (u64::MAX, 9));
+            Ok(())
         }
 
         #[test]
-        fn all_tier_boundaries() {
+        fn all_tier_boundaries() -> TestResult {
             for tier in 1..=NUM_TIERS {
                 let min_val = OFFSETS[tier];
                 let max_val = if tier < NUM_TIERS {
@@ -500,11 +512,12 @@ mod tests {
                         buf.len()
                     );
 
-                    let (decoded, consumed) = decode(&buf).expect("decode failed");
+                    let (decoded, consumed) = decode(&buf)?;
                     assert_eq!(decoded, value, "tier {tier} round-trip failed for {value}");
                     assert_eq!(consumed, expected_len);
                 }
             }
+            Ok(())
         }
     }
 
@@ -528,7 +541,7 @@ mod tests {
                 66_040,
                 16_843_255,
                 16_843_256,
-                u32::MAX as u64,
+                u64::from(u32::MAX),
                 4_311_810_551,
                 4_311_810_552,
                 u64::MAX,
@@ -555,8 +568,8 @@ mod tests {
 
                 let (arr, len) = encode_array(value);
                 assert_eq!(
-                    &arr[..len],
-                    buf.as_slice(),
+                    arr.get(..len),
+                    Some(buf.as_slice()),
                     "encode_array({value}) mismatch"
                 );
             }
@@ -586,12 +599,13 @@ mod tests {
         }
 
         #[test]
-        fn trailing_bytes_not_consumed() {
-            let (v, n) = decode(&[0x2A, 0xDE, 0xAD]).expect("decode failed");
+        fn trailing_bytes_not_consumed() -> TestResult {
+            let (v, n) = decode(&[0x2A, 0xDE, 0xAD])?;
             assert_eq!((v, n), (42, 1));
 
-            let (v, n) = decode(&[0xF8, 0x34, 0xBE, 0xEF]).expect("decode failed");
+            let (v, n) = decode(&[0xF8, 0x34, 0xBE, 0xEF])?;
             assert_eq!((v, n), (300, 2));
+            Ok(())
         }
     }
 
@@ -599,49 +613,48 @@ mod tests {
         use super::*;
 
         #[test]
-        fn tier0() {
+        fn tier0() -> TestResult {
             for value in 0..248u64 {
                 let mut buf = Vec::new();
                 encode(value, &mut buf);
                 assert_eq!(buf.len(), 1);
+                assert_eq!(buf[0], u8::try_from(value).unwrap_or(0));
 
-                #[allow(clippy::cast_possible_truncation)]
-                {
-                    assert_eq!(buf[0], value as u8);
-                }
-
-                let (decoded, consumed) = decode(&buf).expect("decode failed");
+                let (decoded, consumed) = decode(&buf)?;
                 assert_eq!(decoded, value);
                 assert_eq!(consumed, 1);
             }
+            Ok(())
         }
 
         #[test]
-        fn tier1() {
+        fn tier1() -> TestResult {
             for value in 248..504u64 {
                 let mut buf = Vec::new();
                 encode(value, &mut buf);
                 assert_eq!(buf.len(), 2, "value {value} should encode in 2 bytes");
                 assert_eq!(buf[0], 0xF8);
 
-                let (decoded, consumed) = decode(&buf).expect("decode failed");
+                let (decoded, consumed) = decode(&buf)?;
                 assert_eq!(decoded, value, "round-trip failed for {value}");
                 assert_eq!(consumed, 2);
             }
+            Ok(())
         }
 
         #[test]
-        fn tier2() {
+        fn tier2() -> TestResult {
             for value in 504..66_040u64 {
                 let mut buf = Vec::new();
                 encode(value, &mut buf);
                 assert_eq!(buf.len(), 3, "value {value} should encode in 3 bytes");
                 assert_eq!(buf[0], 0xF9);
 
-                let (decoded, consumed) = decode(&buf).expect("decode failed");
+                let (decoded, consumed) = decode(&buf)?;
                 assert_eq!(decoded, value, "round-trip failed for {value}");
                 assert_eq!(consumed, 3);
             }
+            Ok(())
         }
     }
 
@@ -649,7 +662,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn offset_triples() {
+        fn offset_triples() -> TestResult {
             // For each tier boundary OFFSET[n], verify that:
             //   OFFSET[n] - 1  encodes in tier n-1 (shorter)
             //   OFFSET[n]      encodes in tier n
@@ -669,7 +682,7 @@ mod tests {
                     "OFFSETS[{tier}] - 1 = {below}: expected {prev_len} bytes, got {}",
                     buf.len()
                 );
-                let (v, n) = decode(&buf).expect("decode OFFSET[n]-1 failed");
+                let (v, n) = decode(&buf)?;
                 assert_eq!(v, below);
                 assert_eq!(n, prev_len);
 
@@ -682,7 +695,7 @@ mod tests {
                     "OFFSETS[{tier}] = {offset}: expected {tier_len} bytes, got {}",
                     buf.len()
                 );
-                let (v, n) = decode(&buf).expect("decode OFFSET[n] failed");
+                let (v, n) = decode(&buf)?;
                 assert_eq!(v, offset);
                 assert_eq!(n, tier_len);
 
@@ -697,24 +710,23 @@ mod tests {
                         offset + 1,
                         buf.len()
                     );
-                    let (v, n) = decode(&buf).expect("decode OFFSET[n]+1 failed");
+                    let (v, n) = decode(&buf)?;
                     assert_eq!(v, offset + 1);
                     assert_eq!(n, tier_len);
                 }
             }
+            Ok(())
         }
 
         #[test]
-        fn all_zero_payloads() {
+        fn all_zero_payloads() -> TestResult {
             // [tag, 0x00, ..., 0x00] should decode to OFFSETS[tier] for each tier
             for tier in 1..=NUM_TIERS {
-                let tag = (247 + tier) as u8;
+                let tag = u8::try_from(247 + tier).unwrap_or(0xFF);
                 let mut buf = vec![tag];
-                buf.extend(core::iter::repeat(0x00u8).take(tier));
+                buf.extend(core::iter::repeat_n(0x00u8, tier));
 
-                let (value, consumed) = decode(&buf).unwrap_or_else(|e| {
-                    panic!("decode all-zeros tier {tier} failed: {e}");
-                });
+                let (value, consumed) = decode(&buf)?;
                 assert_eq!(
                     value, OFFSETS[tier],
                     "tier {tier} all-zeros payload: expected OFFSETS[{tier}] = {}, got {value}",
@@ -727,24 +739,23 @@ mod tests {
                 encode(value, &mut re);
                 assert_eq!(re, buf, "tier {tier} all-zeros round-trip mismatch");
             }
+            Ok(())
         }
 
         #[test]
-        fn all_ones_payloads() {
+        fn all_ones_payloads() -> TestResult {
             // [tag, 0xFF, ..., 0xFF] should decode to the tier's maximum value
             for tier in 1..=NUM_TIERS {
-                let tag = (247 + tier) as u8;
+                let tag = u8::try_from(247 + tier).unwrap_or(0xFF);
                 let mut buf = vec![tag];
-                buf.extend(core::iter::repeat(0xFFu8).take(tier));
+                buf.extend(core::iter::repeat_n(0xFFu8, tier));
 
                 let result = decode(&buf);
 
                 if tier < NUM_TIERS {
                     // Tiers 1-7: all-ones payload = 256^tier - 1, so
                     // value = OFFSETS[tier] + (256^tier - 1) = OFFSETS[tier+1] - 1
-                    let (value, consumed) = result.unwrap_or_else(|e| {
-                        panic!("decode all-ones tier {tier} failed: {e}");
-                    });
+                    let (value, consumed) = result?;
                     let expected = OFFSETS[tier + 1] - 1;
                     assert_eq!(
                         value, expected,
@@ -765,6 +776,7 @@ mod tests {
                     );
                 }
             }
+            Ok(())
         }
     }
 
@@ -772,7 +784,7 @@ mod tests {
         use super::*;
 
         #[test]
-        fn overlong_encoding_decodes_to_different_value() {
+        fn overlong_encoding_decodes_to_different_value() -> TestResult {
             // For each tier 1..7, take a value that belongs to that tier and
             // manually encode it in the *next* tier's format (wider tag, same
             // numeric payload without re-adding the offset). Because the
@@ -785,12 +797,12 @@ mod tests {
 
                 // Forge: use next tier's tag with the same payload bytes
                 let wider_tier = tier + 1;
-                let tag = (247 + wider_tier) as u8;
+                let tag = u8::try_from(247 + wider_tier).unwrap_or(0xFF);
                 let mut forged = vec![tag];
                 let be = payload.to_be_bytes();
-                forged.extend_from_slice(&be[8 - wider_tier..]);
+                forged.extend_from_slice(be.get(8 - wider_tier..).unwrap_or(&[]));
 
-                let (decoded, _) = decode(&forged).expect("forged decode failed");
+                let (decoded, _) = decode(&forged)?;
 
                 // The forged encoding should decode to OFFSETS[wider_tier],
                 // not the original value (unless they happen to be equal,
@@ -806,6 +818,7 @@ mod tests {
                      decode to OFFSETS[{wider_tier}]"
                 );
             }
+            Ok(())
         }
 
         #[test]
@@ -882,7 +895,7 @@ mod tests {
     mod test_vectors {
         use super::*;
 
-        /// Test vectors: (value, expected_bytes).
+        /// Test vectors: `(value, expected_bytes)`.
         ///
         /// These vectors should be replicated in any second implementation
         /// (e.g., TypeScript) to verify encoding compatibility.
@@ -925,7 +938,7 @@ mod tests {
         ];
 
         #[test]
-        fn encode() {
+        fn encode_vectors() {
             for &(value, expected) in VECTORS {
                 let mut buf = Vec::new();
                 super::encode(value, &mut buf);
@@ -938,17 +951,16 @@ mod tests {
         }
 
         #[test]
-        fn decode() {
+        fn decode_vectors() -> TestResult {
             for &(expected_value, bytes) in VECTORS {
-                let (value, consumed) = super::decode(bytes).unwrap_or_else(|e| {
-                    panic!("decode({bytes:02X?}) failed: {e}");
-                });
+                let (value, consumed) = super::decode(bytes)?;
                 assert_eq!(
                     value, expected_value,
                     "decode({bytes:02X?}): got {value}, expected {expected_value}"
                 );
                 assert_eq!(consumed, bytes.len());
             }
+            Ok(())
         }
     }
 
@@ -962,7 +974,9 @@ mod tests {
             bolero::check!().with_arbitrary::<u64>().for_each(|&value| {
                 let mut buf = Vec::new();
                 encode(value, &mut buf);
-                let (decoded, consumed) = decode(&buf).expect("decode failed");
+                let (decoded, consumed) = decode(&buf).unwrap_or_else(|e| {
+                    panic!("round-trip decode failed for {value}: {e}");
+                });
                 assert_eq!(decoded, value, "round-trip failed for {value}");
                 assert_eq!(consumed, buf.len());
             });
@@ -985,7 +999,7 @@ mod tests {
                 let mut buf = Vec::new();
                 encode(value, &mut buf);
                 let (arr, len) = encode_array(value);
-                assert_eq!(&arr[..len], buf.as_slice());
+                assert_eq!(arr.get(..len), Some(buf.as_slice()));
             });
         }
 
@@ -1007,15 +1021,14 @@ mod tests {
                 .with_arbitrary::<Vec<u8>>()
                 .for_each(|buf| {
                     if let Ok((value, consumed)) = decode(buf) {
-                        // Re-encode and verify it produces the same bytes
                         let mut re_encoded = Vec::new();
                         encode(value, &mut re_encoded);
                         assert_eq!(
                             re_encoded.as_slice(),
-                            &buf[..consumed],
+                            buf.get(..consumed).unwrap_or_default(),
                             "bijection violated: decode({:02X?}) = {value}, \
                              re-encode = {:02X?}",
-                            &buf[..consumed],
+                            buf.get(..consumed).unwrap_or_default(),
                             re_encoded
                         );
                     }

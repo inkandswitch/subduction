@@ -4,7 +4,7 @@ members = [
   "automerge_sedimentree",
   "automerge_sedimentree_wasm",
   "automerge_subduction_wasm",
-  "bivu64",
+  "bijou64",
   "sedimentree_core",
   "sedimentree_fs_storage",
   "sedimentree_wasm",
@@ -32,7 +32,7 @@ authors = [
 [workspace.dependencies]
 # Internal crates
 automerge_sedimentree_wasm = { version = "0.5.0", path = "automerge_sedimentree_wasm" }
-bivu64 = { version = "0.1.0", path = "bivu64", default-features = false }
+bijou64 = { version = "0.1.0", path = "bijou64", default-features = false }
 sedimentree_core = { version = "0.5.0", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.5.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.5.0", path = "sedimentree_wasm", default-features = false }

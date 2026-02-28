@@ -1,10 +1,10 @@
-# bivu64
+# bijou64
 
 Bijective variable-length encoding for unsigned 64-bit integers.
 
-Pronounced "bye-voo-sixty-four".
+Pronounced "bee-zhoo-sixty-four" — **bij**ective **o**ffset **u64**.
 
-`bivu64` encodes `u64` values into 1–9 bytes using a tag-byte prefix
+`bijou64` encodes `u64` values into 1–9 bytes using a tag-byte prefix
 scheme derived from [VARU64], modified with per-tier offsets to achieve
 _structural canonicality_ — each value has exactly one encoding, and
 each encoding has exactly one value.
@@ -14,20 +14,20 @@ each encoding has exactly one value.
 ```rust
 // Encode
 let mut buf = Vec::new();
-bivu64::encode(300, &mut buf);
+bijou64::encode(300, &mut buf);
 assert_eq!(buf, [0xF8, 0x34]); // tag 0xF8, payload 300 - 248 = 52
 
 // Decode
-let (value, len) = bivu64::decode(&buf).unwrap();
+let (value, len) = bijou64::decode(&buf).unwrap();
 assert_eq!(value, 300);
 assert_eq!(len, 2);
 
 // Stack-allocated encoding (no alloc needed)
-let (bytes, len) = bivu64::encode_array(300);
+let (bytes, len) = bijou64::encode_array(300);
 assert_eq!(&bytes[..len], &[0xF8, 0x34]);
 
 // Query encoded length without encoding
-assert_eq!(bivu64::encoded_len(300), 2);
+assert_eq!(bijou64::encoded_len(300), 2);
 ```
 
 ## Encoding
@@ -56,7 +56,7 @@ decoder must reject them with a runtime check. If that check is
 omitted, round-trip tests still pass; only adversarial inputs expose
 the bug.
 
-`bivu64` makes the offset subtraction load-bearing: decoding
+`bijou64` makes the offset subtraction load-bearing: decoding
 `[0xF8, 0x00]` produces 248 (not 0), because the decoder adds
 `OFFSET[1] = 248` to the payload. There is no overlong encoding to
 reject, and no check to forget.

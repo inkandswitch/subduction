@@ -1,4 +1,7 @@
-# bivu64
+# bijou64
+
+> "Plurality must never be posited without necessity."
+> — William of Ockham
 
 ## Authors
 
@@ -8,9 +11,13 @@
 
 The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "SHOULD NOT", "RECOMMENDED", "NOT RECOMMENDED", "MAY", and "OPTIONAL" in this document are to be interpreted as described in [BCP 14] when, and only when, they appear in all capitals, as shown here.
 
+## Name
+
+bijou64 (**bij**ective **o**ffset **u64**) is pronounced /biːʒuː sɪksti fɔːr/ ("bee-zhoo-sixty-four"). The name encodes the format's three defining properties: bijectivity (canonical by construction), per-tier offset addition (the mechanism that achieves it), and the `u64` value type. That "bijou" is also French for "small jewel" is a happy coincidence for a compact encoding.
+
 # Abstract
 
-bivu64 is a [bijective][bijective numeration] variable-length encoding for unsigned 64-bit integers. It encodes values into 1–9 bytes using tag-byte framing inherited from [VARU64], modified with per-tier offsets so that canonicality is structural rather than checked at runtime.
+bijou64 is a [bijective][bijective numeration] variable-length encoding for unsigned 64-bit integers. It encodes values into 1–9 bytes using tag-byte framing inherited from [VARU64], modified with per-tier offsets so that canonicality is structural rather than checked at runtime.
 
 # Introduction
 
@@ -18,11 +25,11 @@ Many binary protocols need a compact way to encode integers that are usually sma
 
 [VARU64] is a big-endian, tag-byte-framed varint. It admits a unique shortest encoding for every value, but the decoder must _actively reject_ overlong encodings. This rejection is a single `if` statement that, if omitted, does not break round-trip tests — only adversarial inputs expose the bug. In a canonical binary codec where encoders and decoders must agree on a single byte-level representation, a silently deletable canonicality check is a liability.
 
-bivu64 eliminates this class of error by making the offset subtraction load-bearing. There is exactly one way to represent each number. Each tier subtracts a different cumulative offset from the value before encoding the payload. If you attempt to encode a value in the wrong tier, the offset arithmetic produces a _different value_, which fails any round-trip or hash comparison immediately. There is no overlong encoding to reject because the tier ranges are disjoint by construction.
+bijou64 eliminates this class of error by making the offset subtraction load-bearing. There is exactly one way to represent each number. Each tier subtracts a different cumulative offset from the value before encoding the payload. If you attempt to encode a value in the wrong tier, the offset arithmetic produces a _different value_, which fails any round-trip or hash comparison immediately. There is no overlong encoding to reject because the tier ranges are disjoint by construction.
 
 ## Design Goals
 
-bivu64 was designed to satisfy the following properties:
+bijou64 was designed to satisfy the following properties:
 
 | Property                  | Description                                                                                                                                                                                                                           |
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -36,7 +43,7 @@ bivu64 was designed to satisfy the following properties:
 
 # Format
 
-bivu64 encodes unsigned 64-bit integers into 1–9 bytes. The encoding is a bijection: every `u64` value maps to exactly one byte sequence, and every valid byte sequence maps to exactly one `u64` value.
+bijou64 encodes unsigned 64-bit integers into 1–9 bytes. The encoding is a bijection: every `u64` value maps to exactly one byte sequence, and every valid byte sequence maps to exactly one `u64` value.
 
 ## Tag Byte
 
@@ -141,7 +148,10 @@ To decode from a byte buffer:
 
 ## Canonicality
 
-bivu64 achieves canonicality _structurally_ (by construction) rather than by runtime rejection of overlong encodings.
+> "The best error message is the one that never shows up."
+> — Thomas Fuchs
+
+bijou64 achieves canonicality _structurally_ (by construction) rather than by runtime rejection of overlong encodings.
 
 ### Disjoint Tier Ranges
 
@@ -214,57 +224,57 @@ Implementations SHOULD use these vectors to verify encoding compatibility.
 
 # Prior Art
 
-bivu64 combines tag-byte framing from [VARU64] by [Aljoscha Meyer] with per-tier offsets — an instance of [bijective numeration], the same principle used by [Git's pack offset encoding]. [SQLite4's varint] uses a partial version of this offset idea (tiers 1–2 only).
+bijou64 combines tag-byte framing from [VARU64] by [Aljoscha Meyer] with per-tier offsets — an instance of [bijective numeration], the same principle used by [Git's pack offset encoding]. [SQLite4's varint] uses a partial version of this offset idea (tiers 1–2 only).
 
-bivu64 would not exist without these prior designs. Each of the formats below is well-engineered and well-suited to its original use case. The reasons bivu64 diverges from them are specific to the requirements of a content-addressed, canonical-by-construction protocol — not general criticisms of the formats themselves. LEB128 has been a reliable workhorse in DWARF, protobuf, and Wasm; VARU64 is an elegant design that bivu64 directly inherits most of its structure from.
+bijou64 would not exist without these prior designs. Each of the formats below is well-engineered and well-suited to its original use case. The reasons bijou64 diverges from them are specific to the requirements of a content-addressed, canonical-by-construction protocol — not general criticisms of the formats themselves. LEB128 has been a reliable workhorse in DWARF, protobuf, and Wasm; VARU64 is an elegant design that bijou64 directly inherits most of its structure from.
 
 ## LEB128
 
 [LEB128] is the most widely deployed varint (Wasm, protobuf, DWARF). It uses per-byte continuation bits and little-endian byte order. It is _not_ canonical: the same value can be encoded in multiple ways (e.g., `0x00` and `0x80 0x00` both decode to 0). Canonicality must be enforced by a runtime check at every decode site.
 
-bivu64 was not built on LEB128 because:
+bijou64 was not built on LEB128 because:
 
-- **Little-endian byte order.** The protocol using bivu64 is big-endian throughout. Mixing byte orders is an invitation to bugs.
+- **Little-endian byte order.** The protocol using bijou64 is big-endian throughout. Mixing byte orders is an invitation to bugs.
 - **No structural canonicality.** Overlong encodings are valid LEB128. In a content-addressed protocol, accepting a non-canonical encoding silently produces a different hash — a security issue.
 - **Continuation-bit framing.** The encoding length cannot be determined from the first byte alone; the decoder must scan for the terminating byte. This also means a missing termination byte can cause a decoder to read past the end of the buffer or loop indefinitely.
-- **Difficult to debug by hand.** Each byte interleaves one continuation bit with seven value bits. Reconstructing the original value from a hexdump requires masking and shifting every byte, then reassembling in little-endian order. Tag-byte framing (as in bivu64) keeps the payload bytes contiguous and big-endian, making hexdump inspection straightforward.
+- **Difficult to debug by hand.** Each byte interleaves one continuation bit with seven value bits. Reconstructing the original value from a hexdump requires masking and shifting every byte, then reassembling in little-endian order. Tag-byte framing (as in bijou64) keeps the payload bytes contiguous and big-endian, making hexdump inspection straightforward.
 
 ## vu128 / vu64
 
 The [vu128] and [vu64] crates use UTF-8-style prefix bits in the first byte: leading `1` bits encode the length, remaining bits carry value data, and subsequent bytes are pure payload. Like LEB128, they are little-endian and not canonical by construction. `vu128` explicitly permits overlong encodings by design, stating that applications requiring canonicality should check it themselves.
 
-bivu64 was not built on vu128/vu64 because:
+bijou64 was not built on vu128/vu64 because:
 
 - **Little-endian byte order**, same consideration as LEB128.
-- **Explicitly non-canonical.** The library considers overlong encodings a feature, not a bug — a reasonable design choice, but the opposite of bivu64's canonical-by-construction goal.
+- **Explicitly non-canonical.** The library considers overlong encodings a feature, not a bug — a reasonable design choice, but the opposite of bijou64's canonical-by-construction goal.
 - **Difficult to debug by hand.** The first byte mixes prefix bits with value bits, requiring masking to extract either. Combined with little-endian payload order, reconstructing a value from a hexdump is not straightforward.
 
 ## SQLite4 Varint
 
-[SQLite4's varint] uses a tag-byte and big-endian payloads — the closest _structural_ analogue to bivu64. It applies offsets for the first two multi-byte tiers (`240 + 256*(A0-241) + A1` and `2288 + 256*A1 + A2`), but switches to raw big-endian payloads for 3+ byte tiers. This means it is _not_ canonical by construction for those tiers: `[250, 0x00, 0x00, 0x01]` (value 1 as 3-byte big-endian) and `[0x01]` (single byte) both decode to 1.
+[SQLite4's varint] uses a tag-byte and big-endian payloads — the closest _structural_ analogue to bijou64. It applies offsets for the first two multi-byte tiers (`240 + 256*(A0-241) + A1` and `2288 + 256*A1 + A2`), but switches to raw big-endian payloads for 3+ byte tiers. This means it is _not_ canonical by construction for those tiers: `[250, 0x00, 0x00, 0x01]` (value 1 as 3-byte big-endian) and `[0x01]` (single byte) both decode to 1.
 
-bivu64 was not built directly on SQLite4's varint because:
+bijou64 was not built directly on SQLite4's varint because:
 
-- **Partial offset coverage.** Offsets apply only to tiers 1–2. Tiers 3+ use raw big-endian payloads, so overlong encodings are possible and canonicality requires a runtime check — exactly the class of error bivu64 is designed to eliminate.
-- **Different tag-byte threshold.** SQLite4 uses 241 as the tag threshold (vs. 248 in VARU64/bivu64). Adopting SQLite4's threshold would sacrifice compatibility with VARU64's framing for no structural benefit.
+- **Partial offset coverage.** Offsets apply only to tiers 1–2. Tiers 3+ use raw big-endian payloads, so overlong encodings are possible and canonicality requires a runtime check — exactly the class of error bijou64 is designed to eliminate.
+- **Different tag-byte threshold.** SQLite4 uses 241 as the tag threshold (vs. 248 in VARU64/bijou64). Adopting SQLite4's threshold would sacrifice compatibility with VARU64's framing for no structural benefit.
 
-bivu64 extends SQLite4's partial offset approach through all tiers, making every tier canonical by construction.
+bijou64 extends SQLite4's partial offset approach through all tiers, making every tier canonical by construction.
 
 ## Git Pack Offset Encoding
 
-[Git's pack offset encoding] uses continuation-bit (LEB128-style) framing with full bijective offsets across all tiers. It is canonical by construction — the same principle as bivu64 — but uses a different wire format: 7 value bits per byte with MSB continuation, big-endian byte significance.
+[Git's pack offset encoding] uses continuation-bit (LEB128-style) framing with full bijective offsets across all tiers. It is canonical by construction — the same principle as bijou64 — but uses a different wire format: 7 value bits per byte with MSB continuation, big-endian byte significance.
 
-bivu64 was not built on Git's pack offset encoding because:
+bijou64 was not built on Git's pack offset encoding because:
 
 - **No length from first byte.** It uses MSB continuation bits, so the decoder must scan forward byte-by-byte to find the end of the encoding. This prevents $\mathcal{O}(1)$ skipping and complicates streaming parsers and buffer pre-allocation.
 - **No lexicographic sort order.** Continuation bits are interleaved with value bits across every byte, so lexicographic byte comparison does not equal numeric comparison. The protocol requires sorted storage and binary search over encoded values without decoding.
 - **Difficult to debug in a hexdump.** Each byte mixes one control bit with seven value bits. Reconstructing the original value requires masking every byte and reassembling 7-bit chunks — the same issue as LEB128.
 
-bivu64 applies Git's offset principle to VARU64's tag-byte framing instead, gaining length-from-first-byte and contiguous big-endian payloads.
+bijou64 applies Git's offset principle to VARU64's tag-byte framing instead, gaining length-from-first-byte and contiguous big-endian payloads.
 
 ## VARU64
 
-[VARU64] is the closest relative of bivu64. It uses the same tag-byte framing (first byte determines length), big-endian payload bytes, and value range. bivu64 directly inherits its wire format structure.
+[VARU64] is the closest relative of bijou64. It uses the same tag-byte framing (first byte determines length), big-endian payload bytes, and value range. bijou64 directly inherits its wire format structure.
 
 The difference is in payload interpretation. In VARU64, the payload bytes are the raw big-endian value. This means multiple byte sequences can _represent_ the same number: `[0xF8, 0x00]` decodes to 0, and so does `[0x00]`. The VARU64 spec requires decoders to reject the longer form, but this rejection is a single `if` statement that, if omitted:
 
@@ -272,18 +282,33 @@ The difference is in payload interpretation. In VARU64, the payload bytes are th
 - Does not break any test that only uses honestly-encoded data.
 - Only fails under adversarial input — which may not be tested.
 
-bivu64 was not built directly on VARU64 because:
+bijou64 was not built directly on VARU64 because:
 
 - **Canonicality is not structural.** The single runtime check that rejects overlong encodings is load-bearing for correctness but invisible to normal testing. Removing it does not break any test that only uses honestly-encoded data. In a content-addressed protocol, accepting a non-canonical encoding silently produces a different hash.
-- **The check is silently deletable.** Because round-trip tests pass without it, the canonicality check can be accidentally removed (or never implemented in a new port) without any test failure. bivu64's offset addition is not deletable — removing it breaks _everything_.
+- **The check is silently deletable.** Because round-trip tests pass without it, the canonicality check can be accidentally removed (or never implemented in a new port) without any test failure. bijou64's offset addition is not deletable — removing it breaks _everything_.
 
-In bivu64, the offset addition replaces this runtime check with a structural guarantee. Decoding `[0xF8, 0x00]` produces 248 (not 0), because the decoder adds `OFFSET[1] = 248` to the payload. The overlong encoding does not silently succeed — it produces a _different_ value entirely. There is no check to forget.
+In bijou64, the offset addition replaces this runtime check with a structural guarantee. Decoding `[0xF8, 0x00]` produces 248 (not 0), because the decoder adds `OFFSET[1] = 248` to the payload. The overlong encoding does not silently succeed — it produces a _different_ value entirely. There is no check to forget.
 
-The trade-off is that bivu64 payloads are not the raw value, so hexdump inspection is less direct for values above 247. For values below 248 (the common case), the encoding is byte-identical to VARU64.
+The trade-off is that bijou64 payloads are not the raw value, so hexdump inspection is less direct for values above 247. For values below 248 (the common case), the encoding is byte-identical to VARU64.
+
+# Future Extensions
+
+The bijou64 design generalizes naturally to other integer widths. The offset recurrence, tag-byte framing, and bijective property are not specific to 64-bit integers — they depend only on the tag threshold (248), the number of tiers, and the maximum payload width. A family of encodings could be defined:
+
+| Variant  | Max value   | Max bytes | Tiers |
+|----------|-------------|-----------|-------|
+| bijou16  | `u16::MAX`  | 3         | 0–2   |
+| bijou32  | `u32::MAX`  | 5         | 0–4   |
+| bijou64  | `u64::MAX`  | 9         | 0–8   |
+| bijou128 | `u128::MAX` | 17        | 0–16  |
+
+Each variant would use the same tag-byte threshold (248), the same offset recurrence, and the same encoding/decoding algorithms — differing only in the number of tiers and the maximum payload width. bijou128 would require tag bytes beyond `0xFF`, which would need an extended framing scheme (e.g., `0xFF` followed by a secondary length byte).
+
+This specification does not define these variants. They are noted here to show that the design is not ad hoc — it is a specific instance of a general construction that could be extended if the need arises.
 
 # License
 
-This specification is adapted from the [VARU64] specification by [Aljoscha Meyer], licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The tag-byte framing and tier structure are inherited from VARU64; the per-tier offset addition (inspired by [Git's pack offset encoding] and [SQLite4's varint]) and surrounding specification text are new in bivu64.
+This specification is adapted from the [VARU64] specification by [Aljoscha Meyer], licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The tag-byte framing and tier structure are inherited from VARU64; the per-tier offset addition (inspired by [Git's pack offset encoding] and [SQLite4's varint]) and surrounding specification text are new in bijou64.
 
 This specification is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 

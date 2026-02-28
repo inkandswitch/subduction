@@ -7,11 +7,11 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use id::CommitId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, EncodeFields},
-        error::{Bivu64Error, BufferTooShort, DecodeError, ReadingType},
+        error::{Bijou64Error, BufferTooShort, DecodeError, ReadingType},
         schema::{self, Schema},
     },
     crypto::digest::Digest,
@@ -98,7 +98,7 @@ impl HasBlobMeta for LooseCommit {
 /// SedimentreeId(32) + Digest<Blob>(32) + |Parents|(1).
 const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 1;
 
-/// Minimum fields size: fixed fields + smallest bivu64 (1 byte for values 0–247).
+/// Minimum fields size: fixed fields + smallest bijou64 (1 byte for values 0–247).
 const CODEC_MIN_FIELDS_SIZE: usize = CODEC_FIXED_FIELDS_SIZE + 1;
 
 /// Minimum signed message size: Schema(4) + IssuerVK(32) + MinFields(66) + Signature(64).
@@ -118,7 +118,7 @@ impl EncodeFields for LooseCommit {
         #[allow(clippy::cast_possible_truncation)]
         encode::u8(self.parents().len() as u8, buf);
 
-        bivu64::encode(self.blob_meta().size_bytes(), buf);
+        bijou64::encode(self.blob_meta().size_bytes(), buf);
 
         for parent in self.parents() {
             encode::array(parent.as_bytes(), buf);
@@ -127,7 +127,7 @@ impl EncodeFields for LooseCommit {
 
     fn fields_size(&self) -> usize {
         CODEC_FIXED_FIELDS_SIZE
-            + bivu64::encoded_len(self.blob_meta().size_bytes())
+            + bijou64::encoded_len(self.blob_meta().size_bytes())
             + (self.parents().len() * 32)
     }
 }
@@ -157,8 +157,8 @@ impl Decode for LooseCommit {
         let parent_count = decode::u8(buf, offset)? as usize;
         offset += 1;
 
-        let (blob_size, consumed) = bivu64::decode(buf.get(offset..).unwrap_or_default())
-            .map_err(|kind| Bivu64Error { offset, kind })?;
+        let (blob_size, consumed) = bijou64::decode(buf.get(offset..).unwrap_or_default())
+            .map_err(|kind| Bijou64Error { offset, kind })?;
         offset += consumed;
 
         let parents_size = parent_count * 32;
@@ -209,7 +209,7 @@ mod tests {
         encode::array(id.as_bytes(), &mut buf);
         encode::array(&[0x20; 32], &mut buf); // blob digest
         encode::u8(2, &mut buf);
-        bivu64::encode(1024, &mut buf);
+        bijou64::encode(1024, &mut buf);
         encode::array(&[0x50; 32], &mut buf);
         encode::array(&[0x30; 32], &mut buf);
 
@@ -232,7 +232,7 @@ mod tests {
 
     #[test]
     fn codec_min_size_is_correct() {
-        // Schema(4) + IssuerVK(32) + SedimentreeId(32) + BlobDigest(32) + ParentCnt(1) + BlobSize(bivu64 min=1) + Signature(64)
+        // Schema(4) + IssuerVK(32) + SedimentreeId(32) + BlobDigest(32) + ParentCnt(1) + BlobSize(bijou64 min=1) + Signature(64)
         assert_eq!(LooseCommit::MIN_SIZE, 166);
     }
 }

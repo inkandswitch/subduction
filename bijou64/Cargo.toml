@@ -1,5 +1,5 @@
 [package]
-name = "bivu64"
+name = "bijou64"
 version = "0.1.0"
 description = "Bijective variable-length encoding for unsigned 64-bit integers"
 authors = ["Brooklyn Zelenka <hello@brooklynzelenka.com>"]
@@ -20,7 +20,7 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
-bivu64 = { path = ".", features = ["bolero"] }
+bijou64 = { path = ".", features = ["bolero"] }
 bolero = { workspace = true, features = ["arbitrary"] }
 testresult = { workspace = true }
 

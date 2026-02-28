@@ -32,7 +32,7 @@ Big-endian
 big-endian
 BigCo
 blake
-bivu64
+bijou64
 BlobDigest
 BlobLen
 BlobSize

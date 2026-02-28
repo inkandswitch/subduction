@@ -15,7 +15,7 @@ rust-version.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-lock = { workspace = true }
-bivu64 = { workspace = true }
+bijou64 = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 futures = { workspace = true }

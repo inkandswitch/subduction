@@ -9,11 +9,11 @@ use checkpoint::Checkpoint;
 use id::FragmentId;
 
 use crate::{
-    blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
+    blob::{has_meta::HasBlobMeta, Blob, BlobMeta},
     codec::{
         decode::{self, Decode},
         encode::{self, EncodeFields},
-        error::{Bivu64Error, BufferTooShort, DecodeError, ReadingType},
+        error::{Bijou64Error, BufferTooShort, DecodeError, ReadingType},
         schema::{self, Schema},
     },
     crypto::{
@@ -22,7 +22,7 @@ use crate::{
     },
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -352,7 +352,7 @@ impl FragmentSpec {
 /// SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2).
 const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2;
 
-/// Minimum fields size: fixed fields + smallest bivu64 (1 byte for values 0–247).
+/// Minimum fields size: fixed fields + smallest bijou64 (1 byte for values 0–247).
 const CODEC_MIN_FIELDS_SIZE: usize = CODEC_FIXED_FIELDS_SIZE + 1;
 
 /// Minimum signed message size: Schema(4) + IssuerVK(32) + MinFields(100) + Signature(64).
@@ -379,7 +379,7 @@ impl EncodeFields for Fragment {
         #[allow(clippy::cast_possible_truncation)]
         encode::u16(self.checkpoints().len() as u16, buf);
 
-        bivu64::encode(self.summary().blob_meta().size_bytes(), buf);
+        bijou64::encode(self.summary().blob_meta().size_bytes(), buf);
 
         for boundary in self.boundary() {
             encode::array(boundary.as_bytes(), buf);
@@ -392,7 +392,7 @@ impl EncodeFields for Fragment {
 
     fn fields_size(&self) -> usize {
         CODEC_FIXED_FIELDS_SIZE
-            + bivu64::encoded_len(self.summary().blob_meta().size_bytes())
+            + bijou64::encoded_len(self.summary().blob_meta().size_bytes())
             + (self.boundary().len() * 32)
             + (self.checkpoints().len() * CHECKPOINT_BYTES)
     }
@@ -430,8 +430,8 @@ impl Decode for Fragment {
         let checkpoint_count = decode::u16(buf, offset)? as usize;
         offset += 2;
 
-        let (blob_size, consumed) = bivu64::decode(buf.get(offset..).unwrap_or_default())
-            .map_err(|kind| Bivu64Error { offset, kind })?;
+        let (blob_size, consumed) = bijou64::decode(buf.get(offset..).unwrap_or_default())
+            .map_err(|kind| Bijou64Error { offset, kind })?;
         offset += consumed;
 
         let boundary_size = boundary_count * 32;
@@ -511,7 +511,7 @@ mod tests {
             encode::array(&[0x20; 32], &mut buf); // blob digest
             encode::u8(2, &mut buf); // boundary count
             encode::u16(0, &mut buf); // checkpoint count
-            bivu64::encode(1024, &mut buf); // blob size
+            bijou64::encode(1024, &mut buf); // blob size
             encode::array(&[0x50; 32], &mut buf); // boundary 1 (unsorted - bigger first)
             encode::array(&[0x30; 32], &mut buf); // boundary 2 (smaller second)
 
@@ -534,7 +534,7 @@ mod tests {
 
         #[test]
         fn min_size_is_correct() {
-            // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + BndryCnt(1) + CkptCnt(2) + BlobSize(bivu64 min=1) + Signature(64)
+            // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + BndryCnt(1) + CkptCnt(2) + BlobSize(bijou64 min=1) + Signature(64)
             assert_eq!(Fragment::MIN_SIZE, 200);
         }
     }

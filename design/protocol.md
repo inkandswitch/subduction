@@ -244,7 +244,7 @@ All multi-byte integers are **big-endian** (network byte order):
 | `u16`     | 2 bytes, big-endian                                              |
 | `u32`     | 4 bytes, big-endian                                              |
 | `u64`     | 8 bytes, big-endian                                              |
-| `bivu64`  | 1–9 bytes, bijective variable-length ([spec](../bivu64/SPEC.md)) |
+| `bijou64`  | 1–9 bytes, bijective variable-length ([spec](../bijou64/SPEC.md)) |
 | `[u8; N]` | N bytes, raw                                                     |
 
 ### Array Encoding
@@ -280,7 +280,7 @@ Decoding returns structured errors with context:
 | `UnsortedArray` | Array elements not in ascending order |
 | `InvalidEnumTag` | Unknown discriminant value |
 | `SizeMismatch` | Declared size doesn't match actual data |
-| `Bivu64` | `bivu64` decode failed (buffer too short or tier 8 overflow) |
+| `Bijou64` | `bijou64` decode failed (buffer too short or tier 8 overflow) |
 | `BlobTooLarge` | Blob exceeds maximum allowed size |
 | `ArrayTooLarge` | Too many elements in array |
 | `DuplicateElement` | Array contains duplicates |
@@ -333,7 +333,7 @@ Schema: `STC\x00` (Sedimentree Commit, version 0)
 | SedimentreeId | 32 bytes | Document identifier (binds commit to document) |
 | BlobDigest | 32 bytes | BLAKE3 hash of the blob content |
 | ParentCnt | 1 byte | Number of parent commits (max 255, sufficient for realistic workloads) |
-| BlobSize | 1–9 bytes | Size of blob in bytes ([`bivu64`](../bivu64/SPEC.md)) |
+| BlobSize | 1–9 bytes | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md)) |
 | Parents | N × 32 bytes | Parent commit digests, **sorted ascending** |
 | Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
 
@@ -359,7 +359,7 @@ Schema: `STF\x00` (Sedimentree Fragment, version 0)
 | BlobDigest | 32 bytes | BLAKE3 hash of the fragment blob |
 | BndryCnt | 1 byte | Number of boundary commits (0-255) |
 | CkptCnt | 2 bytes | Number of checkpoints (big-endian u16, 0-65535) |
-| BlobSize | 1–9 bytes | Size of blob in bytes ([`bivu64`](../bivu64/SPEC.md)) |
+| BlobSize | 1–9 bytes | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md)) |
 | Boundary | N × 32 bytes | Boundary commit digests, **sorted ascending** |
 | Checkpoints | M × 12 bytes | Truncated checkpoint digests (96-bit), **sorted ascending** |
 | Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
@@ -442,7 +442,7 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ╚═══════════════╩══════════════════════╩═════════╩══════════╝
 ```
 
-BlobLen is encoded as [`bivu64`](../bivu64/SPEC.md).
+BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
 
 ### Fragment Message (Tag 0x01)
 
@@ -453,7 +453,7 @@ BlobLen is encoded as [`bivu64`](../bivu64/SPEC.md).
 ╚═══════════════╩══════════════════╩═════════╩══════════╝
 ```
 
-BlobLen is encoded as [`bivu64`](../bivu64/SPEC.md).
+BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
 
 ### BlobsRequest (Tag 0x02)
 
@@ -469,11 +469,11 @@ BlobLen is encoded as [`bivu64`](../bivu64/SPEC.md).
 ```
 ╔═══════════════╦═══════╦════════════════════════════╗
 ║ SedimentreeId ║ Count ║    (BlobLen + Blob)...     ║
-║      32B      ║  2B   ║ N × (bivu64 + variable)    ║
+║      32B      ║  2B   ║ N × (bijou64 + variable)    ║
 ╚═══════════════╩═══════╩════════════════════════════╝
 ```
 
-Each blob is encoded as `bivu64(size) || bytes[0..size]`.
+Each blob is encoded as `bijou64(size) || bytes[0..size]`.
 
 ### BatchSyncRequest (Tag 0x04)
 
@@ -520,7 +520,7 @@ Each blob is encoded as `bivu64(size) || bytes[0..size]`.
 ╚═══════════╩═════════╩════════════╩══════════╩═══════════════════════════════════════════════════════════════════╝
 ```
 
-Each missing commit/fragment is: `Signed<T>` (variable) + BlobLen (`bivu64`) + Blob (variable)
+Each missing commit/fragment is: `Signed<T>` (variable) + BlobLen (`bijou64`) + Blob (variable)
 
 Requested fingerprints are 8 bytes each.
 
@@ -582,7 +582,7 @@ Signed payloads use a custom codec (not CBOR) to guarantee determinism:
 
 - Fixed field order defined by `EncodeFields` implementation
 - Big-endian integers (no smallest-encoding ambiguity)
-- [`bivu64`](../bivu64/SPEC.md) for blob size fields (canonical by construction — bijective encoding eliminates overlong forms structurally)
+- [`bijou64`](../bijou64/SPEC.md) for blob size fields (canonical by construction — bijective encoding eliminates overlong forms structurally)
 - Sorted arrays with no duplicates
 - No optional fields or default values
 
