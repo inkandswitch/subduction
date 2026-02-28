@@ -38,6 +38,7 @@ big-endian
 BigCo
 blake
 bijou64
+BIJective
 BlobDigest
 BlobLen
 BlobSize
