@@ -24,9 +24,8 @@ a unique shortest encoding for every value, but the decoder must
 _actively reject_ overlong encodings. This rejection is a single
 `if` statement that, if omitted, does not break round-trip tests —
 only adversarial inputs expose the bug. In a canonical binary codec
-where the entire point is that encoders and decoders agree on a
-single byte-level representation, a silently deletable canonicality
-check is a liability.
+where encoders and decoders must agree on a single byte-level
+representation, a silently deletable canonicality check is a liability.
 
 `bivu64` eliminates this class of bug by making the offset subtraction
 "load-bearing". Each tier subtracts a different cumulative offset
@@ -39,40 +38,17 @@ by construction.
 ## Approach
 
 `bivu64` was designed to satisfy the following properties, in
-roughly this priority order:
+no particular order:
 
-1. **Canonical by construction.** Every value MUST have exactly one
-   encoding. This property MUST be structural — enforced by the
-   format itself, not by a runtime check that can be omitted. This
-   is the defining requirement; it motivates the entire design.
-
-2. **Big-endian byte order.** Payload bytes MUST be big-endian so
-   that lexicographic byte comparison equals numeric comparison.
-   This enables sorted storage and binary search over encoded
-   values without decoding.
-
-3. **Length from first byte.** The total encoding length MUST be
-   determined by inspecting only the first byte. This enables
-   O(1) skipping, streaming parsers, and simple buffer management.
-
-4. **Compact for small values.** Values that fit in one byte (0–247)
-   encode as that single byte with no overhead. The common case in
-   the target protocol is blob sizes of 54–100 bytes, which
-   fall in this range.
-
-5. **Full `u64` range.** The encoding MUST cover all values from 0
-   to 2^64 − 1. A 32-bit cap would be simpler but does not align
-   with the protocol's use of `u64` size fields.
-
-6. **Simple to implement.** The encoding and decoding algorithms
-   SHOULD be implementable in under 50 lines, in any language,
-   with no dependencies or clever bit shifting tricks. The format
-   should be easy to port (e.g. to TypeScript for a browser client).
-
-7. **Debuggable in a hexdump.** For single-byte values (the common
-   case), the encoded byte SHOULD be the value itself. For
-   multi-byte values, the payload SHOULD be contiguous big-endian
-   bytes that can be read with minimal mental or hand arithmetic.
+| Property                  | Description                                                                                                                                                                                                                       |
+|---------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| Canonical by construction | Every value MUST have exactly one encoding, enforced structurally by the format itself — not by a runtime check that can be omitted. This is the defining requirement; it motivates the entire design.                            |
+| Big-endian byte order     | Payload bytes are big-endian so that lexicographic byte comparison equals numeric comparison. This enables sorted storage and binary search over encoded values without decoding.                                                 |
+| Length from first byte    | The total encoding length SHOULD be determined by inspecting only the first byte. This enables O(1) skipping, streaming parsers, and other buffer management.                                                                     |
+| Compact for small values  | Values that fit in one byte (0–247) encode as that single byte with no overhead. The common case in the target protocol is blob sizes of 54–100 bytes, which fall in this range.                                                  |
+| Full `u64` range          | The encoding MUST cover all values from 0 to 2^64 − 1. A 32-bit cap would be simpler but does not align with the protocol's use of `u64` size fields.                                                                             |
+| Simple to implement       | The encoding and decoding algorithms SHOULD be implementable in under 50 lines, in any language, with no dependencies or clever bit-shifting tricks. The format should be easy to port (e.g. to TypeScript for a browser client). |
+| Debuggable in a hexdump   | For single-byte values (the common case), the encoded byte SHOULD be the value itself. For multi-byte values, the payload SHOULD be contiguous big-endian bytes readable with minimal mental arithmetic.                          |
 
 ## Format
 
@@ -174,16 +150,16 @@ Note that we subtracted **66,040** (the tier 3 offset), _not_ 247.
 If we had 300 instead, it would land in tier 1 and we would subtract
 **248** (the tier 1 offset). Each tier has its own offset:
 
-| Tier | Subtracted from value    |
-|------|--------------------------|
-| 1    | 248                      |
-| 2    | 504                      |
-| 3    | 66,040                   |
-| 4    | 16,843,256               |
-| 5    | 4,311,810,552            |
-| 6    | 1,103,823,438,328        |
-| 7    | 282,578,800,148,984      |
-| 8    | 72,340,172,838,076,920   |
+| Tier | Offset (decimal)         | Offset (hex)             |
+|------|--------------------------|--------------------------|
+| 1    | 248                      | `0xF8`                   |
+| 2    | 504                      | `0x1F8`                  |
+| 3    | 66,040                   | `0x101F8`                |
+| 4    | 16,843,256               | `0x10101F8`              |
+| 5    | 4,311,810,552            | `0x1010101F8`            |
+| 6    | 1,103,823,438,328        | `0x101010101F8`          |
+| 7    | 282,578,800,148,984      | `0x10101010101F8`        |
+| 8    | 72,340,172,838,076,920   | `0x01010101010101F8`     |
 
 ### Decoding algorithm
 
