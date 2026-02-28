@@ -1,6 +1,6 @@
 [package]
 name = "sedimentree_fs_storage"
-version = "0.4.1"
+version = "0.5.0"
 description = "Filesystem-based storage backend for Sedimentree"
 
 categories = ["filesystem"]

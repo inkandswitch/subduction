@@ -1,6 +1,6 @@
 [package]
 name = "subduction_http_longpoll"
-version = "0.2.1"
+version = "0.3.0"
 description = "HTTP long-poll transport layer for the Subduction sync protocol"
 
 categories = ["web-programming"]

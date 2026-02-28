@@ -1,6 +1,6 @@
 [package]
 name = "subduction_iroh"
-version = "0.1.0"
+version = "0.2.0"
 description = "Iroh (QUIC) transport layer for the Subduction sync protocol"
 
 categories = ["network-programming"]

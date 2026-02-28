@@ -19,7 +19,8 @@ use alloc::{collections::BTreeSet, vec::Vec};
 use sedimentree_core::{
     blob::Blob,
     codec::error::{
-        BufferTooShort, DecodeError, InvalidEnumTag, InvalidSchema, ReadingType, SizeMismatch,
+        Bijou64Error, BlobTooLarge, BufferTooShort, DecodeError, InvalidEnumTag, InvalidSchema,
+        ReadingType, SizeMismatch,
     },
     crypto::{
         digest::Digest,
@@ -328,9 +329,9 @@ mod tags {
 }
 
 mod min_sizes {
-    // sed_id(32) + Signed<LooseCommit>::MIN_SIZE(173) + blob_len_prefix(4)
-    pub(super) const LOOSE_COMMIT: usize = 32 + 173 + 4;
-    pub(super) const FRAGMENT: usize = 32 + 207 + 4;
+    // sed_id(32) + Signed<LooseCommit>::MIN_SIZE(166) + blob_len_prefix(bijou64 min=1)
+    pub(super) const LOOSE_COMMIT: usize = 32 + 166 + 1;
+    pub(super) const FRAGMENT: usize = 32 + 200 + 1;
     pub(super) const BLOBS_REQUEST: usize = 32 + 2;
     pub(super) const BLOBS_RESPONSE: usize = 32 + 2;
     pub(super) const BATCH_SYNC_REQUEST: usize = 32 + 32 + 8 + 1 + 16 + 2 + 2;
@@ -499,14 +500,24 @@ impl Message {
     fn payload_size(&self) -> usize {
         match self {
             Message::LooseCommit { commit, blob, .. } => {
-                32 + commit.as_bytes().len() + 4 + blob.as_slice().len()
+                32 + commit.as_bytes().len()
+                    + bijou64::encoded_len(blob.as_slice().len() as u64)
+                    + blob.as_slice().len()
             }
             Message::Fragment { fragment, blob, .. } => {
-                32 + fragment.as_bytes().len() + 4 + blob.as_slice().len()
+                32 + fragment.as_bytes().len()
+                    + bijou64::encoded_len(blob.as_slice().len() as u64)
+                    + blob.as_slice().len()
             }
             Message::BlobsRequest { digests, .. } => 32 + 2 + (digests.len() * 32),
             Message::BlobsResponse { blobs, .. } => {
-                32 + 2 + blobs.iter().map(|b| 4 + b.as_slice().len()).sum::<usize>()
+                32 + 2
+                    + blobs
+                        .iter()
+                        .map(|b| {
+                            bijou64::encoded_len(b.as_slice().len() as u64) + b.as_slice().len()
+                        })
+                        .sum::<usize>()
             }
             Message::BatchSyncRequest(req) => {
                 32 + 32
@@ -538,13 +549,21 @@ fn sync_diff_size(diff: &SyncDiff) -> usize {
     let commits_size: usize = diff
         .missing_commits
         .iter()
-        .map(|(signed, blob)| signed.as_bytes().len() + 4 + blob.as_slice().len())
+        .map(|(signed, blob)| {
+            signed.as_bytes().len()
+                + bijou64::encoded_len(blob.as_slice().len() as u64)
+                + blob.as_slice().len()
+        })
         .sum();
 
     let fragments_size: usize = diff
         .missing_fragments
         .iter()
-        .map(|(signed, blob)| signed.as_bytes().len() + 4 + blob.as_slice().len())
+        .map(|(signed, blob)| {
+            signed.as_bytes().len()
+                + bijou64::encoded_len(blob.as_slice().len() as u64)
+                + blob.as_slice().len()
+        })
         .sum();
 
     let requested_fps_size = (diff.requesting.commit_fingerprints.len()
@@ -562,8 +581,7 @@ fn encode_loose_commit(
 ) {
     buf.extend_from_slice(id.as_bytes());
     buf.extend_from_slice(commit.as_bytes());
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(blob.as_slice().len() as u32).to_be_bytes());
+    bijou64::encode(blob.as_slice().len() as u64, buf);
     buf.extend_from_slice(blob.as_slice());
 }
 
@@ -575,8 +593,7 @@ fn encode_fragment(
 ) {
     buf.extend_from_slice(id.as_bytes());
     buf.extend_from_slice(fragment.as_bytes());
-    #[allow(clippy::cast_possible_truncation)]
-    buf.extend_from_slice(&(blob.as_slice().len() as u32).to_be_bytes());
+    bijou64::encode(blob.as_slice().len() as u64, buf);
     buf.extend_from_slice(blob.as_slice());
 }
 
@@ -594,8 +611,7 @@ fn encode_blobs_response(buf: &mut Vec<u8>, id: &SedimentreeId, blobs: &[Blob]) 
     #[allow(clippy::cast_possible_truncation)]
     buf.extend_from_slice(&(blobs.len() as u16).to_be_bytes());
     for blob in blobs {
-        #[allow(clippy::cast_possible_truncation)]
-        buf.extend_from_slice(&(blob.as_slice().len() as u32).to_be_bytes());
+        bijou64::encode(blob.as_slice().len() as u64, buf);
         buf.extend_from_slice(blob.as_slice());
     }
 }
@@ -656,15 +672,13 @@ fn encode_sync_diff(buf: &mut Vec<u8>, diff: &SyncDiff) {
 
     for (signed, blob) in &diff.missing_commits {
         buf.extend_from_slice(signed.as_bytes());
-        #[allow(clippy::cast_possible_truncation)]
-        buf.extend_from_slice(&(blob.as_slice().len() as u32).to_be_bytes());
+        bijou64::encode(blob.as_slice().len() as u64, buf);
         buf.extend_from_slice(blob.as_slice());
     }
 
     for (signed, blob) in &diff.missing_fragments {
         buf.extend_from_slice(signed.as_bytes());
-        #[allow(clippy::cast_possible_truncation)]
-        buf.extend_from_slice(&(blob.as_slice().len() as u32).to_be_bytes());
+        bijou64::encode(blob.as_slice().len() as u64, buf);
         buf.extend_from_slice(blob.as_slice());
     }
 
@@ -706,7 +720,7 @@ fn decode_loose_commit(payload: &[u8]) -> Result<Message, DecodeError> {
     )?;
     offset += commit.as_bytes().len();
 
-    let blob_size = read_u32(payload, &mut offset)? as usize;
+    let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
 
     let blob = Blob::new(
         payload
@@ -741,7 +755,7 @@ fn decode_fragment(payload: &[u8]) -> Result<Message, DecodeError> {
     )?;
     offset += fragment.as_bytes().len();
 
-    let blob_size = read_u32(payload, &mut offset)? as usize;
+    let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
 
     let blob = Blob::new(
         payload
@@ -783,7 +797,7 @@ fn decode_blobs_response(payload: &[u8]) -> Result<Message, DecodeError> {
 
     let mut blobs = Vec::with_capacity(count);
     for _ in 0..count {
-        let blob_size = read_u32(payload, &mut offset)? as usize;
+        let blob_size = read_bijou64_as_usize(payload, &mut offset)?;
         blobs.push(Blob::new(
             payload
                 .get(offset..offset + blob_size)
@@ -900,7 +914,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
         )?;
         *offset += commit.as_bytes().len();
 
-        let blob_size = read_u32(payload, offset)? as usize;
+        let blob_size = read_bijou64_as_usize(payload, offset)?;
         let blob = Blob::new(
             payload
                 .get(*offset..*offset + blob_size)
@@ -932,7 +946,7 @@ fn decode_sync_diff(payload: &[u8], offset: &mut usize) -> Result<SyncDiff, Deco
         )?;
         *offset += fragment.as_bytes().len();
 
-        let blob_size = read_u32(payload, offset)? as usize;
+        let blob_size = read_bijou64_as_usize(payload, offset)?;
         let blob = Blob::new(
             payload
                 .get(*offset..*offset + blob_size)
@@ -1015,21 +1029,6 @@ fn read_u16(buf: &[u8], offset: &mut usize) -> Result<u16, DecodeError> {
     Ok(val)
 }
 
-fn read_u32(buf: &[u8], offset: &mut usize) -> Result<u32, DecodeError> {
-    let val = u32::from_be_bytes(
-        buf.get(*offset..*offset + 4)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(BufferTooShort {
-                reading: ReadingType::U32,
-                offset: *offset,
-                need: 4,
-                have: buf.len().saturating_sub(*offset),
-            })?,
-    );
-    *offset += 4;
-    Ok(val)
-}
-
 fn read_u64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
     let val = u64::from_be_bytes(
         buf.get(*offset..*offset + 8)
@@ -1057,6 +1056,27 @@ fn read_array<const N: usize>(buf: &[u8], offset: &mut usize) -> Result<[u8; N],
         })?;
     *offset += N;
     Ok(arr)
+}
+
+fn read_bijou64(buf: &[u8], offset: &mut usize) -> Result<u64, DecodeError> {
+    let (val, consumed) =
+        bijou64::decode(buf.get(*offset..).unwrap_or_default()).map_err(|kind| Bijou64Error {
+            offset: *offset,
+            kind,
+        })?;
+    *offset += consumed;
+    Ok(val)
+}
+
+fn read_bijou64_as_usize(buf: &[u8], offset: &mut usize) -> Result<usize, DecodeError> {
+    let val = read_bijou64(buf, offset)?;
+    usize::try_from(val).map_err(|_| {
+        BlobTooLarge {
+            size: val,
+            max: usize::MAX as u64,
+        }
+        .into()
+    })
 }
 
 #[cfg(test)]

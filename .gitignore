@@ -25,3 +25,6 @@ data
 
 # dhat heap profiling output
 **/dhat-heap.json
+
+# rustc snippet output
+rust_out

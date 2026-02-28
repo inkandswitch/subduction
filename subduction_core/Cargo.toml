@@ -1,6 +1,6 @@
 [package]
 name = "subduction_core"
-version = "0.4.2"
+version = "0.5.0"
 description = "Subduction: sync protocol for replicating Sedimentrees between peers"
 
 categories = ["web-programming"]
@@ -15,6 +15,7 @@ repository.workspace = true
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-channel = { workspace = true }
 async-lock = { workspace = true }
+bijou64 = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ed25519-dalek = { workspace = true, features = ["zeroize"] }

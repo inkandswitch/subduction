@@ -238,14 +238,14 @@ trait Decode: Schema + Sized {
 
 All multi-byte integers are **big-endian** (network byte order):
 
-| Type      | Encoding                                 |
-|-----------|------------------------------------------|
-| `u8`      | 1 byte                                   |
-| `u16`     | 2 bytes, big-endian                      |
-| `u32`     | 4 bytes, big-endian                      |
-| `u64`     | 8 bytes, big-endian                      |
-| `[u8; N]` | N bytes, raw                             |
-| `&[u8]`   | Length-prefixed (u16 or u32) + raw bytes |
+| Type      | Encoding                                                          |
+|-----------|-------------------------------------------------------------------|
+| `u8`      | 1 byte                                                            |
+| `u16`     | 2 bytes, big-endian                                               |
+| `u32`     | 4 bytes, big-endian                                               |
+| `u64`     | 8 bytes, big-endian                                               |
+| `bijou64` | 1–9 bytes, bijective variable-length ([spec](../bijou64/SPEC.md)) |
+| `[u8; N]` | N bytes, raw                                                      |
 
 ### Array Encoding
 
@@ -280,6 +280,7 @@ Decoding returns structured errors with context:
 | `UnsortedArray` | Array elements not in ascending order |
 | `InvalidEnumTag` | Unknown discriminant value |
 | `SizeMismatch` | Declared size doesn't match actual data |
+| `Bijou64` | `bijou64` decode failed (buffer too short or tier 8 overflow) |
 | `BlobTooLarge` | Blob exceeds maximum allowed size |
 | `ArrayTooLarge` | Too many elements in array |
 | `DuplicateElement` | Array contains duplicates |
@@ -319,10 +320,10 @@ The codec defines error types for content validation (`BlobTooLarge`, `ArrayTooL
 Schema: `STC\x00` (Sedimentree Commit, version 0)
 
 ```
-╔════════╦═══════════╦═══════════════╦════════════╦═══════════╦══════════╦═════════════╦═══════════╗
-║ Schema ║ IssuerVK  ║ SedimentreeId ║ BlobDigest ║ ParentCnt ║ BlobSize ║ Parents...  ║ Signature ║
-║   4B   ║    32B    ║      32B      ║    32B     ║    1B     ║    8B    ║   N × 32B   ║    64B    ║
-╚════════╩═══════════╩═══════════════╩════════════╩═══════════╩══════════╩═════════════╩═══════════╝
+╔════════╦══════════╦═══════════════╦════════════╦═══════════╦══════════╦═════════════╦═══════════╗
+║ Schema ║ IssuerVK ║ SedimentreeId ║ BlobDigest ║ ParentCnt ║ BlobSize ║  Parents... ║ Signature ║
+║   4B   ║   32B    ║      32B      ║    32B     ║    1B     ║  1-9B    ║   N × 32B   ║    64B    ║
+╚════════╩══════════╩═══════════════╩════════════╩═══════════╩══════════╩═════════════╩═══════════╝
 ```
 
 | Field | Size | Description |
@@ -332,21 +333,21 @@ Schema: `STC\x00` (Sedimentree Commit, version 0)
 | SedimentreeId | 32 bytes | Document identifier (binds commit to document) |
 | BlobDigest | 32 bytes | BLAKE3 hash of the blob content |
 | ParentCnt | 1 byte | Number of parent commits (max 255, sufficient for realistic workloads) |
-| BlobSize | 8 bytes | Size of blob in bytes (big-endian u64) |
+| BlobSize | 1–9 bytes | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md)) |
 | Parents | N × 32 bytes | Parent commit digests, **sorted ascending** |
 | Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
 
-**Minimum size:** 173 bytes (0 parents)
+**Minimum size:** 166 bytes (0 parents)
 
 ### Fragment
 
 Schema: `STF\x00` (Sedimentree Fragment, version 0)
 
 ```
-╔════════╦══════════╦═══════════════╦══════╦════════════╦══════════╦══════════╦═════════╦═══════════╦══════════════╦═══════════╗
-║ Schema ║ IssuerVK ║ SedimentreeId ║ Head ║ BlobDigest ║ BlobSize ║ BndryCnt ║ CkptCnt ║ Boundary  ║ Checkpoints  ║ Signature ║
-║   4B   ║   32B    ║      32B      ║ 32B  ║    32B     ║    8B    ║    1B    ║   2B    ║  N × 32B  ║   M × 12B    ║    64B    ║
-╚════════╩══════════╩═══════════════╩══════╩════════════╩══════════╩══════════╩═════════╩═══════════╩══════════════╩═══════════╝
+╔════════╦══════════╦═══════════════╦══════╦════════════╦══════════╦═════════╦══════════╦═══════════╦══════════════╦═══════════╗
+║ Schema ║ IssuerVK ║ SedimentreeId ║ Head ║ BlobDigest ║ BndryCnt ║ CkptCnt ║ BlobSize ║ Boundary  ║ Checkpoints  ║ Signature ║
+║   4B   ║   32B    ║      32B      ║ 32B  ║    32B     ║    1B    ║   2B    ║  1-9B    ║  N × 32B  ║   M × 12B    ║    64B    ║
+╚════════╩══════════╩═══════════════╩══════╩════════════╩══════════╩═════════╩══════════╩═══════════╩══════════════╩═══════════╝
 ```
 
 | Field | Size | Description |
@@ -356,14 +357,14 @@ Schema: `STF\x00` (Sedimentree Fragment, version 0)
 | SedimentreeId | 32 bytes | Document identifier (binds fragment to document) |
 | Head | 32 bytes | Digest of the head commit |
 | BlobDigest | 32 bytes | BLAKE3 hash of the fragment blob |
-| BlobSize | 8 bytes | Size of blob in bytes (big-endian u64) |
 | BndryCnt | 1 byte | Number of boundary commits (0-255) |
 | CkptCnt | 2 bytes | Number of checkpoints (big-endian u16, 0-65535) |
+| BlobSize | 1–9 bytes | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md)) |
 | Boundary | N × 32 bytes | Boundary commit digests, **sorted ascending** |
 | Checkpoints | M × 12 bytes | Truncated checkpoint digests (96-bit), **sorted ascending** |
 | Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
 
-**Minimum size:** 207 bytes (0 boundary, 0 checkpoints)
+**Minimum size:** 200 bytes (0 boundary, 0 checkpoints)
 
 ### Challenge (Handshake)
 
@@ -437,18 +438,22 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ```
 ╔═══════════════╦══════════════════════╦═════════╦══════════╗
 ║ SedimentreeId ║ Signed<LooseCommit>  ║ BlobLen ║   Blob   ║
-║      32B      ║       variable       ║   4B    ║ variable ║
+║      32B      ║       variable       ║ 1-9B    ║ variable ║
 ╚═══════════════╩══════════════════════╩═════════╩══════════╝
 ```
+
+BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
 
 ### Fragment Message (Tag 0x01)
 
 ```
 ╔═══════════════╦══════════════════╦═════════╦══════════╗
 ║ SedimentreeId ║ Signed<Fragment> ║ BlobLen ║   Blob   ║
-║      32B      ║     variable     ║   4B    ║ variable ║
+║      32B      ║     variable     ║ 1-9B    ║ variable ║
 ╚═══════════════╩══════════════════╩═════════╩══════════╝
 ```
+
+BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
 
 ### BlobsRequest (Tag 0x02)
 
@@ -462,11 +467,13 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ### BlobsResponse (Tag 0x03)
 
 ```
-╔═══════════════╦═══════╦═════════════════════╗
-║ SedimentreeId ║ Count ║ (BlobLen + Blob)... ║
-║      32B      ║  2B   ║ N × (4B + variable) ║
-╚═══════════════╩═══════╩═════════════════════╝
+╔═══════════════╦═══════╦════════════════════════════╗
+║ SedimentreeId ║ Count ║    (BlobLen + Blob)...     ║
+║      32B      ║  2B   ║ N × (bijou64 + variable)    ║
+╚═══════════════╩═══════╩════════════════════════════╝
 ```
+
+Each blob is encoded as `bijou64(size) || bytes[0..size]`.
 
 ### BatchSyncRequest (Tag 0x04)
 
@@ -513,7 +520,7 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ╚═══════════╩═════════╩════════════╩══════════╩═══════════════════════════════════════════════════════════════════╝
 ```
 
-Each missing commit/fragment is: `Signed<T>` (variable) + BlobLen (4B) + Blob (variable)
+Each missing commit/fragment is: `Signed<T>` (variable) + BlobLen (`bijou64`) + Blob (variable)
 
 Requested fingerprints are 8 bytes each.
 
@@ -575,6 +582,7 @@ Signed payloads use a custom codec (not CBOR) to guarantee determinism:
 
 - Fixed field order defined by `EncodeFields` implementation
 - Big-endian integers (no smallest-encoding ambiguity)
+- [`bijou64`](../bijou64/SPEC.md) for blob size fields (canonical by construction — bijective encoding eliminates overlong forms structurally)
 - Sorted arrays with no duplicates
 - No optional fields or default values
 

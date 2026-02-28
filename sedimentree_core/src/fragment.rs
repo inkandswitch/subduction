@@ -13,7 +13,7 @@ use crate::{
     codec::{
         decode::{self, Decode},
         encode::{self, EncodeFields},
-        error::{BufferTooShort, DecodeError, ReadingType},
+        error::{Bijou64Error, BufferTooShort, DecodeError, ReadingType},
         schema::{self, Schema},
     },
     crypto::{
@@ -348,11 +348,15 @@ impl FragmentSpec {
     }
 }
 
-/// Fixed fields size: SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2) + BlobSize(8).
-const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2 + 8;
+/// Fixed fields size _excluding_ the variable-length blob size:
+/// SedimentreeId(32) + Head(32) + Digest<Blob>(32) + |Boundary|(1) + |Checkpoints|(2).
+const CODEC_FIXED_FIELDS_SIZE: usize = 32 + 32 + 32 + 1 + 2;
 
-/// Minimum signed message size: Schema(4) + IssuerVK(32) + Fields(103) + Signature(64).
-const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_FIXED_FIELDS_SIZE + 64;
+/// Minimum fields size: fixed fields + smallest bijou64 (1 byte for values 0–247).
+const CODEC_MIN_FIELDS_SIZE: usize = CODEC_FIXED_FIELDS_SIZE + 1;
+
+/// Minimum signed message size: Schema(4) + IssuerVK(32) + MinFields(100) + Signature(64).
+const CODEC_MIN_SIZE: usize = 4 + 32 + CODEC_MIN_FIELDS_SIZE + 64;
 
 /// Checkpoint truncation size in bytes.
 const CHECKPOINT_BYTES: usize = 12;
@@ -375,7 +379,7 @@ impl EncodeFields for Fragment {
         #[allow(clippy::cast_possible_truncation)]
         encode::u16(self.checkpoints().len() as u16, buf);
 
-        encode::u64(self.summary().blob_meta().size_bytes(), buf);
+        bijou64::encode(self.summary().blob_meta().size_bytes(), buf);
 
         for boundary in self.boundary() {
             encode::array(boundary.as_bytes(), buf);
@@ -388,6 +392,7 @@ impl EncodeFields for Fragment {
 
     fn fields_size(&self) -> usize {
         CODEC_FIXED_FIELDS_SIZE
+            + bijou64::encoded_len(self.summary().blob_meta().size_bytes())
             + (self.boundary().len() * 32)
             + (self.checkpoints().len() * CHECKPOINT_BYTES)
     }
@@ -397,10 +402,10 @@ impl Decode for Fragment {
     const MIN_SIZE: usize = CODEC_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
-        if buf.len() < CODEC_FIXED_FIELDS_SIZE {
+        if buf.len() < CODEC_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Fragment",
-                need: CODEC_FIXED_FIELDS_SIZE,
+                need: CODEC_MIN_FIELDS_SIZE,
                 have: buf.len(),
             });
         }
@@ -425,8 +430,9 @@ impl Decode for Fragment {
         let checkpoint_count = decode::u16(buf, offset)? as usize;
         offset += 2;
 
-        let blob_size = decode::u64(buf, offset)?;
-        offset += 8;
+        let (blob_size, consumed) = bijou64::decode(buf.get(offset..).unwrap_or_default())
+            .map_err(|kind| Bijou64Error { offset, kind })?;
+        offset += consumed;
 
         let boundary_size = boundary_count * 32;
         let checkpoints_size = checkpoint_count * CHECKPOINT_BYTES;
@@ -505,7 +511,7 @@ mod tests {
             encode::array(&[0x20; 32], &mut buf); // blob digest
             encode::u8(2, &mut buf); // boundary count
             encode::u16(0, &mut buf); // checkpoint count
-            encode::u64(1024, &mut buf); // blob size
+            bijou64::encode(1024, &mut buf); // blob size
             encode::array(&[0x50; 32], &mut buf); // boundary 1 (unsorted - bigger first)
             encode::array(&[0x30; 32], &mut buf); // boundary 2 (smaller second)
 
@@ -528,8 +534,8 @@ mod tests {
 
         #[test]
         fn min_size_is_correct() {
-            // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + BndryCnt(1) + CkptCnt(2) + BlobSize(8) + Signature(64)
-            assert_eq!(Fragment::MIN_SIZE, 207);
+            // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + BndryCnt(1) + CkptCnt(2) + BlobSize(bijou64 min=1) + Signature(64)
+            assert_eq!(Fragment::MIN_SIZE, 200);
         }
     }
     use alloc::collections::BTreeSet;
