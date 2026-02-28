@@ -243,13 +243,24 @@ The [vu128] and [vu64] crates use UTF-8-style prefix bits in the first byte: lea
 
 [SQLite4's varint] uses a tag-byte and big-endian payloads — the closest _structural_ analogue to `bivu64`. It applies offsets for the first two multi-byte tiers (`240 + 256*(A0-241) + A1` and `2288 + 256*A1 + A2`), but switches to raw big-endian payloads for 3+ byte tiers. This means it is _not_ canonical by construction for those tiers: `[250, 0x00, 0x00, 0x01]` (value 1 as 3-byte big-endian) and `[0x01]` (single byte) both decode to 1.
 
+`bivu64` was not built directly on SQLite4's varint because:
+
+- **Partial offset coverage.** Offsets apply only to tiers 1–2. Tiers 3+ use raw big-endian payloads, so overlong encodings are possible and canonicality requires a runtime check — exactly the class of error `bivu64` is designed to eliminate.
+- **Different tag-byte threshold.** SQLite4 uses 241 as the tag threshold (vs. 248 in VARU64/`bivu64`). Adopting SQLite4's threshold would sacrifice compatibility with VARU64's framing for no structural benefit.
+
 `bivu64` extends SQLite4's partial offset approach through all tiers, making every tier canonical by construction.
 
 ## Git Pack Offset Encoding
 
 [Git's pack offset encoding] uses continuation-bit (LEB128-style) framing with full bijective offsets across all tiers. It is canonical by construction — the same principle as `bivu64` — but uses a different wire format: 7 value bits per byte with MSB continuation, big-endian byte significance.
 
-`bivu64` applies Git's offset principle to VARU64's tag-byte framing instead, gaining length-from-first-byte and big-endian byte order.
+`bivu64` was not built on Git's pack offset encoding because:
+
+- **No length from first byte.** It uses MSB continuation bits, so the decoder must scan forward byte-by-byte to find the end of the encoding. This prevents $\mathcal{O}(1)$ skipping and complicates streaming parsers and buffer pre-allocation.
+- **No lexicographic sort order.** Continuation bits are interleaved with value bits across every byte, so lexicographic byte comparison does not equal numeric comparison. The protocol requires sorted storage and binary search over encoded values without decoding.
+- **Difficult to debug in a hexdump.** Each byte mixes one control bit with seven value bits. Reconstructing the original value requires masking every byte and reassembling 7-bit chunks — the same issue as LEB128.
+
+`bivu64` applies Git's offset principle to VARU64's tag-byte framing instead, gaining length-from-first-byte and contiguous big-endian payloads.
 
 ## VARU64
 
@@ -260,6 +271,11 @@ The difference is in payload interpretation. In VARU64, the payload bytes are th
 - Does not break round-trip tests (encode-decode-compare still passes for all values).
 - Does not break any test that only uses honestly-encoded data.
 - Only fails under adversarial input — which may not be tested.
+
+`bivu64` was not built directly on VARU64 because:
+
+- **Canonicality is not structural.** The single runtime check that rejects overlong encodings is load-bearing for correctness but invisible to normal testing. Removing it does not break any test that only uses honestly-encoded data. In a content-addressed protocol, accepting a non-canonical encoding silently produces a different hash.
+- **The check is silently deletable.** Because round-trip tests pass without it, the canonicality check can be accidentally removed (or never implemented in a new port) without any test failure. `bivu64`'s offset addition is not deletable — removing it breaks _everything_.
 
 In `bivu64`, the offset addition replaces this runtime check with a structural guarantee. Decoding `[0xF8, 0x00]` produces 248 (not 0), because the decoder adds `OFFSET[1] = 248` to the payload. The overlong encoding does not silently succeed — it produces a _different_ value entirely. There is no check to forget.
 
