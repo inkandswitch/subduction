@@ -28,9 +28,9 @@ Many binary protocols need a compact way to encode integers that are usually sma
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Canonical by construction | Every value has exactly one encoding, enforced structurally by the format itself — not by a runtime check that can be omitted. This is the defining requirement; it motivates much of the design.                                     |
 | Big-endian byte order     | Payload bytes are big-endian so that lexicographic byte comparison equals numeric comparison. This enables sorted storage and binary search over encoded values without decoding, and is easier to calculate by hand while debugging. |
-| Length from first byte    | The total encoding length is determined by inspecting only the first byte. This enables O(1) skipping, streaming parsers, and other buffer management.                                                                                |
+| Length from first byte    | The total encoding length is determined by inspecting only the first byte. This enables $O(1)$ skipping, streaming parsers, and other buffer management.                                                                              |
 | Compact for small values  | Values that fit in one byte (0–247) encode as that single byte with no overhead. The common case in the target protocol is blob sizes of 54–100 bytes, which fall in this range.                                                      |
-| Full `u64` range          | The encoding covers all values from 0 to $2^64 − 1$. A 32-bit cap would be simpler but does not align with the protocol's use of `u64` size fields.                                                                                   |
+| Full `u64` range          | The encoding covers all values from 0 to $2^{64} − 1$. A 32-bit cap would be simpler but does not align with the protocol's use of `u64` size fields.                                                                                 |
 | Simple to implement       | The encoding and decoding algorithms are implementable in under 50 lines, in any language, with no dependencies or clever bit-shifting tricks. The format is easy to port (e.g. to TypeScript for a browser client).                  |
 | Debuggable in a hexdump   | For single-byte values (the common case), the encoded byte is the value itself. For multibyte values, the payload is contiguous big-endian bytes readable with minimal mental arithmetic.                                             |
 
@@ -93,7 +93,7 @@ Giving the concrete values:
 To encode a value `v`:
 
 1. If `v < 248`, emit a single byte with value `v`.
-2. Otherwise, find the tier `t` (1–8) such that `OFFSET[t] <= v < OFFSET[t+1]` (with `OFFSET[9]` treated as $2^64$).
+2. Otherwise, find the tier `t` (1–8) such that `OFFSET[t] <= v < OFFSET[t+1]` (with `OFFSET[9]` treated as $2^{64}$).
 3. Emit tag byte `247 + t`.
 4. Emit `v - OFFSET[t]` as a `t`-byte big-endian integer.
 
@@ -167,7 +167,7 @@ This is in contrast to [VARU64], where the decoder MUST explicitly reject non-mi
 A conforming decoder MUST signal an error for:
 
 1. **Buffer too short**: the input buffer contains fewer bytes than the tag byte requires.
-2. **Overflow**: at tier 8, `OFFSET[8] + payload` exceeds $2^64 - 1$.
+2. **Overflow**: at tier 8, `OFFSET[8] + payload` exceeds $2^{64} - 1$.
 
 No other error conditions exist. In particular, there is no "non-canonical encoding" error because non-canonical encodings are structurally impossible.
 
