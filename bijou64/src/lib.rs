@@ -6,6 +6,9 @@
 //! exactly one encoding, and each encoding has exactly one value. This is
 //! [bijective numeration] applied to VARU64's tag-byte framing.
 //!
+//! See the [specification](https://github.com/inkandswitch/subduction/blob/main/bijou64/SPEC.md)
+//! for the full format definition, design rationale, and test vectors.
+//!
 //! # Encoding
 //!
 //! The first byte determines the encoding:
