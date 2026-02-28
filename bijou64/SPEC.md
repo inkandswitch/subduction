@@ -276,7 +276,7 @@ bijou64 applies Git's offset principle to VARU64's tag-byte framing instead, gai
 
 [VARU64] is the closest relative of bijou64. It uses the same tag-byte framing (first byte determines length), big-endian payload bytes, and value range. bijou64 directly inherits its wire format structure.
 
-The difference is in payload interpretation. In VARU64, the payload bytes are the raw big-endian value. This means multiple byte sequences can _represent_ the same number: `[0xF8, 0x00]` decodes to 0, and so does `[0x00]`. The VARU64 spec requires decoders to reject the longer form, but this rejection is a single `if` statement that, if omitted:
+The difference is in payload interpretation. In VARU64, the payload bytes are the raw big-endian value. This means multiple byte sequences can _represent_ the same number — `[0x00]`, `[0xF8, 0x00]`, `[0xF9, 0x00, 0x00]`, and so on up to `[0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]` all decode to 0 — one encoding per tier, nine total. Values 0–247 have the worst case (nine encodings each); higher values have progressively fewer as they stop fitting in narrower tiers. The VARU64 spec specifies that decoders "must indicate an error" for overlong encodings, but this check is a single `if` statement that, if omitted:
 
 - Does not break round-trip tests (encode-decode-compare still passes for all values).
 - Does not break any test that only uses honestly-encoded data.
