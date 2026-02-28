@@ -1,0 +1,32 @@
+[package]
+name = "bivu64"
+version = "0.1.0"
+description = "Bijective variable-length encoding for unsigned 64-bit integers"
+authors = ["Brooklyn Zelenka <hello@brooklynzelenka.com>"]
+
+categories = ["encoding", "no-std"]
+keywords = ["varint", "variable-length", "canonical", "bijective"]
+readme = "./README.md"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+arbitrary = { workspace = true, optional = true, features = ["derive"] }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
+
+[dev-dependencies]
+arbitrary = { workspace = true, optional = false, features = ["derive"] }
+bivu64 = { path = ".", features = ["bolero"] }
+bolero = { workspace = true, features = ["arbitrary"] }
+testresult = { workspace = true }
+
+[features]
+default = []
+arbitrary = ["dep:arbitrary"]
+bolero = ["dep:bolero", "arbitrary"]
+
+[lints]
+workspace = true
