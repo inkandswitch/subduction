@@ -58,7 +58,7 @@ roughly this priority order:
    O(1) skipping, streaming parsers, and simple buffer management.
 
 4. **Compact for small values.** Values that fit in one byte (0–247)
-   encode as that single byte with no overhead. The common in
+   encode as that single byte with no overhead. The common case in
    the target protocol is blob sizes of 54–100 bytes, which
    fall in this range.
 
@@ -268,8 +268,9 @@ formats below is well-engineered and well-suited to its original
 use case. The reasons `bivu64` diverges from them are specific to
 the requirements of a content-addressed, canonical-by-construction
 protocol — not general criticisms of the formats themselves. LEB128
-has served Wasm and protobuf well for decades; VARU64 is an elegant
-design that `bivu64` directly inherits most of its structure from.
+has been a reliable workhorse in DWARF, protobuf, and Wasm; VARU64
+is an elegant design that `bivu64` directly inherits most of its
+structure from.
 
 The following formats were considered and informed the design.
 
@@ -340,7 +341,7 @@ tiers, making every tier canonical by construction.
 framing with full bijective offsets across all tiers. It is
 canonical by construction — the same principle as `bivu64` — but
 uses a different wire format: 7 value bits per byte with MSB
-continuation, little-endian byte significance.
+continuation, big-endian byte significance.
 
 `bivu64` applies Git's offset principle to VARU64's tag-byte
 framing instead, gaining length-from-first-byte and big-endian
