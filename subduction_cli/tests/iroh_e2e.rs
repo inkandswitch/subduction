@@ -241,7 +241,10 @@ async fn push_commit(client: &TestSubduction, sed_id: SedimentreeId, payload: &[
 }
 
 #[tokio::test]
-#[cfg_attr(target_os = "macos", ignore = "iroh QUIC unreliable on macOS CI runners")]
+#[cfg_attr(
+    target_os = "macos",
+    ignore = "iroh QUIC unreliable on macOS CI runners"
+)]
 async fn iroh_sync_between_two_cli_servers() {
     let tmp_a = tempfile::tempdir().expect("tmpdir A");
     let tmp_b = tempfile::tempdir().expect("tmpdir B");
