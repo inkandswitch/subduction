@@ -1,6 +1,6 @@
 [package]
 name = "sedimentree_core"
-version = "0.4.2"
+version = "0.5.0"
 description = "Sedimentree: a hash-linked CRDT storage structure with fragments, commits, and content-addressed blobs"
 
 authors.workspace = true
@@ -15,6 +15,7 @@ rust-version.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 async-lock = { workspace = true }
+bivu64 = { workspace = true }
 blake3 = { workspace = true }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 futures = { workspace = true }

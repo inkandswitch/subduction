@@ -74,66 +74,73 @@ const TAG_THRESHOLD: u8 = 248;
 /// Number of multi-byte tiers (tags 248–255).
 const NUM_TIERS: usize = 8;
 
+/// Computes the tier offset for tier `n`.
+///
+/// Each tier's offset is the first value not representable by the previous
+/// tier. Recurrence: `offset(n) = offset(n-1) + 256^(n-1)` for `n >= 2`,
+/// with `offset(1) = 248` and `offset(0) = 0`.
+const fn tier_offset(n: usize) -> u64 {
+    if n == 0 {
+        return 0;
+    }
+    if n == 1 {
+        return TAG_THRESHOLD as u64;
+    }
+
+    let mut result = TAG_THRESHOLD as u64;
+    let mut power = 1u64; // 256^0
+    let mut i = 2;
+    while i <= n {
+        power = power.saturating_mul(256);
+        result = result.saturating_add(power);
+        i += 1;
+    }
+    result
+}
+
 /// Per-tier offsets.
 ///
 /// `OFFSETS[t]` is the first value that requires tier `t` (1-indexed).
-/// Recurrence: `OFFSETS[n] = OFFSETS[n-1] + 256^(n-1)` for `n >= 2`,
-/// with `OFFSETS[1] = 248`.
-///
 /// Index 0 is unused (tier 0 values are encoded as the tag byte itself).
-#[allow(clippy::indexing_slicing)] // indices bounded by NUM_TIERS; .get() unavailable in const
-const OFFSETS: [u64; NUM_TIERS + 1] = {
-    let mut table = [0u64; NUM_TIERS + 1];
-    table[1] = TAG_THRESHOLD as u64;
-
-    let mut i = 2;
-    let mut power = 1u64; // 256^0
-    while i <= NUM_TIERS {
-        power = power.saturating_mul(256);
-        table[i] = table[i - 1].saturating_add(power);
-        i += 1;
-    }
-
-    table
-};
+const OFFSETS: [u64; NUM_TIERS + 1] = [
+    tier_offset(0),
+    tier_offset(1),
+    tier_offset(2),
+    tier_offset(3),
+    tier_offset(4),
+    tier_offset(5),
+    tier_offset(6),
+    tier_offset(7),
+    tier_offset(8),
+];
 
 /// Per-tier upper bounds (exclusive).
 ///
 /// A value belongs to tier `t` if `OFFSETS[t] <= value < BOUNDS[t]`.
 /// `BOUNDS[t] == OFFSETS[t + 1]` for tiers 1–7. Tier 8 extends to
 /// `u64::MAX` (the decoder handles overflow via `checked_add`).
-#[allow(clippy::indexing_slicing)] // indices bounded by NUM_TIERS; .get() unavailable in const
-const BOUNDS: [u64; NUM_TIERS + 1] = {
-    let mut table = [0u64; NUM_TIERS + 1];
-    table[0] = TAG_THRESHOLD as u64;
-
-    let mut i = 1;
-    while i < NUM_TIERS {
-        table[i] = OFFSETS[i + 1];
-        i += 1;
-    }
-
-    table[NUM_TIERS] = u64::MAX;
-    table
-};
+const BOUNDS: [u64; NUM_TIERS + 1] = [
+    tier_offset(1), // tier 0 upper bound = tier 1 offset
+    tier_offset(2),
+    tier_offset(3),
+    tier_offset(4),
+    tier_offset(5),
+    tier_offset(6),
+    tier_offset(7),
+    tier_offset(8),
+    u64::MAX, // tier 8 extends to u64::MAX
+];
 
 /// Errors that can occur when decoding a `bivu64`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum DecodeError {
     /// The input buffer is shorter than the encoding requires.
+    #[error("buffer too short for bivu64 encoding")]
     BufferTooShort,
 
     /// The decoded value exceeds `u64::MAX` (tier 8 only).
+    #[error("bivu64 tier 8 payload overflows u64")]
     Overflow,
-}
-
-impl core::fmt::Display for DecodeError {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::BufferTooShort => f.write_str("buffer too short for bivu64 encoding"),
-            Self::Overflow => f.write_str("bivu64 tier 8 payload overflows u64"),
-        }
-    }
 }
 
 /// Returns the encoded length of `value` in bytes (1–9).
@@ -173,6 +180,11 @@ pub const fn encoded_len(value: u64) -> usize {
 
 /// Encodes `value` as a `bivu64`, appending bytes to `buf`.
 ///
+/// # Panics
+///
+/// Cannot panic. The internal `expect` guards an invariant of
+/// [`encode_array`] (returned length is always 1–9).
+///
 /// # Examples
 ///
 /// ```
@@ -184,23 +196,12 @@ pub const fn encoded_len(value: u64) -> usize {
 /// bivu64::encode(248, &mut buf);
 /// assert_eq!(buf, [0xF8, 0x00]);
 /// ```
-#[allow(clippy::indexing_slicing)] // tier is 1..=8; all indices provably in bounds
 pub fn encode(value: u64, buf: &mut Vec<u8>) {
-    if value < u64::from(TAG_THRESHOLD) {
-        #[allow(clippy::cast_possible_truncation)] // value < 248
-        buf.push(value as u8);
-        return;
-    }
-
-    let tier = tier_for(value);
-    let tag = 247 + tier;
-
-    #[allow(clippy::cast_possible_truncation)] // tag <= 255
-    buf.push(tag as u8);
-
-    let payload = value - OFFSETS[tier];
-    let be = payload.to_be_bytes();
-    buf.extend_from_slice(&be[8 - tier..]);
+    let (arr, len) = encode_array(value);
+    buf.extend_from_slice(
+        arr.get(..len)
+            .expect("encode_array returns len in 1..=MAX_BYTES"),
+    );
 }
 
 /// Encodes `value` as a `bivu64` into a fixed-size array.
@@ -215,30 +216,46 @@ pub fn encode(value: u64, buf: &mut Vec<u8>) {
 /// assert_eq!(&bytes[..len], &[0xF8, 0x34]);
 /// ```
 #[must_use]
-#[allow(clippy::indexing_slicing)] // tier is 1..=8; all indices provably in bounds
-#[allow(clippy::cast_possible_truncation)] // value < 248 or tag <= 255
 pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
-    let mut out = [0u8; MAX_BYTES];
-
-    if value < TAG_THRESHOLD as u64 {
-        out[0] = value as u8;
-        return (out, 1);
+    if value < BOUNDS[0] {
+        // Tier 0: single byte is the value. Mask is a no-op (value < 248)
+        // but satisfies clippy::cast_possible_truncation without an allow.
+        return ([(value & 0xFF) as u8, 0, 0, 0, 0, 0, 0, 0, 0], 1);
     }
 
-    let tier = tier_for(value);
-    out[0] = (247 + tier) as u8;
-
-    let payload = value - OFFSETS[tier];
-    let be = payload.to_be_bytes();
-
-    let start = 8 - tier;
-    let mut i = 0;
-    while i < tier {
-        out[1 + i] = be[start + i];
-        i += 1;
+    // For multi-byte tiers, compute tag + big-endian (value - offset).
+    // Fully unrolled: each arm uses only literal indices.
+    if value < BOUNDS[1] {
+        let be = (value - OFFSETS[1]).to_be_bytes();
+        ([0xF8, be[7], 0, 0, 0, 0, 0, 0, 0], 2)
+    } else if value < BOUNDS[2] {
+        let be = (value - OFFSETS[2]).to_be_bytes();
+        ([0xF9, be[6], be[7], 0, 0, 0, 0, 0, 0], 3)
+    } else if value < BOUNDS[3] {
+        let be = (value - OFFSETS[3]).to_be_bytes();
+        ([0xFA, be[5], be[6], be[7], 0, 0, 0, 0, 0], 4)
+    } else if value < BOUNDS[4] {
+        let be = (value - OFFSETS[4]).to_be_bytes();
+        ([0xFB, be[4], be[5], be[6], be[7], 0, 0, 0, 0], 5)
+    } else if value < BOUNDS[5] {
+        let be = (value - OFFSETS[5]).to_be_bytes();
+        ([0xFC, be[3], be[4], be[5], be[6], be[7], 0, 0, 0], 6)
+    } else if value < BOUNDS[6] {
+        let be = (value - OFFSETS[6]).to_be_bytes();
+        ([0xFD, be[2], be[3], be[4], be[5], be[6], be[7], 0, 0], 7)
+    } else if value < BOUNDS[7] {
+        let be = (value - OFFSETS[7]).to_be_bytes();
+        (
+            [0xFE, be[1], be[2], be[3], be[4], be[5], be[6], be[7], 0],
+            8,
+        )
+    } else {
+        let be = (value - OFFSETS[8]).to_be_bytes();
+        (
+            [0xFF, be[0], be[1], be[2], be[3], be[4], be[5], be[6], be[7]],
+            9,
+        )
     }
-
-    (out, 1 + tier)
 }
 
 /// Decodes a `bivu64` from the front of `buf`.
@@ -263,58 +280,65 @@ pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
 /// let (v, n) = bivu64::decode(&[0xF8, 0x34, 0xFF]).unwrap();
 /// assert_eq!((v, n), (300, 2));
 /// ```
-#[allow(clippy::indexing_slicing)] // all indices guarded by length checks above their use
+#[allow(clippy::many_single_char_names)] // byte destructuring in slice patterns
 pub const fn decode(buf: &[u8]) -> Result<(u64, usize), DecodeError> {
-    if buf.is_empty() {
+    let Some((&tag, rest)) = buf.split_first() else {
         return Err(DecodeError::BufferTooShort);
-    }
-
-    let tag = buf[0];
+    };
 
     if tag < TAG_THRESHOLD {
         return Ok((tag as u64, 1));
     }
 
-    let additional = (tag - 247) as usize; // 1..=8
+    // Read big-endian payload and add tier offset. Slice-pattern matching
+    // proves to the compiler that enough bytes exist in each arm, and
+    // `u64::from_be_bytes` reconstructs the payload without manual shifts.
+    let (offset, payload, consumed) = match tag {
+        0xF8 => match rest {
+            &[a, ..] => (OFFSETS[1], u64::from_be_bytes([0, 0, 0, 0, 0, 0, 0, a]), 2),
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+        0xF9 => match rest {
+            &[a, b, ..] => (OFFSETS[2], u64::from_be_bytes([0, 0, 0, 0, 0, 0, a, b]), 3),
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+        0xFA => match rest {
+            &[a, b, c, ..] => (OFFSETS[3], u64::from_be_bytes([0, 0, 0, 0, 0, a, b, c]), 4),
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+        0xFB => match rest {
+            &[a, b, c, d, ..] => (OFFSETS[4], u64::from_be_bytes([0, 0, 0, 0, a, b, c, d]), 5),
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+        0xFC => match rest {
+            &[a, b, c, d, e, ..] => (OFFSETS[5], u64::from_be_bytes([0, 0, 0, a, b, c, d, e]), 6),
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+        0xFD => match rest {
+            &[a, b, c, d, e, f, ..] => {
+                (OFFSETS[6], u64::from_be_bytes([0, 0, a, b, c, d, e, f]), 7)
+            }
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+        0xFE => match rest {
+            &[a, b, c, d, e, f, g, ..] => {
+                (OFFSETS[7], u64::from_be_bytes([0, a, b, c, d, e, f, g]), 8)
+            }
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+        // 0xFF — only remaining value since tag >= TAG_THRESHOLD (248)
+        _ => match rest {
+            &[a, b, c, d, e, f, g, h, ..] => {
+                (OFFSETS[8], u64::from_be_bytes([a, b, c, d, e, f, g, h]), 9)
+            }
+            _ => return Err(DecodeError::BufferTooShort),
+        },
+    };
 
-    if buf.len() < 1 + additional {
-        return Err(DecodeError::BufferTooShort);
-    }
-
-    // Read big-endian payload
-    let mut payload = 0u64;
-    let mut i = 0;
-    while i < additional {
-        payload = (payload << 8) | (buf[1 + i] as u64);
-        i += 1;
-    }
-
-    // OFFSETS[additional] + payload, with overflow check for tier 8
-    match OFFSETS[additional].checked_add(payload) {
-        Some(value) => Ok((value, 1 + additional)),
+    match offset.checked_add(payload) {
+        Some(value) => Ok((value, consumed)),
         None => Err(DecodeError::Overflow),
     }
-}
-
-/// Returns the tier (1–8) for a multi-byte value.
-///
-/// # Panics
-///
-/// Panics if `value < 248` (single-byte values have no tier).
-#[allow(clippy::indexing_slicing)] // t bounded by NUM_TIERS loop guard
-const fn tier_for(value: u64) -> usize {
-    debug_assert!(value >= TAG_THRESHOLD as u64);
-
-    // Walk tiers 1..8, return first where value < BOUNDS[tier]
-    let mut t = 1;
-    while t < NUM_TIERS {
-        if value < BOUNDS[t] {
-            return t;
-        }
-        t += 1;
-    }
-
-    NUM_TIERS // tier 8
 }
 
 // ============================================================

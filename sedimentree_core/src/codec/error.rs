@@ -125,6 +125,16 @@ pub struct DuplicateElement {
     pub field: &'static str,
 }
 
+/// Failed to decode a [`bivu64`]-encoded value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+#[error("bivu64 decode error at offset {offset}: {kind}")]
+pub struct Bivu64Error {
+    /// Offset where the bivu64 decoding was attempted.
+    pub offset: usize,
+    /// The underlying bivu64 error.
+    pub kind: bivu64::DecodeError,
+}
+
 /// Errors that can occur during decoding.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum DecodeError {
@@ -182,4 +192,8 @@ pub enum DecodeError {
     /// Duplicate element in array.
     #[error(transparent)]
     DuplicateElement(#[from] DuplicateElement),
+
+    /// Failed to decode a [`bivu64`]-encoded value.
+    #[error(transparent)]
+    Bivu64(#[from] Bivu64Error),
 }

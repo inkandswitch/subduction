@@ -1,6 +1,6 @@
 [package]
 name = "subduction_cli"
-version = "0.5.0"
+version = "0.6.0"
 description = "CLI server for Subduction sync over WebSocket, HTTP long-poll, and Iroh (QUIC)"
 
 categories = ["command-line-utilities", "web-programming"]

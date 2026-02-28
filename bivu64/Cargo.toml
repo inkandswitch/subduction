@@ -16,6 +16,7 @@ rust-version.workspace = true
 [dependencies]
 arbitrary = { workspace = true, optional = true, features = ["derive"] }
 bolero = { workspace = true, optional = true, features = ["arbitrary"] }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true, optional = false, features = ["derive"] }

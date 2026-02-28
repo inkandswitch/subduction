@@ -1,6 +1,6 @@
 [package]
 name = "subduction_keyhive_policy"
-version = "0.3.1"
+version = "0.4.0"
 description = "Keyhive-based authorization policy for Subduction connections"
 readme = "./README.md"
 publish = false
