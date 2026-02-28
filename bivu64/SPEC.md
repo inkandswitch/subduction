@@ -1,9 +1,7 @@
 # bivu64
 
-A [bijective][[bijective numeration]] variable-length encoding for
+A [bijective][bijective numeration] variable-length encoding for
 unsigned 64-bit integers.
-
-Pronounced "bye-voo-sixty-four".
 
 ## Conventions
 
@@ -405,11 +403,11 @@ verify encoding compatibility.
 
 ### Error test vectors
 
-| Input bytes (hex)            | Expected error   |
-|------------------------------|------------------|
-| _(empty)_                    | Buffer too short |
-| `F9 00`                      | Buffer too short |
-| `FF FF FF FF FF FF FF FF FF` | Overflow         |
+| Input bytes (hex)            | Expected error   | Rationale                                          |
+|------------------------------|------------------|----------------------------------------------------|
+| _(empty)_                    | Buffer too short | No tag byte present                                |
+| `F9 00`                      | Buffer too short | Tag `F9` requires 2 payload bytes, only 1 provided |
+| `FF FF FF FF FF FF FF FF FF` | Overflow         | `OFFSET[8]` + `0xFF..FF` exceeds `u64::MAX`        |
 
 ## License
 
