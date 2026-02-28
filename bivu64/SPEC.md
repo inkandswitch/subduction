@@ -28,9 +28,9 @@ Many binary protocols need a compact way to encode integers that are usually sma
 |---------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | Canonical by construction | Every value has exactly one encoding, enforced structurally by the format itself — not by a runtime check that can be omitted. This is the defining requirement; it motivates much of the design.                                     |
 | Big-endian byte order     | Payload bytes are big-endian so that lexicographic byte comparison equals numeric comparison. This enables sorted storage and binary search over encoded values without decoding, and is easier to calculate by hand while debugging. |
-| Length from first byte    | The total encoding length is determined by inspecting only the first byte. This enables $\mathcal{O}(1)$ skipping, streaming parsers, and other buffer management.                                                                              |
+| Length from first byte    | The total encoding length is determined by inspecting only the first byte. This enables $\mathcal{O}(1)$ skipping, streaming parsers, and other buffer management.                                                                    |
 | Compact for small values  | Values that fit in one byte (0–247) encode as that single byte with no overhead. The common case in the target protocol is blob sizes of 54–100 bytes, which fall in this range.                                                      |
-| Full `u64` range          | The encoding covers all values from 0 to $2^{64} − 1$, matching the protocol's `u64` size fields.                                                                                                                                      |
+| Full `u64` range          | The encoding covers all values from 0 to $2^{64} − 1$, matching the protocol's `u64` size fields.                                                                                                                                     |
 | Simple to implement       | The encoding and decoding algorithms are implementable in under 50 lines, in any language, with no dependencies or clever bit-shifting tricks. The format is easy to port (e.g. to TypeScript for a browser client).                  |
 | Debuggable in a hexdump   | For single-byte values (the common case), the encoded byte is the value itself. For multibyte values, the payload is contiguous big-endian bytes readable with minimal mental arithmetic.                                             |
 
@@ -42,17 +42,17 @@ Many binary protocols need a compact way to encode integers that are usually sma
 
 The first byte of an encoding is the _tag byte_. Its value determines how many additional bytes follow:
 
-| First byte       | Total length | Offset (decimal)       | Offset (hex)          |
-|------------------|--------------|------------------------|-----------------------|
-| `0x00` – `0xF7`  | 1            | 0                      | `0x00`                |
-| `0xF8`           | 2            | 248                    | `0xF8`                |
-| `0xF9`           | 3            | 504                    | `0x1F8`               |
-| `0xFA`           | 4            | 66,040                 | `0x101F8`             |
-| `0xFB`           | 5            | 16,843,256             | `0x10101F8`           |
-| `0xFC`           | 6            | 4,311,810,552          | `0x1010101F8`         |
-| `0xFD`           | 7            | 1,103,823,438,328      | `0x101010101F8`       |
-| `0xFE`           | 8            | 282,578,800,148,984    | `0x10101010101F8`     |
-| `0xFF`           | 9            | 72,340,172,838,076,920 | `0x1010101010101F8`   |
+| First byte      | Total length | Offset (decimal)       | Offset (hex)        |
+|-----------------|--------------|------------------------|---------------------|
+| `0x00` – `0xF7` | 1            | 0                      | `0x00`              |
+| `0xF8`          | 2            | 248                    | `0xF8`              |
+| `0xF9`          | 3            | 504                    | `0x1F8`             |
+| `0xFA`          | 4            | 66,040                 | `0x101F8`           |
+| `0xFB`          | 5            | 16,843,256             | `0x10101F8`         |
+| `0xFC`          | 6            | 4,311,810,552          | `0x1010101F8`       |
+| `0xFD`          | 7            | 1,103,823,438,328      | `0x101010101F8`     |
+| `0xFE`          | 8            | 282,578,800,148,984    | `0x10101010101F8`   |
+| `0xFF`          | 9            | 72,340,172,838,076,920 | `0x1010101010101F8` |
 
 If the tag byte is below 248 (`0xF8`), the byte _is_ the encoded value and there are no additional bytes.
 
@@ -115,18 +115,18 @@ Encoding the value **67,000**:
 
 Note that we subtracted **66,040** (the tier 3 offset), _not_ 247. If we had 300 instead, it would land in tier 1 and we would subtract **248** (the tier 1 offset). Each tier has its own offset:
 
-| Tier | Offset (decimal)         | Offset (hex)             |
-|------|--------------------------|--------------------------|
-| 1    | 248                      | `0xF8`                   |
-| 2    | 504                      | `0x1F8`                  |
-| 3    | 66,040                   | `0x101F8`                |
-| 4    | 16,843,256               | `0x10101F8`              |
-| 5    | 4,311,810,552            | `0x1010101F8`            |
-| 6    | 1,103,823,438,328        | `0x101010101F8`          |
-| 7    | 282,578,800,148,984      | `0x10101010101F8`        |
-| 8    | 72,340,172,838,076,920   | `0x01010101010101F8`     |
+| Tier | Offset (decimal)       | Offset (hex)         |
+|------|------------------------|----------------------|
+| 1    | 248                    | `0xF8`               |
+| 2    | 504                    | `0x1F8`              |
+| 3    | 66,040                 | `0x101F8`            |
+| 4    | 16,843,256             | `0x10101F8`          |
+| 5    | 4,311,810,552          | `0x1010101F8`        |
+| 6    | 1,103,823,438,328      | `0x101010101F8`      |
+| 7    | 282,578,800,148,984    | `0x10101010101F8`    |
+| 8    | 72,340,172,838,076,920 | `0x01010101010101F8` |
 
-The hex column shows a staircase pattern: each offset ends with `0xF8` (248, the tier 0 capacity) and prepends one `01` byte per tier. This is a consequence of the geometric recurrence — each `256^n` term contributes a `0x01` in its corresponding byte position.
+The hex column shows a staircase pattern: each offset ends with `0xF8` (248, the tier 0 capacity) and prepends one `01` byte per tier. This is a consequence of the geometric recurrence — each $256^{n}$ term contributes a `0x01` in its corresponding byte position.
 
 ## Decoding
 
