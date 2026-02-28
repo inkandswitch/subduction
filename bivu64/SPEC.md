@@ -1,4 +1,4 @@
-# bivu64
+# `bivu64`
 
 ## Authors
 
@@ -282,6 +282,8 @@ In `bivu64`, the offset addition replaces this runtime check with a structural g
 The trade-off is that `bivu64` payloads are not the raw value, so hexdump inspection is less direct for values above 247. For values below 248 (the common case), the encoding is byte-identical to VARU64.
 
 # License
+
+This specification is adapted from the [VARU64] specification by [Aljoscha Meyer], licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/). The tag-byte framing and tier structure are inherited from VARU64; the per-tier offset addition (inspired by [Git's pack offset encoding] and [SQLite4's varint]) and surrounding specification text are new in `bivu64`.
 
 This specification is licensed under [CC BY-SA 4.0](https://creativecommons.org/licenses/by-sa/4.0/).
 
