@@ -13,7 +13,7 @@ The key words "MUST", "MUST NOT", "REQUIRED", "SHALL", "SHALL NOT", "SHOULD", "S
 
 ## Name
 
-bijou64 (**bij**ective **o**ffset **u64**) is pronounced /biːʒuː sɪksti fɔːr/ ("bee-zhoo-sixty-four"). The name encodes the format's three defining properties: bijectivity (canonical by construction), per-tier offset addition (the mechanism that achieves it), and the `u64` value type. That "bijou" is also French for "small jewel" is a happy coincidence for a compact encoding.
+bijou64 (**BIJ**ective **O**ffset **U64**) is pronounced /biːʒuː sɪksti fɔːr/ ("bee-zoo-sixty-four"). The name encodes the format's three defining properties: bijectivity (canonical by construction), per-tier offset addition (the mechanism that achieves it), and the `u64` value type. That "bijou" is also French for "small jewel" is a happy coincidence for a compact encoding.
 
 # Abstract
 

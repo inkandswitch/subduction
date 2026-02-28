@@ -2,7 +2,7 @@
 
 Bijective variable-length encoding for unsigned 64-bit integers.
 
-Pronounced "bee-zhoo-sixty-four" — **bij**ective **o**ffset **u64**.
+Pronounced "bee-zoo-sixty-four" — **bij**ective **o**ffset **u64**.
 
 `bijou64` encodes `u64` values into 1–9 bytes using a tag-byte prefix
 scheme derived from [VARU64], modified with per-tier offsets to achieve

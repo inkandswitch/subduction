@@ -238,14 +238,14 @@ trait Decode: Schema + Sized {
 
 All multi-byte integers are **big-endian** (network byte order):
 
-| Type      | Encoding                                                         |
-|-----------|------------------------------------------------------------------|
-| `u8`      | 1 byte                                                           |
-| `u16`     | 2 bytes, big-endian                                              |
-| `u32`     | 4 bytes, big-endian                                              |
-| `u64`     | 8 bytes, big-endian                                              |
-| `bijou64`  | 1–9 bytes, bijective variable-length ([spec](../bijou64/SPEC.md)) |
-| `[u8; N]` | N bytes, raw                                                     |
+| Type      | Encoding                                                          |
+|-----------|-------------------------------------------------------------------|
+| `u8`      | 1 byte                                                            |
+| `u16`     | 2 bytes, big-endian                                               |
+| `u32`     | 4 bytes, big-endian                                               |
+| `u64`     | 8 bytes, big-endian                                               |
+| `bijou64` | 1–9 bytes, bijective variable-length ([spec](../bijou64/SPEC.md)) |
+| `[u8; N]` | N bytes, raw                                                      |
 
 ### Array Encoding
 

@@ -22,7 +22,7 @@ backend
 backoff
 balancer
 BatchSyncRequest
-bee-zhoo-sixty-four
+bee-zoo-sixty-four
 BatchSyncResponse
 BChaCha
 bchacha-note

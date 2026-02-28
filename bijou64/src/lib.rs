@@ -1,6 +1,6 @@
 //! Bijective variable-length encoding for unsigned 64-bit integers.
 //!
-//! bijou64 (**bij**ective **o**ffset **u64**) encodes `u64` values into 1–9
+//! bijou64 (**BIJ**ective **O**ffset **U64**) encodes `u64` values into 1–9
 //! bytes using a tag-byte prefix scheme derived from [VARU64], modified with
 //! per-tier offsets to achieve **structural canonicality** — each value has
 //! exactly one encoding, and each encoding has exactly one value. This is
@@ -345,10 +345,6 @@ pub enum DecodeError {
     Overflow,
 }
 
-// ============================================================
-// Tests
-// ============================================================
-
 #[cfg(test)]
 #[allow(clippy::indexing_slicing, clippy::needless_range_loop, clippy::panic)]
 mod tests {
@@ -379,12 +375,12 @@ mod tests {
         fn known_values() {
             assert_eq!(OFFSETS[1], 248);
             assert_eq!(OFFSETS[2], 504);
-            assert_eq!(OFFSETS[3], 66_040);
-            assert_eq!(OFFSETS[4], 16_843_256);
-            assert_eq!(OFFSETS[5], 4_311_810_552);
-            assert_eq!(OFFSETS[6], 1_103_823_438_328);
-            assert_eq!(OFFSETS[7], 282_578_800_148_984);
-            assert_eq!(OFFSETS[8], 72_340_172_838_076_920);
+            assert_eq!(OFFSETS[3], 0x1_01F8);
+            assert_eq!(OFFSETS[4], 0x101_01F8);
+            assert_eq!(OFFSETS[5], 0x1_0101_01F8);
+            assert_eq!(OFFSETS[6], 0x101_0101_01F8);
+            assert_eq!(OFFSETS[7], 0x1_0101_0101_01F8);
+            assert_eq!(OFFSETS[8], 0x101_0101_0101_01F8);
         }
 
         #[test]
@@ -405,95 +401,7 @@ mod tests {
     mod round_trip {
         use super::*;
 
-        #[test]
-        fn zero() -> TestResult {
-            let mut buf = Vec::new();
-            encode(0, &mut buf);
-            assert_eq!(buf, [0x00]);
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (0, 1));
-            Ok(())
-        }
-
-        #[test]
-        fn max_single_byte() -> TestResult {
-            let mut buf = Vec::new();
-            encode(247, &mut buf);
-            assert_eq!(buf, [0xF7]);
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (247, 1));
-            Ok(())
-        }
-
-        #[test]
-        fn tier1_min() -> TestResult {
-            let mut buf = Vec::new();
-            encode(248, &mut buf);
-            assert_eq!(buf, [0xF8, 0x00]);
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (248, 2));
-            Ok(())
-        }
-
-        #[test]
-        fn tier1_max() -> TestResult {
-            let mut buf = Vec::new();
-            encode(503, &mut buf);
-            assert_eq!(buf, [0xF8, 0xFF]);
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (503, 2));
-            Ok(())
-        }
-
-        #[test]
-        fn tier2_min() -> TestResult {
-            let mut buf = Vec::new();
-            encode(504, &mut buf);
-            assert_eq!(buf, [0xF9, 0x00, 0x00]);
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (504, 3));
-            Ok(())
-        }
-
-        #[test]
-        fn value_300() -> TestResult {
-            let mut buf = Vec::new();
-            encode(300, &mut buf);
-            assert_eq!(buf, [0xF8, 0x34]); // 300 - 248 = 52 = 0x34
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (300, 2));
-            Ok(())
-        }
-
-        #[test]
-        fn value_1000() -> TestResult {
-            let mut buf = Vec::new();
-            encode(1000, &mut buf);
-            assert_eq!(buf, [0xF9, 0x01, 0xF0]); // 1000 - 504 = 496 = 0x01F0
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (1000, 3));
-            Ok(())
-        }
-
-        #[test]
-        fn u64_max() -> TestResult {
-            let mut buf = Vec::new();
-            encode(u64::MAX, &mut buf);
-            assert_eq!(buf.len(), 9);
-            assert_eq!(buf[0], 0xFF); // tag 255 = tier 8
-
-            let (v, n) = decode(&buf)?;
-            assert_eq!((v, n), (u64::MAX, 9));
-            Ok(())
-        }
-
+        /// Every tier boundary (min and max) round-trips at the correct length.
         #[test]
         fn all_tier_boundaries() -> TestResult {
             for tier in 1..=NUM_TIERS {
@@ -524,61 +432,6 @@ mod tests {
         }
     }
 
-    mod encoded_len {
-        use super::*;
-
-        #[test]
-        fn matches_actual() {
-            let test_values = [
-                0,
-                1,
-                127,
-                128,
-                247,
-                248,
-                503,
-                504,
-                1000,
-                65_535,
-                66_039,
-                66_040,
-                16_843_255,
-                16_843_256,
-                u64::from(u32::MAX),
-                4_311_810_551,
-                4_311_810_552,
-                u64::MAX,
-            ];
-
-            for &value in &test_values {
-                let mut buf = Vec::new();
-                encode(value, &mut buf);
-                assert_eq!(
-                    super::encoded_len(value),
-                    buf.len(),
-                    "encoded_len({value}) mismatch"
-                );
-            }
-        }
-
-        #[test]
-        fn encode_array_matches_encode() {
-            let test_values = [0, 42, 247, 248, 300, 504, 1000, 66_040, u64::MAX];
-
-            for &value in &test_values {
-                let mut buf = Vec::new();
-                encode(value, &mut buf);
-
-                let (arr, len) = encode_array(value);
-                assert_eq!(
-                    arr.get(..len),
-                    Some(buf.as_slice()),
-                    "encode_array({value}) mismatch"
-                );
-            }
-        }
-    }
-
     mod errors {
         use super::*;
 
@@ -588,9 +441,23 @@ mod tests {
         }
 
         #[test]
-        fn truncated_multi_byte() {
-            // Tag 0xF9 means 2 additional bytes, but only 1 provided
-            assert_eq!(decode(&[0xF9, 0x00]), Err(DecodeError::BufferTooShort));
+        fn truncated_at_every_tier() {
+            // For each multi-byte tier, provide the tag byte plus one fewer
+            // payload byte than required.
+            for tier in 1..=NUM_TIERS {
+                let tag = u8::try_from(247 + tier).unwrap_or(0xFF);
+                let mut buf = vec![tag];
+                // tier needs `tier` payload bytes; provide `tier - 1`
+                buf.extend(core::iter::repeat_n(0x00u8, tier - 1));
+
+                assert_eq!(
+                    decode(&buf),
+                    Err(DecodeError::BufferTooShort),
+                    "tier {tier} (tag 0x{tag:02X}) with {}-byte payload \
+                     should be BufferTooShort",
+                    tier - 1
+                );
+            }
         }
 
         #[test]
@@ -599,6 +466,30 @@ mod tests {
             // OFFSETS[8] + u64::MAX overflows
             let buf = [0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF];
             assert_eq!(decode(&buf), Err(DecodeError::Overflow));
+        }
+
+        #[test]
+        fn tier8_overflow_exact_boundary() -> TestResult {
+            // Smallest tier 8 payload that overflows:
+            // OFFSETS[8] = 0x101_0101_0101_01F8
+            // Max valid payload = u64::MAX - OFFSETS[8] = 0xFEFE_FEFE_FEFE_FE07
+            // One above that overflows.
+            let max_payload = u64::MAX - OFFSETS[8];
+            let overflow_payload = max_payload + 1; // = 0xFEFE_FEFE_FEFE_FE08
+            let be = overflow_payload.to_be_bytes();
+            let buf = [0xFF, be[0], be[1], be[2], be[3], be[4], be[5], be[6], be[7]];
+            assert_eq!(decode(&buf), Err(DecodeError::Overflow));
+
+            // One below: the max valid payload should decode to u64::MAX
+            let be_max = max_payload.to_be_bytes();
+            let buf_max = [
+                0xFF, be_max[0], be_max[1], be_max[2], be_max[3], be_max[4], be_max[5], be_max[6],
+                be_max[7],
+            ];
+            let (value, consumed) = decode(&buf_max)?;
+            assert_eq!(value, u64::MAX);
+            assert_eq!(consumed, 9);
+            Ok(())
         }
 
         #[test]
@@ -823,75 +714,60 @@ mod tests {
             }
             Ok(())
         }
+    }
+
+    mod streaming {
+        use super::*;
 
         #[test]
-        fn no_two_byte_sequences_decode_to_same_value() {
-            // For each tier boundary value, verify that its canonical encoding
-            // is the *only* encoding that decodes to it. Specifically, no
-            // wider tier can produce the same value, because the wider tier's
-            // minimum (OFFSETS[wider]) already exceeds the value.
-            for tier in 1..=NUM_TIERS {
-                let value = OFFSETS[tier];
+        fn consecutive_decode() -> TestResult {
+            // Encode two values back-to-back into a single buffer, then
+            // decode them sequentially using the returned `consumed` offset.
+            let values: &[(u64, u64)] = &[
+                (0, 0),
+                (42, 300),
+                (248, 504),
+                (0x101_01F8, u64::MAX),
+                (u64::MAX, 0),
+            ];
 
-                // Canonical encoding
-                let mut canonical = Vec::new();
-                encode(value, &mut canonical);
-                assert_eq!(canonical.len(), 1 + tier);
+            for &(a, b) in values {
+                let mut buf = Vec::new();
+                encode(a, &mut buf);
+                encode(b, &mut buf);
 
-                // Any wider tier's minimum decoded value is OFFSETS[wider] > value
-                for wider in (tier + 1)..=NUM_TIERS {
-                    assert!(
-                        OFFSETS[wider] > value,
-                        "OFFSETS[{wider}] <= OFFSETS[{tier}]: tier ranges overlap"
-                    );
-                }
+                let (decoded_a, consumed_a) = decode(&buf)?;
+                assert_eq!(decoded_a, a, "first value mismatch for ({a}, {b})");
 
-                // Any narrower tier's maximum decoded value is OFFSETS[tier] - 1 < value
-                // (except tier 0 whose max is 247)
-                if tier > 1 {
-                    let narrower_max = OFFSETS[tier] - 1;
-                    assert!(
-                        narrower_max < value,
-                        "narrower tier max ({narrower_max}) >= tier {tier} min ({value})"
-                    );
-                }
-            }
-        }
-
-        #[test]
-        fn tier_ranges_are_contiguous_and_disjoint() {
-            // Verify that tier ranges cover [0, u64::MAX] with no gaps or overlaps.
-            // Tier 0: [0, OFFSETS[1])
-            // Tier n: [OFFSETS[n], OFFSETS[n+1])  for n in 1..8
-            // Tier 8: [OFFSETS[8], u64::MAX]
-            assert_eq!(BOUNDS[0], OFFSETS[1], "tier 0 upper bound != tier 1 offset");
-            let mut prev_end = BOUNDS[0];
-
-            for tier in 1..=NUM_TIERS {
+                let (decoded_b, consumed_b) = decode(&buf[consumed_a..])?;
+                assert_eq!(decoded_b, b, "second value mismatch for ({a}, {b})");
                 assert_eq!(
-                    OFFSETS[tier],
-                    prev_end,
-                    "gap between tier {} and tier {tier}",
-                    tier - 1
+                    consumed_a + consumed_b,
+                    buf.len(),
+                    "total consumed mismatch for ({a}, {b})"
                 );
-
-                if tier < NUM_TIERS {
-                    prev_end = OFFSETS[tier + 1];
-                } else {
-                    // Tier 8 must be able to represent u64::MAX
-                    let max_payload = u64::MAX - OFFSETS[tier];
-                    let tier_capacity = if tier < 8 {
-                        (1u64 << (8 * tier)) - 1
-                    } else {
-                        u64::MAX
-                    };
-                    assert!(
-                        max_payload <= tier_capacity,
-                        "tier 8 cannot represent u64::MAX: \
-                         max_payload={max_payload}, capacity={tier_capacity}"
-                    );
-                }
             }
+            Ok(())
+        }
+    }
+
+    mod encode_api {
+        use super::*;
+
+        #[test]
+        fn appends_to_non_empty_buffer() -> TestResult {
+            let mut buf = vec![0xDE, 0xAD];
+            encode(300, &mut buf);
+
+            // Original bytes preserved
+            assert_eq!(&buf[..2], &[0xDE, 0xAD]);
+
+            // Appended encoding is correct
+            let (value, consumed) = decode(&buf[2..])?;
+            assert_eq!(value, 300);
+            assert_eq!(consumed, 2);
+            assert_eq!(buf.len(), 4); // 2 prefix + 2 encoding
+            Ok(())
         }
     }
 
@@ -923,15 +799,33 @@ mod tests {
             (65_535, &[0xF9, 0xFE, 0x07]),
             (66_039, &[0xF9, 0xFF, 0xFF]),
             // Tier 3: tag 0xFA + 3 bytes
-            (66_040, &[0xFA, 0x00, 0x00, 0x00]),
-            (67_000, &[0xFA, 0x00, 0x03, 0xC0]),
-            (16_843_255, &[0xFA, 0xFF, 0xFF, 0xFF]),
+            (0x1_01F8, &[0xFA, 0x00, 0x00, 0x00]),
+            (0x1_05B8, &[0xFA, 0x00, 0x03, 0xC0]),
+            (0x101_01F7, &[0xFA, 0xFF, 0xFF, 0xFF]),
             // Tier 4: tag 0xFB + 4 bytes
-            (16_843_256, &[0xFB, 0x00, 0x00, 0x00, 0x00]),
-            (4_311_810_551, &[0xFB, 0xFF, 0xFF, 0xFF, 0xFF]),
+            (0x101_01F8, &[0xFB, 0x00, 0x00, 0x00, 0x00]),
+            (0x1_0101_01F7, &[0xFB, 0xFF, 0xFF, 0xFF, 0xFF]),
+            // Tier 5: tag 0xFC + 5 bytes
+            (0x1_0101_01F8, &[0xFC, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            (0x101_0101_01F7, &[0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF]),
+            // Tier 6: tag 0xFD + 6 bytes
+            (0x101_0101_01F8, &[0xFD, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]),
+            (
+                0x1_0101_0101_01F7,
+                &[0xFD, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+            ),
+            // Tier 7: tag 0xFE + 7 bytes
+            (
+                0x1_0101_0101_01F8,
+                &[0xFE, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
+            ),
+            (
+                0x101_0101_0101_01F7,
+                &[0xFE, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF],
+            ),
             // Tier 8: tag 0xFF + 8 bytes
             (
-                72_340_172_838_076_920,
+                0x101_0101_0101_01F8,
                 &[0xFF, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00],
             ),
             (
@@ -1014,6 +908,26 @@ mod tests {
                 .for_each(|buf| {
                     // Should return Ok or Err, never panic
                     let _ = decode(buf);
+                });
+        }
+
+        /// `a < b ⟹ encode(a) < encode(b)` lexicographically.
+        #[test]
+        #[cfg_attr(miri, ignore)]
+        fn lexicographic_order() {
+            bolero::check!()
+                .with_arbitrary::<(u64, u64)>()
+                .for_each(|&(a, b)| {
+                    let (enc_a, len_a) = encode_array(a);
+                    let (enc_b, len_b) = encode_array(b);
+                    let slice_a = &enc_a[..len_a];
+                    let slice_b = &enc_b[..len_b];
+                    assert_eq!(
+                        a.cmp(&b),
+                        slice_a.cmp(slice_b),
+                        "order mismatch: {a} vs {b}, \
+                         encoded {slice_a:02X?} vs {slice_b:02X?}",
+                    );
                 });
         }
 
