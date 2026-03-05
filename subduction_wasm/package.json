@@ -68,7 +68,7 @@
       "import": "./dist/esm/slim.js",
       "require": "./dist/cjs/slim.cjs"
     },
-    "./wasm": "./dist/@automerge/subduction.wasm",
+    "./wasm": "./dist/subduction.wasm",
     "./wasm-base64": {
       "import": "./dist/esm/wasm-base64.js",
       "require": "./dist/cjs/wasm-base64.cjs"

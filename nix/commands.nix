@@ -482,24 +482,9 @@
     "bodge:all" = cmd "Build all wasm packages with wasm-bodge" ''
       set -e
 
-      # Workaround: wasm-bodge doesn't mkdir parents for scoped package names
-      # (e.g. dist/@automerge/ for @automerge/subduction.wasm).
-      # Pre-create the scope directory so the .wasm copy succeeds.
-      ensure_scope_dir() {
-        local pkg_json="$1"
-        local out_dir="$2"
-        local pkg_name
-        pkg_name=$(${pkgs.jq}/bin/jq -r '.name' "$pkg_json")
-        if [[ "$pkg_name" == @*/* ]]; then
-          local scope="''${pkg_name%%/*}"
-          mkdir -p "$out_dir/$scope"
-        fi
-      }
-
       for crate in sedimentree_wasm subduction_wasm automerge_sedimentree_wasm automerge_subduction_wasm; do
         echo "===> wasm-bodge build $crate..."
         rm -rf "$WORKSPACE_ROOT/$crate/dist"
-        ensure_scope_dir "$WORKSPACE_ROOT/$crate/package.json" "$WORKSPACE_ROOT/$crate/dist"
         ${wasm-bodge-bin} build \
           --crate-path "$WORKSPACE_ROOT/$crate" \
           --package-json "$WORKSPACE_ROOT/$crate/package.json" \
@@ -534,13 +519,6 @@
       fi
 
       rm -rf "$WORKSPACE_ROOT/$CRATE/dist"
-
-      # Workaround: wasm-bodge doesn't mkdir parents for scoped package names
-      PKG_NAME=$(${pkgs.jq}/bin/jq -r '.name' "$WORKSPACE_ROOT/$CRATE/package.json")
-      if [[ "$PKG_NAME" == @*/* ]]; then
-        SCOPE="''${PKG_NAME%%/*}"
-        mkdir -p "$WORKSPACE_ROOT/$CRATE/dist/$SCOPE"
-      fi
 
       echo "===> wasm-bodge build $CRATE..."
       ${wasm-bodge-bin} build \
