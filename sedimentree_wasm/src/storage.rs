@@ -11,7 +11,7 @@ use futures::future::LocalBoxFuture;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
-    codec::{decode::Decode, encode::Encode, error::DecodeError},
+    codec::{decode::DecodeFields, encode::Encode, error::DecodeError},
     crypto::digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
@@ -152,7 +152,7 @@ impl core::fmt::Debug for JsStorage {
 }
 
 /// Parse a JS array of digests.
-fn parse_digest_array<T: Encode + Decode>(js_value: &JsValue) -> Set<Digest<T>> {
+fn parse_digest_array<T: Encode + DecodeFields>(js_value: &JsValue) -> Set<Digest<T>> {
     let array = js_sys::Array::from(js_value);
     let mut result = Set::new();
 

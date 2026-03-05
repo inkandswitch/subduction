@@ -11,6 +11,7 @@
 //!
 //! - [`subduction`] — Main sync manager and API guide
 //! - [`connection`] — Connection traits and handshake protocol
+//! - [`handler`] — Message handler trait for dispatch extensibility
 //! - [`policy`] — Authorization policies ([`ConnectionPolicy`], [`StoragePolicy`])
 //! - [`storage`] — Storage capabilities ([`Fetcher`], [`Putter`], [`Destroyer`])
 //! - [`peer`] — Peer identity ([`PeerId`])
@@ -36,6 +37,7 @@ extern crate std;
 extern crate alloc;
 
 pub mod connection;
+pub mod handler;
 pub mod peer;
 pub mod policy;
 pub mod sharded_map;

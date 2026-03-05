@@ -5,14 +5,39 @@ use super::{
     schema::Schema,
 };
 
-/// Decode a type from its canonical binary representation.
+/// Decode a type from its complete wire representation.
 ///
-/// Types implementing this trait can be parsed from received bytes.
-pub trait Decode: Schema + Sized {
+/// This is the generic decoding trait for any type that can be
+/// deserialized from bytes, including both message envelopes
+/// and signed payloads.
+pub trait Decode: Sized {
     /// Minimum valid encoded size (for early rejection).
-    ///
-    /// This is the size of the full signed message (schema + issuer + fields + signature).
     const MIN_SIZE: usize;
+
+    /// Decode from complete wire bytes.
+    ///
+    /// The buffer should contain the full encoded representation
+    /// of the type, including any framing or headers.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DecodeError`] if the buffer is malformed, too short,
+    /// contains invalid values, or fails validation.
+    fn try_decode(buf: &[u8]) -> Result<Self, DecodeError>;
+}
+
+/// Decode the fields portion of a signed payload.
+///
+/// This trait is for types that live inside [`Signed<T>`] envelopes.
+/// The `buf` passed to [`try_decode_fields`](DecodeFields::try_decode_fields)
+/// contains only the type-specific fields (after schema + issuer,
+/// before signature), not the full wire message.
+///
+/// [`Signed<T>`]: https://docs.rs/subduction_crypto/latest/subduction_crypto/signed/struct.Signed.html
+pub trait DecodeFields: Schema + Sized {
+    /// Minimum valid size of the full signed message
+    /// (schema + issuer + fields + signature), for early rejection.
+    const MIN_SIGNED_SIZE: usize;
 
     /// Decode type-specific fields from the buffer.
     ///
