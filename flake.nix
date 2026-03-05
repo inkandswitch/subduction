@@ -92,14 +92,14 @@
 
         wasm-bodge = wasm-bodge-rustPlatform.buildRustPackage rec {
           pname = "wasm-bodge";
-          version = "0.1.1";
+          version = "0.2.0";
           src = pkgs.fetchFromGitHub {
             owner = "alexjg";
             repo = "wasm-bodge";
             rev = "v${version}";
-            hash = "sha256-MfbnMu5MY360/VQ/co0Miju22c5/ATSaim0VcP3aR3g=";
+            hash = "sha256-yuCaOiGRHluZdYMG1U8A7eWF7eFOavldd+objwekB9E=";
           };
-          cargoHash = "sha256-7L8sVZVxGSwii8EMaxuDiodVxnZ5OKh+bmr2LeGR4M8=";
+          cargoHash = "sha256-UOi8yE+hftKHMU/C/UCt3kfUNzQFDWE9VQ0dc7mDw5M=";
           nativeBuildInputs = [ unstable.cargo-auditable ];
           doCheck = false; # tests require npm/puppeteer infrastructure
         };
