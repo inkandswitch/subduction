@@ -12,8 +12,10 @@
 //! construction time. The [`Subduction`] listen loop calls
 //! [`Handler::handle`] for each message received from the wire.
 //!
-//! The message type must implement [`Encode`] + [`Decode`] so that it
-//! has a canonical binary representation on the wire.
+//! The message type must implement [`Decode`] so that it can be
+//! deserialized from the wire. The handler only _receives_ decoded
+//! messages — encoding of outgoing responses is handled by
+//! [`Connection::send`].
 //!
 //! # Example
 //!
@@ -45,11 +47,11 @@
 //!
 //! [`Arc`]: alloc::sync::Arc
 //! [`Subduction`]: crate::subduction::Subduction
-//! [`Encode`]: sedimentree_core::codec::encode::Encode
 //! [`Decode`]: sedimentree_core::codec::decode::Decode
+//! [`Connection::send`]: crate::connection::Connection::send
 
 use future_form::FutureForm;
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
+use sedimentree_core::codec::decode::Decode;
 
 use crate::connection::{authenticated::Authenticated, Connection};
 
@@ -61,8 +63,9 @@ use crate::connection::{authenticated::Authenticated, Connection};
 ///
 /// # Wire Compatibility
 ///
-/// The message type [`M`](Handler::Message) must implement [`Encode`] +
-/// [`Decode`], ensuring it has a canonical binary representation.
+/// The message type [`M`](Handler::Message) must implement [`Decode`]
+/// so it can be deserialized from the wire. Encoding of outgoing
+/// responses is handled by the [`Connection`] layer, not the handler.
 ///
 /// # Error Semantics
 ///
@@ -73,9 +76,9 @@ use crate::connection::{authenticated::Authenticated, Connection};
 pub trait Handler<K: FutureForm, C: Connection<K>> {
     /// The message type this handler processes.
     ///
-    /// Must support wire encoding/decoding. For the standard Subduction
+    /// Must support wire decoding. For the standard Subduction
     /// protocol, this is [`Message`](crate::connection::message::Message).
-    type Message: Encode + Decode;
+    type Message: Decode;
 
     /// Error type returned by the handler.
     type HandlerError: core::error::Error;
