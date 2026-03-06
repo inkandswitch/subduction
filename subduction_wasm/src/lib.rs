@@ -9,6 +9,17 @@ extern crate std;
 
 extern crate alloc;
 
+use wasm_bindgen::prelude::*;
+
+/// Install the panic hook at module instantiation, before any exported
+/// function can be called. This ensures panics always produce readable
+/// error messages in the browser console.
+#[wasm_bindgen(start)]
+pub fn start() {
+    #[cfg(feature = "console_error_panic_hook")]
+    console_error_panic_hook::set_once();
+}
+
 pub mod connection;
 pub mod connection_id;
 pub mod error;

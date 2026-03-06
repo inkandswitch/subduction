@@ -80,8 +80,7 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 wasm-bindgen-test = "0.2"
 
 [features]
-default = []
-# Enable for better panic messages in dev builds (adds ~30KB due to std)
+default = ["console_error_panic_hook"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 # IndexedDB storage backend
 idb = ["sedimentree_wasm/idb"]

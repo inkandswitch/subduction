@@ -164,6 +164,22 @@ opt-level = 3
 [profile.release.package.tokio]
 opt-level = 3
 
+# Wasm crates: preserve Wasm name section for readable stack traces in
+# production. Only strips DWARF debug info, not function names (~5-15%
+# larger than strip="symbols", but panics show real function names
+# instead of wasm-function[4616]).
+[profile.release.package.sedimentree_wasm]
+strip = "debuginfo"
+
+[profile.release.package.subduction_wasm]
+strip = "debuginfo"
+
+[profile.release.package.automerge_sedimentree_wasm]
+strip = "debuginfo"
+
+[profile.release.package.automerge_subduction_wasm]
+strip = "debuginfo"
+
 # Benchmarks inherit from release, but the workspace release profile is tuned
 # for Wasm (opt-level="z", strip="symbols"). Override for accurate benchmarks
 # with debug info sufficient for flamegraphs.

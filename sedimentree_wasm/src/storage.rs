@@ -152,18 +152,25 @@ impl core::fmt::Debug for JsStorage {
 }
 
 /// Parse a JS array of digests.
-fn parse_digest_array<T: Encode + Decode>(js_value: &JsValue) -> Set<Digest<T>> {
+fn parse_digest_array<T: Encode + Decode>(
+    js_value: &JsValue,
+) -> Result<Set<Digest<T>>, JsStorageError> {
     let array = js_sys::Array::from(js_value);
     let mut result = Set::new();
 
     for i in 0..array.length() {
         let item = array.get(i);
-        let js_digest: JsDigest = JsCast::unchecked_into(item);
+        let js_digest: JsDigest = item.dyn_into().map_err(|value| {
+            JsStorageError::UnexpectedJsType {
+                expected: "Digest",
+                value,
+            }
+        })?;
         let digest: Digest<T> = WasmDigest::from(&js_digest).into();
         result.insert(digest);
     }
 
-    result
+    Ok(result)
 }
 
 impl Storage<Local> for JsStorage {
@@ -265,7 +272,11 @@ impl Storage<Local> for JsStorage {
                 return Ok(None);
             }
 
-            let commit_with_blob: JsCommitWithBlob = js_value.unchecked_into();
+            let commit_with_blob: JsCommitWithBlob =
+                js_value.dyn_into().map_err(|value| JsStorageError::UnexpectedJsType {
+                    expected: "CommitWithBlob",
+                    value,
+                })?;
             let wasm_commit: WasmCommitWithBlob = (&commit_with_blob).into();
             let signed: Signed<LooseCommit> = wasm_commit.signed().into();
             let blob = Blob::new(wasm_commit.blob().to_vec());
@@ -286,7 +297,7 @@ impl Storage<Local> for JsStorage {
             let js_value = JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::JsError)?;
-            Ok(parse_digest_array(&js_value))
+            parse_digest_array(&js_value)
         })
     }
 
@@ -307,7 +318,11 @@ impl Storage<Local> for JsStorage {
 
             for i in 0..array.length() {
                 let item = array.get(i);
-                let commit_with_blob: JsCommitWithBlob = item.unchecked_into();
+                let commit_with_blob: JsCommitWithBlob =
+                    item.dyn_into().map_err(|value| JsStorageError::UnexpectedJsType {
+                        expected: "CommitWithBlob",
+                        value,
+                    })?;
                 let wasm_commit: WasmCommitWithBlob = (&commit_with_blob).into();
                 let signed: Signed<LooseCommit> = wasm_commit.signed().into();
                 let blob = Blob::new(wasm_commit.blob().to_vec());
@@ -397,7 +412,11 @@ impl Storage<Local> for JsStorage {
                 return Ok(None);
             }
 
-            let fragment_with_blob: JsFragmentWithBlob = js_value.unchecked_into();
+            let fragment_with_blob: JsFragmentWithBlob =
+                js_value.dyn_into().map_err(|value| JsStorageError::UnexpectedJsType {
+                    expected: "FragmentWithBlob",
+                    value,
+                })?;
             let wasm_fragment: WasmFragmentWithBlob = (&fragment_with_blob).into();
             let signed: Signed<Fragment> = wasm_fragment.signed().into();
             let blob = Blob::new(wasm_fragment.blob().to_vec());
@@ -418,7 +437,7 @@ impl Storage<Local> for JsStorage {
             let js_value = JsFuture::from(js_promise)
                 .await
                 .map_err(JsStorageError::JsError)?;
-            Ok(parse_digest_array(&js_value))
+            parse_digest_array(&js_value)
         })
     }
 
@@ -439,7 +458,11 @@ impl Storage<Local> for JsStorage {
 
             for i in 0..array.length() {
                 let item = array.get(i);
-                let fragment_with_blob: JsFragmentWithBlob = item.unchecked_into();
+                let fragment_with_blob: JsFragmentWithBlob =
+                    item.dyn_into().map_err(|value| JsStorageError::UnexpectedJsType {
+                        expected: "FragmentWithBlob",
+                        value,
+                    })?;
                 let wasm_fragment: WasmFragmentWithBlob = (&fragment_with_blob).into();
                 let signed: Signed<Fragment> = wasm_fragment.signed().into();
                 let blob = Blob::new(wasm_fragment.blob().to_vec());
@@ -550,6 +573,15 @@ pub enum JsStorageError {
     /// The `JsValue` could not be converted into an array of `SedimentreeId`s.
     #[error("Value was not an array of SedimentreeIds: {0:?}")]
     NotSedimentreeIdArray(#[from] WasmConvertJsValueToSedimentreeIdArrayError),
+
+    /// A JS value could not be cast to the expected type.
+    #[error("JS type cast failed: expected {expected}, got {value:?}")]
+    UnexpectedJsType {
+        /// The type name that was expected.
+        expected: &'static str,
+        /// The actual JS value received.
+        value: JsValue,
+    },
 }
 
 impl From<JsStorageError> for JsValue {
