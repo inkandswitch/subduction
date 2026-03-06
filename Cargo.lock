@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
@@ -4578,7 +4578,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-lock",
  "base58",
@@ -5138,7 +5138,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "async-channel",
  "async-lock",

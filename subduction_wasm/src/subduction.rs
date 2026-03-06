@@ -123,6 +123,11 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `hash_metric_override` is `Some` but the underlying JS value
+    /// cannot be cast to a `Function`.
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(
@@ -132,12 +137,14 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
     ) -> Self {
-        #[cfg(feature = "console_error_panic_hook")]
-        console_error_panic_hook::set_once();
-
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
-        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        #[allow(clippy::expect_used)]
+        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(|h| {
+            JsValue::from(h)
+                .dyn_into()
+                .expect("hash_metric_override is not a Function")
+        });
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();
@@ -186,6 +193,11 @@ impl WasmSubduction {
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
     ///
+    /// # Panics
+    ///
+    /// Panics if `hash_metric_override` is `Some` but the underlying JS value
+    /// cannot be cast to a `Function`.
+    ///
     /// # Errors
     ///
     /// Returns [`WasmHydrationError`] if hydration fails.
@@ -199,7 +211,12 @@ impl WasmSubduction {
     ) -> Result<Self, WasmHydrationError> {
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
-        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(JsCast::unchecked_into);
+        #[allow(clippy::expect_used)]
+        let raw_fn: Option<js_sys::Function> = hash_metric_override.map(|h| {
+            JsValue::from(h)
+                .dyn_into()
+                .expect("hash_metric_override is not a Function")
+        });
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
         let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
             ShardedMap::new();

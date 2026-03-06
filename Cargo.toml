@@ -32,15 +32,16 @@ authors = [
 [workspace.dependencies]
 # Internal crates
 automerge_sedimentree_wasm = { version = "0.5.0", path = "automerge_sedimentree_wasm" }
+automerge_subduction_wasm = { version = "0.3.1", path = "automerge_subduction_wasm", default-features = false }
 bijou64 = { version = "0.1.0", path = "bijou64", default-features = false }
 sedimentree_core = { version = "0.5.0", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.5.0", path = "sedimentree_fs_storage" }
-sedimentree_wasm = { version = "0.5.0", path = "sedimentree_wasm", default-features = false }
+sedimentree_wasm = { version = "0.5.1", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.5.0", path = "subduction_core", default-features = false }
 subduction_crypto = { version = "0.2.0", path = "subduction_crypto", default-features = false }
 subduction_http_longpoll = { version = "0.3.0", path = "subduction_http_longpoll", default-features = false }
 subduction_iroh = { version = "0.2.0", path = "subduction_iroh" }
-subduction_wasm = { version = "0.5.0", path = "subduction_wasm", default-features = false }
+subduction_wasm = { version = "0.5.1", path = "subduction_wasm", default-features = false }
 subduction_websocket = { version = "0.5.0", path = "subduction_websocket", default-features = false }
 
 # External crates
@@ -163,6 +164,22 @@ opt-level = 3
 
 [profile.release.package.tokio]
 opt-level = 3
+
+# Wasm crates: preserve Wasm name section for readable stack traces in
+# production. Only strips DWARF debug info, not function names (~5-15%
+# larger than strip="symbols", but panics show real function names
+# instead of wasm-function[4616]).
+[profile.release.package.sedimentree_wasm]
+strip = "debuginfo"
+
+[profile.release.package.subduction_wasm]
+strip = "debuginfo"
+
+[profile.release.package.automerge_sedimentree_wasm]
+strip = "debuginfo"
+
+[profile.release.package.automerge_subduction_wasm]
+strip = "debuginfo"
 
 # Benchmarks inherit from release, but the workspace release profile is tuned
 # for Wasm (opt-level="z", strip="symbols"). Override for accurate benchmarks

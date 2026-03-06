@@ -69,20 +69,27 @@ impl Signer<Local> for JsSigner {
 
         Local::from_future(async move {
             // Check if result is a Promise and await it if so
+            #[allow(clippy::expect_used)]
             let sig_array: Uint8Array = if result.has_type::<Promise>() {
-                let promise: Promise = result.unchecked_into();
+                let promise: Promise = result.dyn_into().expect(
+                    "JsSigner.sign: value passed has_type::<Promise>() but dyn_into failed",
+                );
                 JsFuture::from(promise)
                     .await
-                    .expect("JsSigner.sign promise rejected")
-                    .unchecked_into()
+                    .expect("JsSigner.sign: promise rejected")
+                    .dyn_into()
+                    .expect("JsSigner.sign: resolved value is not a Uint8Array")
             } else {
-                result.unchecked_into()
+                result
+                    .dyn_into()
+                    .expect("JsSigner.sign: return value is not a Uint8Array")
             };
 
             let sig_bytes: Vec<u8> = sig_array.to_vec();
+            #[allow(clippy::expect_used)]
             let sig_array: [u8; 64] = sig_bytes
                 .try_into()
-                .expect("JsSigner.sign must return exactly 64 bytes");
+                .expect("JsSigner.sign: must return exactly 64 bytes");
             Signature::from_bytes(&sig_array)
         })
     }
@@ -97,8 +104,8 @@ impl Signer<Local> for JsSigner {
         let vk_bytes: Vec<u8> = self.js_verifying_key().to_vec();
         let vk_array: [u8; 32] = vk_bytes
             .try_into()
-            .expect("JsSigner.verifyingKey must return exactly 32 bytes");
+            .expect("JsSigner.verifyingKey: must return exactly 32 bytes");
         VerifyingKey::from_bytes(&vk_array)
-            .expect("JsSigner.verifyingKey must return a valid Ed25519 public key")
+            .expect("JsSigner.verifyingKey: bytes are not a valid Ed25519 public key")
     }
 }

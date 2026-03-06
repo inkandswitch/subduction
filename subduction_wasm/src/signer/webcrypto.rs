@@ -147,10 +147,10 @@ impl WebCryptoSigner {
                 .and_then(|t| t.dyn_into::<web_sys::IdbOpenDbRequest>().ok())
                 .and_then(|r| r.result().ok())
                 .and_then(|r| r.dyn_into().ok())
-                .expect("database from upgrade event");
+                .expect("load_from_idb: IDB onupgradeneeded event did not yield a database");
             if !db.object_store_names().contains(store_name) {
                 db.create_object_store(store_name)
-                    .expect("create object store");
+                    .expect("load_from_idb: failed to create IDB object store");
             }
         });
         open_request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
@@ -220,10 +220,10 @@ impl WebCryptoSigner {
                 .and_then(|t| t.dyn_into::<web_sys::IdbOpenDbRequest>().ok())
                 .and_then(|r| r.result().ok())
                 .and_then(|r| r.dyn_into().ok())
-                .expect("database from upgrade event");
+                .expect("save_to_idb: IDB onupgradeneeded event did not yield a database");
             if !db.object_store_names().contains(store_name) {
                 db.create_object_store(store_name)
-                    .expect("create object store");
+                    .expect("save_to_idb: failed to create IDB object store");
             }
         });
         open_request.set_onupgradeneeded(Some(onupgradeneeded.as_ref().unchecked_ref()));
@@ -314,8 +314,9 @@ impl WebCryptoSigner {
     #[must_use]
     #[allow(clippy::expect_used)]
     pub fn peer_id(&self) -> WasmPeerId {
-        let vk = VerifyingKey::from_bytes(&self.public_key_bytes)
-            .expect("public key bytes should be valid");
+        let vk = VerifyingKey::from_bytes(&self.public_key_bytes).expect(
+            "WebCryptoSigner::peer_id: stored public key bytes are not a valid Ed25519 key",
+        );
         WasmPeerId::from(subduction_core::peer::id::PeerId::from(vk))
     }
 }
@@ -327,7 +328,7 @@ impl Signer<Local> for WebCryptoSigner {
         Local::from_future(async move {
             let sig_array = WebCryptoSigner::sign(self, &message)
                 .await
-                .expect("WebCrypto signing failed");
+                .expect("WebCryptoSigner: crypto.subtle.sign(\"Ed25519\", ...) failed");
 
             let mut sig_bytes = [0u8; 64];
             sig_array.copy_to(&mut sig_bytes);
@@ -335,8 +336,9 @@ impl Signer<Local> for WebCryptoSigner {
         })
     }
 
+    #[allow(clippy::expect_used)]
     fn verifying_key(&self) -> VerifyingKey {
-        #[allow(clippy::expect_used)]
-        VerifyingKey::from_bytes(&self.public_key_bytes).expect("public key bytes should be valid")
+        VerifyingKey::from_bytes(&self.public_key_bytes)
+            .expect("WebCryptoSigner: stored public key bytes are not a valid Ed25519 key")
     }
 }

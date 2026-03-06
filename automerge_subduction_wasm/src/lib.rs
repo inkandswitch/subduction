@@ -254,7 +254,13 @@ pub fn set_panic_hook() {
     }
 }
 
-/// Entry point called when the wasm module is instantiated.
+/// Entry point called when the Wasm module is instantiated.
+///
+/// Only compiled when the `standalone` feature is active. Downstream cdylib
+/// crates that define their own `#[wasm_bindgen(start)]` should depend on
+/// `automerge_subduction_wasm` with `default-features = false` and call
+/// [`set_panic_hook`] from their own start function.
+#[cfg(feature = "standalone")]
 #[wasm_bindgen(start)]
 pub fn start() {
     set_panic_hook();

@@ -1,6 +1,6 @@
 [package]
 name = "subduction_wasm"
-version = "0.5.0"
+version = "0.5.1"
 description = "Wasm/JavaScript bindings for Subduction (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
@@ -80,9 +80,12 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 wasm-bindgen-test = "0.2"
 
 [features]
-default = []
-# Enable for better panic messages in dev builds (adds ~30KB due to std)
+default = ["console_error_panic_hook", "standalone"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
+# Enable the #[wasm_bindgen(start)] entry point. Disable when using
+# subduction_wasm as a dependency of another cdylib crate that defines
+# its own start function (wasm-bindgen allows only one per module).
+standalone = []
 # IndexedDB storage backend
 idb = ["sedimentree_wasm/idb"]
 std = [

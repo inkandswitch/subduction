@@ -137,7 +137,13 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_recv())
                 .await
                 .map_err(JsConnectionError::Recv)?;
-            let js_msg: JsMessage = JsCast::unchecked_into(js_value);
+            let js_msg: JsMessage =
+                js_value
+                    .dyn_into()
+                    .map_err(|value| JsConnectionError::UnexpectedJsType {
+                        expected: "Message",
+                        value,
+                    })?;
             let wasm_msg = WasmMessage::from(&js_msg);
             Ok(wasm_msg.into())
         }
@@ -149,8 +155,11 @@ impl Connection<Local> for JsConnection {
             #[allow(clippy::expect_used)]
             let js_value = JsFuture::from(self.js_next_request_id())
                 .await
-                .expect("nextRequestId should not fail");
-            let js_req_id: JsRequestId = js_value.unchecked_into();
+                .expect("JsConnection.nextRequestId() promise rejected");
+            #[allow(clippy::expect_used)]
+            let js_req_id: JsRequestId = js_value
+                .dyn_into()
+                .expect("JsConnection.nextRequestId() did not return a RequestId");
             let wasm_req_id = WasmRequestId::from(&js_req_id);
             wasm_req_id.into()
         }
@@ -169,7 +178,13 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_call(wasm_req, timeout_ms))
                 .await
                 .map_err(JsConnectionError::Call)?;
-            let js_resp: JsBatchSyncResponse = JsCast::unchecked_into(js_value);
+            let js_resp: JsBatchSyncResponse =
+                js_value
+                    .dyn_into()
+                    .map_err(|value| JsConnectionError::UnexpectedJsType {
+                        expected: "BatchSyncResponse",
+                        value,
+                    })?;
             let wasm_resp = WasmBatchSyncResponse::from(&js_resp);
             Ok(wasm_resp.into())
         }
@@ -195,6 +210,15 @@ pub enum JsConnectionError {
     /// An error that occurred during a synchronous call.
     #[error("Call error")]
     Call(JsValue),
+
+    /// A JS value could not be cast to the expected type.
+    #[error("JS type cast failed: expected {expected}, got {value:?}")]
+    UnexpectedJsType {
+        /// The type name that was expected.
+        expected: &'static str,
+        /// The actual JS value received.
+        value: JsValue,
+    },
 }
 
 impl From<JsConnectionError> for JsValue {
