@@ -11,8 +11,7 @@ use crate::{
         fingerprint::{Fingerprint, FingerprintSeed},
     },
     depth::{Depth, DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, FragmentSpec, checkpoint::Checkpoint, id::FragmentId},
-    id::SedimentreeId,
+    fragment::{Fragment, checkpoint::Checkpoint, id::FragmentId},
     loose_commit::{LooseCommit, id::CommitId},
 };
 
@@ -443,116 +442,6 @@ impl Sedimentree {
             .chain(self.commits.into_values().map(CommitOrFragment::Commit))
     }
 
-    /// Given a [`SedimentreeId`], return the [`FragmentSpec`]s needed to fill
-    /// uncovered gaps in the commit DAG.
-    ///
-    /// Walks backward from each DAG head through parent edges. Commits that
-    /// are already inside a known [`Fragment`] (via [`Fragment::supports_block`])
-    /// are treated as covered and stop further traversal on that path. Commits
-    /// at depth ≥ [`MAX_STRATA_DEPTH`] form fragment boundaries.
-    ///
-    /// Each uncovered region between a head and its boundary commits produces
-    /// a [`FragmentSpec`] with potentially multiple boundary entries (for
-    /// branching DAGs).
-    #[must_use]
-    pub fn missing_fragments<M: DepthMetric>(
-        &self,
-        id: SedimentreeId,
-        seed: &FingerprintSeed,
-        depth_metric: &M,
-    ) -> Vec<FragmentSpec> {
-        let dag = commit_dag::CommitDag::from_commits(self.commits.values());
-        let heads: Vec<Digest<LooseCommit>> = dag.heads().collect();
-
-        // Walk each head independently. A globally shared visited set prevents
-        // the same gap from being emitted twice when two heads share subgraphs.
-        let mut global_visited = Set::<Digest<LooseCommit>>::new();
-        let mut all_specs = Vec::new();
-
-        for head in &heads {
-            let head_depth = depth_metric.to_depth(*head);
-            if head_depth < MAX_STRATA_DEPTH {
-                // Head isn't deep enough to anchor a fragment.
-                continue;
-            }
-
-            // Already covered by an existing fragment — skip.
-            if self.fragments.values().any(|f| f.supports_block(*head)) {
-                continue;
-            }
-
-            // BFS backward from this head, collecting the uncovered region.
-            let mut boundary = BTreeSet::<Digest<LooseCommit>>::new();
-            let mut checkpoints = Vec::<Digest<LooseCommit>>::new();
-            let mut has_uncovered = false;
-            let mut queue = alloc::collections::VecDeque::<Digest<LooseCommit>>::new();
-            let mut local_visited = Set::<Digest<LooseCommit>>::new();
-
-            // Seed the BFS with the head's parents (the head itself is the
-            // fragment head, not an interior node).
-            local_visited.insert(*head);
-            global_visited.insert(*head);
-            for parent in dag.parents_of_hash(*head) {
-                queue.push_back(parent);
-            }
-
-            while let Some(commit) = queue.pop_front() {
-                if !local_visited.insert(commit) {
-                    continue;
-                }
-                global_visited.insert(commit);
-
-                // Already inside an existing fragment — this is a coverage
-                // boundary, stop traversal on this path.
-                if self.fragments.values().any(|f| f.supports_block(commit)) {
-                    continue;
-                }
-
-                let commit_depth = depth_metric.to_depth(commit);
-
-                if commit_depth >= MAX_STRATA_DEPTH {
-                    // Deep commit: acts as a fragment boundary.
-                    boundary.insert(commit);
-                    has_uncovered = true;
-                } else {
-                    // Shallow commit: interior node of the gap.
-                    has_uncovered = true;
-                    if commit_depth > Depth(0) {
-                        checkpoints.push(commit);
-                    }
-                    for parent in dag.parents_of_hash(commit) {
-                        if !local_visited.contains(&parent) {
-                            queue.push_back(parent);
-                        }
-                    }
-                }
-            }
-
-            if !has_uncovered {
-                continue;
-            }
-
-            let checkpoint_fps = checkpoints
-                .iter()
-                .map(|d| {
-                    Fingerprint::new(
-                        seed,
-                        &CommitId::new(Digest::force_from_bytes(d.into_bytes())),
-                    )
-                })
-                .collect();
-
-            all_specs.push(FragmentSpec::new(
-                id,
-                *head,
-                *seed,
-                checkpoint_fps,
-                boundary,
-            ));
-        }
-
-        all_specs
-    }
 }
 
 /// An enum over either a [`LooseCommit`] or a [`Fragment`].
@@ -620,7 +509,10 @@ pub fn has_commit_boundary<
 mod tests {
     use alloc::vec;
 
-    use crate::blob::{Blob, BlobMeta};
+    use crate::{
+        blob::{Blob, BlobMeta},
+        id::SedimentreeId,
+    };
 
     use super::*;
 
@@ -735,7 +627,12 @@ mod tests {
 
         use rand::{Rng, SeedableRng, rngs::SmallRng};
 
-        use crate::{blob::BlobMeta, commit::CountLeadingZeroBytes, fragment::FragmentSummary};
+        use crate::{
+            blob::BlobMeta,
+            commit::CountLeadingZeroBytes,
+            fragment::FragmentSummary,
+            id::SedimentreeId,
+        };
 
         use super::super::*;
 

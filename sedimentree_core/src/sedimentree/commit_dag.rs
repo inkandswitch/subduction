@@ -313,7 +313,7 @@ impl CommitDag {
         Parents::new(self, node)
     }
 
-    pub(crate) fn parents_of_hash(
+    fn parents_of_hash(
         &self,
         hash: Digest<LooseCommit>,
     ) -> impl Iterator<Item = Digest<LooseCommit>> + '_ {
