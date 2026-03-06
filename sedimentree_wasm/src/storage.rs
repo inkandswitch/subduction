@@ -152,6 +152,8 @@ impl core::fmt::Debug for JsStorage {
 }
 
 /// Parse a JS array of digests.
+///
+/// Returns an error if any element cannot be cast to a `Digest`.
 fn parse_digest_array<T: Encode + Decode>(
     js_value: &JsValue,
 ) -> Result<Set<Digest<T>>, JsStorageError> {

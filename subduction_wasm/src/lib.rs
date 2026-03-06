@@ -9,15 +9,27 @@ extern crate std;
 
 extern crate alloc;
 
-use wasm_bindgen::prelude::*;
-
-/// Install the panic hook at module instantiation, before any exported
-/// function can be called. This ensures panics always produce readable
+/// Install the console error panic hook so that panics produce readable
 /// error messages in the browser console.
-#[wasm_bindgen(start)]
-pub fn start() {
+///
+/// Called automatically when the `standalone` feature is enabled.
+/// When `subduction_wasm` is used as a dependency of another cdylib crate,
+/// call this from that crate's own start function instead.
+pub fn set_panic_hook() {
     #[cfg(feature = "console_error_panic_hook")]
     console_error_panic_hook::set_once();
+}
+
+/// Entry point called when the Wasm module is instantiated.
+///
+/// Only compiled when the `standalone` feature is active. Downstream cdylib
+/// crates that define their own `#[wasm_bindgen(start)]` should depend on
+/// `subduction_wasm` with `default-features = false` and call
+/// [`set_panic_hook`] from their own start function.
+#[cfg(feature = "standalone")]
+#[wasm_bindgen::prelude::wasm_bindgen(start)]
+pub fn start() {
+    set_panic_hook();
 }
 
 pub mod connection;

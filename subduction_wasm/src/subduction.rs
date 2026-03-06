@@ -123,6 +123,11 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `hash_metric_override` is `Some` but the underlying JS value
+    /// cannot be cast to a `Function`.
     #[must_use]
     #[wasm_bindgen(constructor)]
     pub fn new(
@@ -187,6 +192,11 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    ///
+    /// # Panics
+    ///
+    /// Panics if `hash_metric_override` is `Some` but the underlying JS value
+    /// cannot be cast to a `Function`.
     ///
     /// # Errors
     ///

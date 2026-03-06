@@ -212,7 +212,7 @@ pub enum JsConnectionError {
     Call(JsValue),
 
     /// A JS value could not be cast to the expected type.
-    #[error("JS type cast failed: expected {expected}")]
+    #[error("JS type cast failed: expected {expected}, got {value:?}")]
     UnexpectedJsType {
         /// The type name that was expected.
         expected: &'static str,
