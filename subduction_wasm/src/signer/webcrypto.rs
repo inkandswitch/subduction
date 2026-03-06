@@ -314,8 +314,9 @@ impl WebCryptoSigner {
     #[must_use]
     #[allow(clippy::expect_used)]
     pub fn peer_id(&self) -> WasmPeerId {
-        let vk = VerifyingKey::from_bytes(&self.public_key_bytes)
-            .expect("WebCryptoSigner::peer_id: stored public key bytes are not a valid Ed25519 key");
+        let vk = VerifyingKey::from_bytes(&self.public_key_bytes).expect(
+            "WebCryptoSigner::peer_id: stored public key bytes are not a valid Ed25519 key",
+        );
         WasmPeerId::from(subduction_core::peer::id::PeerId::from(vk))
     }
 }

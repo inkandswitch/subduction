@@ -71,9 +71,9 @@ impl Signer<Local> for JsSigner {
             // Check if result is a Promise and await it if so
             #[allow(clippy::expect_used)]
             let sig_array: Uint8Array = if result.has_type::<Promise>() {
-                let promise: Promise = result
-                    .dyn_into()
-                    .expect("JsSigner.sign: value passed has_type::<Promise>() but dyn_into failed");
+                let promise: Promise = result.dyn_into().expect(
+                    "JsSigner.sign: value passed has_type::<Promise>() but dyn_into failed",
+                );
                 JsFuture::from(promise)
                     .await
                     .expect("JsSigner.sign: promise rejected")
