@@ -621,17 +621,12 @@ mod tests {
     #[cfg(all(test, feature = "bolero"))]
     #[allow(clippy::similar_names)]
     mod proptests {
-        use alloc::vec;
         use core::sync::atomic::{AtomicU64, Ordering};
 
         use rand::{Rng, SeedableRng, rngs::SmallRng};
 
-        use crate::{
-            blob::BlobMeta, commit::CountLeadingZeroBytes, fragment::FragmentSummary,
-            id::SedimentreeId,
-        };
-
-        use super::super::*;
+        use super::*;
+        use crate::{commit::CountLeadingZeroBytes, fragment::FragmentSummary};
 
         static SEED_COUNTER: AtomicU64 = AtomicU64::new(0);
 
