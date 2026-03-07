@@ -628,7 +628,7 @@ mod tests {
         );
     }
 
-    /// Diamond DAG: canonical_sequence must include all four commits exactly once.
+    /// Diamond DAG: `canonical_sequence` must include all four commits exactly once.
     ///
     /// ```text
     ///        A (depth 2)
@@ -670,7 +670,7 @@ mod tests {
         );
     }
 
-    /// canonical_sequence must never produce duplicate entries.
+    /// `canonical_sequence` must never produce duplicate entries.
     #[test]
     fn canonical_sequence_no_duplicates() {
         let sedimentree_id = make_sedimentree_id(11);
@@ -703,7 +703,7 @@ mod tests {
         );
     }
 
-    /// canonical_sequence must terminate on a cyclic (malformed) DAG.
+    /// `canonical_sequence` must terminate on a cyclic (malformed) DAG.
     ///
     /// We construct a cycle by manually inserting nodes that reference each
     /// other as parents. The DFS visited-set should prevent infinite looping.

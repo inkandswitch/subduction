@@ -340,6 +340,8 @@ impl<
                 .sedimentrees
                 .with_entry_or_default(id, |tree| tree.merge(sedimentree))
                 .await;
+
+            subduction.minimize_tree(id).await;
         }
         Ok((subduction, fut_listener, manager_fut))
     }
@@ -1373,6 +1375,8 @@ impl<
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
+        self.minimize_tree(id).await;
+
         let msg = Message::LooseCommit {
             id,
             commit: signed_for_wire,
@@ -1468,6 +1472,8 @@ impl<
         self.insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
+
+        self.minimize_tree(id).await;
 
         let msg = Message::Fragment {
             id,
@@ -1576,6 +1582,8 @@ impl<
             .await
             .map_err(IoError::Storage)?;
 
+        self.minimize_tree(id).await;
+
         if was_new {
             let msg = Message::LooseCommit {
                 id,
@@ -1661,6 +1669,8 @@ impl<
             .insert_fragment_locally(&putter, verified_meta)
             .await
             .map_err(IoError::Storage)?;
+
+        self.minimize_tree(id).await;
 
         if was_new {
             let msg = Message::Fragment {
@@ -1771,7 +1781,8 @@ impl<
                     .collect();
 
                 if !loose_commits.is_empty() || !fragments.is_empty() {
-                    let sedimentree = Sedimentree::new(fragments, loose_commits);
+                    let sedimentree =
+                        Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
                     entry.insert(sedimentree);
                     tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
                 }
@@ -2086,6 +2097,8 @@ impl<
                             .map_err(IoError::Storage)?;
                     }
 
+                    self.minimize_tree(id).await;
+
                     // Update received stats (count what was offered, not verified)
                     stats.commits_received += commits_to_receive;
                     stats.fragments_received += fragments_to_receive;
@@ -2316,6 +2329,8 @@ impl<
                                         .await
                                         .map_err(IoError::Storage)?;
                                 }
+
+                                self.minimize_tree(id).await;
 
                                 // Update received stats
                                 stats.commits_received += commits_to_receive;
@@ -2766,6 +2781,19 @@ impl<
             .await;
 
         Ok(was_added)
+    }
+
+    /// Re-minimize a sedimentree in the in-memory cache.
+    ///
+    /// Prunes dominated fragments and loose commits covered by fragments,
+    /// keeping only the minimal covering. Storage retains the full history.
+    async fn minimize_tree(&self, id: SedimentreeId) {
+        let metric = &self.depth_metric;
+        self.sedimentrees
+            .with_entry(&id, |tree| {
+                *tree = tree.minimize(metric);
+            })
+            .await;
     }
 }
 
