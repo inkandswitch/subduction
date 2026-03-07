@@ -441,7 +441,6 @@ impl Sedimentree {
             .map(CommitOrFragment::Fragment)
             .chain(self.commits.into_values().map(CommitOrFragment::Commit))
     }
-
 }
 
 /// An enum over either a [`LooseCommit`] or a [`Fragment`].
@@ -628,9 +627,7 @@ mod tests {
         use rand::{Rng, SeedableRng, rngs::SmallRng};
 
         use crate::{
-            blob::BlobMeta,
-            commit::CountLeadingZeroBytes,
-            fragment::FragmentSummary,
+            blob::BlobMeta, commit::CountLeadingZeroBytes, fragment::FragmentSummary,
             id::SedimentreeId,
         };
 
@@ -1389,8 +1386,8 @@ mod tests {
             let fragment = graph.make_fragment("a", &["d"], &["b"]);
 
             // Remote has only the fragment (minimized away the commits)
-            let remote = Sedimentree::new(vec![fragment.clone()], vec![])
-                .minimize(graph.depth_metric());
+            let remote =
+                Sedimentree::new(vec![fragment.clone()], vec![]).minimize(graph.depth_metric());
 
             // Local has only the loose commits (no fragment yet)
             let local = graph.to_sedimentree().minimize(graph.depth_metric());
