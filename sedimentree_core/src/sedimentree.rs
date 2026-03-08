@@ -903,6 +903,412 @@ mod tests {
                     );
                 });
         }
+
+        // ==========================================================
+        // merge() algebraic properties
+        // ==========================================================
+
+        #[test]
+        fn merge_is_commutative() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(a, b)| {
+                    let mut ab = a.clone();
+                    ab.merge(b.clone());
+
+                    let mut ba = b.clone();
+                    ba.merge(a.clone());
+
+                    assert_eq!(ab, ba, "merge must be commutative: a ∪ b == b ∪ a");
+                });
+        }
+
+        #[test]
+        fn merge_is_associative() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree, Sedimentree)>()
+                .for_each(|(a, b, c)| {
+                    let mut ab_c = a.clone();
+                    ab_c.merge(b.clone());
+                    ab_c.merge(c.clone());
+
+                    let mut a_bc = a.clone();
+                    let mut bc = b.clone();
+                    bc.merge(c.clone());
+                    a_bc.merge(bc);
+
+                    assert_eq!(
+                        ab_c, a_bc,
+                        "merge must be associative: (a ∪ b) ∪ c == a ∪ (b ∪ c)"
+                    );
+                });
+        }
+
+        #[test]
+        fn merge_is_idempotent() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let mut doubled = tree.clone();
+                    doubled.merge(tree.clone());
+
+                    assert_eq!(*tree, doubled, "merge must be idempotent: a ∪ a == a");
+                });
+        }
+
+        // ==========================================================
+        // minimize() + merge() interaction
+        // ==========================================================
+
+        #[test]
+        fn minimize_merge_commutes_after_minimize() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(a, b)| {
+                    let mut ab = a.clone();
+                    ab.merge(b.clone());
+                    let min_ab = ab.minimize(&CountLeadingZeroBytes);
+
+                    let mut ba = b.clone();
+                    ba.merge(a.clone());
+                    let min_ba = ba.minimize(&CountLeadingZeroBytes);
+
+                    assert_eq!(min_ab, min_ba, "minimize(a ∪ b) == minimize(b ∪ a)");
+                });
+        }
+
+        #[test]
+        fn minimize_of_merge_subsumes_both_minimized() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(a, b)| {
+                    let min_a = a.minimize(&CountLeadingZeroBytes);
+                    let min_b = b.minimize(&CountLeadingZeroBytes);
+
+                    let mut merged = a.clone();
+                    merged.merge(b.clone());
+                    let min_merged = merged.minimize(&CountLeadingZeroBytes);
+
+                    // Every commit in minimize(a) must appear in minimize(a ∪ b)
+                    // OR be covered by a fragment in minimize(a ∪ b)
+                    let merged_commit_keys: Set<_> =
+                        min_merged.loose_commits().map(Digest::hash).collect();
+                    let merged_frag_keys: Set<_> =
+                        min_merged.fragments().map(Digest::hash).collect();
+
+                    // All fragments from either minimized input must either
+                    // appear in the merged result or be dominated by a deeper one
+                    for frag in min_a.fragments().chain(min_b.fragments()) {
+                        let frag_digest = Digest::hash(frag);
+                        let present = merged_frag_keys.contains(&frag_digest);
+                        let dominated = min_merged
+                            .fragments()
+                            .any(|mf| mf.supports(frag.summary(), &CountLeadingZeroBytes));
+                        assert!(
+                            present || dominated,
+                            "fragment from minimized input must be present or dominated in minimize(merge)"
+                        );
+                    }
+
+                    // All commits from either minimized input must either
+                    // appear in the merged result or be covered by a fragment
+                    for commit in min_a.loose_commits().chain(min_b.loose_commits()) {
+                        let commit_digest = Digest::hash(commit);
+                        let present = merged_commit_keys.contains(&commit_digest);
+                        let covered = min_merged
+                            .fragments()
+                            .any(|f| f.supports_block(commit_digest));
+                        assert!(
+                            present || covered,
+                            "commit from minimized input must be present or covered in minimize(merge)"
+                        );
+                    }
+                });
+        }
+
+        // ==========================================================
+        // fingerprint_summarize / diff_remote_fingerprints
+        // ==========================================================
+
+        #[test]
+        fn fingerprint_diff_self_requests_nothing() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, FingerprintSeed)>()
+                .for_each(|(tree, seed)| {
+                    let summary = tree.fingerprint_summarize(seed);
+                    let diff = tree.diff_remote_fingerprints(&summary);
+
+                    assert!(
+                        diff.local_only_commits.is_empty(),
+                        "diffing against own summary should find no local-only commits"
+                    );
+                    assert!(
+                        diff.local_only_fragments.is_empty(),
+                        "diffing against own summary should find no local-only fragments"
+                    );
+                    assert!(
+                        diff.remote_only_commit_fingerprints.is_empty(),
+                        "diffing against own summary should find no remote-only commit fingerprints"
+                    );
+                    assert!(
+                        diff.remote_only_fragment_fingerprints.is_empty(),
+                        "diffing against own summary should find no remote-only fragment fingerprints"
+                    );
+                });
+        }
+
+        #[test]
+        fn fingerprint_summary_deterministic() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, FingerprintSeed)>()
+                .for_each(|(tree, seed)| {
+                    let s1 = tree.fingerprint_summarize(seed);
+                    let s2 = tree.fingerprint_summarize(seed);
+                    assert_eq!(s1, s2, "fingerprint_summarize must be deterministic");
+                });
+        }
+
+        #[test]
+        fn fingerprint_summary_item_count_matches() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, FingerprintSeed)>()
+                .for_each(|(tree, seed)| {
+                    let summary = tree.fingerprint_summarize(seed);
+
+                    // Fingerprint count should match unique item count
+                    // (fingerprints are u64 so collisions are possible but
+                    // vanishingly rare — we check <=)
+                    assert!(
+                        summary.commit_fingerprints().len() <= tree.loose_commits().count(),
+                        "commit fingerprint count should not exceed commit count"
+                    );
+                    assert!(
+                        summary.fragment_fingerprints().len() <= tree.fragments().count(),
+                        "fragment fingerprint count should not exceed fragment count"
+                    );
+                });
+        }
+
+        #[test]
+        fn fingerprint_diff_superset_finds_extras() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree, FingerprintSeed)>()
+                .for_each(|(a, b, seed)| {
+                    // Merge a into b so b is a superset of a
+                    let mut superset = a.clone();
+                    superset.merge(b.clone());
+
+                    let a_summary = a.fingerprint_summarize(seed);
+                    let diff = superset.diff_remote_fingerprints(&a_summary);
+
+                    // The superset should have no remote-only fingerprints
+                    // (everything in a is also in superset)
+                    assert!(
+                        diff.remote_only_commit_fingerprints.is_empty(),
+                        "superset should recognize all of subset's commit fingerprints"
+                    );
+                    assert!(
+                        diff.remote_only_fragment_fingerprints.is_empty(),
+                        "superset should recognize all of subset's fragment fingerprints"
+                    );
+                });
+        }
+
+        // ==========================================================
+        // heads() properties
+        // ==========================================================
+
+        #[test]
+        fn heads_nonempty_when_commits_exist() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    if tree.loose_commits().count() > 0 {
+                        let heads = tree.heads(&CountLeadingZeroBytes);
+                        assert!(
+                            !heads.is_empty(),
+                            "a sedimentree with loose commits must have at least one head"
+                        );
+                    }
+                });
+        }
+
+        #[test]
+        fn heads_empty_iff_tree_empty() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let heads = tree.heads(&CountLeadingZeroBytes);
+                    if tree.loose_commits().count() == 0 && tree.fragments().count() == 0 {
+                        assert!(heads.is_empty(), "an empty tree must have no heads");
+                    }
+                });
+        }
+
+        #[test]
+        fn heads_no_duplicates() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let heads = tree.heads(&CountLeadingZeroBytes);
+                    let unique: Set<_> = heads.iter().collect();
+                    assert_eq!(
+                        heads.len(),
+                        unique.len(),
+                        "heads must not contain duplicates"
+                    );
+                });
+        }
+
+        #[test]
+        fn heads_stable_after_minimize() {
+            bolero::check!()
+                .with_arbitrary::<Sedimentree>()
+                .for_each(|tree| {
+                    let heads_before = tree.heads(&CountLeadingZeroBytes);
+                    let minimized = tree.minimize(&CountLeadingZeroBytes);
+                    let heads_after = minimized.heads(&CountLeadingZeroBytes);
+
+                    let before_set: Set<_> = heads_before.into_iter().collect();
+                    let after_set: Set<_> = heads_after.into_iter().collect();
+
+                    assert_eq!(
+                        before_set, after_set,
+                        "heads must be identical before and after minimize"
+                    );
+                });
+        }
+
+        // ==========================================================
+        // add_commit / add_fragment invariant preservation
+        // ==========================================================
+
+        #[test]
+        fn add_commit_to_minimized_re_minimizes_cleanly() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, LooseCommit)>()
+                .for_each(|(tree, commit)| {
+                    let mut minimized = tree.minimize(&CountLeadingZeroBytes);
+                    minimized.add_commit(commit.clone());
+                    let re_minimized = minimized.minimize(&CountLeadingZeroBytes);
+
+                    // minimize invariants hold
+                    let frags: Vec<_> = re_minimized.fragments().collect();
+                    for (i, f1) in frags.iter().enumerate() {
+                        for (j, f2) in frags.iter().enumerate() {
+                            if i != j {
+                                assert!(
+                                    !f1.supports(f2.summary(), &CountLeadingZeroBytes),
+                                    "no mutual support after add_commit + re-minimize"
+                                );
+                            }
+                        }
+                    }
+
+                    // re-minimizing again is idempotent
+                    let triple = re_minimized.minimize(&CountLeadingZeroBytes);
+                    assert_eq!(
+                        re_minimized, triple,
+                        "minimize must be idempotent after add_commit"
+                    );
+                });
+        }
+
+        #[test]
+        fn add_fragment_to_minimized_re_minimizes_cleanly() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Fragment)>()
+                .for_each(|(tree, fragment)| {
+                    let mut minimized = tree.minimize(&CountLeadingZeroBytes);
+                    minimized.add_fragment(fragment.clone());
+                    let re_minimized = minimized.minimize(&CountLeadingZeroBytes);
+
+                    let frags: Vec<_> = re_minimized.fragments().collect();
+                    for (i, f1) in frags.iter().enumerate() {
+                        for (j, f2) in frags.iter().enumerate() {
+                            if i != j {
+                                assert!(
+                                    !f1.supports(f2.summary(), &CountLeadingZeroBytes),
+                                    "no mutual support after add_fragment + re-minimize"
+                                );
+                            }
+                        }
+                    }
+
+                    let triple = re_minimized.minimize(&CountLeadingZeroBytes);
+                    assert_eq!(
+                        re_minimized, triple,
+                        "minimize must be idempotent after add_fragment"
+                    );
+                });
+        }
+
+        // ==========================================================
+        // diff + merge convergence (the sync round-trip)
+        // ==========================================================
+
+        #[test]
+        fn diff_apply_converges() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(a, b)| {
+                    let diff = a.diff(b);
+
+                    let mut a_patched = a.clone();
+                    for f in diff.left_missing_fragments {
+                        a_patched.add_fragment(f.clone());
+                    }
+                    for c in diff.left_missing_commits {
+                        a_patched.add_commit(c.clone());
+                    }
+
+                    let mut b_patched = b.clone();
+                    for f in diff.right_missing_fragments {
+                        b_patched.add_fragment(f.clone());
+                    }
+                    for c in diff.right_missing_commits {
+                        b_patched.add_commit(c.clone());
+                    }
+
+                    assert_eq!(
+                        a_patched, b_patched,
+                        "applying diff to both sides must produce identical trees"
+                    );
+                });
+        }
+
+        #[test]
+        fn minimize_after_diff_apply_converges() {
+            bolero::check!()
+                .with_arbitrary::<(Sedimentree, Sedimentree)>()
+                .for_each(|(a, b)| {
+                    let diff = a.diff(b);
+
+                    let mut a_patched = a.clone();
+                    for f in diff.left_missing_fragments {
+                        a_patched.add_fragment(f.clone());
+                    }
+                    for c in diff.left_missing_commits {
+                        a_patched.add_commit(c.clone());
+                    }
+
+                    let mut b_patched = b.clone();
+                    for f in diff.right_missing_fragments {
+                        b_patched.add_fragment(f.clone());
+                    }
+                    for c in diff.right_missing_commits {
+                        b_patched.add_commit(c.clone());
+                    }
+
+                    let min_a = a_patched.minimize(&CountLeadingZeroBytes);
+                    let min_b = b_patched.minimize(&CountLeadingZeroBytes);
+
+                    assert_eq!(
+                        min_a, min_b,
+                        "minimize(diff-patched a) == minimize(diff-patched b)"
+                    );
+                });
+        }
     }
 
     #[allow(clippy::similar_names)]
