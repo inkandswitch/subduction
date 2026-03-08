@@ -1114,6 +1114,8 @@ mod tests {
         }
 
         mod heads {
+            use super::*;
+
             #[test]
             fn heads_nonempty_when_commits_exist() {
                 bolero::check!()
