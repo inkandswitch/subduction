@@ -1,15 +1,17 @@
 //! Tests for round-trip communication between Subduction peers using `WebSocket`s.
 
-use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, sync::OnceLock, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 use testresult::TestResult;
 
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::Blob,
-    commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
-    id::SedimentreeId,
+    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
     connection::handshake::Audience,
@@ -112,12 +114,11 @@ async fn batch_sync() -> TestResult {
 
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, _server_handler, listener_fut, manager_fut) =
-        SubductionBuilder::new()
-            .signer(server_signer)
-            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>();
+    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(server_signer)
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())

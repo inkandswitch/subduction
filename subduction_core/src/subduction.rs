@@ -86,8 +86,8 @@ use crate::{
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
-            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, Message,
-            RequestedData, SyncDiff, SyncResult,
+            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, Message, RequestedData,
+            SyncDiff, SyncResult,
         },
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
@@ -109,8 +109,8 @@ use core::{
     time::Duration,
 };
 use error::{
-    AttachError, IoError, ListenError, RegistrationError,
-    SendRequestedDataError, Unauthorized, WriteError,
+    AttachError, IoError, ListenError, RegistrationError, SendRequestedDataError, Unauthorized,
+    WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -2206,8 +2206,7 @@ pub trait StartListener<
     M: DepthMetric,
     H: Handler<Self, C>,
     const N: usize,
->: FutureForm + RunManager<Authenticated<C, Self>> + Sized
-where
+>: FutureForm + RunManager<Authenticated<C, Self>> + Sized where
     H::Message: From<Message>,
     H::HandlerError: Into<ListenError<Self, S, C>>,
 {
@@ -2246,8 +2245,8 @@ where
         H: Handler<Local, C> + 'a,
         H::HandlerError: Into<ListenError<Local, S, C>>
 )]
-impl<'a, K: FutureForm, C, S, P, Sig, M, H, const N: usize>
-    StartListener<'a, S, C, P, Sig, M, H, N> for K
+impl<'a, K: FutureForm, C, S, P, Sig, M, H, const N: usize> StartListener<'a, S, C, P, Sig, M, H, N>
+    for K
 where
     H: Handler<K, C>,
     H::Message: From<Message>,
@@ -2375,7 +2374,9 @@ mod tests {
         policy::open::OpenPolicy,
         sharded_map::ShardedMap,
         storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-        subduction::pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+        subduction::pending_blob_requests::{
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests,
+        },
     };
     use alloc::collections::BTreeSet;
     use async_lock::Mutex;

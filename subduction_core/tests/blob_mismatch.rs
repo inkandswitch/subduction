@@ -4,13 +4,11 @@
 //! are rejected before being stored. This prevents poisoned metadata from
 //! referencing non-existent blobs.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
-use core::future::Future;
-use core::time::Duration;
-use futures::future::Aborted;
+use core::{future::Future, time::Duration};
 use future_form::Sendable;
+use futures::future::Aborted;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
     commit::CountLeadingZeroBytes,

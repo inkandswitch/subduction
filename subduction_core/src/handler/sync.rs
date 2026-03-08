@@ -176,9 +176,7 @@ impl<
         P: StoragePolicy<Local>,
         M: DepthMetric
 )]
-impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C>
-    for SyncHandler<K, S, C, P, M, N>
-{
+impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K, S, C, P, M, N> {
     type Message = Message;
     type HandlerError = ListenError<K, S, C>;
 

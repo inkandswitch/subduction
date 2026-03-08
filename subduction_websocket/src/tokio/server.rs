@@ -12,9 +12,7 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use sedimentree_core::{
-    commit::CountLeadingZeroBytes, depth::DepthMetric,
-};
+use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric};
 use subduction_core::{
     connection::{
         authenticated::Authenticated,
@@ -24,9 +22,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
-    subduction::{
-        Subduction, SubductionBuilder, error::RegistrationError,
-    },
+    subduction::{Subduction, SubductionBuilder, error::RegistrationError},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};

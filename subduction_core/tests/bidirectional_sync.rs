@@ -16,8 +16,8 @@
 use core::{future::Future, time::Duration};
 use std::sync::Arc;
 
-use futures::future::Aborted;
 use future_form::Sendable;
+use futures::future::Aborted;
 use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
@@ -50,7 +50,17 @@ const TEST_SEED: FingerprintSeed = FingerprintSeed::new(12345, 67890);
 
 #[allow(clippy::type_complexity)]
 fn make_subduction() -> (
-    Arc<Subduction<'static, Sendable, MemoryStorage, ChannelMockConnection, OpenPolicy, subduction_crypto::signer::memory::MemorySigner, CountLeadingZeroBytes>>,
+    Arc<
+        Subduction<
+            'static,
+            Sendable,
+            MemoryStorage,
+            ChannelMockConnection,
+            OpenPolicy,
+            subduction_crypto::signer::memory::MemorySigner,
+            CountLeadingZeroBytes,
+        >,
+    >,
     impl Future<Output = Result<(), Aborted>>,
     impl Future<Output = Result<(), Aborted>>,
 ) {

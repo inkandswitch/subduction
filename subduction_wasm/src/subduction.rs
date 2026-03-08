@@ -32,8 +32,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, SubductionBuilder,
-        error::HydrationError,
+        Subduction, SubductionBuilder, error::HydrationError,
         pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
 };

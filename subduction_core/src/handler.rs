@@ -55,7 +55,7 @@ pub mod sync;
 use future_form::FutureForm;
 use sedimentree_core::codec::decode::Decode;
 
-use crate::connection::{authenticated::Authenticated, Connection};
+use crate::connection::{Connection, authenticated::Authenticated};
 
 /// A handler for messages received from authenticated peers.
 ///

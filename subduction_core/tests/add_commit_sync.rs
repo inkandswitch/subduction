@@ -263,12 +263,11 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
 async fn full_sync_sends_all_commits() -> TestResult {
     use subduction_core::connection::message::Message;
 
-    let (client, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
-            .signer(test_signer())
-            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-            .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+    let (client, _handler, listener_fut, actor_fut) = SubductionBuilder::<_, _, _, _, 256>::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, ChannelMockConnection>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let server_peer_id = PeerId::new([2u8; 32]);

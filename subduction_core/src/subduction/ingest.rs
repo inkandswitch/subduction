@@ -11,13 +11,8 @@
 
 use future_form::FutureForm;
 use sedimentree_core::{
-    blob::Blob,
-    crypto::digest::Digest,
-    depth::DepthMetric,
-    fragment::Fragment,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
-    sedimentree::Sedimentree,
+    blob::Blob, crypto::digest::Digest, depth::DepthMetric, fragment::Fragment, id::SedimentreeId,
+    loose_commit::LooseCommit, sedimentree::Sedimentree,
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 

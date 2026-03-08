@@ -7,8 +7,7 @@
 //! Tests run for both `Sendable` and `Local` future kinds to ensure
 //! behavior is consistent across native and Wasm-like environments.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use core::time::Duration;
 use future_form::{Local, Sendable};

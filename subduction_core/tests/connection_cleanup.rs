@@ -1,17 +1,12 @@
 //! Tests for connection cleanup on send failure.
 
-use std::collections::BTreeSet;
-use std::sync::Arc;
+use std::{collections::BTreeSet, sync::Arc};
 
 use async_lock::Mutex;
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob,
-    collections::Map,
-    commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
-    id::SedimentreeId,
-    loose_commit::LooseCommit,
+    blob::Blob, collections::Map, commit::CountLeadingZeroBytes, crypto::digest::Digest,
+    id::SedimentreeId, loose_commit::LooseCommit,
 };
 use subduction_core::{
     connection::{

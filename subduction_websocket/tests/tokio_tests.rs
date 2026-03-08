@@ -3,13 +3,15 @@
 use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{
-    blob::Blob,
-    commit::CountLeadingZeroBytes,
-    crypto::digest::Digest,
-    id::SedimentreeId,
+    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
     loose_commit::LooseCommit,
 };
-use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, sync::OnceLock, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 use subduction_core::{
     connection::{
         Connection, Reconnect, handshake::Audience, message::Message, nonce_cache::NonceCache,

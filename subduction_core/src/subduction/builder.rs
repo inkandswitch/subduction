@@ -67,10 +67,7 @@ use sedimentree_core::{
 
 use crate::{
     connection::{
-        Connection,
-        authenticated::Authenticated,
-        manager::Spawn,
-        nonce_cache::NonceCache,
+        Connection, authenticated::Authenticated, manager::Spawn, nonce_cache::NonceCache,
     },
     handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
@@ -128,9 +125,7 @@ pub struct SubductionBuilder<
 /// Using a wrapper struct avoids placing the const generic `N` on
 /// fields that don't otherwise need it.
 #[derive(Debug)]
-struct SedimentreesOption<const N: usize>(
-    Option<Arc<ShardedMap<SedimentreeId, Sedimentree, N>>>,
-);
+struct SedimentreesOption<const N: usize>(Option<Arc<ShardedMap<SedimentreeId, Sedimentree, N>>>);
 
 impl<const N: usize> Default for SedimentreesOption<N> {
     fn default() -> Self {
@@ -166,17 +161,11 @@ impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, CountLeadingZeroByte
     }
 }
 
-impl<const N: usize> Default
-    for SubductionBuilder<Unset, Unset, Unset, CountLeadingZeroBytes, N>
-{
+impl<const N: usize> Default for SubductionBuilder<Unset, Unset, Unset, CountLeadingZeroBytes, N> {
     fn default() -> Self {
         Self::new()
     }
 }
-
-// -----------------------------------------------------------------------
-// Required field setters (type-state transitions)
-// -----------------------------------------------------------------------
 
 impl<Sp, Sto, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, M, N> {
     /// Set the signer for peer identity and handshake authentication.
@@ -239,19 +228,12 @@ impl<Sig, Sp, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, M, N> {
     }
 }
 
-// -----------------------------------------------------------------------
-// Optional field setters (available in any state)
-// -----------------------------------------------------------------------
-
 impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
     /// Set the discovery ID for discovery-mode connections.
     ///
     /// Defaults to `None` (peer-to-peer mode only).
     #[must_use]
-    pub fn discovery_id(
-        mut self,
-        id: super::super::connection::handshake::DiscoveryId,
-    ) -> Self {
+    pub fn discovery_id(mut self, id: super::super::connection::handshake::DiscoveryId) -> Self {
         self.discovery_id = Some(id);
         self
     }
@@ -360,8 +342,7 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         SyncHandler<F, S, C, P, M, N>: Handler<F, C>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message:
             From<super::super::connection::message::Message>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
-            Into<ListenError<F, S, C>>,
+        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self
             .sedimentrees
@@ -372,8 +353,9 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
-        let pending_blob_requests =
-            Arc::new(Mutex::new(PendingBlobRequests::new(self.max_pending_blob_requests)));
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
+            self.max_pending_blob_requests,
+        )));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
         let handler = Arc::new(SyncHandler::new(
@@ -450,8 +432,9 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
             Arc::new(Mutex::new(Map::new()));
         let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
             Arc::new(Mutex::new(Map::new()));
-        let pending_blob_requests =
-            Arc::new(Mutex::new(PendingBlobRequests::new(self.max_pending_blob_requests)));
+        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(
+            self.max_pending_blob_requests,
+        )));
         let nonce_cache = self.nonce_cache.unwrap_or_default();
 
         Subduction::new(
