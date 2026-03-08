@@ -20,7 +20,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
@@ -98,6 +98,7 @@ type ServerHandler = Arc<
     >,
 >;
 
+#[allow(clippy::type_complexity)]
 fn setup_client_subduction(
     signer: MemorySigner,
 ) -> (
@@ -121,6 +122,7 @@ fn setup_client_subduction(
         .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
 }
 
+#[allow(clippy::type_complexity)]
 fn setup_server_subduction(
     signer: MemorySigner,
 ) -> (

@@ -9,7 +9,7 @@ in {
   options.services.subduction = {
     package = lib.mkOption {
       type = lib.types.package;
-      default = self.packages.${pkgs.system}.subduction_cli;
+      default = self.packages.${pkgs.stdenv.hostPlatform.system}.subduction_cli;
       defaultText = lib.literalExpression "pkgs.subduction_cli";
       description = "The Subduction CLI package to use.";
     };

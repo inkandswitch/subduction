@@ -34,7 +34,7 @@ use subduction_core::{
     connection::test_utils::TokioSpawn,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;

@@ -27,7 +27,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 
 use sedimentree_core::{

@@ -19,7 +19,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
@@ -62,6 +62,7 @@ type TestHandler = Arc<
     >,
 >;
 
+#[allow(clippy::type_complexity)]
 fn setup_client_subduction(
     signer: MemorySigner,
 ) -> (

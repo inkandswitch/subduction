@@ -7,7 +7,7 @@ use subduction_core::{
     connection::test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::SubductionBuilder,
+    subduction::builder::SubductionBuilder,
 };
 
 #[test]

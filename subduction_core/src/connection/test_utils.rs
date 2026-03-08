@@ -20,7 +20,7 @@ use crate::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 
 /// A minimal mock connection for testing.

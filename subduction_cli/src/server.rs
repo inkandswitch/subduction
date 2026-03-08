@@ -17,7 +17,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};

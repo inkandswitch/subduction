@@ -70,12 +70,12 @@
 //! [`remove_sedimentree`]: Subduction::remove_sedimentree
 
 pub mod builder;
-pub use builder::SubductionBuilder;
 pub mod error;
-pub(crate) mod ingest;
-pub(crate) mod peers;
 pub mod pending_blob_requests;
 pub mod request;
+
+pub(crate) mod ingest;
+pub(crate) mod peers;
 
 use crate::{
     connection::{

@@ -22,7 +22,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
-    subduction::{Subduction, SubductionBuilder, error::RegistrationError},
+    subduction::{Subduction, builder::SubductionBuilder, error::RegistrationError},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};

@@ -30,7 +30,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_iroh::connection::IrohConnection;

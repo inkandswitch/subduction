@@ -67,6 +67,7 @@ use super::Handler;
 ///
 /// [`Subduction::new`]: crate::subduction::Subduction::new
 /// [`Subduction::hydrate`]: crate::subduction::Subduction::hydrate
+#[allow(clippy::type_complexity)]
 pub struct SyncHandler<
     F: FutureForm,
     S: Storage<F>,
@@ -134,7 +135,8 @@ impl<
     /// to `Subduction` and vice versa.
     ///
     /// [`Subduction::new`]: crate::subduction::Subduction::new
-    pub fn new(
+    #[allow(clippy::type_complexity)]
+    pub const fn new(
         sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
         connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
         subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,

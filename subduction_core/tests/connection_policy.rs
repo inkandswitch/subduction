@@ -14,7 +14,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::memory::MemoryStorage,
-    subduction::SubductionBuilder,
+    subduction::builder::SubductionBuilder,
 };
 use testresult::TestResult;
 

@@ -28,7 +28,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use subduction_core::subduction::SubductionBuilder;
+//! use subduction_core::subduction::builder::SubductionBuilder;
 //!
 //! let (subduction, handler, listener, manager) = SubductionBuilder::new()
 //!     .signer(signer)
@@ -233,7 +233,10 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
     ///
     /// Defaults to `None` (peer-to-peer mode only).
     #[must_use]
-    pub fn discovery_id(mut self, id: super::super::connection::handshake::DiscoveryId) -> Self {
+    pub const fn discovery_id(
+        mut self,
+        id: super::super::connection::handshake::DiscoveryId,
+    ) -> Self {
         self.discovery_id = Some(id);
         self
     }
@@ -270,7 +273,7 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
     ///
     /// Defaults to [`DEFAULT_MAX_PENDING_BLOB_REQUESTS`] (10,000).
     #[must_use]
-    pub fn max_pending_blob_requests(mut self, max: usize) -> Self {
+    pub const fn max_pending_blob_requests(mut self, max: usize) -> Self {
         self.max_pending_blob_requests = max;
         self
     }

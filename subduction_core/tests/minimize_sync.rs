@@ -21,7 +21,7 @@ use subduction_core::{
     connection::test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, SubductionBuilder},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use testresult::TestResult;
 
