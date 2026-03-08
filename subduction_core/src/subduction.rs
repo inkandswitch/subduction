@@ -1232,6 +1232,9 @@ impl<
 
     /// Handle receiving a batch sync response from a peer.
     ///
+    /// Ingests all commits and fragments from the diff, then re-minimizes
+    /// the in-memory sedimentree to maintain the minimal covering invariant.
+    ///
     /// # Errors
     ///
     /// * [`IoError`] if a storage or network error occurs while inserting commits or fragments.
@@ -1241,7 +1244,9 @@ impl<
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<F, S, C>> {
-        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await
+        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
+        self.minimize_tree(id).await;
+        Ok(())
     }
 
     /// Find blobs from connected peers for a specific sedimentree.

@@ -61,12 +61,12 @@ use super::Handler;
 ///
 /// # Construction
 ///
-/// Built internally by [`Subduction::new`] / [`Subduction::hydrate`]
-/// with clones of the shared `Arc` state. Not intended to be
-/// constructed directly by users.
+/// Built automatically by [`SubductionBuilder::build`], or manually
+/// via [`SyncHandler::new`] for custom setups. Holds `Arc` clones of
+/// the shared state that [`Subduction`] also references.
 ///
-/// [`Subduction::new`]: crate::subduction::Subduction::new
-/// [`Subduction::hydrate`]: crate::subduction::Subduction::hydrate
+/// [`SubductionBuilder::build`]: crate::subduction::builder::SubductionBuilder::build
+/// [`Subduction`]: crate::subduction::Subduction
 #[allow(clippy::type_complexity)]
 pub struct SyncHandler<
     F: FutureForm,
@@ -625,7 +625,9 @@ impl<
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<F, S, C>> {
-        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await
+        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
+        self.minimize_tree(id).await;
+        Ok(())
     }
 
     async fn recv_blob_request(
