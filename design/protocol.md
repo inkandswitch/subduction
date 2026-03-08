@@ -307,6 +307,8 @@ Sync messages use a framing envelope:
 
 Unlike signed payloads, sync messages are not signed — they're authenticated by the connection layer (handshake establishes peer identity).
 
+Sync messages are dispatched via the [`Handler`](./handler.md) trait. The `Subduction` listen loop decodes each message and calls `handler.handle(conn, msg)`. The default `SyncHandler` processes all standard variants; custom handlers can replace or compose with it.
+
 ## Message Size Limits
 
 WebSocket transport enforces a **5 MB maximum message size**. Messages exceeding this limit are rejected at the transport layer before deserialization.

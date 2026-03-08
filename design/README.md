@@ -7,6 +7,7 @@ This directory contains protocol design documents for Subduction.
 | Document                          | Purpose                                      |
 |-----------------------------------|----------------------------------------------|
 | [`assumptions`](./assumptions.md) | Protocol assumptions and invariants          |
+| [`handler`](./handler.md)         | Handler trait, SyncHandler, and builder      |
 | [`handshake`](./handshake.md)     | Mutual authentication via Ed25519 signatures |
 | [`protocol`](./protocol.md)       | Binary format, serialization, cryptographic choices |
 | [`security/`](./security/)        | Threat model and security rationale          |
@@ -19,6 +20,7 @@ This directory contains protocol design documents for Subduction.
 block-beta
     columns 1
     Application
+    Handler["Handler<br/>(SyncHandler · Custom · Composed)"]
     Sync["Sync<br/>(Batch + Incremental)"]
     Connection["Connection<br/>(Handshake + Policy)"]
     Transport["Transport<br/>(WebSocket · HTTP Long-Poll · Iroh/QUIC)"]
