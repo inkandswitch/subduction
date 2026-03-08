@@ -167,7 +167,7 @@ impl WasmWebSocket {
         Self {
             peer_id,
             timeout_ms,
-            request_id_counter: Arc::new(AtomicU64::new(0)),
+            request_id_counter: Arc::new(AtomicU64::new(rand::random())),
             socket: ws,
             pending,
             inbound_reader,
