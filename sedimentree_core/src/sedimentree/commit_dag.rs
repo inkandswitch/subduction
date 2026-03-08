@@ -13,7 +13,7 @@ use crate::{
     collections::{Map, Set},
     crypto::digest::Digest,
     depth::{DepthMetric, MAX_STRATA_DEPTH},
-    fragment::{Fragment, checkpoint::Checkpoint},
+    fragment::Fragment,
     loose_commit::LooseCommit,
 };
 
@@ -348,84 +348,6 @@ impl CommitDag {
                 None
             }
         })
-    }
-
-    /// All the commit hashes in this dag plus the stratum in the order in which they should
-    /// be bundled into strata
-    pub(crate) fn canonical_sequence<M: DepthMetric>(
-        &self,
-        fragments: &[&Fragment],
-        hash_metric: &M,
-    ) -> Vec<Digest<LooseCommit>> {
-        // Pre-index: map boundary commits → fragments (deepest first)
-        let mut fragments_by_boundary: Map<Digest<LooseCommit>, Vec<&&Fragment>> = Map::new();
-        for fragment in fragments {
-            for end in fragment.boundary() {
-                fragments_by_boundary
-                    .entry(*end)
-                    .or_default()
-                    .push(fragment);
-            }
-        }
-
-        // Pre-index: reverse map for checkpoint resolution
-        let checkpoint_to_digest: Map<Checkpoint, Digest<LooseCommit>> = self
-            .nodes
-            .iter()
-            .map(|node| (Checkpoint::new(node.hash), node.hash))
-            .collect();
-
-        // Find the tips: heads of the commit DAG + fragment boundary commits
-        // not contained in the commit DAG
-        let mut boundary = Vec::new();
-        for fragment in fragments {
-            for end in fragment.boundary() {
-                if !self.contains_commit(end) {
-                    boundary.push(*end);
-                }
-            }
-        }
-        let mut heads = self.heads().chain(boundary).collect::<Vec<_>>();
-        heads.sort();
-
-        // Collect all commits via DFS from each head. When we reach a commit
-        // that's in a fragment, resolve its checkpoints via the reverse map.
-        let mut result = Vec::new();
-        let mut visited = Set::new();
-
-        for head in heads {
-            let mut stack = vec![head];
-            while let Some(commit) = stack.pop() {
-                if visited.contains(&commit) {
-                    continue;
-                }
-                visited.insert(commit);
-                result.push(commit);
-
-                if let Some(idx) = self.node_map.get(&commit) {
-                    let mut parents = self
-                        .parents(*idx)
-                        .map(|i| {
-                            #[allow(clippy::expect_used)]
-                            self.nodes.get(i.0).expect("node is not in self.nodes").hash
-                        })
-                        .collect::<Vec<_>>();
-                    parents.sort();
-                    stack.extend(parents);
-                } else if let Some(supporting) = fragments_by_boundary.get(&commit)
-                    && let Some(fragment) = supporting.iter().max_by_key(|s| s.depth(hash_metric))
-                {
-                    for checkpoint in fragment.checkpoints() {
-                        if let Some(full_digest) = checkpoint_to_digest.get(checkpoint) {
-                            stack.push(*full_digest);
-                        }
-                    }
-                    stack.push(fragment.head());
-                }
-            }
-        }
-
-        result
     }
 
     #[cfg(test)]

@@ -16,13 +16,10 @@ use crate::{
         error::{Bijou64Error, BufferTooShort, DecodeError, ReadingType},
         schema::{self, Schema},
     },
-    crypto::{
-        digest::Digest,
-        fingerprint::{Fingerprint, FingerprintSeed},
-    },
+    crypto::digest::Digest,
     depth::{Depth, DepthMetric},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::LooseCommit,
 };
 
 /// A portion of a Sedimentree that includes a set of checkpoints.
@@ -285,66 +282,6 @@ impl FragmentSummary {
     #[must_use]
     pub fn depth<M: DepthMetric>(&self, hash_metric: &M) -> Depth {
         hash_metric.to_depth(self.head)
-    }
-}
-
-/// The barest information needed to identify a fragment.
-#[derive(Debug, Clone)]
-pub struct FragmentSpec {
-    id: SedimentreeId,
-    head: Digest<LooseCommit>,
-    seed: FingerprintSeed,
-    checkpoints: BTreeSet<Fingerprint<CommitId>>,
-    boundary: BTreeSet<Digest<LooseCommit>>,
-}
-
-impl FragmentSpec {
-    /// Constructor for a [`FragmentSpec`].
-    #[must_use]
-    pub const fn new(
-        id: SedimentreeId,
-        head: Digest<LooseCommit>,
-        seed: FingerprintSeed,
-        checkpoints: BTreeSet<Fingerprint<CommitId>>,
-        boundary: BTreeSet<Digest<LooseCommit>>,
-    ) -> Self {
-        Self {
-            id,
-            head,
-            seed,
-            checkpoints,
-            boundary,
-        }
-    }
-
-    /// The sedimentree ID.
-    #[must_use]
-    pub const fn id(&self) -> SedimentreeId {
-        self.id
-    }
-
-    /// The head of the fragment.
-    #[must_use]
-    pub const fn head(&self) -> Digest<LooseCommit> {
-        self.head
-    }
-
-    /// The (possibly ragged) end(s) of the fragment.
-    #[must_use]
-    pub const fn boundary(&self) -> &BTreeSet<Digest<LooseCommit>> {
-        &self.boundary
-    }
-
-    /// The fingerprint seed used for checkpoint fingerprints.
-    #[must_use]
-    pub const fn seed(&self) -> &FingerprintSeed {
-        &self.seed
-    }
-
-    /// The inner checkpoint fingerprints of the fragment.
-    #[must_use]
-    pub const fn checkpoints(&self) -> &BTreeSet<Fingerprint<CommitId>> {
-        &self.checkpoints
     }
 }
 
