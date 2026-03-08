@@ -28,11 +28,15 @@ use subduction_core::{
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -94,16 +98,39 @@ impl TestServer {
         let discovery_id = Some(DiscoveryId::new(SERVICE_NAME.as_bytes()));
         let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
+        let sedimentrees = Arc::new(ShardedMap::new());
+        let connections = Arc::new(async_lock::Mutex::new(
+            sedimentree_core::collections::Map::new(),
+        ));
+        let subscriptions = Arc::new(async_lock::Mutex::new(
+            sedimentree_core::collections::Map::new(),
+        ));
+        let storage = StoragePowerbox::new(MemoryStorage::default(), Arc::new(OpenPolicy));
+        let pending = Arc::new(async_lock::Mutex::new(PendingBlobRequests::new(
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        )));
+
+        let handler = Arc::new(SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            storage.clone(),
+            pending.clone(),
+            CountLeadingZeroBytes,
+        ));
+
         let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
+            handler,
             discovery_id,
             sig.clone(),
-            MemoryStorage::default(),
-            OpenPolicy,
+            sedimentrees,
+            connections,
+            subscriptions,
+            storage,
+            pending,
             NonceCache::default(),
             CountLeadingZeroBytes,
-            ShardedMap::new(),
             TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
         tokio::spawn(listener_fut);
@@ -227,16 +254,39 @@ async fn serve_http_connection(
 async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     let client_signer = signer(seed);
 
+    let sedimentrees = Arc::new(ShardedMap::new());
+    let connections = Arc::new(async_lock::Mutex::new(
+        sedimentree_core::collections::Map::new(),
+    ));
+    let subscriptions = Arc::new(async_lock::Mutex::new(
+        sedimentree_core::collections::Map::new(),
+    ));
+    let storage = StoragePowerbox::new(MemoryStorage::default(), Arc::new(OpenPolicy));
+    let pending = Arc::new(async_lock::Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     let (client, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
+        handler,
         None,
         client_signer.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
+        sedimentrees,
+        connections,
+        subscriptions,
+        storage,
+        pending,
         NonceCache::default(),
         CountLeadingZeroBytes,
-        ShardedMap::new(),
         TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(listener_fut);
@@ -306,16 +356,39 @@ async fn connected_client_known_peer(
 ) -> TestSubduction {
     let client_signer = signer(seed);
 
+    let sedimentrees = Arc::new(ShardedMap::new());
+    let connections = Arc::new(async_lock::Mutex::new(
+        sedimentree_core::collections::Map::new(),
+    ));
+    let subscriptions = Arc::new(async_lock::Mutex::new(
+        sedimentree_core::collections::Map::new(),
+    ));
+    let storage = StoragePowerbox::new(MemoryStorage::default(), Arc::new(OpenPolicy));
+    let pending = Arc::new(async_lock::Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     let (client, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
+        handler,
         None,
         client_signer.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
+        sedimentrees,
+        connections,
+        subscriptions,
+        storage,
+        pending,
         NonceCache::default(),
         CountLeadingZeroBytes,
-        ShardedMap::new(),
         TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(listener_fut);

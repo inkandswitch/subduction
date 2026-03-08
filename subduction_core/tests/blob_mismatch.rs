@@ -5,11 +5,16 @@
 //! referencing non-existent blobs.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use async_lock::Mutex;
+use core::future::Future;
 use core::time::Duration;
+use futures::future::Aborted;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
+    collections::Map,
     commit::CountLeadingZeroBytes,
     crypto::digest::Digest,
     fragment::Fragment,
@@ -22,11 +27,15 @@ use subduction_core::{
         nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
 };
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;
@@ -88,21 +97,57 @@ async fn make_mismatched_fragment(id: &SedimentreeId) -> (Signed<Fragment>, Blob
     (verified.into_signed(), actual_blob)
 }
 
+#[allow(clippy::type_complexity)]
+fn make_subduction() -> (
+    Arc<
+        Subduction<
+            'static,
+            Sendable,
+            MemoryStorage,
+            ChannelMockConnection,
+            OpenPolicy,
+            subduction_crypto::signer::memory::MemorySigner,
+            CountLeadingZeroBytes,
+        >,
+    >,
+    impl Future<Output = Result<(), Aborted>>,
+    impl Future<Output = Result<(), Aborted>>,
+) {
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
+    Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+        handler,
+        None,
+        test_signer(),
+        sedimentrees,
+        connections,
+        subscriptions,
+        storage,
+        pending,
+        NonceCache::default(),
+        CountLeadingZeroBytes,
+        TokioSpawn,
+    )
+}
+
 #[tokio::test]
 async fn recv_commit_rejects_mismatched_blob() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -148,19 +193,7 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
 
 #[tokio::test]
 async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -199,19 +232,7 @@ async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
 
 #[tokio::test]
 async fn recv_commit_accepts_valid_blob() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -258,19 +279,7 @@ async fn recv_commit_accepts_valid_blob() -> TestResult {
 
 #[tokio::test]
 async fn recv_fragment_accepts_valid_blob() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
@@ -309,19 +318,7 @@ async fn recv_fragment_accepts_valid_blob() -> TestResult {
 
 #[tokio::test]
 async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

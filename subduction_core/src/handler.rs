@@ -32,11 +32,11 @@
 //!     type Message = Message;
 //!     type HandlerError = MyError;
 //!
-//!     fn handle(
-//!         &self,
-//!         conn: &Authenticated<C, K>,
+//!     fn handle<'a>(
+//!         &'a self,
+//!         conn: &'a Authenticated<C, K>,
 //!         message: Message,
-//!     ) -> K::Future<'_, Result<(), MyError>> {
+//!     ) -> K::Future<'a, Result<(), MyError>> {
 //!         K::from_future(async move {
 //!             // process message ...
 //!             Ok(())
@@ -49,6 +49,8 @@
 //! [`Subduction`]: crate::subduction::Subduction
 //! [`Decode`]: sedimentree_core::codec::decode::Decode
 //! [`Connection::send`]: crate::connection::Connection::send
+
+pub mod sync;
 
 use future_form::FutureForm;
 use sedimentree_core::codec::decode::Decode;
@@ -88,9 +90,11 @@ pub trait Handler<K: FutureForm, C: Connection<K>> {
     /// The `conn` parameter is the authenticated connection the message
     /// arrived on. The handler may use it to send responses, but should
     /// not call `recv()` — the listen loop owns the receive side.
-    fn handle(
-        &self,
-        conn: &Authenticated<C, K>,
+    ///
+    /// The returned future borrows both `self` and `conn` for lifetime `'a`.
+    fn handle<'a>(
+        &'a self,
+        conn: &'a Authenticated<C, K>,
         message: Self::Message,
-    ) -> K::Future<'_, Result<(), Self::HandlerError>>;
+    ) -> K::Future<'a, Result<(), Self::HandlerError>>;
 }

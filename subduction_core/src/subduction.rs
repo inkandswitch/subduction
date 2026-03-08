@@ -82,12 +82,13 @@ use crate::{
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
-            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, Message, RemoveSubscriptions,
-            RequestId, RequestedData, SyncDiff, SyncResult,
+            BatchSyncRequest, BatchSyncResponse, DataRequestRejected, Message,
+            RequestedData, SyncDiff, SyncResult,
         },
         nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
     },
+    handler::Handler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -104,7 +105,7 @@ use core::{
     time::Duration,
 };
 use error::{
-    AttachError, BlobRequestErr, HydrationError, IoError, ListenError, RegistrationError,
+    AttachError, IoError, ListenError, RegistrationError,
     SendRequestedDataError, Unauthorized, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
@@ -118,7 +119,7 @@ use request::FragmentRequested;
 use sedimentree_core::{
     blob::{Blob, verified::VerifiedBlobMeta},
     collections::{
-        Entry, Map, Set,
+        Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     commit::CountLeadingZeroBytes,
@@ -197,29 +198,72 @@ impl<
     const N: usize,
 > Subduction<'a, F, S, C, P, Sig, M, N>
 {
-    /// Initialize a new `Subduction` with the given storage backend, policy, signer, depth metric, sharded `Sedimentree` map, and spawner.
+    /// Initialize a new `Subduction` instance.
     ///
-    /// The spawner is used to spawn individual connection handler tasks.
+    /// The caller constructs all shared state (`sedimentrees`, `connections`,
+    /// `subscriptions`, `storage`, `pending_blob_requests`) and the `handler`
+    /// externally, then passes them in. This lets the handler hold its own
+    /// `Arc` clones of whatever shared state it needs.
     ///
-    /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
-    /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
-    /// or provide secure random keys to [`ShardedMap::with_key`].
+    /// For the standard sync protocol, pass a [`SyncHandler`] constructed
+    /// from the same `Arc`s.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let sedimentrees = Arc::new(ShardedMap::new());
+    /// let connections = Arc::new(Mutex::new(Map::new()));
+    /// let subscriptions = Arc::new(Mutex::new(Map::new()));
+    /// let storage = StoragePowerbox::new(storage, Arc::new(policy));
+    /// let pending = Arc::new(Mutex::new(PendingBlobRequests::new(1024)));
+    ///
+    /// let handler = Arc::new(SyncHandler::new(
+    ///     sedimentrees.clone(),
+    ///     connections.clone(),
+    ///     subscriptions.clone(),
+    ///     storage.clone(),
+    ///     pending.clone(),
+    ///     depth_metric.clone(),
+    /// ));
+    ///
+    /// let (sd, listener, manager) = Subduction::new(
+    ///     handler,
+    ///     discovery_id,
+    ///     signer,
+    ///     sedimentrees,
+    ///     connections,
+    ///     subscriptions,
+    ///     storage,
+    ///     pending,
+    ///     nonce_cache,
+    ///     depth_metric,
+    ///     spawner,
+    /// );
+    /// ```
     #[allow(clippy::type_complexity, clippy::too_many_arguments)]
-    pub fn new<Sp: Spawn<F> + Send + Sync + 'static>(
+    pub fn new<H, Sp: Spawn<F> + Send + Sync + 'static>(
+        handler: Arc<H>,
         discovery_id: Option<DiscoveryId>,
         signer: Sig,
-        storage: S,
-        policy: P,
+        sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
+        connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+        subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
+        storage: StoragePowerbox<S, P>,
+        pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
         nonce_cache: NonceCache,
         depth_metric: M,
-        sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
         spawner: Sp,
-        max_pending_blob_requests: usize,
     ) -> (
         Arc<Self>,
         ListenerFuture<'a, F, S, C, P, Sig, M, N>,
         crate::connection::manager::ManagerFuture<F>,
-    ) {
+    )
+    where
+        H: Handler<F, C>,
+        H::Message: From<Message>,
+        H::HandlerError: Into<ListenError<F, S, C>>,
+        F: StartListener<'a, S, C, P, Sig, M, H, N>,
+    {
         tracing::info!("initializing Subduction instance");
 
         let (manager_sender, manager_receiver) = bounded(256);
@@ -239,16 +283,14 @@ impl<
             discovery_id,
             signer,
             depth_metric,
-            sedimentrees: Arc::new(sedimentrees),
-            connections: Arc::new(Mutex::new(Map::new())),
-            subscriptions: Arc::new(Mutex::new(Map::new())),
-            storage: StoragePowerbox::new(storage, Arc::new(policy)),
+            sedimentrees,
+            connections,
+            subscriptions,
+            storage,
             nonce_tracker: Arc::new(nonce_cache),
             reconnect_backoff: Arc::new(Mutex::new(Map::new())),
             outgoing_subscriptions: Arc::new(Mutex::new(Map::new())),
-            pending_blob_requests: Arc::new(Mutex::new(PendingBlobRequests::new(
-                max_pending_blob_requests,
-            ))),
+            pending_blob_requests,
             manager_channel: manager_sender,
             msg_queue: queue_receiver,
             connection_closed: closed_receiver,
@@ -262,88 +304,9 @@ impl<
 
         (
             sd.clone(),
-            ListenerFuture::new(F::start_listener(sd, abort_listener_reg)),
+            ListenerFuture::new(F::start_listener(sd, handler, abort_listener_reg)),
             crate::connection::manager::ManagerFuture::new(abortable_manager),
         )
-    }
-
-    /// Hydrate a `Subduction` instance from existing sedimentrees in external storage.
-    ///
-    /// The caller is responsible for providing a [`ShardedMap`] with appropriate keys.
-    /// For `DoS` resistance, use randomly generated keys via [`ShardedMap::new`] (requires `getrandom` feature)
-    /// or provide secure random keys to [`ShardedMap::with_key`].
-    ///
-    /// # Errors
-    ///
-    /// * Returns [`HydrationError`] if loading from storage fails.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn hydrate<Sp: Spawn<F> + Send + Sync + 'static>(
-        discovery_id: Option<DiscoveryId>,
-        signer: Sig,
-        storage: S,
-        policy: P,
-        nonce_cache: NonceCache,
-        depth_metric: M,
-        sedimentrees: ShardedMap<SedimentreeId, Sedimentree, N>,
-        spawner: Sp,
-        max_pending_blob_requests: usize,
-    ) -> Result<
-        (
-            Arc<Self>,
-            ListenerFuture<'a, F, S, C, P, Sig, M, N>,
-            crate::connection::manager::ManagerFuture<F>,
-        ),
-        HydrationError<F, S>,
-    > {
-        let ids = storage
-            .load_all_sedimentree_ids()
-            .await
-            .map_err(HydrationError::LoadAllIdsError)?;
-        let (subduction, fut_listener, manager_fut) = Self::new(
-            discovery_id,
-            signer,
-            storage,
-            policy,
-            nonce_cache,
-            depth_metric,
-            sedimentrees,
-            spawner,
-            max_pending_blob_requests,
-        );
-        for id in ids {
-            let signed_loose_commits = subduction
-                .storage
-                .hydration_access()
-                .load_loose_commits::<F>(id)
-                .await
-                .map_err(HydrationError::LoadLooseCommitsError)?;
-            let signed_fragments = subduction
-                .storage
-                .hydration_access()
-                .load_fragments::<F>(id)
-                .await
-                .map_err(HydrationError::LoadFragmentsError)?;
-
-            // Extract payloads from trusted storage (already verified before storage)
-            let loose_commits: Vec<_> = signed_loose_commits
-                .into_iter()
-                .map(|verified| verified.payload().clone())
-                .collect();
-            let fragments: Vec<_> = signed_fragments
-                .into_iter()
-                .map(|verified| verified.payload().clone())
-                .collect();
-
-            let sedimentree = Sedimentree::new(fragments, loose_commits);
-
-            subduction
-                .sedimentrees
-                .with_entry_or_default(id, |tree| tree.merge(sedimentree))
-                .await;
-
-            subduction.minimize_tree(id).await;
-        }
-        Ok((subduction, fut_listener, manager_fut))
     }
 
     /// Get the configured discovery ID for this instance.
@@ -493,21 +456,29 @@ impl<
             .insert(sedimentree_id);
     }
 
-    /// Listen for incoming messages from all connections and handle them appropriately.
+    /// Listen for incoming messages and dispatch them through the given handler.
     ///
     /// This method runs indefinitely, processing messages as they arrive.
     /// If no peers are connected, it will wait until a peer connects.
-    ///
-    /// Listen for incoming messages with concurrent dispatch.
     ///
     /// Dispatches messages concurrently using [`FuturesUnordered`], which
     /// significantly improves throughput when handling many independent
     /// requests (e.g., batch sync requests for different sedimentrees).
     ///
+    /// The `handler` receives each decoded message and decides what to do
+    /// with it. For the standard sync protocol, pass a [`SyncHandler`].
+    ///
     /// # Errors
     ///
-    /// * Returns `ListenError` if a storage or network error occurs.
-    pub async fn listen(self: Arc<Self>) -> Result<(), ListenError<F, S, C>> {
+    /// * Returns `ListenError` if a handler error signals a broken connection.
+    pub async fn listen<H: Handler<F, C>>(
+        self: Arc<Self>,
+        handler: Arc<H>,
+    ) -> Result<(), ListenError<F, S, C>>
+    where
+        H::Message: From<Message>,
+        H::HandlerError: Into<ListenError<F, S, C>>,
+    {
         tracing::info!("starting Subduction listener with concurrent dispatch");
 
         let mut in_flight: FuturesUnordered<_> = FuturesUnordered::new();
@@ -517,7 +488,7 @@ impl<
                 // First priority: handle completed dispatch tasks
                 result = in_flight.select_next_some() => {
                     #[allow(clippy::type_complexity)]
-                    let (conn, dispatch_result): (Authenticated<C, F>, Result<(), ListenError<F, S, C>>) = result;
+                    let (conn, dispatch_result): (Authenticated<C, F>, Result<(), H::HandlerError>) = result;
                     if let Err(e) = dispatch_result {
                         tracing::error!(
                             peer = %conn.peer_id(),
@@ -538,12 +509,12 @@ impl<
                             msg
                         );
 
-                        // Spawn dispatch as concurrent task
-                        let this = self.clone();
+                        // Dispatch via handler
+                        let h = handler.clone();
                         let conn_clone = conn.clone();
 
                         in_flight.push(async move {
-                            let result = this.dispatch(&conn_clone, msg).await;
+                            let result = h.handle(&conn_clone, msg.into()).await;
                             (conn_clone, result)
                         });
                     } else {
@@ -572,121 +543,6 @@ impl<
                 }
             }
         }
-        Ok(())
-    }
-
-    #[allow(clippy::too_many_lines)]
-    async fn dispatch(
-        &self,
-        conn: &Authenticated<C, F>,
-        message: Message,
-    ) -> Result<(), ListenError<F, S, C>> {
-        let from = conn.peer_id();
-        tracing::info!(
-            from = %from,
-            message_type = message.variant_name(),
-            sedimentree_id = ?message.sedimentree_id(),
-            request_id = ?message.request_id(),
-            "dispatch"
-        );
-
-        #[cfg(feature = "metrics")]
-        crate::metrics::message_dispatched(message.variant_name());
-
-        #[cfg(feature = "metrics")]
-        let _timer = crate::metrics::DispatchTimer::new();
-
-        match message {
-            Message::LooseCommit { id, commit, blob } => {
-                self.recv_commit(&from, id, &commit, blob).await?;
-            }
-            Message::Fragment { id, fragment, blob } => {
-                self.recv_fragment(&from, id, &fragment, blob).await?;
-            }
-            Message::BatchSyncRequest(BatchSyncRequest {
-                id,
-                fingerprint_summary,
-                req_id,
-                subscribe,
-            }) => {
-                #[cfg(feature = "metrics")]
-                crate::metrics::batch_sync_request();
-
-                // Add subscription if requested
-                if subscribe {
-                    self.add_subscription(from, id).await;
-                    tracing::debug!("added subscription for peer {from} to sedimentree {id:?}");
-                }
-
-                // With compound storage, blobs are always stored with commits/fragments,
-                // so recv_batch_sync_request will never return MissingBlobs
-                self.recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
-                    .await?;
-            }
-            Message::BatchSyncResponse(BatchSyncResponse { id, result, .. }) => {
-                #[cfg(feature = "metrics")]
-                crate::metrics::batch_sync_response();
-
-                match result {
-                    SyncResult::Ok(diff) => {
-                        self.recv_batch_sync_response(&from, id, diff).await?;
-                    }
-                    SyncResult::NotFound => {
-                        tracing::info!("peer {from} reports sedimentree {id:?} not found");
-                    }
-                    SyncResult::Unauthorized => {
-                        tracing::info!(
-                            "peer {from} reports we are unauthorized to access sedimentree {id:?}"
-                        );
-                    }
-                }
-            }
-            Message::BlobsRequest { id, digests } => {
-                match self.recv_blob_request(conn, id, &digests).await {
-                    Ok(()) => {
-                        tracing::info!("successfully handled blob request from peer {:?}", from);
-                    }
-                    Err(BlobRequestErr::IoError(e)) => Err(e)?,
-                    Err(BlobRequestErr::MissingBlobs(missing)) => {
-                        tracing::warn!(
-                            "missing blobs for request from peer {:?}: {:?}",
-                            from,
-                            missing
-                        );
-                    }
-                }
-            }
-            Message::BlobsResponse { id, blobs } => {
-                // With compound storage, blobs are stored together with commits/fragments.
-                // Standalone blob responses are no longer used for storage, but we still
-                // need to handle the message type for protocol compatibility.
-                // Clear any pending requests for these blobs.
-                let accepted_count = {
-                    let mut pending = self.pending_blob_requests.lock().await;
-                    let mut count = 0usize;
-                    for blob in &blobs {
-                        let digest = Digest::hash(blob);
-                        if pending.remove(id, digest) {
-                            count += 1;
-                        }
-                    }
-                    count
-                };
-
-                tracing::debug!(
-                    "blob response from peer {from} for {id:?}: {accepted_count}/{} blobs acknowledged (compound storage - blobs stored with commits)",
-                    blobs.len()
-                );
-            }
-            Message::RemoveSubscriptions(RemoveSubscriptions { ids }) => {
-                self.remove_subscriptions(from, &ids).await;
-                tracing::debug!("removed subscriptions for peer {from}: {ids:?}");
-            }
-            Message::DataRequestRejected(DataRequestRejected { id }) => {
-                tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
-            }
-        }
-
         Ok(())
     }
 
@@ -956,19 +812,6 @@ impl<
         });
     }
 
-    /// Remove a peer's subscriptions for specific sedimentree IDs.
-    async fn remove_subscriptions(&self, peer_id: PeerId, ids: &[SedimentreeId]) {
-        let mut subscriptions = self.subscriptions.lock().await;
-        for id in ids {
-            if let Some(peers) = subscriptions.get_mut(id) {
-                peers.remove(&peer_id);
-                if peers.is_empty() {
-                    subscriptions.remove(id);
-                }
-            }
-        }
-    }
-
     /// Add a subscription for a peer to a sedimentree.
     pub(crate) async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
         let mut subscriptions = self.subscriptions.lock().await;
@@ -1206,39 +1049,6 @@ impl<
             let updated = self.get_blobs(id).await.map_err(IoError::Storage)?;
 
             Ok(updated)
-        }
-    }
-
-    /// Handle receiving a blob request from a peer.
-    ///
-    /// # Errors
-    ///
-    /// * [`BlobRequestErr::IoError`] if a storage or network error occurs,
-    ///   or if blobs we expect to be stored are missing (possibly waiting for them from a peer).
-    pub async fn recv_blob_request(
-        &self,
-        conn: &Authenticated<C, F>,
-        id: SedimentreeId,
-        digests: &[Digest<Blob>],
-    ) -> Result<(), BlobRequestErr<F, S, C>> {
-        let mut blobs = Vec::new();
-        let mut missing = Vec::new();
-        for digest in digests {
-            if let Some(blob) = self.get_blob(id, *digest).await.map_err(IoError::Storage)? {
-                blobs.push(blob);
-            } else {
-                missing.push(*digest);
-            }
-        }
-
-        conn.send(&Message::BlobsResponse { id, blobs })
-            .await
-            .map_err(IoError::ConnSend)?;
-
-        if missing.is_empty() {
-            Ok(())
-        } else {
-            Err(BlobRequestErr::MissingBlobs(missing))
         }
     }
 
@@ -1512,350 +1322,6 @@ impl<
             }
         }
 
-        Ok(())
-    }
-
-    /****************************
-     * RECEIVE UPDATE FROM PEER *
-     ****************************/
-
-    /// Handle receiving a new commit from a peer.
-    ///
-    /// Also propagates it to all other connected peers.
-    ///
-    /// # Errors
-    ///
-    /// * [`IoError`] if a storage or network error occurs.
-    pub async fn recv_commit(
-        &self,
-        from: &PeerId,
-        id: SedimentreeId,
-        signed_commit: &Signed<LooseCommit>,
-        blob: Blob,
-    ) -> Result<bool, IoError<F, S, C>> {
-        let verified = match signed_commit.try_verify() {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    "commit signature verification failed from peer {:?}: {e}",
-                    from
-                );
-                return Ok(false);
-            }
-        };
-
-        let author = PeerId::from(verified.issuer());
-        tracing::debug!(
-            "receiving commit {:?} for sedimentree {:?} from peer {:?} (author {:?})",
-            Digest::hash(verified.payload()),
-            id,
-            from,
-            author
-        );
-
-        let putter = match self.storage.get_putter::<F>(*from, author, id).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    "policy rejected commit from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                    from,
-                    author,
-                    id
-                );
-                return Ok(false);
-            }
-        };
-
-        let signed_for_wire = verified.signed().clone();
-
-        // Verify blob matches claimed metadata
-        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
-            Ok(vm) => vm,
-            Err(e) => {
-                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
-                return Err(IoError::BlobMismatch(e));
-            }
-        };
-
-        let was_new = self
-            .insert_commit_locally(&putter, verified_meta)
-            .await
-            .map_err(IoError::Storage)?;
-
-        self.minimize_tree(id).await;
-
-        if was_new {
-            let msg = Message::LooseCommit {
-                id,
-                commit: signed_for_wire,
-                blob,
-            };
-
-            let conns = self.get_authorized_subscriber_conns(id, from).await;
-            for conn in conns {
-                let peer_id = conn.peer_id();
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::info!("peer {peer_id} disconnected: {e}");
-                    self.unregister(&conn).await;
-                }
-            }
-        }
-
-        Ok(was_new)
-    }
-
-    /// Handle receiving a new fragment from a peer.
-    ///
-    /// Also propagates it to all other connected peers.
-    ///
-    /// # Errors
-    ///
-    /// * [`IoError`] if a storage or network error occurs.
-    pub async fn recv_fragment(
-        &self,
-        from: &PeerId,
-        id: SedimentreeId,
-        signed_fragment: &Signed<Fragment>,
-        blob: Blob,
-    ) -> Result<bool, IoError<F, S, C>> {
-        // Verify the signature
-        let verified = match signed_fragment.try_verify() {
-            Ok(v) => v,
-            Err(e) => {
-                tracing::warn!(
-                    "fragment signature verification failed from peer {:?}: {e}",
-                    from
-                );
-                return Ok(false);
-            }
-        };
-
-        let author = PeerId::from(verified.issuer());
-        tracing::debug!(
-            "receiving fragment {:?} for sedimentree {:?} from peer {:?} (author {:?})",
-            verified.payload().digest(),
-            id,
-            from,
-            author
-        );
-
-        // Authorize using verified author, not sender
-        let putter = match self.storage.get_putter::<F>(*from, author, id).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    "policy rejected fragment from peer {:?} (author {:?}) for sedimentree {:?}: {e}",
-                    from,
-                    author,
-                    id
-                );
-                return Ok(false);
-            }
-        };
-
-        // Clone signed for forwarding before consuming verified
-        let signed_for_wire = verified.signed().clone();
-
-        // Verify blob matches claimed metadata
-        let verified_meta = match VerifiedMeta::new(verified, blob.clone()) {
-            Ok(vm) => vm,
-            Err(e) => {
-                tracing::warn!("blob mismatch from peer {:?}: {e}", from);
-                return Err(IoError::BlobMismatch(e));
-            }
-        };
-
-        let was_new = self
-            .insert_fragment_locally(&putter, verified_meta)
-            .await
-            .map_err(IoError::Storage)?;
-
-        self.minimize_tree(id).await;
-
-        if was_new {
-            let msg = Message::Fragment {
-                id,
-                fragment: signed_for_wire,
-                blob,
-            };
-            // Forward to authorized subscribers only
-            let conns = self.get_authorized_subscriber_conns(id, from).await;
-            for conn in conns {
-                let peer_id = conn.peer_id();
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::info!("peer {peer_id} disconnected: {e}");
-                    self.unregister(&conn).await;
-                }
-            }
-        }
-
-        Ok(was_new)
-    }
-
-    /*********************
-     * BATCH SYNCHRONIZE *
-     *********************/
-
-    /// Handle receiving a batch sync request from a peer.
-    ///
-    /// # Errors
-    ///
-    /// * [`ListenError::IoError`] if a storage or network error occurs.
-    #[allow(clippy::too_many_lines)]
-    pub async fn recv_batch_sync_request(
-        &self,
-        id: SedimentreeId,
-        their_fingerprints: &FingerprintSummary,
-        req_id: RequestId,
-        conn: &Authenticated<C, F>,
-    ) -> Result<(), ListenError<F, S, C>> {
-        tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
-
-        let peer_id = conn.peer_id();
-        let fetcher = match self.storage.get_fetcher::<F>(peer_id, id).await {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::debug!(
-                    %peer_id,
-                    ?id,
-                    error = %e,
-                    "policy rejected fetch request"
-                );
-                // Send unauthorized response and return Ok - this is not a connection error
-                let msg: Message = BatchSyncResponse {
-                    id,
-                    req_id,
-                    result: SyncResult::Unauthorized,
-                }
-                .into();
-                if let Err(e) = conn.send(&msg).await {
-                    tracing::info!(
-                        "peer {} disconnected while sending unauthorized response: {e}",
-                        conn.peer_id()
-                    );
-                }
-                return Ok(());
-            }
-        };
-
-        let mut their_missing_commits = Vec::new();
-        let mut their_missing_fragments = Vec::new();
-
-        let verified_commits = fetcher
-            .load_loose_commits()
-            .await
-            .map_err(IoError::Storage)?;
-        let verified_fragments = fetcher.load_fragments().await.map_err(IoError::Storage)?;
-
-        // Build lookup maps keyed by digest
-        let commit_by_digest: Map<Digest<LooseCommit>, VerifiedMeta<LooseCommit>> =
-            verified_commits
-                .into_iter()
-                .map(|vm| (Digest::hash(vm.payload()), vm))
-                .collect();
-        let fragment_by_digest: Map<Digest<Fragment>, VerifiedMeta<Fragment>> = verified_fragments
-            .into_iter()
-            .map(|vm| (vm.payload().digest(), vm))
-            .collect();
-
-        // Compute the diff under the shard lock, then release it before blob I/O.
-        // This prevents slow blob loads from blocking all operations on
-        // other sedimentrees that share the same shard.
-        let (
-            local_commit_digests,
-            local_fragment_digests,
-            our_missing_commit_fingerprints,
-            our_missing_fragment_fingerprints,
-        ) = {
-            let mut locked = self.sedimentrees.get_shard_containing(&id).lock().await;
-
-            // If sedimentree not in memory, hydrate it from storage
-            if let Entry::Vacant(entry) = locked.entry(id) {
-                let loose_commits: Vec<_> = commit_by_digest
-                    .values()
-                    .map(|vm| vm.payload().clone())
-                    .collect();
-                let fragments: Vec<_> = fragment_by_digest
-                    .values()
-                    .map(|vm| vm.payload().clone())
-                    .collect();
-
-                if !loose_commits.is_empty() || !fragments.is_empty() {
-                    let sedimentree =
-                        Sedimentree::new(fragments, loose_commits).minimize(&self.depth_metric);
-                    entry.insert(sedimentree);
-                    tracing::debug!("hydrated sedimentree {id:?} from storage for batch sync");
-                }
-            }
-
-            let sedimentree = locked.entry(id).or_default();
-            tracing::debug!(
-                "received batch sync request for sedimentree {id:?} for req_id {req_id:?} with {} commit fps and {} fragment fps",
-                their_fingerprints.commit_fingerprints().len(),
-                their_fingerprints.fragment_fingerprints().len()
-            );
-
-            let diff = sedimentree.diff_remote_fingerprints(their_fingerprints);
-            (
-                diff.local_only_commits
-                    .iter()
-                    .map(|c| Digest::hash(*c))
-                    .collect::<Vec<_>>(),
-                diff.local_only_fragments
-                    .iter()
-                    .map(|f| f.digest())
-                    .collect::<Vec<_>>(),
-                diff.remote_only_commit_fingerprints,
-                diff.remote_only_fragment_fingerprints,
-            )
-            // NOTE: We intentionally do NOT add remote commits to the in-memory tree here.
-            // The commits_to_add are just metadata from the summary — we don't have the actual
-            // signed commits or blobs yet. We'll add them when they arrive via LooseCommit
-            // messages (in response to our "requesting" field).
-        };
-        // Shard lock released. Blob I/O below does not block other sedimentrees.
-
-        // With compound storage, blobs are always stored with their commits/fragments
-        for digest in local_commit_digests {
-            if let Some(verified) = commit_by_digest.get(&digest) {
-                their_missing_commits.push((verified.signed().clone(), verified.blob().clone()));
-            }
-        }
-
-        for digest in local_fragment_digests {
-            if let Some(verified) = fragment_by_digest.get(&digest) {
-                their_missing_fragments.push((verified.signed().clone(), verified.blob().clone()));
-            }
-        }
-
-        tracing::info!(
-            "sending batch sync response for sedimentree {id:?} on req_id {req_id:?}, with {} missing commits and {} missing fragments, requesting {} commits and {} fragments",
-            their_missing_commits.len(),
-            their_missing_fragments.len(),
-            our_missing_commit_fingerprints.len(),
-            our_missing_fragment_fingerprints.len(),
-        );
-
-        let sync_diff = SyncDiff {
-            missing_commits: their_missing_commits,
-            missing_fragments: their_missing_fragments,
-            requesting: RequestedData {
-                commit_fingerprints: our_missing_commit_fingerprints,
-                fragment_fingerprints: our_missing_fragment_fingerprints,
-            },
-        };
-
-        let msg: Message = BatchSyncResponse {
-            id,
-            req_id,
-            result: SyncResult::Ok(sync_diff),
-        }
-        .into();
-        if let Err(e) = conn.send(&msg).await {
-            tracing::info!("peer {} disconnected: {e}", conn.peer_id());
-        }
-
-        // With compound storage, blobs are always available with commits/fragments
         Ok(())
     }
 
@@ -2884,6 +2350,10 @@ impl<
 ///
 /// Similarly, the trait alias helps us avoid repeating the same complex trait bounds everywhere,
 /// and needing to update them in many places if the constraints change.
+///
+/// Note: [`StartListener`] is _not_ a supertrait here — it is only required
+/// on the constructor methods that build the listener future, keeping the
+/// handler type `H` out of the main `Subduction` struct definition.
 pub trait SubductionFutureForm<
     'a,
     S: Storage<Self>,
@@ -2892,7 +2362,7 @@ pub trait SubductionFutureForm<
     Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
->: StartListener<'a, S, C, P, Sig, M, N>
+>: FutureForm + RunManager<Authenticated<C, Self>> + Sized
 {
 }
 
@@ -2904,14 +2374,19 @@ impl<
     Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
-    U: StartListener<'a, S, C, P, Sig, M, N>,
+    U: FutureForm + RunManager<Authenticated<C, U>> + Sized,
 > SubductionFutureForm<'a, S, C, P, Sig, M, N> for U
 {
 }
 
 /// A trait for starting the listener task for Subduction.
 ///
-/// This lets us abstract over `Send` and `!Send` futures
+/// This lets us abstract over `Send` and `!Send` futures while keeping
+/// the handler type `H` available for the `#[future_form]` macro to
+/// generate correct `Send` bounds.
+///
+/// `H` is a trait-level (not method-level) generic so the macro can
+/// emit the required `H: Send + Sync` bounds for the `Sendable` impl.
 pub trait StartListener<
     'a,
     S: Storage<Self>,
@@ -2919,12 +2394,17 @@ pub trait StartListener<
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sig: Signer<Self>,
     M: DepthMetric,
+    H: Handler<Self, C>,
     const N: usize,
 >: FutureForm + RunManager<Authenticated<C, Self>> + Sized
+where
+    H::Message: From<Message>,
+    H::HandlerError: Into<ListenError<Self, S, C>>,
 {
     /// Start the listener task for Subduction.
     fn start_listener(
         subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
+        handler: Arc<H>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -2940,6 +2420,8 @@ pub trait StartListener<
         P::FetchDisallowed: Send + 'static,
         Sig: Signer<Sendable> + Send + Sync + 'a,
         M: DepthMetric + Send + Sync + 'a,
+        H: Handler<Sendable, C> + Send + Sync + 'a,
+        H::HandlerError: Into<ListenError<Sendable, S, C>> + Send + 'static,
         S::Error: Send + 'static,
         C::DisconnectionError: Send + 'static,
         C::CallError: Send + 'static,
@@ -2950,18 +2432,25 @@ pub trait StartListener<
         S: Storage<Local> + 'a,
         P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
         Sig: Signer<Local> + 'a,
-        M: DepthMetric + 'a
+        M: DepthMetric + 'a,
+        H: Handler<Local, C> + 'a,
+        H::HandlerError: Into<ListenError<Local, S, C>>
 )]
-impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C, P, Sig, M, N>
-    for K
+impl<'a, K: FutureForm, C, S, P, Sig, M, H, const N: usize>
+    StartListener<'a, S, C, P, Sig, M, H, N> for K
+where
+    H: Handler<K, C>,
+    H::Message: From<Message>,
+    H::HandlerError: Into<ListenError<K, S, C>>,
 {
     fn start_listener(
         subduction: Arc<Subduction<'a, Self, S, C, P, Sig, M, N>>,
+        handler: Arc<H>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
             K::from_future(async move {
-                if let Err(e) = subduction.listen().await {
+                if let Err(e) = subduction.listen(handler).await {
                     tracing::info!("Subduction listener disconnected: {}", e.to_string());
                 }
             }),
@@ -2977,7 +2466,7 @@ impl<'a, K: FutureForm, C, S, P, Sig, M, const N: usize> StartListener<'a, S, C,
 #[derive(Debug)]
 pub struct ListenerFuture<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -2991,7 +2480,7 @@ pub struct ListenerFuture<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3017,7 +2506,7 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3035,7 +2524,7 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3053,7 +2542,7 @@ impl<
 
 impl<
     'a,
-    F: StartListener<'a, S, C, P, Sig, M, N>,
+    F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
     C: Connection<F> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
@@ -3072,15 +2561,18 @@ mod tests {
             nonce_cache::NonceCache,
             test_utils::{FailingSendMockConnection, TestSpawn, test_signer},
         },
+        handler::sync::SyncHandler,
         policy::open::OpenPolicy,
         sharded_map::ShardedMap,
-        storage::memory::MemoryStorage,
-        subduction::pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+        subduction::pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     };
     use alloc::collections::BTreeSet;
+    use async_lock::Mutex;
     use future_form::Sendable;
     use sedimentree_core::{
         blob::{Blob, BlobMeta},
+        collections::Map,
         commit::CountLeadingZeroBytes,
         crypto::digest::Digest,
         fragment::Fragment,
@@ -3129,20 +2621,36 @@ mod tests {
 
     #[tokio::test]
     async fn test_recv_commit_unregisters_connection_on_send_failure() -> TestResult {
-        let storage = MemoryStorage::new();
-        let depth_metric = CountLeadingZeroBytes;
+        let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        )));
+
+        let handler = Arc::new(SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            storage.clone(),
+            pending.clone(),
+            CountLeadingZeroBytes,
+        ));
 
         let (subduction, _listener_fut, _actor_fut) =
             Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+                handler.clone(),
                 None,
                 test_signer(),
+                sedimentrees,
+                connections,
+                subscriptions,
                 storage,
-                OpenPolicy,
+                pending,
                 NonceCache::default(),
-                depth_metric,
-                ShardedMap::with_key(0, 0),
+                CountLeadingZeroBytes,
                 TestSpawn,
-                DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             );
 
         // Register a failing connection with a different peer ID than the sender
@@ -3156,12 +2664,15 @@ mod tests {
         let id = SedimentreeId::new([1u8; 32]);
         subduction.add_subscription(other_peer_id, id).await;
 
-        // Receive a commit from a different peer - the propagation send will fail
+        // Dispatch a commit via the handler from a different peer
         let (signed_commit, blob) = make_signed_test_commit(&id).await;
-
-        let _ = subduction
-            .recv_commit(&sender_peer_id, id, &signed_commit, blob)
-            .await;
+        let sender_conn = FailingSendMockConnection::with_peer_id(sender_peer_id).authenticated();
+        let msg = Message::LooseCommit {
+            id,
+            commit: signed_commit,
+            blob,
+        };
+        let _ = handler.handle(&sender_conn, msg).await;
 
         // Connection should be unregistered after send failure during propagation
         assert_eq!(
@@ -3175,20 +2686,36 @@ mod tests {
 
     #[tokio::test]
     async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResult {
-        let storage = MemoryStorage::new();
-        let depth_metric = CountLeadingZeroBytes;
+        let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+        let connections = Arc::new(Mutex::new(Map::new()));
+        let subscriptions = Arc::new(Mutex::new(Map::new()));
+        let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        )));
+
+        let handler = Arc::new(SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            storage.clone(),
+            pending.clone(),
+            CountLeadingZeroBytes,
+        ));
 
         let (subduction, _listener_fut, _actor_fut) =
             Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+                handler.clone(),
                 None,
                 test_signer(),
+                sedimentrees,
+                connections,
+                subscriptions,
                 storage,
-                OpenPolicy,
+                pending,
                 NonceCache::default(),
-                depth_metric,
-                ShardedMap::with_key(0, 0),
+                CountLeadingZeroBytes,
                 TestSpawn,
-                DEFAULT_MAX_PENDING_BLOB_REQUESTS,
             );
 
         // Register a failing connection with a different peer ID than the sender
@@ -3202,12 +2729,15 @@ mod tests {
         let id = SedimentreeId::new([1u8; 32]);
         subduction.add_subscription(other_peer_id, id).await;
 
-        // Receive a fragment from a different peer - the propagation send will fail
+        // Dispatch a fragment via the handler from a different peer
         let (signed_fragment, blob) = make_signed_test_fragment(&id).await;
-
-        let _ = subduction
-            .recv_fragment(&sender_peer_id, id, &signed_fragment, blob)
-            .await;
+        let sender_conn = FailingSendMockConnection::with_peer_id(sender_peer_id).authenticated();
+        let msg = Message::Fragment {
+            id,
+            fragment: signed_fragment,
+            blob,
+        };
+        let _ = handler.handle(&sender_conn, msg).await;
 
         // Connection should be unregistered after send failure during propagation
         assert_eq!(

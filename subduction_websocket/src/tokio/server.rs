@@ -13,7 +13,7 @@ use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
 use sedimentree_core::{
-    commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
+    commit::CountLeadingZeroBytes, depth::DepthMetric,
 };
 use subduction_core::{
     connection::{
@@ -21,13 +21,14 @@ use subduction_core::{
         handshake::{self, Audience, AuthenticateError, DiscoveryId},
         nonce_cache::NonceCache,
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
-    storage::traits::Storage,
+    storage::{powerbox::StoragePowerbox, traits::Storage},
     subduction::{
         Subduction, error::RegistrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
     timestamp::TimestampSeconds,
 };
@@ -269,19 +270,47 @@ where
         policy: P,
         nonce_cache: NonceCache,
         depth_metric: M,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Self, tungstenite::Error>
+    where
+        M: Clone,
+        S: core::fmt::Debug,
+        UnifiedWebSocket<O>: core::fmt::Debug,
+    {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
-        let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
+
+        let sedimentrees = Arc::new(ShardedMap::new());
+        let connections = Arc::new(async_lock::Mutex::new(
+            sedimentree_core::collections::Map::new(),
+        ));
+        let subscriptions = Arc::new(async_lock::Mutex::new(
+            sedimentree_core::collections::Map::new(),
+        ));
+        let storage = StoragePowerbox::new(storage, Arc::new(policy));
+        let pending_blob_requests = Arc::new(async_lock::Mutex::new(PendingBlobRequests::new(
+            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        )));
+
+        let handler = Arc::new(SyncHandler::new(
+            sedimentrees.clone(),
+            connections.clone(),
+            subscriptions.clone(),
+            storage.clone(),
+            pending_blob_requests.clone(),
+            depth_metric.clone(),
+        ));
+
         let (subduction, listener_fut, manager_fut) = Subduction::new(
+            handler,
             discovery_id,
             signer,
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            policy,
+            pending_blob_requests,
             nonce_cache,
             depth_metric,
-            sedimentrees,
             TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
         let server = Self::new(

@@ -28,14 +28,21 @@ use std::{
     time::Duration,
 };
 
+use async_lock::Mutex;
 use future_form::Sendable;
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::{
+    blob::Blob, collections::Map, commit::CountLeadingZeroBytes, id::SedimentreeId,
+};
 use subduction_core::{
     connection::{nonce_cache::NonceCache, test_utils::TokioSpawn},
+    handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -188,16 +195,35 @@ async fn wait_for_http(base_url: &str) {
 async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) -> TestSubduction {
     let client_signer = signer(client_seed);
 
+    let sedimentrees = Arc::new(ShardedMap::new());
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::default(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
+        handler,
         None,
         client_signer.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
+        sedimentrees,
+        connections,
+        subscriptions,
+        storage,
+        pending,
         NonceCache::default(),
         CountLeadingZeroBytes,
-        ShardedMap::new(),
         TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     );
 
     tokio::spawn(listener_fut);

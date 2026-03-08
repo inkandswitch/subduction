@@ -18,20 +18,30 @@ use std::{
     time::Duration,
 };
 
+use async_lock::Mutex;
 use future_form::Sendable;
 use rand::RngCore;
-use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::{
+    blob::Blob,
+    collections::Map,
+    commit::CountLeadingZeroBytes,
+    id::SedimentreeId,
+};
 use subduction_core::{
     connection::{
         handshake::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_iroh::connection::IrohConnection;
@@ -76,6 +86,48 @@ fn random_blob(size: usize) -> Blob {
     Blob::new(bytes)
 }
 
+/// Build a [`Subduction`] instance using the new externalized-state API,
+/// spawn the listener and manager futures, and return the `Arc<Subduction>`.
+fn spawn_subduction(sig: &MemorySigner, discovery_id: Option<DiscoveryId>) -> TestSubduction {
+    let depth_metric = CountLeadingZeroBytes;
+
+    let sedimentrees = Arc::new(ShardedMap::new());
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::default(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        depth_metric,
+    ));
+
+    let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
+        handler,
+        discovery_id,
+        sig.clone(),
+        sedimentrees,
+        connections,
+        subscriptions,
+        storage,
+        pending,
+        NonceCache::default(),
+        depth_metric,
+        TokioSpawn,
+    );
+
+    tokio::spawn(listener_fut);
+    tokio::spawn(manager_fut);
+
+    subduction
+}
+
 // ─── Test Helpers ────────────────────────────────────────────────────────────
 
 struct TestServer {
@@ -89,20 +141,7 @@ impl TestServer {
         let sig = signer(seed);
         let peer_id = PeerId::from(sig.verifying_key());
 
-        let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-            None,
-            sig.clone(),
-            MemoryStorage::default(),
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::new(),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
-
-        tokio::spawn(listener_fut);
-        tokio::spawn(manager_fut);
+        let subduction = spawn_subduction(&sig, None);
 
         let endpoint = iroh::Endpoint::builder()
             .alpns(vec![subduction_iroh::ALPN.to_vec()])
@@ -162,20 +201,7 @@ impl TestClient {
         let sig = signer(seed);
         let peer_id = PeerId::from(sig.verifying_key());
 
-        let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-            None,
-            sig.clone(),
-            MemoryStorage::default(),
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::new(),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
-
-        tokio::spawn(listener_fut);
-        tokio::spawn(manager_fut);
+        let subduction = spawn_subduction(&sig, None);
 
         let client_ep = iroh::Endpoint::builder()
             .bind()
@@ -224,20 +250,7 @@ impl TestServerDiscover {
         let discovery_id = DiscoveryId::new(service_name.as_bytes());
         let discovery_audience = Some(Audience::discover_id(discovery_id));
 
-        let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-            Some(discovery_id),
-            sig.clone(),
-            MemoryStorage::default(),
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::new(),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
-
-        tokio::spawn(listener_fut);
-        tokio::spawn(manager_fut);
+        let subduction = spawn_subduction(&sig, Some(discovery_id));
 
         let endpoint = iroh::Endpoint::builder()
             .alpns(vec![subduction_iroh::ALPN.to_vec()])
@@ -292,20 +305,7 @@ impl TestClient {
         let sig = signer(seed);
         let peer_id = PeerId::from(sig.verifying_key());
 
-        let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-            None,
-            sig.clone(),
-            MemoryStorage::default(),
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::new(),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
-
-        tokio::spawn(listener_fut);
-        tokio::spawn(manager_fut);
+        let subduction = spawn_subduction(&sig, None);
 
         let client_ep = iroh::Endpoint::builder()
             .bind()
@@ -998,20 +998,7 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
     let sig = signer(120);
     let peer_id = PeerId::from(sig.verifying_key());
 
-    let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-        None,
-        sig.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::new(),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
-
-    tokio::spawn(listener_fut);
-    tokio::spawn(manager_fut);
+    let subduction = spawn_subduction(&sig, None);
 
     let endpoint = iroh::Endpoint::builder()
         .alpns(vec![subduction_iroh::ALPN.to_vec()])

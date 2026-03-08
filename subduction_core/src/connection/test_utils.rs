@@ -18,11 +18,15 @@ use super::{
     nonce_cache::NonceCache,
 };
 use crate::{
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
 };
 
 /// A minimal mock connection for testing.
@@ -597,16 +601,39 @@ pub fn new_test_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(async_lock::Mutex::new(
+        sedimentree_core::collections::Map::new(),
+    ));
+    let subscriptions = Arc::new(async_lock::Mutex::new(
+        sedimentree_core::collections::Map::new(),
+    ));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(async_lock::Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
+        handler,
         None,
         test_signer(),
-        MemoryStorage::new(),
-        OpenPolicy,
+        sedimentrees,
+        connections,
+        subscriptions,
+        storage,
+        pending,
         NonceCache::default(),
         CountLeadingZeroBytes,
-        ShardedMap::with_key(0, 0),
         TestSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     )
 }
 

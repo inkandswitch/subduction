@@ -8,24 +8,30 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
+use async_lock::Mutex;
 use future_form::Sendable;
 use sedimentree_core::{
     blob::Blob,
+    collections::Map,
     commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
     connection::{
         nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
+    handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
 };
 use testresult::TestResult;
 
@@ -56,7 +62,7 @@ fn make_unique_blob(seed: u8) -> Blob {
 /// futures are spawned onto the tokio runtime automatically.
 ///
 /// Must be called from within a tokio runtime context.
-fn make_subduction() -> std::sync::Arc<
+fn make_subduction() -> Arc<
     Subduction<
         'static,
         Sendable,
@@ -67,17 +73,36 @@ fn make_subduction() -> std::sync::Arc<
         CountLeadingZeroBytes,
     >,
 > {
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
-            MemoryStorage::new(),
-            OpenPolicy,
+            sedimentrees,
+            connections,
+            subscriptions,
+            storage,
+            pending,
             NonceCache::default(),
             CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);

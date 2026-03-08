@@ -8,11 +8,14 @@
 //! behavior is consistent across native and Wasm-like environments.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
+use async_lock::Mutex;
 use core::time::Duration;
 use future_form::{Local, Sendable};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
+    collections::Map,
     commit::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -23,11 +26,15 @@ use subduction_core::{
         nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
 };
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;
@@ -45,18 +52,36 @@ async fn make_test_commit_with_data(
 
 #[tokio::test]
 async fn test_sendable_single_commit() -> TestResult {
-    let storage = MemoryStorage::new();
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            OpenPolicy,
+            pending,
             NonceCache::default(),
             CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -100,18 +125,36 @@ async fn test_sendable_single_commit() -> TestResult {
 
 #[tokio::test]
 async fn test_sendable_multiple_sequential() -> TestResult {
-    let storage = MemoryStorage::new();
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            OpenPolicy,
+            pending,
             NonceCache::default(),
             CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -155,18 +198,36 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 
 #[tokio::test]
 async fn test_sendable_same_sedimentree() -> TestResult {
-    let storage = MemoryStorage::new();
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     let (subduction, listener_fut, actor_fut) =
         Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            OpenPolicy,
+            pending,
             NonceCache::default(),
             CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
             TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -215,18 +276,36 @@ async fn test_sendable_same_sedimentree() -> TestResult {
 async fn test_local_single_commit() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let storage = MemoryStorage::new();
+            let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+            let connections = Arc::new(Mutex::new(Map::new()));
+            let subscriptions = Arc::new(Mutex::new(Map::new()));
+            let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+            let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+                DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            )));
+
+            let handler = Arc::new(SyncHandler::new(
+                sedimentrees.clone(),
+                connections.clone(),
+                subscriptions.clone(),
+                storage.clone(),
+                pending.clone(),
+                CountLeadingZeroBytes,
+            ));
+
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
+                    handler,
                     None,
                     test_signer(),
+                    sedimentrees,
+                    connections,
+                    subscriptions,
                     storage,
-                    OpenPolicy,
+                    pending,
                     NonceCache::default(),
                     CountLeadingZeroBytes,
-                    ShardedMap::with_key(0, 0),
                     TokioSpawn,
-                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -275,18 +354,36 @@ async fn test_local_single_commit() -> TestResult {
 async fn test_local_multiple_sequential() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let storage = MemoryStorage::new();
+            let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+            let connections = Arc::new(Mutex::new(Map::new()));
+            let subscriptions = Arc::new(Mutex::new(Map::new()));
+            let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+            let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+                DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            )));
+
+            let handler = Arc::new(SyncHandler::new(
+                sedimentrees.clone(),
+                connections.clone(),
+                subscriptions.clone(),
+                storage.clone(),
+                pending.clone(),
+                CountLeadingZeroBytes,
+            ));
+
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
+                    handler,
                     None,
                     test_signer(),
+                    sedimentrees,
+                    connections,
+                    subscriptions,
                     storage,
-                    OpenPolicy,
+                    pending,
                     NonceCache::default(),
                     CountLeadingZeroBytes,
-                    ShardedMap::with_key(0, 0),
                     TokioSpawn,
-                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
@@ -336,18 +433,36 @@ async fn test_local_multiple_sequential() -> TestResult {
 async fn test_local_same_sedimentree() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let storage = MemoryStorage::new();
+            let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+            let connections = Arc::new(Mutex::new(Map::new()));
+            let subscriptions = Arc::new(Mutex::new(Map::new()));
+            let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+            let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+                DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+            )));
+
+            let handler = Arc::new(SyncHandler::new(
+                sedimentrees.clone(),
+                connections.clone(),
+                subscriptions.clone(),
+                storage.clone(),
+                pending.clone(),
+                CountLeadingZeroBytes,
+            ));
+
             let (subduction, listener_fut, actor_fut) =
                 Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
+                    handler,
                     None,
                     test_signer(),
+                    sedimentrees,
+                    connections,
+                    subscriptions,
                     storage,
-                    OpenPolicy,
+                    pending,
                     NonceCache::default(),
                     CountLeadingZeroBytes,
-                    ShardedMap::with_key(0, 0),
                     TokioSpawn,
-                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
                 );
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));

@@ -1,22 +1,32 @@
 //! Tests for connection cleanup on send failure.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
+
+use async_lock::Mutex;
+use future_form::Sendable;
+use sedimentree_core::{
+    blob::Blob,
+    collections::Map,
+    commit::CountLeadingZeroBytes,
+    crypto::digest::Digest,
+    id::SedimentreeId,
+    loose_commit::LooseCommit,
+};
 use subduction_core::{
     connection::{
         nonce_cache::NonceCache,
         test_utils::{FailingSendMockConnection, MockConnection, TestSpawn, test_signer},
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
-};
-
-use future_form::Sendable;
-use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
-    loose_commit::LooseCommit,
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
 };
 use testresult::TestResult;
 
@@ -43,20 +53,36 @@ fn make_fragment_parts() -> (
 
 #[tokio::test]
 async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            OpenPolicy,
+            pending,
             NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
+            CountLeadingZeroBytes,
             TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection
@@ -83,20 +109,36 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
 
 #[tokio::test]
 async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResult {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            OpenPolicy,
+            pending,
             NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
+            CountLeadingZeroBytes,
             TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection
@@ -129,20 +171,36 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
 
 #[tokio::test]
 async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResult {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            OpenPolicy,
+            pending,
             NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
+            CountLeadingZeroBytes,
             TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register a failing connection
@@ -169,20 +227,36 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
 
 #[tokio::test]
 async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
 
     let (subduction, _listener_fut, _actor_fut) =
         Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
+            handler,
             None,
             test_signer(),
+            sedimentrees,
+            connections,
+            subscriptions,
             storage,
-            OpenPolicy,
+            pending,
             NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
+            CountLeadingZeroBytes,
             TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
         );
 
     // Register two connections that will succeed
