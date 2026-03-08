@@ -167,7 +167,7 @@ impl WasmWebSocket {
         Self {
             peer_id,
             timeout_ms,
-            request_id_counter: Arc::new(AtomicU64::new(rand::random())),
+            request_id_counter: Arc::new(AtomicU64::new(random_u64())),
             socket: ws,
             pending,
             inbound_reader,
@@ -877,4 +877,19 @@ impl WasmAuthenticatedWebSocket {
     pub fn peer_id(&self) -> WasmPeerId {
         self.inner.peer_id().into()
     }
+}
+
+/// Generate a random `u64` via `getrandom`.
+///
+/// Used to initialize the request ID counter with a random starting value,
+/// preventing nonce collisions across page refreshes.
+///
+/// # Panics
+///
+/// Panics if the platform CSPRNG is unavailable.
+#[allow(clippy::expect_used)]
+fn random_u64() -> u64 {
+    let mut buf = [0u8; 8];
+    getrandom::getrandom(&mut buf).expect("platform CSPRNG unavailable");
+    u64::from_le_bytes(buf)
 }
