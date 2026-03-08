@@ -18,30 +18,19 @@ use std::{
     time::Duration,
 };
 
-use async_lock::Mutex;
 use future_form::Sendable;
 use rand::RngCore;
-use sedimentree_core::{
-    blob::Blob,
-    collections::Map,
-    commit::CountLeadingZeroBytes,
-    id::SedimentreeId,
-};
+use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     connection::{
         handshake::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
     },
-    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
-    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::memory::MemoryStorage,
+    subduction::{Subduction, SubductionBuilder},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_iroh::connection::IrohConnection;
@@ -86,41 +75,20 @@ fn random_blob(size: usize) -> Blob {
     Blob::new(bytes)
 }
 
-/// Build a [`Subduction`] instance using the new externalized-state API,
+/// Build a [`Subduction`] instance using [`SubductionBuilder`],
 /// spawn the listener and manager futures, and return the `Arc<Subduction>`.
 fn spawn_subduction(sig: &MemorySigner, discovery_id: Option<DiscoveryId>) -> TestSubduction {
-    let depth_metric = CountLeadingZeroBytes;
+    let mut builder = SubductionBuilder::new()
+        .signer(sig.clone())
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn);
 
-    let sedimentrees = Arc::new(ShardedMap::new());
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::default(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
+    if let Some(id) = discovery_id {
+        builder = builder.discovery_id(id);
+    }
 
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        depth_metric,
-    ));
-
-    let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-        handler,
-        discovery_id,
-        sig.clone(),
-        sedimentrees,
-        connections,
-        subscriptions,
-        storage,
-        pending,
-        NonceCache::default(),
-        depth_metric,
-        TokioSpawn,
-    );
+    let (subduction, _handler, listener_fut, manager_fut) =
+        builder.build::<Sendable, IrohConnection<FuturesTimerTimeout>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

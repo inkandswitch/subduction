@@ -69,7 +69,11 @@
 //! [`add_fragment`]: Subduction::add_fragment
 //! [`remove_sedimentree`]: Subduction::remove_sedimentree
 
+pub mod builder;
+pub use builder::SubductionBuilder;
 pub mod error;
+pub(crate) mod ingest;
+pub(crate) mod peers;
 pub mod pending_blob_requests;
 pub mod request;
 
@@ -754,39 +758,7 @@ impl<
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
     pub async fn unregister(&self, conn: &Authenticated<C, F>) -> Option<bool> {
-        let peer_id = conn.peer_id();
-        let mut connections = self.connections.lock().await;
-
-        if let Some(peer_conns) = connections.remove(&peer_id) {
-            match peer_conns.remove_item(conn) {
-                RemoveResult::Removed(remaining) => {
-                    connections.insert(peer_id, remaining);
-
-                    #[cfg(feature = "metrics")]
-                    crate::metrics::connection_closed();
-
-                    Some(false) // Peer still has connections
-                }
-                RemoveResult::WasLast(_) => {
-                    // Don't put anything back, peer entry stays removed
-                    // Also remove peer from all subscriptions
-                    drop(connections); // Release connection lock before acquiring subscription lock
-                    self.remove_peer_from_subscriptions(peer_id).await;
-
-                    #[cfg(feature = "metrics")]
-                    crate::metrics::connection_closed();
-
-                    Some(true) // Was the last connection for this peer
-                }
-                RemoveResult::NotFound(original) => {
-                    // Put the original back
-                    connections.insert(peer_id, original);
-                    None // Connection wasn't found
-                }
-            }
-        } else {
-            None // Peer not found
-        }
+        peers::unregister(&self.connections, &self.subscriptions, conn).await
     }
 
     /// Get all connections as a flat list.
@@ -801,24 +773,9 @@ impl<
             .collect()
     }
 
-    /// Remove a peer from all subscription sets.
-    ///
-    /// Called when the last connection for a peer drops.
-    async fn remove_peer_from_subscriptions(&self, peer_id: PeerId) {
-        let mut subscriptions = self.subscriptions.lock().await;
-        subscriptions.retain(|_id, peers| {
-            peers.remove(&peer_id);
-            !peers.is_empty()
-        });
-    }
-
     /// Add a subscription for a peer to a sedimentree.
     pub(crate) async fn add_subscription(&self, peer_id: PeerId, sedimentree_id: SedimentreeId) {
-        let mut subscriptions = self.subscriptions.lock().await;
-        subscriptions
-            .entry(sedimentree_id)
-            .or_default()
-            .insert(peer_id);
+        peers::add_subscription(&self.subscriptions, peer_id, sedimentree_id).await;
     }
 
     /// Get connections for subscribers authorized to receive updates for a sedimentree.
@@ -829,47 +786,14 @@ impl<
         sedimentree_id: SedimentreeId,
         exclude_peer: &PeerId,
     ) -> Vec<Authenticated<C, F>> {
-        // Get the subscribers for this sedimentree
-        let subscriber_ids: Vec<PeerId> = {
-            let subscriptions = self.subscriptions.lock().await;
-            subscriptions
-                .get(&sedimentree_id)
-                .map(|peers| peers.iter().copied().collect())
-                .unwrap_or_default()
-        };
-
-        if subscriber_ids.is_empty() {
-            return Vec::new();
-        }
-
-        // For each subscriber, check if they're authorized to fetch this sedimentree
-        let mut authorized_peers = Vec::new();
-        for peer_id in subscriber_ids {
-            if peer_id == *exclude_peer {
-                continue;
-            }
-            // Check if this peer can fetch this sedimentree
-            let can_fetch = self
-                .storage
-                .policy()
-                .filter_authorized_fetch(peer_id, alloc::vec![sedimentree_id])
-                .await;
-            if !can_fetch.is_empty() {
-                authorized_peers.push(peer_id);
-            }
-        }
-
-        // Get connections for authorized peers
-        let connections = self.connections.lock().await;
-        authorized_peers
-            .into_iter()
-            .flat_map(|pid| {
-                connections
-                    .get(&pid)
-                    .map(|conns| conns.iter().cloned().collect::<Vec<_>>())
-                    .unwrap_or_default()
-            })
-            .collect()
+        peers::get_authorized_subscriber_conns(
+            &self.subscriptions,
+            &self.storage,
+            &self.connections,
+            sedimentree_id,
+            exclude_peer,
+        )
+        .await
     }
 
     /*********
@@ -892,26 +816,7 @@ impl<
         digest: Digest<Blob>,
     ) -> Result<Option<Blob>, S::Error> {
         tracing::debug!(?id, ?digest, "Looking for blob");
-
-        // With compound storage, blobs are stored with their commits/fragments.
-        // We need to search through commits and fragments to find the matching blob.
-        let local_access = self.storage.hydration_access();
-
-        // Search commits
-        for verified in local_access.load_loose_commits::<F>(id).await? {
-            if verified.payload().blob_meta().digest() == digest {
-                return Ok(Some(verified.blob().clone()));
-            }
-        }
-
-        // Search fragments
-        for verified in local_access.load_fragments::<F>(id).await? {
-            if verified.payload().summary().blob_meta().digest() == digest {
-                return Ok(Some(verified.blob().clone()));
-            }
-        }
-
-        Ok(None)
+        ingest::get_blob(&self.storage, id, digest).await
     }
 
     /// Get all blobs associated with a given sedimentree ID from local storage.
@@ -1336,67 +1241,7 @@ impl<
         id: SedimentreeId,
         diff: SyncDiff,
     ) -> Result<(), IoError<F, S, C>> {
-        tracing::info!(
-            "received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
-            id,
-            from,
-            diff.missing_commits.len(),
-            diff.missing_fragments.len()
-        );
-
-        let putter = match self.storage.get_putter::<F>(*from, *from, id).await {
-            Ok(p) => p,
-            Err(e) => {
-                tracing::warn!(
-                    "policy rejected batch sync from peer {:?} for sedimentree {:?}: {e}",
-                    from,
-                    id
-                );
-                return Ok(());
-            }
-        };
-
-        for (signed_commit, blob) in diff.missing_commits {
-            let verified = match signed_commit.try_verify() {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("batch sync commit signature verification failed: {e}");
-                    continue;
-                }
-            };
-            let verified_meta = match VerifiedMeta::new(verified, blob) {
-                Ok(vm) => vm,
-                Err(e) => {
-                    tracing::warn!("batch sync commit blob mismatch: {e}");
-                    continue;
-                }
-            };
-            self.insert_commit_locally(&putter, verified_meta)
-                .await
-                .map_err(IoError::Storage)?;
-        }
-
-        for (signed_fragment, blob) in diff.missing_fragments {
-            let verified = match signed_fragment.try_verify() {
-                Ok(v) => v,
-                Err(e) => {
-                    tracing::warn!("batch sync fragment signature verification failed: {e}");
-                    continue;
-                }
-            };
-            let verified_meta = match VerifiedMeta::new(verified, blob) {
-                Ok(vm) => vm,
-                Err(e) => {
-                    tracing::warn!("batch sync fragment blob mismatch: {e}");
-                    continue;
-                }
-            };
-            self.insert_fragment_locally(&putter, verified_meta)
-                .await
-                .map_err(IoError::Storage)?;
-        }
-
-        Ok(())
+        ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await
     }
 
     /// Find blobs from connected peers for a specific sedimentree.
@@ -2201,23 +2046,7 @@ impl<
         putter: &Putter<F, S>,
         verified_meta: VerifiedMeta<LooseCommit>,
     ) -> Result<bool, S::Error> {
-        let id = putter.sedimentree_id();
-        let commit = verified_meta.payload().clone();
-
-        tracing::debug!("inserting commit {:?} locally", Digest::hash(&commit));
-
-        // Persist to storage first (cancel-safe: idempotent CAS writes)
-        // VerifiedMeta guarantees blob matches claimed metadata at construction
-        putter.save_sedimentree_id().await?;
-        putter.save_commit(verified_meta).await?;
-
-        // Update in-memory tree last (returns false if already present)
-        let was_added = self
-            .sedimentrees
-            .with_entry_or_default(id, |tree| tree.add_commit(commit))
-            .await;
-
-        Ok(was_added)
+        ingest::insert_commit_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
     /// Insert a fragment locally, persisting to storage before updating in-memory state.
@@ -2232,21 +2061,7 @@ impl<
         putter: &Putter<F, S>,
         verified_meta: VerifiedMeta<Fragment>,
     ) -> Result<bool, S::Error> {
-        let id = putter.sedimentree_id();
-        let fragment = verified_meta.payload().clone();
-
-        // Persist to storage first (cancel-safe: idempotent CAS writes)
-        // VerifiedMeta guarantees blob matches claimed metadata at construction
-        putter.save_sedimentree_id().await?;
-        putter.save_fragment(verified_meta).await?;
-
-        // Update in-memory tree last
-        let was_added = self
-            .sedimentrees
-            .with_entry_or_default(id, |tree| tree.add_fragment(fragment))
-            .await;
-
-        Ok(was_added)
+        ingest::insert_fragment_locally(&self.sedimentrees, putter, verified_meta).await
     }
 
     /// Re-minimize a sedimentree in the in-memory cache.
@@ -2254,12 +2069,7 @@ impl<
     /// Prunes dominated fragments and loose commits covered by fragments,
     /// keeping only the minimal covering. Storage retains the full history.
     async fn minimize_tree(&self, id: SedimentreeId) {
-        let metric = &self.depth_metric;
-        self.sedimentrees
-            .with_entry(&id, |tree| {
-                *tree = tree.minimize(metric);
-            })
-            .await;
+        ingest::minimize_tree(&self.sedimentrees, &self.depth_metric, id).await;
     }
 }
 

@@ -16,30 +16,22 @@
 use core::{future::Future, time::Duration};
 use std::sync::Arc;
 
-use async_lock::Mutex;
 use futures::future::Aborted;
 use future_form::Sendable;
 use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
-        nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
-    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
-    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::memory::MemoryStorage,
+    subduction::{Subduction, SubductionBuilder},
 };
 
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    collections::Map,
     commit::CountLeadingZeroBytes,
     crypto::{
         digest::Digest,
@@ -62,36 +54,13 @@ fn make_subduction() -> (
     impl Future<Output = Result<(), Aborted>>,
     impl Future<Output = Result<(), Aborted>>,
 ) {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
+    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, ChannelMockConnection>();
 
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-        handler,
-        None,
-        test_signer(),
-        sedimentrees,
-        connections,
-        subscriptions,
-        storage,
-        pending,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    )
+    (sd, listener, manager)
 }
 
 async fn make_test_commit(

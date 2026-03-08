@@ -7,29 +7,17 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use eyre::Result;
 use iroh::EndpointAddr;
-use sedimentree_core::{
-    commit::CountLeadingZeroBytes, id::SedimentreeId, sedimentree::Sedimentree,
-};
+use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
-use async_lock::Mutex;
-use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
         handshake::{self, Audience, DiscoveryId},
         nonce_cache::NonceCache,
     },
-    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
-    storage::{
-        metrics::{MetricsStorage, RefreshMetrics},
-        powerbox::StoragePowerbox,
-    },
-    subduction::{
-        Subduction,
-        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
-    },
+    storage::metrics::{MetricsStorage, RefreshMetrics},
+    subduction::{Subduction, SubductionBuilder},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
@@ -212,41 +200,18 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
-    // Shared state
-    let sedimentrees = Arc::new(ShardedMap::<SedimentreeId, Sedimentree>::new());
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage_powerbox =
-        StoragePowerbox::new(storage, Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-    let depth_metric = CountLeadingZeroBytes;
+    // Build the Subduction instance with all defaults
+    let mut builder = SubductionBuilder::new()
+        .signer(signer.clone())
+        .storage(storage, Arc::new(OpenPolicy))
+        .spawner(TokioSpawn);
 
-    // Build the sync handler
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage_powerbox.clone(),
-        pending.clone(),
-        depth_metric,
-    ));
+    if let Some(id) = discovery_id {
+        builder = builder.discovery_id(id);
+    }
 
-    // Create the unified Subduction instance (parameterized over UnifiedTransport)
-    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) = Subduction::new(
-        handler,
-        discovery_id,
-        signer.clone(),
-        sedimentrees,
-        connections,
-        subscriptions,
-        storage_powerbox,
-        pending,
-        NonceCache::default(),
-        depth_metric,
-        TokioSpawn,
-    );
+    let (subduction, _handler, listener_fut, manager_fut): (CliSubduction, _, _, _) =
+        builder.build();
 
     let server_peer_id = subduction.peer_id();
 

@@ -36,25 +36,17 @@
 
 use std::{collections::BTreeSet, net::SocketAddr, sync::Arc, time::Duration};
 
-use async_lock::Mutex;
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
 use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
-use sedimentree_core::{
-    blob::Blob, collections::Map, commit::CountLeadingZeroBytes, id::SedimentreeId,
-};
+use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     connection::{handshake::Audience, nonce_cache::NonceCache},
-    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
-    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::memory::MemoryStorage,
+    subduction::{Subduction, SubductionBuilder},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
@@ -195,42 +187,11 @@ async fn connected_client(
 ) -> ClientSubduction {
     let client_signer = signer(seed);
 
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::default(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (client, listener_fut, manager_fut) = Subduction::<
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
-        OpenPolicy,
-        MemorySigner,
-    >::new(
-        handler,
-        None,
-        client_signer.clone(),
-        sedimentrees,
-        connections,
-        subscriptions,
-        storage,
-        pending,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    );
+    let (client, _handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(client_signer.clone())
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>();
 
     // `listener_fut` already runs `Subduction::listen()` internally —
     // do NOT spawn an additional `client.listen()` call.

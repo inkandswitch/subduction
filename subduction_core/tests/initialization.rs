@@ -2,58 +2,23 @@
 
 use std::sync::Arc;
 
-use async_lock::Mutex;
 use future_form::Sendable;
-use sedimentree_core::{collections::Map, commit::CountLeadingZeroBytes};
 use subduction_core::{
-    connection::{
-        nonce_cache::NonceCache,
-        test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
-    },
-    handler::sync::SyncHandler,
+    connection::test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
-    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::memory::MemoryStorage,
+    subduction::SubductionBuilder,
 };
 
 #[test]
 fn test_new_creates_empty_subduction() {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
     // Verify construction doesn't panic
-    let (_subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (_subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 }
 
 #[tokio::test]

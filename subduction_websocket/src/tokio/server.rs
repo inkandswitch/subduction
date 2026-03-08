@@ -21,14 +21,11 @@ use subduction_core::{
         handshake::{self, Audience, AuthenticateError, DiscoveryId},
         nonce_cache::NonceCache,
     },
-    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sharded_map::ShardedMap,
-    storage::{powerbox::StoragePowerbox, traits::Storage},
+    storage::traits::Storage,
     subduction::{
-        Subduction, error::RegistrationError,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+        Subduction, SubductionBuilder, error::RegistrationError,
     },
     timestamp::TimestampSeconds,
 };
@@ -278,40 +275,18 @@ where
     {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
 
-        let sedimentrees = Arc::new(ShardedMap::new());
-        let connections = Arc::new(async_lock::Mutex::new(
-            sedimentree_core::collections::Map::new(),
-        ));
-        let subscriptions = Arc::new(async_lock::Mutex::new(
-            sedimentree_core::collections::Map::new(),
-        ));
-        let storage = StoragePowerbox::new(storage, Arc::new(policy));
-        let pending_blob_requests = Arc::new(async_lock::Mutex::new(PendingBlobRequests::new(
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        )));
+        let mut builder = SubductionBuilder::new()
+            .signer(signer)
+            .storage(storage, Arc::new(policy))
+            .spawner(TokioSpawn)
+            .nonce_cache(nonce_cache)
+            .depth_metric(depth_metric);
 
-        let handler = Arc::new(SyncHandler::new(
-            sedimentrees.clone(),
-            connections.clone(),
-            subscriptions.clone(),
-            storage.clone(),
-            pending_blob_requests.clone(),
-            depth_metric.clone(),
-        ));
+        if let Some(id) = discovery_id {
+            builder = builder.discovery_id(id);
+        }
 
-        let (subduction, listener_fut, manager_fut) = Subduction::new(
-            handler,
-            discovery_id,
-            signer,
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending_blob_requests,
-            nonce_cache,
-            depth_metric,
-            TokioSpawn,
-        );
+        let (subduction, _handler, listener_fut, manager_fut) = builder.build();
 
         let server = Self::new(
             address,

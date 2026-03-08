@@ -5,13 +5,10 @@
 use core::{convert::Infallible, fmt, time::Duration};
 use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 
-use async_lock::Mutex;
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::Blob,
-    collections::Map,
-    commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     id::SedimentreeId,
     loose_commit::LooseCommit,
@@ -20,18 +17,12 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, Message, SyncResult},
-        nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, MockConnection, TestSpawn, TokioSpawn, test_signer},
     },
-    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sharded_map::ShardedMap,
-    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::memory::MemoryStorage,
+    subduction::SubductionBuilder,
 };
 use testresult::TestResult;
 
@@ -158,37 +149,12 @@ fn make_commit_parts(data: &[u8]) -> (BTreeSet<Digest<LooseCommit>>, Blob) {
 
 #[tokio::test]
 async fn add_sedimentree_rejected_by_policy() {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(RejectPutsPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -209,37 +175,12 @@ async fn add_sedimentree_rejected_by_policy() {
 
 #[tokio::test]
 async fn add_commit_rejected_by_policy() {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(RejectPutsPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let (parents, blob) = make_commit_parts(b"test data");
@@ -262,40 +203,15 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
     let allowed_id = SedimentreeId::new([42u8; 32]);
     let disallowed_id = SedimentreeId::new([99u8; 32]);
 
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(
-        MemoryStorage::new(),
-        Arc::new(AllowSpecificIdPolicy { allowed_id }),
-    );
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(
+                MemoryStorage::new(),
+                Arc::new(AllowSpecificIdPolicy { allowed_id }),
+            )
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     // Adding to allowed ID should succeed
     let tree = Sedimentree::default();
@@ -321,37 +237,12 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
 
 #[tokio::test]
 async fn policy_rejection_does_not_store_data() {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(RejectPutsPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -429,37 +320,12 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 
 #[tokio::test]
 async fn multiple_rejections_all_fail_cleanly() {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(RejectPutsPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     // Try multiple operations - all should fail
     for i in 0..5u8 {
@@ -478,37 +344,12 @@ async fn multiple_rejections_all_fail_cleanly() {
 /// with `SyncResult::Unauthorized` so the peer knows they're not authorized.
 #[tokio::test]
 async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(RejectFetchPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TokioSpawn,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

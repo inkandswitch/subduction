@@ -5,25 +5,16 @@
 use core::{convert::Infallible, fmt};
 use std::sync::Arc;
 
-use async_lock::Mutex;
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
-use sedimentree_core::{collections::Map, commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::id::SedimentreeId;
 use std::vec::Vec;
 use subduction_core::{
-    connection::{
-        nonce_cache::NonceCache,
-        test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
-    },
-    handler::sync::SyncHandler,
+    connection::test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sharded_map::ShardedMap,
-    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
-    subduction::{
-        Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
-    },
+    storage::memory::MemoryStorage,
+    subduction::SubductionBuilder,
 };
 use testresult::TestResult;
 
@@ -95,37 +86,12 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
 
 #[tokio::test]
 async fn rejected_connection_is_not_registered() -> TestResult {
-    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let connections = Arc::new(Mutex::new(Map::new()));
-    let subscriptions = Arc::new(Mutex::new(Map::new()));
-    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(RejectConnectionPolicy));
-    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let handler = Arc::new(SyncHandler::new(
-        sedimentrees.clone(),
-        connections.clone(),
-        subscriptions.clone(),
-        storage.clone(),
-        pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            handler,
-            None,
-            test_signer(),
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage,
-            pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let peer_id = PeerId::new([1u8; 32]);
     let conn = MockConnection::with_peer_id(peer_id).authenticated();
@@ -164,38 +130,12 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
     assert!(connected.contains(&allowed_peer));
 
     // Now create a subduction with reject policy and try to register
-    let reject_sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
-    let reject_connections = Arc::new(Mutex::new(Map::new()));
-    let reject_subscriptions = Arc::new(Mutex::new(Map::new()));
-    let reject_storage =
-        StoragePowerbox::new(MemoryStorage::new(), Arc::new(RejectConnectionPolicy));
-    let reject_pending = Arc::new(Mutex::new(PendingBlobRequests::new(
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )));
-
-    let reject_handler = Arc::new(SyncHandler::new(
-        reject_sedimentrees.clone(),
-        reject_connections.clone(),
-        reject_subscriptions.clone(),
-        reject_storage.clone(),
-        reject_pending.clone(),
-        CountLeadingZeroBytes,
-    ));
-
-    let (reject_subduction, _listener_fut2, _actor_fut2) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            reject_handler,
-            None,
-            test_signer(),
-            reject_sedimentrees,
-            reject_connections,
-            reject_subscriptions,
-            reject_storage,
-            reject_pending,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            TestSpawn,
-        );
+    let (reject_subduction, _handler, _listener_fut2, _actor_fut2) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let rejected_peer = PeerId::new([2u8; 32]);
     let rejected_conn = MockConnection::with_peer_id(rejected_peer).authenticated();

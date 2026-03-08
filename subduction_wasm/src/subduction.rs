@@ -6,7 +6,6 @@ use alloc::{
     sync::Arc,
     vec::Vec,
 };
-use async_lock::Mutex;
 use core::{fmt::Debug, time::Duration};
 use sedimentree_core::collections::{Map, Set};
 
@@ -28,16 +27,14 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
-    handler::sync::SyncHandler,
+    connection::{handshake::DiscoveryId, manager::Spawn},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::powerbox::StoragePowerbox,
     subduction::{
-        Subduction,
+        Subduction, SubductionBuilder,
         error::HydrationError,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -156,34 +153,18 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        let sedimentrees = Arc::new(ShardedMap::new());
-        let connections = Arc::new(Mutex::new(Map::new()));
-        let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let storage_powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
-        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+            .signer(signer)
+            .storage(storage, Arc::new(OpenPolicy))
+            .spawner(WasmSpawn)
+            .depth_metric(depth_metric)
+            .max_pending_blob_requests(max_pending);
 
-        let handler = Arc::new(SyncHandler::new(
-            sedimentrees.clone(),
-            connections.clone(),
-            subscriptions.clone(),
-            storage_powerbox.clone(),
-            pending.clone(),
-            depth_metric.clone(),
-        ));
+        if let Some(id) = discovery_id {
+            builder = builder.discovery_id(id);
+        }
 
-        let (core, listener_fut, manager_fut) = Subduction::new(
-            handler,
-            discovery_id,
-            signer,
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage_powerbox,
-            pending,
-            NonceCache::default(),
-            depth_metric,
-            WasmSpawn,
-        );
+        let (core, _handler, listener_fut, manager_fut) = builder.build();
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -282,33 +263,19 @@ impl WasmSubduction {
                 .await;
         }
 
-        let connections = Arc::new(Mutex::new(Map::new()));
-        let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let storage_powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
-        let pending = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+            .signer(signer)
+            .storage(storage, Arc::new(OpenPolicy))
+            .spawner(WasmSpawn)
+            .depth_metric(depth_metric)
+            .max_pending_blob_requests(max_pending)
+            .sedimentrees(sedimentrees);
 
-        let handler = Arc::new(SyncHandler::new(
-            sedimentrees.clone(),
-            connections.clone(),
-            subscriptions.clone(),
-            storage_powerbox.clone(),
-            pending.clone(),
-            depth_metric.clone(),
-        ));
+        if let Some(id) = discovery_id {
+            builder = builder.discovery_id(id);
+        }
 
-        let (core, listener_fut, manager_fut) = Subduction::new(
-            handler,
-            discovery_id,
-            signer,
-            sedimentrees,
-            connections,
-            subscriptions,
-            storage_powerbox,
-            pending,
-            NonceCache::default(),
-            depth_metric,
-            WasmSpawn,
-        );
+        let (core, _handler, listener_fut, manager_fut) = builder.build();
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
