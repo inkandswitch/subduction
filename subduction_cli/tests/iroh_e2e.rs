@@ -31,11 +31,10 @@ use std::{
 use future_form::Sendable;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{nonce_cache::NonceCache, test_utils::TokioSpawn},
+    connection::test_utils::TokioSpawn,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -188,17 +187,12 @@ async fn wait_for_http(base_url: &str) {
 async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) -> TestSubduction {
     let client_signer = signer(client_seed);
 
-    let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-        None,
-        client_signer.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::new(),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
+    let (subduction, _handler, listener_fut, manager_fut): (TestSubduction, _, _, _) =
+        SubductionBuilder::new()
+            .signer(client_signer.clone())
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

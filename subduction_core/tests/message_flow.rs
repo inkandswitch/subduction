@@ -7,27 +7,24 @@
 //! Tests run for both `Sendable` and `Local` future kinds to ensure
 //! behavior is consistent across native and Wasm-like environments.
 
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 
 use core::time::Duration;
 use future_form::{Local, Sendable};
 use sedimentree_core::{
     blob::{Blob, BlobMeta},
-    commit::CountLeadingZeroBytes,
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
 use subduction_core::{
     connection::{
         message::Message,
-        nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::builder::SubductionBuilder,
 };
 use subduction_crypto::signed::Signed;
 use testresult::TestResult;
@@ -45,19 +42,12 @@ async fn make_test_commit_with_data(
 
 #[tokio::test]
 async fn test_sendable_single_commit() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
@@ -100,19 +90,12 @@ async fn test_sendable_single_commit() -> TestResult {
 
 #[tokio::test]
 async fn test_sendable_multiple_sequential() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
@@ -155,19 +138,12 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 
 #[tokio::test]
 async fn test_sendable_same_sedimentree() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
@@ -215,19 +191,12 @@ async fn test_sendable_same_sedimentree() -> TestResult {
 async fn test_local_single_commit() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let storage = MemoryStorage::new();
-            let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
-                    None,
-                    test_signer(),
-                    storage,
-                    OpenPolicy,
-                    NonceCache::default(),
-                    CountLeadingZeroBytes,
-                    ShardedMap::with_key(0, 0),
-                    TokioSpawn,
-                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                );
+            let (subduction, _handler, listener_fut, actor_fut) =
+                SubductionBuilder::<_, _, _, _, 256>::new()
+                    .signer(test_signer())
+                    .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                    .spawner(TokioSpawn)
+                    .build::<Local, ChannelMockConnection>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;
@@ -275,19 +244,12 @@ async fn test_local_single_commit() -> TestResult {
 async fn test_local_multiple_sequential() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let storage = MemoryStorage::new();
-            let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
-                    None,
-                    test_signer(),
-                    storage,
-                    OpenPolicy,
-                    NonceCache::default(),
-                    CountLeadingZeroBytes,
-                    ShardedMap::with_key(0, 0),
-                    TokioSpawn,
-                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                );
+            let (subduction, _handler, listener_fut, actor_fut) =
+                SubductionBuilder::<_, _, _, _, 256>::new()
+                    .signer(test_signer())
+                    .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                    .spawner(TokioSpawn)
+                    .build::<Local, ChannelMockConnection>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;
@@ -336,19 +298,12 @@ async fn test_local_multiple_sequential() -> TestResult {
 async fn test_local_same_sedimentree() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
-            let storage = MemoryStorage::new();
-            let (subduction, listener_fut, actor_fut) =
-                Subduction::<'_, Local, _, ChannelMockConnection, _, _, _>::new(
-                    None,
-                    test_signer(),
-                    storage,
-                    OpenPolicy,
-                    NonceCache::default(),
-                    CountLeadingZeroBytes,
-                    ShardedMap::with_key(0, 0),
-                    TokioSpawn,
-                    DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-                );
+            let (subduction, _handler, listener_fut, actor_fut) =
+                SubductionBuilder::<_, _, _, _, 256>::new()
+                    .signer(test_signer())
+                    .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+                    .spawner(TokioSpawn)
+                    .build::<Local, ChannelMockConnection>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;

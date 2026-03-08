@@ -1,6 +1,11 @@
 //! Tests for round-trip communication between Subduction peers using `WebSocket`s.
 
-use std::{collections::BTreeSet, net::SocketAddr, sync::OnceLock, time::Duration};
+use std::{
+    collections::BTreeSet,
+    net::SocketAddr,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 use testresult::TestResult;
 
 use future_form::Sendable;
@@ -9,12 +14,12 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::{handshake::Audience, nonce_cache::NonceCache},
+    connection::handshake::Audience,
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
@@ -34,6 +39,51 @@ const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 
 fn test_signer(seed: u8) -> MemorySigner {
     MemorySigner::from_bytes(&[seed; 32])
+}
+
+type TestSubduction = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        MemoryStorage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        OpenPolicy,
+        MemorySigner,
+    >,
+>;
+
+type TestHandler = Arc<
+    SyncHandler<
+        Sendable,
+        MemoryStorage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        OpenPolicy,
+        CountLeadingZeroBytes,
+    >,
+>;
+
+#[allow(clippy::type_complexity)]
+fn setup_client_subduction(
+    signer: MemorySigner,
+) -> (
+    TestSubduction,
+    TestHandler,
+    subduction_core::subduction::ListenerFuture<
+        'static,
+        Sendable,
+        MemoryStorage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        OpenPolicy,
+        MemorySigner,
+        CountLeadingZeroBytes,
+    >,
+    subduction_core::connection::manager::ManagerFuture<Sendable>,
+) {
+    SubductionBuilder::new()
+        .signer(signer)
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -63,20 +113,13 @@ async fn batch_sync() -> TestResult {
     // SERVER SETUP //
     ///////////////////
 
-    let server_storage = MemoryStorage::default();
     let sed_id = SedimentreeId::new([0u8; 32]);
 
-    let (server_subduction, listener_fut, manager_fut) = Subduction::new(
-        None,
-        server_signer,
-        server_storage.clone(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::with_key(0, 0),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
+    let (server_subduction, _server_handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(server_signer)
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())
@@ -113,24 +156,8 @@ async fn batch_sync() -> TestResult {
     // CLIENT SETUP //
     ///////////////////
 
-    let client_storage = MemoryStorage::default();
-    let (client, listener_fut, client_manager_fut) = Subduction::<
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
-        OpenPolicy,
-        MemorySigner,
-    >::new(
-        None,
-        client_signer.clone(),
-        client_storage,
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::with_key(0, 0),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
+    let (client, client_handler, listener_fut, client_manager_fut) =
+        setup_client_subduction(client_signer.clone());
 
     tokio::spawn(client_manager_fut);
     tokio::spawn(listener_fut);
@@ -166,8 +193,9 @@ async fn batch_sync() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
+        let handler = client_handler.clone();
         async move {
-            inner_client.listen().await?;
+            inner_client.listen(handler).await?;
             Ok::<(), eyre::Report>(())
         }
     });

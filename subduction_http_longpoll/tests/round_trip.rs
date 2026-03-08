@@ -30,9 +30,8 @@ use subduction_core::{
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::memory::MemorySigner;
@@ -91,20 +90,16 @@ impl TestServer {
     async fn start(seed: u8) -> Self {
         let sig = signer(seed);
         let peer_id = PeerId::from(sig.verifying_key());
-        let discovery_id = Some(DiscoveryId::new(SERVICE_NAME.as_bytes()));
-        let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
+        let discovery_id = DiscoveryId::new(SERVICE_NAME.as_bytes());
+        let discovery_audience: Option<Audience> = Some(Audience::discover_id(discovery_id));
 
-        let (subduction, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-            discovery_id,
-            sig.clone(),
-            MemoryStorage::default(),
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::new(),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+        let (subduction, _handler, listener_fut, manager_fut): (TestSubduction, _, _, _) =
+            SubductionBuilder::new()
+                .signer(sig.clone())
+                .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+                .spawner(TokioSpawn)
+                .discovery_id(discovery_id)
+                .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
 
         tokio::spawn(listener_fut);
         tokio::spawn(manager_fut);
@@ -227,17 +222,12 @@ async fn serve_http_connection(
 async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     let client_signer = signer(seed);
 
-    let (client, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-        None,
-        client_signer.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::new(),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
+    let (client, _handler, listener_fut, manager_fut): (TestSubduction, _, _, _) =
+        SubductionBuilder::new()
+            .signer(client_signer.clone())
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -306,17 +296,12 @@ async fn connected_client_known_peer(
 ) -> TestSubduction {
     let client_signer = signer(seed);
 
-    let (client, listener_fut, manager_fut): (TestSubduction, _, _) = Subduction::new(
-        None,
-        client_signer.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::new(),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
+    let (client, _handler, listener_fut, manager_fut): (TestSubduction, _, _, _) =
+        SubductionBuilder::new()
+            .signer(client_signer.clone())
+            .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

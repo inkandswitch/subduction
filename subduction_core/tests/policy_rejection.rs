@@ -3,28 +3,26 @@
 #![allow(clippy::panic)]
 
 use core::{convert::Infallible, fmt, time::Duration};
+use std::{collections::BTreeSet, sync::Arc, vec::Vec};
+
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::{
     blob::Blob,
-    commit::CountLeadingZeroBytes,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
     id::SedimentreeId,
     loose_commit::LooseCommit,
     sedimentree::{FingerprintSummary, Sedimentree},
 };
-use std::{collections::BTreeSet, vec::Vec};
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, Message, SyncResult},
-        nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, MockConnection, TestSpawn, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::builder::SubductionBuilder,
 };
 use testresult::TestResult;
 
@@ -151,21 +149,12 @@ fn make_commit_parts(data: &[u8]) -> (BTreeSet<Digest<LooseCommit>>, Blob) {
 
 #[tokio::test]
 async fn add_sedimentree_rejected_by_policy() {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            RejectPutsPolicy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -186,21 +175,12 @@ async fn add_sedimentree_rejected_by_policy() {
 
 #[tokio::test]
 async fn add_commit_rejected_by_policy() {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            RejectPutsPolicy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let (parents, blob) = make_commit_parts(b"test data");
@@ -220,26 +200,18 @@ async fn add_commit_rejected_by_policy() {
 
 #[tokio::test]
 async fn policy_allows_specific_sedimentree_id() -> TestResult {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-
     let allowed_id = SedimentreeId::new([42u8; 32]);
     let disallowed_id = SedimentreeId::new([99u8; 32]);
 
-    let policy = AllowSpecificIdPolicy { allowed_id };
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            policy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(
+                MemoryStorage::new(),
+                Arc::new(AllowSpecificIdPolicy { allowed_id }),
+            )
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     // Adding to allowed ID should succeed
     let tree = Sedimentree::default();
@@ -265,21 +237,12 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
 
 #[tokio::test]
 async fn policy_rejection_does_not_store_data() {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            RejectPutsPolicy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
     let tree = Sedimentree::default();
@@ -357,21 +320,12 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 
 #[tokio::test]
 async fn multiple_rejections_all_fail_cleanly() {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            RejectPutsPolicy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     // Try multiple operations - all should fail
     for i in 0..5u8 {
@@ -390,18 +344,12 @@ async fn multiple_rejections_all_fail_cleanly() {
 /// with `SyncResult::Unauthorized` so the peer knows they're not authorized.
 #[tokio::test]
 async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            MemoryStorage::new(),
-            RejectFetchPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

@@ -11,7 +11,7 @@ use id::FragmentId;
 use crate::{
     blob::{Blob, BlobMeta, has_meta::HasBlobMeta},
     codec::{
-        decode::{self, Decode},
+        decode::{self, DecodeFields},
         encode::{self, EncodeFields},
         error::{Bijou64Error, BufferTooShort, DecodeError, ReadingType},
         schema::{self, Schema},
@@ -335,8 +335,8 @@ impl EncodeFields for Fragment {
     }
 }
 
-impl Decode for Fragment {
-    const MIN_SIZE: usize = CODEC_MIN_SIZE;
+impl DecodeFields for Fragment {
+    const MIN_SIGNED_SIZE: usize = CODEC_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < CODEC_MIN_FIELDS_SIZE {
@@ -472,7 +472,7 @@ mod tests {
         #[test]
         fn min_size_is_correct() {
             // Schema(4) + IssuerVK(32) + SedimentreeId(32) + Head(32) + BlobDigest(32) + BndryCnt(1) + CkptCnt(2) + BlobSize(bijou64 min=1) + Signature(64)
-            assert_eq!(Fragment::MIN_SIZE, 200);
+            assert_eq!(Fragment::MIN_SIGNED_SIZE, 200);
         }
     }
     use alloc::collections::BTreeSet;
@@ -691,7 +691,7 @@ mod tests {
     mod proptests {
         use crate::{
             codec::{
-                decode::Decode,
+                decode::DecodeFields,
                 encode::{Encode, EncodeFields},
             },
             commit::CountLeadingZeroBytes,

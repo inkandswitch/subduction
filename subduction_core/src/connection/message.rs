@@ -18,9 +18,13 @@ use alloc::{collections::BTreeSet, vec::Vec};
 
 use sedimentree_core::{
     blob::Blob,
-    codec::error::{
-        Bijou64Error, BlobTooLarge, BufferTooShort, DecodeError, InvalidEnumTag, InvalidSchema,
-        ReadingType, SizeMismatch,
+    codec::{
+        decode::Decode,
+        encode::Encode,
+        error::{
+            Bijou64Error, BlobTooLarge, BufferTooShort, DecodeError, InvalidEnumTag, InvalidSchema,
+            ReadingType, SizeMismatch,
+        },
     },
     crypto::{
         digest::Digest,
@@ -350,52 +354,7 @@ impl Message {
     /// Encode the message to wire bytes.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
-        let payload_size = self.payload_size();
-        let total_size = ENVELOPE_HEADER_SIZE + payload_size;
-
-        let mut buf = Vec::with_capacity(total_size);
-
-        buf.extend_from_slice(&MESSAGE_SCHEMA);
-
-        #[allow(clippy::cast_possible_truncation)]
-        buf.extend_from_slice(&(total_size as u32).to_be_bytes());
-
-        match self {
-            Message::LooseCommit { id, commit, blob } => {
-                buf.push(tags::LOOSE_COMMIT);
-                encode_loose_commit(&mut buf, id, commit, blob);
-            }
-            Message::Fragment { id, fragment, blob } => {
-                buf.push(tags::FRAGMENT);
-                encode_fragment(&mut buf, id, fragment, blob);
-            }
-            Message::BlobsRequest { id, digests } => {
-                buf.push(tags::BLOBS_REQUEST);
-                encode_blobs_request(&mut buf, id, digests);
-            }
-            Message::BlobsResponse { id, blobs } => {
-                buf.push(tags::BLOBS_RESPONSE);
-                encode_blobs_response(&mut buf, id, blobs);
-            }
-            Message::BatchSyncRequest(req) => {
-                buf.push(tags::BATCH_SYNC_REQUEST);
-                encode_batch_sync_request(&mut buf, req);
-            }
-            Message::BatchSyncResponse(resp) => {
-                buf.push(tags::BATCH_SYNC_RESPONSE);
-                encode_batch_sync_response(&mut buf, resp);
-            }
-            Message::RemoveSubscriptions(unsub) => {
-                buf.push(tags::REMOVE_SUBSCRIPTIONS);
-                encode_remove_subscriptions(&mut buf, unsub);
-            }
-            Message::DataRequestRejected(rejected) => {
-                buf.push(tags::DATA_REQUEST_REJECTED);
-                encode_data_request_rejected(&mut buf, rejected);
-            }
-        }
-
-        buf
+        encode_message(self)
     }
 
     /// Decode a message from wire bytes.
@@ -403,98 +362,8 @@ impl Message {
     /// # Errors
     ///
     /// Returns an error if the message is malformed.
-    #[allow(clippy::indexing_slicing)] // Length validated before access
     pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        if bytes.len() < ENVELOPE_HEADER_SIZE {
-            return Err(DecodeError::MessageTooShort {
-                type_name: "Message envelope",
-                need: ENVELOPE_HEADER_SIZE,
-                have: bytes.len(),
-            });
-        }
-
-        let schema: [u8; 4] = bytes.get(0..4).and_then(|s| s.try_into().ok()).ok_or(
-            DecodeError::MessageTooShort {
-                type_name: "Message schema",
-                need: 4,
-                have: bytes.len(),
-            },
-        )?;
-        if schema != MESSAGE_SCHEMA {
-            return Err(InvalidSchema {
-                expected: MESSAGE_SCHEMA,
-                got: schema,
-            }
-            .into());
-        }
-
-        let total_size = u32::from_be_bytes(bytes.get(4..8).and_then(|s| s.try_into().ok()).ok_or(
-            DecodeError::MessageTooShort {
-                type_name: "Message total_size",
-                need: 8,
-                have: bytes.len(),
-            },
-        )?) as usize;
-        if bytes.len() != total_size {
-            return Err(SizeMismatch {
-                declared: total_size,
-                actual: bytes.len(),
-            }
-            .into());
-        }
-
-        let tag = *bytes.get(8).ok_or(DecodeError::MessageTooShort {
-            type_name: "Message tag",
-            need: 9,
-            have: bytes.len(),
-        })?;
-        let payload = bytes
-            .get(ENVELOPE_HEADER_SIZE..)
-            .ok_or(DecodeError::MessageTooShort {
-                type_name: "Message payload",
-                need: ENVELOPE_HEADER_SIZE,
-                have: bytes.len(),
-            })?;
-
-        let (min_payload_size, type_name) = match tag {
-            tags::LOOSE_COMMIT => (min_sizes::LOOSE_COMMIT, "LooseCommit"),
-            tags::FRAGMENT => (min_sizes::FRAGMENT, "Fragment"),
-            tags::BLOBS_REQUEST => (min_sizes::BLOBS_REQUEST, "BlobsRequest"),
-            tags::BLOBS_RESPONSE => (min_sizes::BLOBS_RESPONSE, "BlobsResponse"),
-            tags::BATCH_SYNC_REQUEST => (min_sizes::BATCH_SYNC_REQUEST, "BatchSyncRequest"),
-            tags::BATCH_SYNC_RESPONSE => (min_sizes::BATCH_SYNC_RESPONSE, "BatchSyncResponse"),
-            tags::REMOVE_SUBSCRIPTIONS => (min_sizes::REMOVE_SUBSCRIPTIONS, "RemoveSubscriptions"),
-            tags::DATA_REQUEST_REJECTED => {
-                (min_sizes::DATA_REQUEST_REJECTED, "DataRequestRejected")
-            }
-            _ => {
-                return Err(InvalidEnumTag {
-                    tag,
-                    type_name: "Message",
-                }
-                .into());
-            }
-        };
-
-        if payload.len() < min_payload_size {
-            return Err(DecodeError::MessageTooShort {
-                type_name,
-                need: ENVELOPE_HEADER_SIZE + min_payload_size,
-                have: bytes.len(),
-            });
-        }
-
-        match tag {
-            tags::LOOSE_COMMIT => decode_loose_commit(payload),
-            tags::FRAGMENT => decode_fragment(payload),
-            tags::BLOBS_REQUEST => decode_blobs_request(payload),
-            tags::BLOBS_RESPONSE => decode_blobs_response(payload),
-            tags::BATCH_SYNC_REQUEST => decode_batch_sync_request(payload),
-            tags::BATCH_SYNC_RESPONSE => decode_batch_sync_response(payload),
-            tags::REMOVE_SUBSCRIPTIONS => decode_remove_subscriptions(payload),
-            tags::DATA_REQUEST_REJECTED => decode_data_request_rejected(payload),
-            _ => unreachable!("tag validated above"),
-        }
+        decode_message(bytes)
     }
 
     fn payload_size(&self) -> usize {
@@ -536,6 +405,24 @@ impl Message {
     }
 }
 
+impl Encode for Message {
+    fn encode(&self) -> Vec<u8> {
+        encode_message(self)
+    }
+
+    fn encoded_size(&self) -> usize {
+        ENVELOPE_HEADER_SIZE + self.payload_size()
+    }
+}
+
+impl Decode for Message {
+    const MIN_SIZE: usize = ENVELOPE_HEADER_SIZE;
+
+    fn try_decode(buf: &[u8]) -> Result<Self, DecodeError> {
+        decode_message(buf)
+    }
+}
+
 fn sync_result_size(result: &SyncResult) -> usize {
     match result {
         SyncResult::Ok(diff) => sync_diff_size(diff),
@@ -571,6 +458,149 @@ fn sync_diff_size(diff: &SyncDiff) -> usize {
         * 8;
 
     counts_size + commits_size + fragments_size + requested_fps_size
+}
+
+fn encode_message(msg: &Message) -> Vec<u8> {
+    let payload_size = msg.payload_size();
+    let total_size = ENVELOPE_HEADER_SIZE + payload_size;
+
+    let mut buf = Vec::with_capacity(total_size);
+
+    buf.extend_from_slice(&MESSAGE_SCHEMA);
+
+    #[allow(clippy::cast_possible_truncation)]
+    buf.extend_from_slice(&(total_size as u32).to_be_bytes());
+
+    match msg {
+        Message::LooseCommit { id, commit, blob } => {
+            buf.push(tags::LOOSE_COMMIT);
+            encode_loose_commit(&mut buf, id, commit, blob);
+        }
+        Message::Fragment { id, fragment, blob } => {
+            buf.push(tags::FRAGMENT);
+            encode_fragment(&mut buf, id, fragment, blob);
+        }
+        Message::BlobsRequest { id, digests } => {
+            buf.push(tags::BLOBS_REQUEST);
+            encode_blobs_request(&mut buf, id, digests);
+        }
+        Message::BlobsResponse { id, blobs } => {
+            buf.push(tags::BLOBS_RESPONSE);
+            encode_blobs_response(&mut buf, id, blobs);
+        }
+        Message::BatchSyncRequest(req) => {
+            buf.push(tags::BATCH_SYNC_REQUEST);
+            encode_batch_sync_request(&mut buf, req);
+        }
+        Message::BatchSyncResponse(resp) => {
+            buf.push(tags::BATCH_SYNC_RESPONSE);
+            encode_batch_sync_response(&mut buf, resp);
+        }
+        Message::RemoveSubscriptions(unsub) => {
+            buf.push(tags::REMOVE_SUBSCRIPTIONS);
+            encode_remove_subscriptions(&mut buf, unsub);
+        }
+        Message::DataRequestRejected(rejected) => {
+            buf.push(tags::DATA_REQUEST_REJECTED);
+            encode_data_request_rejected(&mut buf, rejected);
+        }
+    }
+
+    buf
+}
+
+#[allow(clippy::indexing_slicing)] // Length validated before access
+fn decode_message(bytes: &[u8]) -> Result<Message, DecodeError> {
+    if bytes.len() < ENVELOPE_HEADER_SIZE {
+        return Err(DecodeError::MessageTooShort {
+            type_name: "Message envelope",
+            need: ENVELOPE_HEADER_SIZE,
+            have: bytes.len(),
+        });
+    }
+
+    let schema: [u8; 4] =
+        bytes
+            .get(0..4)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: "Message schema",
+                need: 4,
+                have: bytes.len(),
+            })?;
+    if schema != MESSAGE_SCHEMA {
+        return Err(InvalidSchema {
+            expected: MESSAGE_SCHEMA,
+            got: schema,
+        }
+        .into());
+    }
+
+    let total_size = u32::from_be_bytes(bytes.get(4..8).and_then(|s| s.try_into().ok()).ok_or(
+        DecodeError::MessageTooShort {
+            type_name: "Message total_size",
+            need: 8,
+            have: bytes.len(),
+        },
+    )?) as usize;
+    if bytes.len() != total_size {
+        return Err(SizeMismatch {
+            declared: total_size,
+            actual: bytes.len(),
+        }
+        .into());
+    }
+
+    let tag = *bytes.get(8).ok_or(DecodeError::MessageTooShort {
+        type_name: "Message tag",
+        need: 9,
+        have: bytes.len(),
+    })?;
+    let payload = bytes
+        .get(ENVELOPE_HEADER_SIZE..)
+        .ok_or(DecodeError::MessageTooShort {
+            type_name: "Message payload",
+            need: ENVELOPE_HEADER_SIZE,
+            have: bytes.len(),
+        })?;
+
+    let (min_payload_size, type_name) = match tag {
+        tags::LOOSE_COMMIT => (min_sizes::LOOSE_COMMIT, "LooseCommit"),
+        tags::FRAGMENT => (min_sizes::FRAGMENT, "Fragment"),
+        tags::BLOBS_REQUEST => (min_sizes::BLOBS_REQUEST, "BlobsRequest"),
+        tags::BLOBS_RESPONSE => (min_sizes::BLOBS_RESPONSE, "BlobsResponse"),
+        tags::BATCH_SYNC_REQUEST => (min_sizes::BATCH_SYNC_REQUEST, "BatchSyncRequest"),
+        tags::BATCH_SYNC_RESPONSE => (min_sizes::BATCH_SYNC_RESPONSE, "BatchSyncResponse"),
+        tags::REMOVE_SUBSCRIPTIONS => (min_sizes::REMOVE_SUBSCRIPTIONS, "RemoveSubscriptions"),
+        tags::DATA_REQUEST_REJECTED => (min_sizes::DATA_REQUEST_REJECTED, "DataRequestRejected"),
+        _ => {
+            return Err(InvalidEnumTag {
+                tag,
+                type_name: "Message",
+            }
+            .into());
+        }
+    };
+
+    if payload.len() < min_payload_size {
+        return Err(DecodeError::MessageTooShort {
+            type_name,
+            need: ENVELOPE_HEADER_SIZE + min_payload_size,
+            have: bytes.len(),
+        });
+    }
+
+    match tag {
+        tags::LOOSE_COMMIT => decode_loose_commit(payload),
+        tags::FRAGMENT => decode_fragment(payload),
+        tags::BLOBS_REQUEST => decode_blobs_request(payload),
+        tags::BLOBS_RESPONSE => decode_blobs_response(payload),
+        tags::BATCH_SYNC_REQUEST => decode_batch_sync_request(payload),
+        tags::BATCH_SYNC_RESPONSE => decode_batch_sync_response(payload),
+        tags::REMOVE_SUBSCRIPTIONS => decode_remove_subscriptions(payload),
+        tags::DATA_REQUEST_REJECTED => decode_data_request_rejected(payload),
+        _ => unreachable!("tag validated above"),
+    }
 }
 
 fn encode_loose_commit(

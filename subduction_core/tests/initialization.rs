@@ -1,36 +1,24 @@
 //! Tests for Subduction initialization.
 
+use std::sync::Arc;
+
 use future_form::Sendable;
-use sedimentree_core::commit::CountLeadingZeroBytes;
 use subduction_core::{
-    connection::{
-        nonce_cache::NonceCache,
-        test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
-    },
+    connection::test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::builder::SubductionBuilder,
 };
 
 #[test]
 fn test_new_creates_empty_subduction() {
-    let storage = MemoryStorage::new();
-    let depth_metric = CountLeadingZeroBytes;
-
     // Verify construction doesn't panic
-    let (_subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            depth_metric,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (_subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 }
 
 #[tokio::test]

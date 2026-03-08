@@ -7,9 +7,7 @@ use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use eyre::Result;
 use iroh::EndpointAddr;
-use sedimentree_core::{
-    commit::CountLeadingZeroBytes, id::SedimentreeId, sedimentree::Sedimentree,
-};
+use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     connection::{
@@ -18,9 +16,8 @@ use subduction_core::{
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::metrics::{MetricsStorage, RefreshMetrics},
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
@@ -203,20 +200,18 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
-    let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
+    // Build the Subduction instance with all defaults
+    let mut builder = SubductionBuilder::new()
+        .signer(signer.clone())
+        .storage(storage, Arc::new(OpenPolicy))
+        .spawner(TokioSpawn);
 
-    // Create the unified Subduction instance (parameterized over UnifiedTransport)
-    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) = Subduction::new(
-        discovery_id,
-        signer.clone(),
-        storage,
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        sedimentrees,
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
+    if let Some(id) = discovery_id {
+        builder = builder.discovery_id(id);
+    }
+
+    let (subduction, _handler, listener_fut, manager_fut): (CliSubduction, _, _, _) =
+        builder.build();
 
     let server_peer_id = subduction.peer_id();
 

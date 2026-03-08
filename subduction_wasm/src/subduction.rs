@@ -7,7 +7,7 @@ use alloc::{
     vec::Vec,
 };
 use core::{fmt::Debug, time::Duration};
-use sedimentree_core::collections::Map;
+use sedimentree_core::collections::{Map, Set};
 
 use from_js_ref::FromJsRef;
 use future_form::Local;
@@ -27,11 +27,14 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{handshake::DiscoveryId, manager::Spawn, nonce_cache::NonceCache},
+    connection::{handshake::DiscoveryId, manager::Spawn},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{
+        Subduction, builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    },
 };
 use wasm_bindgen::prelude::*;
 
@@ -146,20 +149,21 @@ impl WasmSubduction {
                 .expect("hash_metric_override is not a Function")
         });
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
-        let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
-            ShardedMap::new();
+        let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
-        let (core, listener_fut, manager_fut) = Subduction::new(
-            discovery_id,
-            signer,
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            WasmHashMetric(raw_fn),
-            sedimentrees,
-            WasmSpawn,
-            max_pending,
-        );
+
+        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+            .signer(signer)
+            .storage(storage, Arc::new(OpenPolicy))
+            .spawner(WasmSpawn)
+            .depth_metric(depth_metric)
+            .max_pending_blob_requests(max_pending);
+
+        if let Some(id) = discovery_id {
+            builder = builder.discovery_id(id);
+        }
+
+        let (core, _handler, listener_fut, manager_fut) = builder.build();
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -183,6 +187,9 @@ impl WasmSubduction {
     }
 
     /// Hydrate a [`Subduction`] instance from external storage.
+    ///
+    /// Loads all sedimentree data from storage and reconstructs the in-memory
+    /// state before initializing the sync engine.
     ///
     /// # Arguments
     ///
@@ -209,6 +216,8 @@ impl WasmSubduction {
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
     ) -> Result<Self, WasmHydrationError> {
+        use subduction_core::storage::traits::Storage as _;
+
         tracing::debug!("hydrating new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
         #[allow(clippy::expect_used)]
@@ -218,21 +227,54 @@ impl WasmSubduction {
                 .expect("hash_metric_override is not a Function")
         });
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
-        let sedimentrees: ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT> =
-            ShardedMap::new();
+        let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
-        let (core, listener_fut, manager_fut) = Subduction::hydrate(
-            discovery_id,
-            signer,
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            WasmHashMetric(raw_fn),
-            sedimentrees,
-            WasmSpawn,
-            max_pending,
-        )
-        .await?;
+
+        // Load sedimentree IDs from raw storage before wrapping in powerbox
+        let ids: Set<SedimentreeId> = storage
+            .load_all_sedimentree_ids()
+            .await
+            .map_err(HydrationError::LoadAllIdsError)?;
+
+        // Hydrate sedimentrees from storage
+        let sedimentrees = Arc::new(ShardedMap::new());
+        for id in ids {
+            let commits = storage
+                .load_loose_commits(id)
+                .await
+                .map_err(HydrationError::LoadLooseCommitsError)?;
+            let fragments = storage
+                .load_fragments(id)
+                .await
+                .map_err(HydrationError::LoadFragmentsError)?;
+
+            let loose_commits: Vec<_> = commits.into_iter().map(|v| v.payload().clone()).collect();
+            let fragments: Vec<_> = fragments.into_iter().map(|v| v.payload().clone()).collect();
+
+            let sedimentree = Sedimentree::new(fragments, loose_commits);
+            sedimentrees
+                .with_entry_or_default(id, |tree: &mut Sedimentree| tree.merge(sedimentree))
+                .await;
+            sedimentrees
+                .with_entry(&id, |tree| {
+                    *tree = tree.minimize(&depth_metric);
+                })
+                .await;
+        }
+
+        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+            .signer(signer)
+            .storage(storage, Arc::new(OpenPolicy))
+            .spawner(WasmSpawn)
+            .depth_metric(depth_metric)
+            .max_pending_blob_requests(max_pending)
+            .sedimentrees(sedimentrees);
+
+        if let Some(id) = discovery_id {
+            builder = builder.discovery_id(id);
+        }
+
+        let (core, _handler, listener_fut, manager_fut) = builder.build();
 
         wasm_bindgen_futures::spawn_local(async move {
             let manager = manager_fut.fuse();
@@ -921,7 +963,7 @@ impl WasmPeerResultMap {
 }
 
 /// An overridable hash metric.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 #[wasm_bindgen(js_name = HashMetric)]
 pub struct WasmHashMetric(Option<js_sys::Function>);
 

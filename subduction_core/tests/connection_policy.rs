@@ -3,20 +3,18 @@
 #![allow(clippy::expect_used)]
 
 use core::{convert::Infallible, fmt};
+use std::sync::Arc;
+
 use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
-use sedimentree_core::{commit::CountLeadingZeroBytes, id::SedimentreeId};
+use sedimentree_core::id::SedimentreeId;
 use std::vec::Vec;
 use subduction_core::{
-    connection::{
-        nonce_cache::NonceCache,
-        test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
-    },
+    connection::test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::builder::SubductionBuilder,
 };
 use testresult::TestResult;
 
@@ -88,18 +86,12 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
 
 #[tokio::test]
 async fn rejected_connection_is_not_registered() -> TestResult {
-    let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            MemoryStorage::new(),
-            RejectConnectionPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, _listener_fut, _actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let peer_id = PeerId::new([1u8; 32]);
     let conn = MockConnection::with_peer_id(peer_id).authenticated();
@@ -138,18 +130,12 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
     assert!(connected.contains(&allowed_peer));
 
     // Now create a subduction with reject policy and try to register
-    let (reject_subduction, _listener_fut2, _actor_fut2) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            MemoryStorage::new(),
-            RejectConnectionPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TestSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (reject_subduction, _handler, _listener_fut2, _actor_fut2) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
+            .spawner(TestSpawn)
+            .build::<Sendable, MockConnection>();
 
     let rejected_peer = PeerId::new([2u8; 32]);
     let rejected_conn = MockConnection::with_peer_id(rejected_peer).authenticated();

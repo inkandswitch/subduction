@@ -7,22 +7,29 @@
 #![allow(clippy::expect_used, clippy::panic)]
 
 use core::time::Duration;
+use std::sync::Arc;
+
+use async_lock::Mutex;
 use future_form::Sendable;
 use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
+    blob::Blob, collections::Map, commit::CountLeadingZeroBytes, crypto::digest::Digest,
+    id::SedimentreeId,
 };
-use std::sync::Arc;
 use subduction_core::{
     connection::{
         message::Message,
         nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
-    storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
+    subduction::{
+        Subduction,
+        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    },
 };
 use testresult::TestResult;
 
@@ -67,16 +74,35 @@ fn new_dispatch_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
+    let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
+    let connections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions = Arc::new(Mutex::new(Map::new()));
+    let storage = StoragePowerbox::new(MemoryStorage::new(), Arc::new(OpenPolicy));
+    let pending = Arc::new(Mutex::new(PendingBlobRequests::new(
+        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+    )));
+
+    let handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        storage.clone(),
+        pending.clone(),
+        CountLeadingZeroBytes,
+    ));
+
     Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+        handler,
         None,
         test_signer(),
-        MemoryStorage::new(),
-        OpenPolicy,
+        sedimentrees,
+        connections,
+        subscriptions,
+        storage,
+        pending,
         NonceCache::default(),
         CountLeadingZeroBytes,
-        ShardedMap::with_key(0, 0),
         TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     )
 }
 

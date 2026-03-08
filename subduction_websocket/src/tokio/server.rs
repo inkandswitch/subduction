@@ -12,9 +12,7 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use sedimentree_core::{
-    commit::CountLeadingZeroBytes, depth::DepthMetric, id::SedimentreeId, sedimentree::Sedimentree,
-};
+use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric};
 use subduction_core::{
     connection::{
         authenticated::Authenticated,
@@ -23,12 +21,8 @@ use subduction_core::{
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
-    sharded_map::ShardedMap,
     storage::traits::Storage,
-    subduction::{
-        Subduction, error::RegistrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    },
+    subduction::{Subduction, builder::SubductionBuilder, error::RegistrationError},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -269,20 +263,26 @@ where
         policy: P,
         nonce_cache: NonceCache,
         depth_metric: M,
-    ) -> Result<Self, tungstenite::Error> {
+    ) -> Result<Self, tungstenite::Error>
+    where
+        M: Clone,
+        S: core::fmt::Debug,
+        UnifiedWebSocket<O>: core::fmt::Debug,
+    {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
-        let sedimentrees: ShardedMap<SedimentreeId, Sedimentree> = ShardedMap::new();
-        let (subduction, listener_fut, manager_fut) = Subduction::new(
-            discovery_id,
-            signer,
-            storage,
-            policy,
-            nonce_cache,
-            depth_metric,
-            sedimentrees,
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+
+        let mut builder = SubductionBuilder::new()
+            .signer(signer)
+            .storage(storage, Arc::new(policy))
+            .spawner(TokioSpawn)
+            .nonce_cache(nonce_cache)
+            .depth_metric(depth_metric);
+
+        if let Some(id) = discovery_id {
+            builder = builder.discovery_id(id);
+        }
+
+        let (subduction, _handler, listener_fut, manager_fut) = builder.build();
 
         let server = Self::new(
             address,

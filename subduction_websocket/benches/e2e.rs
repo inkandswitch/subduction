@@ -45,9 +45,8 @@ use subduction_core::{
     connection::{handshake::Audience, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{
@@ -187,23 +186,12 @@ async fn connected_client(
     server_addr: SocketAddr,
 ) -> ClientSubduction {
     let client_signer = signer(seed);
-    let (client, listener_fut, manager_fut) = Subduction::<
-        Sendable,
-        MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
-        OpenPolicy,
-        MemorySigner,
-    >::new(
-        None,
-        client_signer.clone(),
-        MemoryStorage::default(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::with_key(0, 0),
-        TokioSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    );
+
+    let (client, _handler, listener_fut, manager_fut) = SubductionBuilder::new()
+        .signer(client_signer.clone())
+        .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>();
 
     // `listener_fut` already runs `Subduction::listen()` internally —
     // do NOT spawn an additional `client.listen()` call.

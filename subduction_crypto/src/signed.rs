@@ -25,7 +25,7 @@ use core::{cmp::Ordering, marker::PhantomData};
 
 use ed25519_dalek::{Signature, VerifyingKey};
 use sedimentree_core::codec::{
-    decode::Decode,
+    decode::DecodeFields,
     encode::EncodeFields,
     error::{DecodeError, InvalidSchema},
     schema::Schema,
@@ -76,7 +76,7 @@ pub const MIN_SIGNED_SIZE: usize = SCHEMA_SIZE + VERIFYING_KEY_SIZE + SIGNATURE_
 /// ```
 #[derive(Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Signed<T: Schema + EncodeFields + Decode> {
+pub struct Signed<T: Schema + EncodeFields + DecodeFields> {
     /// Cached issuer verifying key (also at bytes[4..36]).
     issuer: VerifyingKey,
 
@@ -89,7 +89,7 @@ pub struct Signed<T: Schema + EncodeFields + Decode> {
     _marker: PhantomData<T>,
 }
 
-impl<T: Schema + EncodeFields + Decode> Clone for Signed<T> {
+impl<T: Schema + EncodeFields + DecodeFields> Clone for Signed<T> {
     fn clone(&self) -> Self {
         Self {
             issuer: self.issuer,
@@ -100,7 +100,7 @@ impl<T: Schema + EncodeFields + Decode> Clone for Signed<T> {
     }
 }
 
-impl<T: Schema + EncodeFields + Decode> Signed<T> {
+impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     /// Get the issuer's verifying key.
     #[must_use]
     pub const fn issuer(&self) -> VerifyingKey {
@@ -185,10 +185,10 @@ impl<T: Schema + EncodeFields + Decode> Signed<T> {
     /// - The payload cannot be decoded
     pub fn try_decode(mut bytes: Vec<u8>) -> Result<Self, DecodeError> {
         // Check minimum size
-        if bytes.len() < T::MIN_SIZE {
+        if bytes.len() < T::MIN_SIGNED_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: core::any::type_name::<T>(),
-                need: T::MIN_SIZE,
+                need: T::MIN_SIGNED_SIZE,
                 have: bytes.len(),
             });
         }
@@ -352,27 +352,27 @@ impl<T: Schema + EncodeFields + Decode> Signed<T> {
     }
 }
 
-impl<T: Schema + EncodeFields + Decode> PartialEq for Signed<T> {
+impl<T: Schema + EncodeFields + DecodeFields> PartialEq for Signed<T> {
     fn eq(&self, other: &Self) -> bool {
         self.bytes == other.bytes
     }
 }
 
-impl<T: Schema + EncodeFields + Decode> Eq for Signed<T> {}
+impl<T: Schema + EncodeFields + DecodeFields> Eq for Signed<T> {}
 
-impl<T: Schema + EncodeFields + Decode> core::hash::Hash for Signed<T> {
+impl<T: Schema + EncodeFields + DecodeFields> core::hash::Hash for Signed<T> {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
         self.bytes.hash(state);
     }
 }
 
-impl<T: Schema + EncodeFields + Decode> PartialOrd for Signed<T> {
+impl<T: Schema + EncodeFields + DecodeFields> PartialOrd for Signed<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<T: Schema + EncodeFields + Decode> Ord for Signed<T> {
+impl<T: Schema + EncodeFields + DecodeFields> Ord for Signed<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         self.bytes.cmp(&other.bytes)
     }
@@ -391,8 +391,8 @@ pub enum VerificationError {
 }
 
 #[cfg(feature = "arbitrary")]
-impl<'a, T: Schema + EncodeFields + Decode + arbitrary::Arbitrary<'a>> arbitrary::Arbitrary<'a>
-    for Signed<T>
+impl<'a, T: Schema + EncodeFields + DecodeFields + arbitrary::Arbitrary<'a>>
+    arbitrary::Arbitrary<'a> for Signed<T>
 {
     fn arbitrary(u: &mut arbitrary::Unstructured<'a>) -> arbitrary::Result<Self> {
         use ed25519_dalek::{Signer as _, SigningKey};
@@ -433,7 +433,7 @@ mod tests {
     use alloc::vec::Vec;
 
     use sedimentree_core::codec::{
-        decode::{self, Decode},
+        decode::{self, DecodeFields},
         encode::{self, EncodeFields},
         error::DecodeError,
         schema::{self, Schema},
@@ -466,8 +466,8 @@ mod tests {
         }
     }
 
-    impl Decode for TestPayload {
-        const MIN_SIZE: usize = 4 + 32 + 8 + 64; // schema + issuer + value + signature
+    impl DecodeFields for TestPayload {
+        const MIN_SIGNED_SIZE: usize = 4 + 32 + 8 + 64; // schema + issuer + value + signature
 
         fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
             let value = decode::u64(buf, 0)?;

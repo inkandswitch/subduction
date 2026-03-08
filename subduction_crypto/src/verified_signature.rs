@@ -3,7 +3,7 @@
 use core::cmp::Ordering;
 
 use sedimentree_core::codec::{
-    decode::Decode, encode::EncodeFields, error::DecodeError, schema::Schema,
+    decode::DecodeFields, encode::EncodeFields, error::DecodeError, schema::Schema,
 };
 
 use crate::signed::{Signed, VerificationError};
@@ -37,12 +37,12 @@ use crate::signed::{Signed, VerificationError};
 /// This type should NEVER be sent over the wire directly. Always transmit
 /// [`Signed<T>`] and have the recipient verify via [`try_from_signed`](Self::try_from_signed).
 #[derive(Clone, Debug)]
-pub struct VerifiedSignature<T: Schema + EncodeFields + Decode> {
+pub struct VerifiedSignature<T: Schema + EncodeFields + DecodeFields> {
     signed: Signed<T>,
     payload: T,
 }
 
-impl<T: Schema + EncodeFields + Decode> VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + DecodeFields> VerifiedSignature<T> {
     /// Verify the signature and decode the payload.
     ///
     /// This is the primary way to create a `VerifiedSignature` from untrusted data.
@@ -129,16 +129,16 @@ impl<T: Schema + EncodeFields + Decode> VerifiedSignature<T> {
     }
 }
 
-impl<T: Schema + EncodeFields + Decode + PartialEq> PartialEq for VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + DecodeFields + PartialEq> PartialEq for VerifiedSignature<T> {
     fn eq(&self, other: &Self) -> bool {
         // Compare by signed value (includes issuer, signature, encoded payload)
         self.signed == other.signed
     }
 }
 
-impl<T: Schema + EncodeFields + Decode + Eq> Eq for VerifiedSignature<T> {}
+impl<T: Schema + EncodeFields + DecodeFields + Eq> Eq for VerifiedSignature<T> {}
 
-impl<T: Schema + EncodeFields + Decode + core::hash::Hash> core::hash::Hash
+impl<T: Schema + EncodeFields + DecodeFields + core::hash::Hash> core::hash::Hash
     for VerifiedSignature<T>
 {
     fn hash<H: core::hash::Hasher>(&self, state: &mut H) {
@@ -146,7 +146,7 @@ impl<T: Schema + EncodeFields + Decode + core::hash::Hash> core::hash::Hash
     }
 }
 
-impl<T: Schema + EncodeFields + Decode + PartialOrd> PartialOrd for VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + DecodeFields + PartialOrd> PartialOrd for VerifiedSignature<T> {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         match self.payload.partial_cmp(&other.payload) {
             Some(Ordering::Equal) => self
@@ -160,7 +160,7 @@ impl<T: Schema + EncodeFields + Decode + PartialOrd> PartialOrd for VerifiedSign
 }
 
 #[allow(clippy::non_canonical_partial_ord_impl)]
-impl<T: Schema + EncodeFields + Decode + Ord> Ord for VerifiedSignature<T> {
+impl<T: Schema + EncodeFields + DecodeFields + Ord> Ord for VerifiedSignature<T> {
     fn cmp(&self, other: &Self) -> Ordering {
         match self.payload.cmp(&other.payload) {
             Ordering::Equal => self

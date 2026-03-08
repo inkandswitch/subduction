@@ -16,16 +16,12 @@ use sedimentree_core::{
     id::SedimentreeId,
     loose_commit::LooseCommit,
 };
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
-    connection::{
-        nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
-    },
+    connection::test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 use testresult::TestResult;
 
@@ -56,7 +52,7 @@ fn make_unique_blob(seed: u8) -> Blob {
 /// futures are spawned onto the tokio runtime automatically.
 ///
 /// Must be called from within a tokio runtime context.
-fn make_subduction() -> std::sync::Arc<
+fn make_subduction() -> Arc<
     Subduction<
         'static,
         Sendable,
@@ -67,18 +63,12 @@ fn make_subduction() -> std::sync::Arc<
         CountLeadingZeroBytes,
     >,
 > {
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            MemoryStorage::new(),
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, ChannelMockConnection>();
+
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
     subduction

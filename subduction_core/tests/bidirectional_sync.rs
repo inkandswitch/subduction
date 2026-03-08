@@ -13,20 +13,21 @@
 
 #![allow(clippy::expect_used, clippy::panic)]
 
-use core::time::Duration;
+use core::{future::Future, time::Duration};
+use std::sync::Arc;
+
 use future_form::Sendable;
+use futures::future::Aborted;
 use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
-        nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 
 use sedimentree_core::{
@@ -46,6 +47,31 @@ use testresult::TestResult;
 
 /// A deterministic seed for tests (not security-sensitive).
 const TEST_SEED: FingerprintSeed = FingerprintSeed::new(12345, 67890);
+
+#[allow(clippy::type_complexity)]
+fn make_subduction() -> (
+    Arc<
+        Subduction<
+            'static,
+            Sendable,
+            MemoryStorage,
+            ChannelMockConnection,
+            OpenPolicy,
+            subduction_crypto::signer::memory::MemorySigner,
+            CountLeadingZeroBytes,
+        >,
+    >,
+    impl Future<Output = Result<(), Aborted>>,
+    impl Future<Output = Result<(), Aborted>>,
+) {
+    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, ChannelMockConnection>();
+
+    (sd, listener, manager)
+}
 
 async fn make_test_commit(
     id: &SedimentreeId,
@@ -77,19 +103,7 @@ async fn make_test_fragment(
 #[tokio::test]
 async fn test_responder_requests_missing_commits() -> TestResult {
     // Set up responder (Alice) - has commit A
-    let alice_storage = MemoryStorage::new();
-    let (alice, alice_listener, alice_actor) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            alice_storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (alice, alice_listener, alice_actor) = make_subduction();
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let peer_id = PeerId::new([1u8; 32]);
@@ -177,19 +191,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
 #[tokio::test]
 async fn test_responder_requests_commits_from_requestor() -> TestResult {
     // Set up responder (Alice) - starts empty
-    let alice_storage = MemoryStorage::new();
-    let (alice, alice_listener, alice_actor) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            alice_storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (alice, alice_listener, alice_actor) = make_subduction();
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let peer_id = PeerId::new([1u8; 32]);
@@ -278,19 +280,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     let commit_b_fp: Fingerprint<CommitId> = Fingerprint::new(&TEST_SEED, &commit_b_id);
 
     // Set up Alice with commit A
-    let alice_storage = MemoryStorage::new();
-    let (alice, alice_listener, alice_actor) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            alice_storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (alice, alice_listener, alice_actor) = make_subduction();
 
     let (alice_conn, alice_handle) = ChannelMockConnection::new_with_handle(bob_peer_id);
     alice.register(alice_conn.authenticated()).await?;
@@ -318,19 +308,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     );
 
     // Set up Bob with commit B
-    let bob_storage = MemoryStorage::new();
-    let (bob, bob_listener, bob_actor) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            bob_storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (bob, bob_listener, bob_actor) = make_subduction();
 
     let (bob_conn, bob_handle) = ChannelMockConnection::new_with_handle(alice_peer_id);
     bob.register(bob_conn.authenticated()).await?;
@@ -442,19 +420,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 /// Test that requesting field includes fragment fingerprints.
 #[tokio::test]
 async fn test_responder_requests_fragments() -> TestResult {
-    let alice_storage = MemoryStorage::new();
-    let (alice, alice_listener, alice_actor) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            alice_storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (alice, alice_listener, alice_actor) = make_subduction();
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let peer_id = PeerId::new([1u8; 32]);
@@ -518,19 +484,7 @@ async fn test_responder_requests_fragments() -> TestResult {
 /// Test that empty requesting field when both sides are in sync.
 #[tokio::test]
 async fn test_no_requesting_when_in_sync() -> TestResult {
-    let alice_storage = MemoryStorage::new();
-    let (alice, alice_listener, alice_actor) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            alice_storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (alice, alice_listener, alice_actor) = make_subduction();
 
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let peer_id = PeerId::new([1u8; 32]);

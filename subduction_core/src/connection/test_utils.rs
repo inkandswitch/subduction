@@ -15,14 +15,12 @@ use super::{
     authenticated::Authenticated,
     manager::Spawn,
     message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    nonce_cache::NonceCache,
 };
 use crate::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 
 /// A minimal mock connection for testing.
@@ -597,17 +595,13 @@ pub fn new_test_subduction() -> (
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
     impl core::future::Future<Output = Result<(), futures::future::Aborted>>,
 ) {
-    Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
-        None,
-        test_signer(),
-        MemoryStorage::new(),
-        OpenPolicy,
-        NonceCache::default(),
-        CountLeadingZeroBytes,
-        ShardedMap::with_key(0, 0),
-        TestSpawn,
-        DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-    )
+    let (sd, _handler, listener, manager) = SubductionBuilder::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TestSpawn)
+        .build::<Sendable, MockConnection>();
+
+    (sd, listener, manager)
 }
 
 #[cfg(test)]

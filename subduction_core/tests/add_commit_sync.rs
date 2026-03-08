@@ -7,20 +7,14 @@
 
 use core::time::Duration;
 use future_form::Sendable;
-use sedimentree_core::{
-    blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
-};
-use std::collections::BTreeSet;
+use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
+use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
-    connection::{
-        nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
-    },
+    connection::test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    sharded_map::ShardedMap,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    subduction::builder::SubductionBuilder,
 };
 use testresult::TestResult;
 
@@ -33,19 +27,12 @@ fn make_unique_blob(seed: u8) -> Blob {
 /// Test: Adding a single commit and verifying it's in the in-memory sedimentree.
 #[tokio::test]
 async fn add_single_commit_is_stored() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -66,19 +53,12 @@ async fn add_single_commit_is_stored() -> TestResult {
 /// Test: Adding multiple commits sequentially and verifying all are stored.
 #[tokio::test]
 async fn add_multiple_commits_all_stored() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -101,19 +81,12 @@ async fn add_multiple_commits_all_stored() -> TestResult {
 /// Test: Verify commits are retrievable after adding.
 #[tokio::test]
 async fn commits_retrievable_after_add() -> TestResult {
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -154,19 +127,12 @@ async fn commits_retrievable_after_add() -> TestResult {
 async fn fingerprint_summary_includes_all_commits() -> TestResult {
     use sedimentree_core::crypto::fingerprint::FingerprintSeed;
 
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -213,19 +179,12 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
         BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult,
     };
 
-    let storage = MemoryStorage::new();
-    let (subduction, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (subduction, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .build::<Sendable, ChannelMockConnection>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let peer_id = PeerId::new([2u8; 32]);
@@ -304,19 +263,11 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
 async fn full_sync_sends_all_commits() -> TestResult {
     use subduction_core::connection::message::Message;
 
-    let storage = MemoryStorage::new();
-    let (client, listener_fut, actor_fut) =
-        Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
-            None,
-            test_signer(),
-            storage,
-            OpenPolicy,
-            NonceCache::default(),
-            CountLeadingZeroBytes,
-            ShardedMap::with_key(0, 0),
-            TokioSpawn,
-            DEFAULT_MAX_PENDING_BLOB_REQUESTS,
-        );
+    let (client, _handler, listener_fut, actor_fut) = SubductionBuilder::<_, _, _, _, 256>::new()
+        .signer(test_signer())
+        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+        .spawner(TokioSpawn)
+        .build::<Sendable, ChannelMockConnection>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let server_peer_id = PeerId::new([2u8; 32]);

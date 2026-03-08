@@ -69,7 +69,7 @@ use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::Ti
 use sedimentree_core::{
     codec::{
         decode,
-        decode::Decode,
+        decode::DecodeFields,
         encode,
         encode::EncodeFields,
         error::{DecodeError, InvalidEnumTag},
@@ -309,8 +309,8 @@ impl EncodeFields for Challenge {
     }
 }
 
-impl Decode for Challenge {
-    const MIN_SIZE: usize = CHALLENGE_MIN_SIZE;
+impl DecodeFields for Challenge {
+    const MIN_SIGNED_SIZE: usize = CHALLENGE_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
@@ -381,8 +381,8 @@ impl EncodeFields for Response {
     }
 }
 
-impl Decode for Response {
-    const MIN_SIZE: usize = RESPONSE_MIN_SIZE;
+impl DecodeFields for Response {
+    const MIN_SIGNED_SIZE: usize = RESPONSE_MIN_SIZE;
 
     fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < RESPONSE_FIELDS_SIZE {

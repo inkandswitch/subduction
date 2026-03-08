@@ -11,7 +11,7 @@ use futures::future::LocalBoxFuture;
 use js_sys::{Promise, Uint8Array};
 use sedimentree_core::{
     blob::Blob,
-    codec::{decode::Decode, encode::Encode, error::DecodeError},
+    codec::{decode::DecodeFields, encode::Encode, error::DecodeError},
     crypto::digest::Digest,
     fragment::Fragment,
     id::{BadSedimentreeId, SedimentreeId},
@@ -154,7 +154,7 @@ impl core::fmt::Debug for JsStorage {
 /// Parse a JS array of digests.
 ///
 /// Returns an error if any element cannot be cast to a `Digest`.
-fn parse_digest_array<T: Encode + Decode>(
+fn parse_digest_array<T: Encode + DecodeFields>(
     js_value: &JsValue,
 ) -> Result<Set<Digest<T>>, JsStorageError> {
     let array = js_sys::Array::from(js_value);
