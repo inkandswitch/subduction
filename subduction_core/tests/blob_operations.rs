@@ -19,7 +19,7 @@ use subduction_core::{
     connection::{
         message::SyncMessage,
         nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
+        test_utils::{SyncChannelMock, TokioSpawn, new_test_subduction, test_signer},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -65,7 +65,7 @@ fn new_dispatch_subduction() -> (
             'static,
             Sendable,
             MemoryStorage,
-            ChannelMockConnection,
+            SyncChannelMock,
             SyncMessage,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
@@ -92,7 +92,7 @@ fn new_dispatch_subduction() -> (
         CountLeadingZeroBytes,
     ));
 
-    Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+    Subduction::<'_, Sendable, _, SyncChannelMock, _, _, _>::new(
         handler,
         None,
         test_signer(),
@@ -116,7 +116,7 @@ async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -171,7 +171,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([2u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -213,7 +213,7 @@ async fn blobs_response_does_not_store_any_blobs() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([3u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -281,7 +281,7 @@ async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([4u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -338,7 +338,7 @@ async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
     let (subduction, listener_fut, actor_fut) = new_dispatch_subduction();
 
     let peer_id = PeerId::new([5u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);

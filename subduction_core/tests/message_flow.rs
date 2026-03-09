@@ -19,7 +19,7 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        test_utils::{SyncChannelMock, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -47,9 +47,9 @@ async fn test_sendable_single_commit() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
-    let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+    let (conn, handle) = SyncChannelMock::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -95,9 +95,9 @@ async fn test_sendable_multiple_sequential() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
-    let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+    let (conn, handle) = SyncChannelMock::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -143,9 +143,9 @@ async fn test_sendable_same_sedimentree() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
-    let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+    let (conn, handle) = SyncChannelMock::new_with_handle(PeerId::new([1u8; 32]));
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -196,9 +196,9 @@ async fn test_local_single_commit() -> TestResult {
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .build::<Local, ChannelMockConnection>();
+                    .build::<Local, SyncChannelMock>();
 
-            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            let (conn, handle) = SyncChannelMock::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;
 
             let actor_task = tokio::task::spawn_local(actor_fut);
@@ -249,9 +249,9 @@ async fn test_local_multiple_sequential() -> TestResult {
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .build::<Local, ChannelMockConnection>();
+                    .build::<Local, SyncChannelMock>();
 
-            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            let (conn, handle) = SyncChannelMock::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;
 
             let actor_task = tokio::task::spawn_local(actor_fut);
@@ -303,9 +303,9 @@ async fn test_local_same_sedimentree() -> TestResult {
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .build::<Local, ChannelMockConnection>();
+                    .build::<Local, SyncChannelMock>();
 
-            let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
+            let (conn, handle) = SyncChannelMock::new_with_handle(PeerId::new([1u8; 32]));
             subduction.register(conn.authenticated()).await?;
 
             let actor_task = tokio::task::spawn_local(actor_fut);

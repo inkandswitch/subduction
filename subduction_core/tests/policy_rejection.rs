@@ -17,7 +17,7 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, SyncMessage, SyncResult},
-        test_utils::{ChannelMockConnection, MockConnection, TestSpawn, TokioSpawn, test_signer},
+        test_utils::{SyncChannelMock, MockConnection, TestSpawn, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -349,10 +349,10 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
     let peer_id = PeerId::new([1u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);

@@ -10,7 +10,7 @@ use future_form::Sendable;
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
-    connection::test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+    connection::test_utils::{SyncChannelMock, TokioSpawn, test_signer},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -32,7 +32,7 @@ async fn add_single_commit_is_stored() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -58,7 +58,7 @@ async fn add_multiple_commits_all_stored() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -86,7 +86,7 @@ async fn commits_retrievable_after_add() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -132,7 +132,7 @@ async fn fingerprint_summary_includes_all_commits() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -184,13 +184,13 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, SyncChannelMock>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let peer_id = PeerId::new([2u8; 32]);
 
     // Register a mock connection
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     tokio::spawn(listener_fut);
@@ -267,13 +267,13 @@ async fn full_sync_sends_all_commits() -> TestResult {
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+        .build::<Sendable, SyncChannelMock>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let server_peer_id = PeerId::new([2u8; 32]);
 
     // Register a mock connection to "server"
-    let (conn, handle) = ChannelMockConnection::new_with_handle(server_peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(server_peer_id);
     client.register(conn.authenticated()).await?;
 
     tokio::spawn(listener_fut);

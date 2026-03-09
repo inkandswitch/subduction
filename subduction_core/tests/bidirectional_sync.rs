@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        test_utils::{SyncChannelMock, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -55,7 +55,7 @@ fn make_subduction() -> (
             'static,
             Sendable,
             MemoryStorage,
-            ChannelMockConnection,
+            SyncChannelMock,
             SyncMessage,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
@@ -69,7 +69,7 @@ fn make_subduction() -> (
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+        .build::<Sendable, SyncChannelMock>();
 
     (sd, listener, manager)
 }
@@ -110,7 +110,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
     let peer_id = PeerId::new([1u8; 32]);
 
     // Register a connection for the peer
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
@@ -197,7 +197,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let peer_id = PeerId::new([1u8; 32]);
 
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
@@ -283,7 +283,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Set up Alice with commit A
     let (alice, alice_listener, alice_actor) = make_subduction();
 
-    let (alice_conn, alice_handle) = ChannelMockConnection::new_with_handle(bob_peer_id);
+    let (alice_conn, alice_handle) = SyncChannelMock::new_with_handle(bob_peer_id);
     alice.register(alice_conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
@@ -311,7 +311,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Set up Bob with commit B
     let (bob, bob_listener, bob_actor) = make_subduction();
 
-    let (bob_conn, bob_handle) = ChannelMockConnection::new_with_handle(alice_peer_id);
+    let (bob_conn, bob_handle) = SyncChannelMock::new_with_handle(alice_peer_id);
     bob.register(bob_conn.authenticated()).await?;
 
     let bob_actor_task = tokio::spawn(bob_actor);
@@ -426,7 +426,7 @@ async fn test_responder_requests_fragments() -> TestResult {
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let peer_id = PeerId::new([1u8; 32]);
 
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);
@@ -490,7 +490,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
     let sedimentree_id = SedimentreeId::new([42u8; 32]);
     let peer_id = PeerId::new([1u8; 32]);
 
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     alice.register(conn.authenticated()).await?;
 
     let alice_actor_task = tokio::spawn(alice_actor);

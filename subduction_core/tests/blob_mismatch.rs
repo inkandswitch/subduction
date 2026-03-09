@@ -20,7 +20,7 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        test_utils::{SyncChannelMock, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -94,7 +94,7 @@ fn make_subduction() -> (
             'static,
             Sendable,
             MemoryStorage,
-            ChannelMockConnection,
+            SyncChannelMock,
             SyncMessage,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
@@ -108,7 +108,7 @@ fn make_subduction() -> (
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+        .build::<Sendable, SyncChannelMock>();
 
     (sd, listener, manager)
 }
@@ -118,7 +118,7 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
     let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -164,7 +164,7 @@ async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
     let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -203,7 +203,7 @@ async fn recv_commit_accepts_valid_blob() -> TestResult {
     let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -250,7 +250,7 @@ async fn recv_fragment_accepts_valid_blob() -> TestResult {
     let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
@@ -289,7 +289,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
     let (subduction, listener_fut, actor_fut) = make_subduction();
 
     let peer_id = PeerId::new([1u8; 32]);
-    let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+    let (conn, handle) = SyncChannelMock::new_with_handle(peer_id);
     subduction.register(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);

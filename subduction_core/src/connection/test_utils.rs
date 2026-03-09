@@ -1,13 +1,25 @@
 //! Test utilities for connection testing.
 //!
 //! This module provides mock connections and helpers for testing connection-related code.
+//!
+//! # Generic Message Support
+//!
+//! [`MockConnection`], [`FailingSendMockConnection`], and [`ChannelMockConnection`]
+//! implement [`Connection<K, M>`] for _any_ `M: Encode + Decode + Clone`. This
+//! lets tests use them with [`SyncMessage`], [`WireMessage`], or any other wire
+//! message type without changing the mock.
+//!
+//! [`WireMessage`]: subduction_ephemeral::wire::WireMessage
 
 use alloc::sync::Arc;
 use core::{convert::Infallible, time::Duration};
 
 use future_form::{FutureForm, Local, Sendable};
 use futures::future::{AbortHandle, BoxFuture, LocalBoxFuture};
-use sedimentree_core::commit::CountLeadingZeroBytes;
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    commit::CountLeadingZeroBytes,
+};
 use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{
@@ -67,7 +79,7 @@ impl Default for MockConnection {
     }
 }
 
-impl Connection<Sendable, SyncMessage> for MockConnection {
+impl<M: Encode + Decode + Send + 'static> Connection<Sendable, M> for MockConnection {
     type DisconnectionError = core::fmt::Error;
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
@@ -84,12 +96,12 @@ impl Connection<Sendable, SyncMessage> for MockConnection {
 
     fn send(
         &self,
-        _message: &SyncMessage,
+        _message: &M,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         Sendable::from_future(async { Ok(()) })
     }
 
-    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<M, Self::RecvError>> {
         Sendable::from_future(async { Err(core::fmt::Error) })
     }
 }
@@ -154,7 +166,7 @@ impl Default for FailingSendMockConnection {
     }
 }
 
-impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
+impl<M: Encode + Decode + Send + 'static> Connection<Sendable, M> for FailingSendMockConnection {
     type DisconnectionError = core::fmt::Error;
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
@@ -171,12 +183,12 @@ impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
 
     fn send(
         &self,
-        _message: &SyncMessage,
+        _message: &M,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         Sendable::from_future(async { Err(core::fmt::Error) })
     }
 
-    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<M, Self::RecvError>> {
         Sendable::from_future(async { Err(core::fmt::Error) })
     }
 }
@@ -203,52 +215,89 @@ impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for FailingSendMoc
     }
 }
 
+/// Convenience alias for [`ChannelMockConnection`] carrying [`SyncMessage`].
+///
+/// Most tests use `SyncMessage`; import this alias to avoid writing
+/// `ChannelMockConnection::<SyncMessage>` everywhere.
+pub type SyncChannelMock = ChannelMockConnection<SyncMessage>;
+
+/// Convenience alias for [`ChannelMockConnectionHandle`] carrying [`SyncMessage`].
+pub type SyncChannelMockHandle = ChannelMockConnectionHandle<SyncMessage>;
+
 /// A channel-based mock connection for diagnostic testing.
 ///
 /// This mock uses async channels to simulate real message flow, allowing
 /// precise control over when messages arrive and observation of timing.
-#[derive(Clone, Debug)]
-pub struct ChannelMockConnection {
+///
+/// Generic over message type `M` so the same mock can carry
+/// [`SyncMessage`], [`WireMessage`], or any other wire type.
+///
+/// [`WireMessage`]: subduction_ephemeral::wire::WireMessage
+#[derive(Debug)]
+pub struct ChannelMockConnection<M> {
     peer_id: PeerId,
 
     /// Sender for outbound messages (from Subduction to "remote")
-    outbound_tx: async_channel::Sender<SyncMessage>,
+    outbound_tx: async_channel::Sender<M>,
 
     /// Receiver for inbound messages (from "remote" to Subduction)
-    inbound_rx: async_channel::Receiver<SyncMessage>,
+    inbound_rx: async_channel::Receiver<M>,
 
     /// Sender for inbound messages (kept for potential direct access in complex tests)
     #[allow(dead_code)]
-    inbound_tx: async_channel::Sender<SyncMessage>,
+    inbound_tx: async_channel::Sender<M>,
 
     /// Request ID counter
     request_counter: std::sync::Arc<std::sync::atomic::AtomicU64>,
 }
 
-impl PartialEq for ChannelMockConnection {
+// Manual Clone — async_channel senders/receivers are Clone regardless of M.
+impl<M> Clone for ChannelMockConnection<M> {
+    fn clone(&self) -> Self {
+        Self {
+            peer_id: self.peer_id,
+            outbound_tx: self.outbound_tx.clone(),
+            inbound_rx: self.inbound_rx.clone(),
+            inbound_tx: self.inbound_tx.clone(),
+            request_counter: self.request_counter.clone(),
+        }
+    }
+}
+
+impl<M> PartialEq for ChannelMockConnection<M> {
     fn eq(&self, other: &Self) -> bool {
         self.peer_id == other.peer_id
     }
 }
 
-/// Handle for controlling a `ChannelMockConnection` from tests.
-#[derive(Clone, Debug)]
-pub struct ChannelMockConnectionHandle {
+/// Handle for controlling a [`ChannelMockConnection`] from tests.
+#[derive(Debug)]
+pub struct ChannelMockConnectionHandle<M> {
     /// Receiver for outbound messages (messages Subduction sends)
-    pub outbound_rx: async_channel::Receiver<SyncMessage>,
+    pub outbound_rx: async_channel::Receiver<M>,
 
     /// Sender for inbound messages (inject messages to Subduction)
-    pub inbound_tx: async_channel::Sender<SyncMessage>,
+    pub inbound_tx: async_channel::Sender<M>,
 }
 
-impl ChannelMockConnection {
+// Manual Clone — async_channel senders/receivers are Clone regardless of M.
+impl<M> Clone for ChannelMockConnectionHandle<M> {
+    fn clone(&self) -> Self {
+        Self {
+            outbound_rx: self.outbound_rx.clone(),
+            inbound_tx: self.inbound_tx.clone(),
+        }
+    }
+}
+
+impl<M> ChannelMockConnection<M> {
     /// Create a new channel mock connection with its control handle.
     ///
     /// Returns the connection and a handle that tests can use to:
     /// - Inject messages via `handle.inbound_tx.send(msg)`
     /// - Observe sent messages via `handle.outbound_rx.recv()`
     #[must_use]
-    pub fn new_with_handle(peer_id: PeerId) -> (Self, ChannelMockConnectionHandle) {
+    pub fn new_with_handle(peer_id: PeerId) -> (Self, ChannelMockConnectionHandle<M>) {
         let (outbound_tx, outbound_rx) = async_channel::unbounded();
         let (inbound_tx, inbound_rx) = async_channel::unbounded();
 
@@ -270,7 +319,7 @@ impl ChannelMockConnection {
 
     /// Create with default peer ID.
     #[must_use]
-    pub fn new_default_with_handle() -> (Self, ChannelMockConnectionHandle) {
+    pub fn new_default_with_handle() -> (Self, ChannelMockConnectionHandle<M>) {
         Self::new_with_handle(PeerId::new([0u8; 32]))
     }
 
@@ -280,15 +329,18 @@ impl ChannelMockConnection {
     #[must_use]
     pub fn authenticated<K: FutureForm>(self) -> Authenticated<Self, K>
     where
-        Self: Connection<K, SyncMessage>,
+        Self: Connection<K, M>,
+        M: Encode + Decode,
     {
         Authenticated::new_for_test(self)
     }
 }
 
-impl Connection<Sendable, SyncMessage> for ChannelMockConnection {
+impl<M: Encode + Decode + Clone + Send + 'static> Connection<Sendable, M>
+    for ChannelMockConnection<M>
+{
     type DisconnectionError = Infallible;
-    type SendError = async_channel::SendError<SyncMessage>;
+    type SendError = async_channel::SendError<M>;
     type RecvError = async_channel::RecvError;
 
     fn peer_id(&self) -> PeerId {
@@ -303,20 +355,22 @@ impl Connection<Sendable, SyncMessage> for ChannelMockConnection {
 
     fn send(
         &self,
-        message: &SyncMessage,
+        message: &M,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         let message = message.clone();
         Sendable::from_future(async move { tx.send(message).await })
     }
 
-    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<M, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
         Sendable::from_future(async move { rx.recv().await })
     }
 }
 
-impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for ChannelMockConnection {
+impl<M: Send + 'static> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
+    for ChannelMockConnection<M>
+{
     type CallError = core::fmt::Error;
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
@@ -341,9 +395,9 @@ impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for ChannelMockCon
     }
 }
 
-impl Connection<Local, SyncMessage> for ChannelMockConnection {
+impl<M: Encode + Decode + Clone + 'static> Connection<Local, M> for ChannelMockConnection<M> {
     type DisconnectionError = Infallible;
-    type SendError = async_channel::SendError<SyncMessage>;
+    type SendError = async_channel::SendError<M>;
     type RecvError = async_channel::RecvError;
 
     fn peer_id(&self) -> PeerId {
@@ -358,20 +412,22 @@ impl Connection<Local, SyncMessage> for ChannelMockConnection {
 
     fn send(
         &self,
-        message: &SyncMessage,
+        message: &M,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         let message = message.clone();
         Local::from_future(async move { tx.send(message).await })
     }
 
-    fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+    fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<M, Self::RecvError>> {
         let rx = self.inbound_rx.clone();
         Local::from_future(async move { rx.recv().await })
     }
 }
 
-impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for ChannelMockConnection {
+impl<M: 'static> Roundtrip<Local, BatchSyncRequest, BatchSyncResponse>
+    for ChannelMockConnection<M>
+{
     type CallError = core::fmt::Error;
 
     fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
@@ -457,8 +513,8 @@ impl<C: PartialEq> PartialEq for CallbackOnRecvConnection<C> {
     }
 }
 
-impl<C: Connection<Sendable, SyncMessage> + Send> Connection<Sendable, SyncMessage>
-    for CallbackOnRecvConnection<C>
+impl<C: Connection<Sendable, M> + Send, M: Encode + Decode + Send + 'static>
+    Connection<Sendable, M> for CallbackOnRecvConnection<C>
 where
     C::RecvError: Send,
 {
@@ -478,12 +534,12 @@ where
 
     fn send(
         &self,
-        message: &SyncMessage,
+        message: &M,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
 
-    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+    fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<M, Self::RecvError>> {
         // Note: This mimics Wasm behavior where callbacks would fire here,
         // but we can't actually fire callbacks here without access to Subduction.
         // The test will inject a callback-like check separately.
@@ -509,7 +565,7 @@ impl<C: Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> + Send>
     }
 }
 
-impl<C: Connection<Local, SyncMessage>> Connection<Local, SyncMessage>
+impl<C: Connection<Local, M>, M: Encode + Decode + 'static> Connection<Local, M>
     for CallbackOnRecvConnection<C>
 {
     type DisconnectionError = C::DisconnectionError;
@@ -528,12 +584,12 @@ impl<C: Connection<Local, SyncMessage>> Connection<Local, SyncMessage>
 
     fn send(
         &self,
-        message: &SyncMessage,
+        message: &M,
     ) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
 
-    fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
+    fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<M, Self::RecvError>> {
         self.inner.recv()
     }
 }
@@ -638,20 +694,24 @@ mod tests {
     #[test]
     fn test_mock_connection_new() {
         let conn = MockConnection::new();
-        assert_eq!(conn.peer_id(), PeerId::new([0u8; 32]));
+        assert_eq!(
+            Connection::<Sendable, SyncMessage>::peer_id(&conn),
+            PeerId::new([0u8; 32])
+        );
     }
 
     #[test]
     fn test_mock_connection_with_peer_id() {
         let peer_id = PeerId::new([42u8; 32]);
         let conn = MockConnection::with_peer_id(peer_id);
-        assert_eq!(conn.peer_id(), peer_id);
+        assert_eq!(Connection::<Sendable, SyncMessage>::peer_id(&conn), peer_id);
     }
 
     #[tokio::test]
     async fn test_channel_mock_connection_send_recv() -> TestResult {
         let peer_id = PeerId::new([1u8; 32]);
-        let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
+        let (conn, handle) =
+            ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
 
         let msg = SyncMessage::BlobsRequest {
             id: SedimentreeId::new([0u8; 32]),

@@ -20,7 +20,7 @@ use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        test_utils::{SyncChannelMock, TokioSpawn, test_signer},
     },
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -60,7 +60,7 @@ fn make_subduction() -> Arc<
         'static,
         Sendable,
         MemoryStorage,
-        ChannelMockConnection,
+        SyncChannelMock,
         SyncMessage,
         OpenPolicy,
         subduction_crypto::signer::memory::MemorySigner,
@@ -71,7 +71,7 @@ fn make_subduction() -> Arc<
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+        .build::<Sendable, SyncChannelMock>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
