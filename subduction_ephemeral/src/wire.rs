@@ -10,7 +10,7 @@
 //!
 //! [`SyncMessage`]: subduction_core::connection::message::SyncMessage
 
-use alloc::vec::Vec;
+use alloc::{boxed::Box, vec::Vec};
 
 use sedimentree_core::codec::{
     decode::Decode,

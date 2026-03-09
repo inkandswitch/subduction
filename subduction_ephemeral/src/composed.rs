@@ -12,7 +12,7 @@
 use alloc::sync::Arc;
 
 use future_form::{FutureForm, Local, Sendable};
-use subduction_core::{connection::authenticated::Authenticated, handler::Handler};
+use subduction_core::{connection::authenticated::Authenticated, handler::Handler, peer::id::PeerId};
 use thiserror::Error;
 
 use crate::wire::WireMessage;
@@ -100,6 +100,13 @@ where
                     .await
                     .map_err(ComposedError::Ephemeral),
             }
+        })
+    }
+
+    fn on_peer_disconnect(&self, peer: PeerId) -> K::Future<'_, ()> {
+        K::from_future(async move {
+            self.sync.on_peer_disconnect(peer).await;
+            self.ephemeral.on_peer_disconnect(peer).await;
         })
     }
 }

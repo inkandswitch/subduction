@@ -55,7 +55,7 @@ pub mod sync;
 use future_form::FutureForm;
 use sedimentree_core::codec::decode::Decode;
 
-use crate::connection::authenticated::Authenticated;
+use crate::{connection::authenticated::Authenticated, peer::id::PeerId};
 
 /// A handler for messages received from authenticated peers.
 ///
@@ -106,4 +106,16 @@ pub trait Handler<K: FutureForm, C: Clone> {
         conn: &'a Authenticated<C, K>,
         message: Self::Message,
     ) -> K::Future<'a, Result<(), Self::HandlerError>>;
+
+    /// Called when a peer's last connection drops.
+    ///
+    /// Use this hook to clean up per-peer state such as subscription
+    /// maps, presence records, or other resources scoped to a peer's
+    /// session lifetime.
+    ///
+    /// The listen loop calls this after [`Subduction::unregister`]
+    /// reports that the peer has no remaining connections.
+    ///
+    /// [`Subduction::unregister`]: crate::subduction::Subduction::unregister
+    fn on_peer_disconnect(&self, peer: PeerId) -> K::Future<'_, ()>;
 }

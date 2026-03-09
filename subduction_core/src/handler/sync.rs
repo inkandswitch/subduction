@@ -205,6 +205,12 @@ impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K,
     ) -> K::Future<'a, Result<(), Self::HandlerError>> {
         K::from_future(async move { self.dispatch(conn, message).await })
     }
+
+    fn on_peer_disconnect(&self, _peer: PeerId) -> K::Future<'_, ()> {
+        // Sync subscriptions are already cleaned by `peers::unregister`,
+        // so there is nothing extra to do here.
+        K::from_future(async {})
+    }
 }
 
 // ---------------------------------------------------------------------------

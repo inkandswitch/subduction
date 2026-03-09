@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Ephemeral (non-persisted) messaging for Subduction"
 
 categories = ["web-programming"]
-keywords = ["sync", "subduction", "ephemeral", "presence"]
+keywords = ["sync", "subduction", "ephemeral"]
 readme = "./README.md"
 
 edition.workspace = true

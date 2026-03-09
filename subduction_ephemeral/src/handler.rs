@@ -178,6 +178,17 @@ impl<K: FutureForm, C, E> Handler<K, C> for EphemeralHandler<K, C, E> {
     ) -> K::Future<'a, Result<(), Self::HandlerError>> {
         K::from_future(async move { self.dispatch(conn, message).await })
     }
+
+    fn on_peer_disconnect(&self, peer: PeerId) -> K::Future<'_, ()> {
+        K::from_future(async move {
+            let mut subs = self.ephemeral_subscriptions.lock().await;
+            subs.retain(|_id, peers| {
+                peers.remove(&peer);
+                !peers.is_empty()
+            });
+            debug!(peer = %peer, "cleaned ephemeral subscriptions on disconnect");
+        })
+    }
 }
 
 impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: EphemeralPolicy<F>>
