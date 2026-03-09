@@ -30,6 +30,9 @@ use subduction_websocket::{
 use testresult::TestResult;
 use tungstenite::http::Uri;
 
+/// Concrete type alias for tests — always uses `SyncMessage` channel.
+type TestClient = TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>;
+
 static TRACING: OnceLock<()> = OnceLock::new();
 
 fn init_tracing() {
@@ -61,7 +64,7 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
         SyncMessage,
         OpenPolicy,
         MemorySigner,
@@ -72,7 +75,7 @@ type TestHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
@@ -83,7 +86,7 @@ type ServerSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>,
+        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
         SyncMessage,
         OpenPolicy,
         MemorySigner,
@@ -94,7 +97,7 @@ type ServerHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>,
+        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
@@ -110,7 +113,7 @@ fn setup_client_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
         SyncMessage,
         OpenPolicy,
         MemorySigner,
@@ -122,7 +125,7 @@ fn setup_client_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>>()
 }
 
 #[allow(clippy::type_complexity)]
@@ -135,7 +138,7 @@ fn setup_server_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>,
+        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
         SyncMessage,
         OpenPolicy,
         MemorySigner,
@@ -147,7 +150,7 @@ fn setup_server_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>()
+        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>>()
 }
 
 #[tokio::test]
@@ -187,7 +190,7 @@ async fn client_reconnect() -> TestResult {
     let bound = server.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
 
-    let (mut client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
+    let (mut client_ws, listener_fut, sender_fut) = TestClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -265,7 +268,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     // Connect a client
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (_client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
+    let (_client_ws, listener_fut, sender_fut) = TestClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -291,7 +294,7 @@ async fn server_graceful_shutdown() -> TestResult {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Attempting to connect should fail
-    let result = TokioWebSocketClient::new(
+    let result = TestClient::new(
         format!("ws://{}:{}", bound.ip(), bound.port()).parse()?,
         TimeoutTokio,
         Duration::from_secs(1),
@@ -367,7 +370,7 @@ async fn multiple_concurrent_clients() -> TestResult {
         tokio::spawn(listener_fut);
 
         let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-        let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
+        let (client_ws, listener_fut, sender_fut) = TestClient::new(
             uri,
             TimeoutTokio,
             Duration::from_secs(5),
@@ -476,7 +479,7 @@ async fn connection_to_invalid_address() -> TestResult {
     // Try to connect to an address that's not listening
     let uri = "ws://127.0.0.1:9".parse()?; // Port 9 is discard protocol, unlikely to have WS server
 
-    let result = TokioWebSocketClient::new(
+    let result = TestClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(1),
@@ -536,7 +539,7 @@ async fn large_message_handling() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TestClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(10),
@@ -638,7 +641,7 @@ async fn message_ordering() -> TestResult {
     tokio::spawn(listener_fut);
 
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
+    let (client_ws, listener_fut, sender_fut) = TestClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -903,7 +906,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
     tokio::spawn(client_listener_fut);
 
     let uri: Uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (client_ws, ws_listener_fut, ws_sender_fut) = TokioWebSocketClient::new(
+    let (client_ws, ws_listener_fut, ws_sender_fut) = TestClient::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),

@@ -2,6 +2,7 @@
 
 use alloc::{boxed::Box, sync::Arc};
 use core::{
+    fmt::Debug,
     future::{Future, IntoFuture},
     marker::PhantomData,
     sync::atomic::{AtomicU64, Ordering},
@@ -17,7 +18,10 @@ use futures::{
     future::{BoxFuture, LocalBoxFuture},
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
-use sedimentree_core::collections::Map;
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    collections::Map,
+};
 use subduction_core::{
     connection::{
         Connection, Roundtrip,
@@ -37,26 +41,99 @@ use crate::{
 /// providing backpressure if the sender task can't keep up.
 const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 
+/// Trait for message types that can carry [`SyncMessage`] over internal
+/// channels.
+///
+/// Implemented for [`SyncMessage`] (identity) and, with the `ephemeral`
+/// feature, for [`WireMessage`](subduction_ephemeral::wire::WireMessage).
+pub trait ChannelMessage: Clone + Debug + Send + Sync + Encode + Decode + 'static {
+    /// Wrap a [`SyncMessage`] into this channel type.
+    fn wrap_sync(msg: SyncMessage) -> Self;
+
+    /// Try to extract a [`BatchSyncResponse`] without consuming the message.
+    ///
+    /// Returns `Some` if this message is (or wraps) a [`BatchSyncResponse`].
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse>;
+
+    /// Try to unwrap into a [`SyncMessage`].
+    ///
+    /// Returns `None` if the message is not a sync message (e.g., ephemeral).
+    fn into_sync(self) -> Option<SyncMessage>;
+}
+
+impl ChannelMessage for SyncMessage {
+    fn wrap_sync(msg: SyncMessage) -> Self {
+        msg
+    }
+
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            SyncMessage::BatchSyncResponse(resp) => Some(resp),
+            SyncMessage::LooseCommit { .. }
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::DataRequestRejected(_) => None,
+        }
+    }
+
+    fn into_sync(self) -> Option<SyncMessage> {
+        Some(self)
+    }
+}
+
+#[cfg(feature = "ephemeral")]
+impl ChannelMessage for subduction_ephemeral::wire::WireMessage {
+    fn wrap_sync(msg: SyncMessage) -> Self {
+        Self::Sync(alloc::boxed::Box::new(msg))
+    }
+
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            Self::Sync(sync_msg) => match sync_msg.as_ref() {
+                SyncMessage::BatchSyncResponse(resp) => Some(resp),
+                SyncMessage::LooseCommit { .. }
+                | SyncMessage::Fragment { .. }
+                | SyncMessage::BlobsRequest { .. }
+                | SyncMessage::BlobsResponse { .. }
+                | SyncMessage::BatchSyncRequest(_)
+                | SyncMessage::RemoveSubscriptions(_)
+                | SyncMessage::DataRequestRejected(_) => None,
+            },
+            Self::Ephemeral(_) => None,
+        }
+    }
+
+    fn into_sync(self) -> Option<SyncMessage> {
+        match self {
+            Self::Sync(msg) => Some(*msg),
+            Self::Ephemeral(_) => None,
+        }
+    }
+}
+
 /// A background task that receives incoming WebSocket messages and dispatches them.
 ///
 /// Must be spawned (e.g., via `tokio::spawn`) for the connection to receive messages.
-pub struct ListenerTask<'a>(BoxFuture<'a, Result<(), RunError>>);
+pub struct ListenerTask<'a, M: core::fmt::Debug>(BoxFuture<'a, Result<(), RunError<M>>>);
 
-impl core::fmt::Debug for ListenerTask<'_> {
+impl<M: core::fmt::Debug> core::fmt::Debug for ListenerTask<'_, M> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ListenerTask").finish_non_exhaustive()
     }
 }
 
-impl<'a> ListenerTask<'a> {
-    pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
+impl<'a, M: core::fmt::Debug> ListenerTask<'a, M> {
+    pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError<M>>>) -> Self {
         Self(fut)
     }
 }
 
-impl<'a> IntoFuture for ListenerTask<'a> {
-    type Output = Result<(), RunError>;
-    type IntoFuture = BoxFuture<'a, Result<(), RunError>>;
+impl<'a, M: core::fmt::Debug> IntoFuture for ListenerTask<'a, M> {
+    type Output = Result<(), RunError<M>>;
+    type IntoFuture = BoxFuture<'a, Result<(), RunError<M>>>;
 
     fn into_future(self) -> Self::IntoFuture {
         self.0
@@ -66,23 +143,23 @@ impl<'a> IntoFuture for ListenerTask<'a> {
 /// A background task that drains outbound messages to the WebSocket.
 ///
 /// Must be spawned (e.g., via `tokio::spawn`) for the connection to send messages.
-pub struct SenderTask<'a>(BoxFuture<'a, Result<(), RunError>>);
+pub struct SenderTask<'a, M: core::fmt::Debug>(BoxFuture<'a, Result<(), RunError<M>>>);
 
-impl core::fmt::Debug for SenderTask<'_> {
+impl<M: core::fmt::Debug> core::fmt::Debug for SenderTask<'_, M> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SenderTask").finish_non_exhaustive()
     }
 }
 
-impl<'a> SenderTask<'a> {
-    pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError>>) -> Self {
+impl<'a, M: core::fmt::Debug> SenderTask<'a, M> {
+    pub(crate) fn new(fut: BoxFuture<'a, Result<(), RunError<M>>>) -> Self {
         Self(fut)
     }
 }
 
-impl<'a> IntoFuture for SenderTask<'a> {
-    type Output = Result<(), RunError>;
-    type IntoFuture = BoxFuture<'a, Result<(), RunError>>;
+impl<'a, M: core::fmt::Debug> IntoFuture for SenderTask<'a, M> {
+    type Output = Result<(), RunError<M>>;
+    type IntoFuture = BoxFuture<'a, Result<(), RunError<M>>>;
 
     fn into_future(self) -> Self::IntoFuture {
         self.0
@@ -90,8 +167,19 @@ impl<'a> IntoFuture for SenderTask<'a> {
 }
 
 /// A WebSocket implementation for [`Connection`].
+///
+/// Parameterized over:
+/// - `T`: the underlying async I/O stream (e.g., `TcpStream`, `ConnectStream`)
+/// - `K`: the async future form (`Local` or `Sendable`)
+/// - `O`: the timeout strategy
+/// - `M`: the channel message type
 #[derive(Debug)]
-pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
+pub struct WebSocket<
+    T: AsyncRead + AsyncWrite + Unpin,
+    K: FutureForm,
+    O: Timeout<K>,
+    M: ChannelMessage,
+> {
     chan_id: u64,
     peer_id: PeerId,
     req_id_counter: Arc<AtomicU64>,
@@ -110,14 +198,14 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
 
     pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
-    inbound_writer: async_channel::Sender<SyncMessage>,
-    inbound_reader: async_channel::Receiver<SyncMessage>,
+    inbound_writer: async_channel::Sender<M>,
+    inbound_reader: async_channel::Receiver<M>,
 
     _phantom: PhantomData<K>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Local, SyncMessage>
-    for WebSocket<T, Local, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>, M: ChannelMessage>
+    Connection<Local, SyncMessage> for WebSocket<T, Local, O, M>
 {
     type SendError = SendError;
     type RecvError = RecvError;
@@ -139,7 +227,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
             self.peer_id
         );
 
-        let msg_bytes = message.encode();
+        let msg_bytes = M::wrap_sync(message.clone()).encode();
 
         let tx = self.outbound_tx.clone();
         async move {
@@ -157,20 +245,26 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
         tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
 
         async move {
-            let msg = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel {} closed unexpectedly", self.chan_id);
-                RecvError
-            })?;
+            loop {
+                let msg = chan.recv().await.map_err(|_| {
+                    tracing::error!("inbound channel closed unexpectedly");
+                    RecvError
+                })?;
 
-            tracing::debug!("recv: inbound message {msg:?}");
-            Ok(msg)
+                if let Some(sync_msg) = msg.into_sync() {
+                    tracing::debug!("recv: inbound message {sync_msg:?}");
+                    return Ok(sync_msg);
+                }
+
+                tracing::trace!("recv<SyncMessage>: skipping non-sync channel message");
+            }
         }
         .boxed_local()
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
-    Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Local, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>, M: ChannelMessage>
+    Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Local, O, M>
 {
     type CallError = CallError;
 
@@ -200,7 +294,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
+            let msg_bytes = M::wrap_sync(SyncMessage::BatchSyncRequest(req)).encode();
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
@@ -238,7 +332,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>, M: ChannelMessage>
+    WebSocket<T, K, O, M>
+{
     /// Create a new WebSocket connection.
     ///
     /// Returns the connection and a sender task future. The sender task drains
@@ -257,7 +353,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         peer_id: PeerId,
     ) -> (
         Self,
-        impl Future<Output = Result<(), RunError>> + use<T, K, O>,
+        impl Future<Output = Result<(), RunError<M>>> + use<T, K, O, M>,
     ) {
         tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
@@ -334,7 +430,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     ///
     /// If there is an error reading from the WebSocket or processing messages.
     #[allow(clippy::too_many_lines)] // 101/100 allowed lines
-    pub async fn listen(&self) -> Result<(), RunError> {
+    pub async fn listen(&self) -> Result<(), RunError<M>> {
         tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
         let mut in_chan = self.ws_reader.lock().await;
         while let Some(ws_msg) = in_chan.next().await {
@@ -346,7 +442,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
-                    let msg = SyncMessage::try_decode(&bytes).map_err(|e| {
+                    let msg = M::try_decode(&bytes).map_err(|e| {
                         tracing::error!(
                             "failed to deserialize inbound message from peer {:?}: {}",
                             self.peer_id,
@@ -356,64 +452,36 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                     })?;
 
                     tracing::debug!(
-                        "decoded inbound message id {:?} from peer {:?}, message: {:?}",
-                        msg.request_id(),
+                        "decoded inbound message from peer {:?}: {:?}",
                         self.peer_id,
                         &msg
                     );
 
-                    match msg {
-                        SyncMessage::BatchSyncResponse(resp) => {
-                            tracing::info!(
-                                "received BatchSyncResponse for req_id {:?}",
-                                resp.req_id
-                            );
-                            let req_id = resp.req_id;
-                            if let Some(waiting) = self.pending.lock().await.remove(&req_id) {
-                                tracing::info!("dispatching to waiter {:?}", req_id);
-                                let result = waiting.send(resp);
-                                if result.is_err() {
-                                    tracing::error!(
-                                        "oneshot channel closed before sending response for req_id {:?}",
-                                        req_id
-                                    );
-                                }
-                            } else {
-                                self.inbound_writer
-                                    .send(SyncMessage::BatchSyncResponse(resp))
-                                    .await
-                                    .map_err(|e| {
-                                        tracing::error!(
-                                            "failed to send inbound message to channel {}: {}",
-                                            self.chan_id,
-                                            e
-                                        );
-                                        RunError::ChanSend(e)
-                                    })?;
-                            }
-                        }
-                        other @ (SyncMessage::LooseCommit { .. }
-                        | SyncMessage::Fragment { .. }
-                        | SyncMessage::BlobsRequest { .. }
-                        | SyncMessage::BlobsResponse { .. }
-                        | SyncMessage::BatchSyncRequest(_)
-                        | SyncMessage::RemoveSubscriptions(_)
-                        | SyncMessage::DataRequestRejected(_)) => {
-                            self.inbound_writer.send(other).await.map_err(|e| {
+                    if let Some(resp) = msg.as_batch_sync_response() {
+                        let req_id = resp.req_id;
+                        if let Some(waiting) = self.pending.lock().await.remove(&req_id) {
+                            tracing::info!("received BatchSyncResponse for req_id {:?}", req_id);
+                            tracing::info!("dispatching to waiter {:?}", req_id);
+                            let result = waiting.send(resp.clone());
+                            if result.is_err() {
                                 tracing::error!(
-                                    "failed to send inbound message to channel {}: {}",
-                                    self.chan_id,
-                                    e
+                                    "oneshot channel closed before sending response for req_id {:?}",
+                                    req_id
                                 );
-                                RunError::ChanSend(e)
-                            })?;
-
-                            tracing::debug!(
-                                "forwarded inbound message to channel {}",
-                                self.chan_id
-                            );
+                            }
+                            continue;
                         }
                     }
+
+                    self.inbound_writer.send(msg).await.map_err(|e| {
+                        tracing::error!(
+                            "failed to send inbound message to channel {}",
+                            self.chan_id,
+                        );
+                        RunError::ChanSend(Box::new(e))
+                    })?;
+
+                    tracing::debug!("forwarded inbound message to channel {}", self.chan_id);
                 }
                 Ok(tungstenite::Message::Text(text)) => {
                     tracing::warn!("unexpected text message: {}", text);
@@ -467,8 +535,8 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
-    Connection<Sendable, SyncMessage> for WebSocket<T, Sendable, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync, M: ChannelMessage>
+    Connection<Sendable, SyncMessage> for WebSocket<T, Sendable, O, M>
 {
     type SendError = SendError;
     type RecvError = RecvError;
@@ -489,7 +557,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
             message.request_id()
         );
 
-        let msg_bytes = message.encode();
+        let msg_bytes = M::wrap_sync(message.clone()).encode();
 
         let tx = self.outbound_tx.clone();
         async move {
@@ -507,20 +575,26 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
         tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
 
         async move {
-            let msg = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel {} closed unexpectedly", self.chan_id);
-                RecvError
-            })?;
+            loop {
+                let msg = chan.recv().await.map_err(|_| {
+                    tracing::error!("inbound channel closed unexpectedly");
+                    RecvError
+                })?;
 
-            tracing::debug!("recv: inbound message {msg:?}");
-            Ok(msg)
+                if let Some(sync_msg) = msg.into_sync() {
+                    tracing::debug!("recv: inbound message {sync_msg:?}");
+                    return Ok(sync_msg);
+                }
+
+                tracing::trace!("recv<SyncMessage>: skipping non-sync channel message");
+            }
         }
         .boxed()
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
-    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Sendable, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync, M: ChannelMessage>
+    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Sendable, O, M>
 {
     type CallError = CallError;
 
@@ -550,7 +624,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
+            let msg_bytes = M::wrap_sync(SyncMessage::BatchSyncRequest(req)).encode();
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
@@ -588,7 +662,203 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for WebSocket<T, K, O> {
+// --- Feature-gated Connection impls for WireMessage and EphemeralMessage ---
+
+#[cfg(feature = "ephemeral")]
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
+    Connection<Local, subduction_ephemeral::wire::WireMessage>
+    for WebSocket<T, Local, O, subduction_ephemeral::wire::WireMessage>
+{
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type DisconnectionError = DisconnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed_local()
+    }
+
+    fn send(
+        &self,
+        message: &subduction_ephemeral::wire::WireMessage,
+    ) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        let msg_bytes = message.encode();
+        let tx = self.outbound_tx.clone();
+        async move {
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
+                .await
+                .map_err(|_| SendError)?;
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn recv(
+        &self,
+    ) -> LocalBoxFuture<'_, Result<subduction_ephemeral::wire::WireMessage, Self::RecvError>> {
+        let chan = self.inbound_reader.clone();
+        async move {
+            let msg = chan.recv().await.map_err(|_| RecvError)?;
+            Ok(msg)
+        }
+        .boxed_local()
+    }
+}
+
+#[cfg(feature = "ephemeral")]
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
+    Connection<Sendable, subduction_ephemeral::wire::WireMessage>
+    for WebSocket<T, Sendable, O, subduction_ephemeral::wire::WireMessage>
+{
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type DisconnectionError = DisconnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn send(
+        &self,
+        message: &subduction_ephemeral::wire::WireMessage,
+    ) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        let msg_bytes = message.encode();
+        let tx = self.outbound_tx.clone();
+        async move {
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
+                .await
+                .map_err(|_| SendError)?;
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn recv(
+        &self,
+    ) -> BoxFuture<'_, Result<subduction_ephemeral::wire::WireMessage, Self::RecvError>> {
+        let chan = self.inbound_reader.clone();
+        async move {
+            let msg = chan.recv().await.map_err(|_| RecvError)?;
+            Ok(msg)
+        }
+        .boxed()
+    }
+}
+
+#[cfg(feature = "ephemeral")]
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
+    Connection<Local, subduction_ephemeral::message::EphemeralMessage>
+    for WebSocket<T, Local, O, subduction_ephemeral::wire::WireMessage>
+{
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type DisconnectionError = DisconnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed_local()
+    }
+
+    fn send(
+        &self,
+        message: &subduction_ephemeral::message::EphemeralMessage,
+    ) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        let wire = subduction_ephemeral::wire::WireMessage::Ephemeral(message.clone());
+        let msg_bytes = wire.encode();
+        let tx = self.outbound_tx.clone();
+        async move {
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
+                .await
+                .map_err(|_| SendError)?;
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn recv(
+        &self,
+    ) -> LocalBoxFuture<'_, Result<subduction_ephemeral::message::EphemeralMessage, Self::RecvError>>
+    {
+        let chan = self.inbound_reader.clone();
+        async move {
+            loop {
+                let wire = chan.recv().await.map_err(|_| RecvError)?;
+                if let subduction_ephemeral::wire::WireMessage::Ephemeral(msg) = wire {
+                    return Ok(msg);
+                }
+                tracing::trace!("recv<EphemeralMessage>: skipping non-ephemeral message");
+            }
+        }
+        .boxed_local()
+    }
+}
+
+#[cfg(feature = "ephemeral")]
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
+    Connection<Sendable, subduction_ephemeral::message::EphemeralMessage>
+    for WebSocket<T, Sendable, O, subduction_ephemeral::wire::WireMessage>
+{
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type DisconnectionError = DisconnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed()
+    }
+
+    fn send(
+        &self,
+        message: &subduction_ephemeral::message::EphemeralMessage,
+    ) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        let wire = subduction_ephemeral::wire::WireMessage::Ephemeral(message.clone());
+        let msg_bytes = wire.encode();
+        let tx = self.outbound_tx.clone();
+        async move {
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
+                .await
+                .map_err(|_| SendError)?;
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn recv(
+        &self,
+    ) -> BoxFuture<'_, Result<subduction_ephemeral::message::EphemeralMessage, Self::RecvError>>
+    {
+        let chan = self.inbound_reader.clone();
+        async move {
+            loop {
+                let wire = chan.recv().await.map_err(|_| RecvError)?;
+                if let subduction_ephemeral::wire::WireMessage::Ephemeral(msg) = wire {
+                    return Ok(msg);
+                }
+                tracing::trace!("recv<EphemeralMessage>: skipping non-ephemeral message");
+            }
+        }
+        .boxed()
+    }
+}
+
+// --- Clone, PartialEq ---
+
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>, M: ChannelMessage> Clone
+    for WebSocket<T, K, O, M>
+{
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,
@@ -607,8 +877,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for 
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
-    for WebSocket<T, K, O>
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>, M: ChannelMessage> PartialEq
+    for WebSocket<T, K, O, M>
 {
     fn eq(&self, other: &Self) -> bool {
         self.peer_id == other.peer_id
@@ -670,7 +940,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
+            let (websocket, _rx): (WebSocket<_, Sendable, _, SyncMessage>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
             let req_id = websocket.next_request_id().await;
@@ -684,7 +954,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
+            let (websocket, _rx): (WebSocket<_, Sendable, _, SyncMessage>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
             let req_id1 = websocket.next_request_id().await;
@@ -702,7 +972,7 @@ mod tests {
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
-            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
+            let (websocket, _rx): (WebSocket<_, Sendable, _, SyncMessage>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
             let ws1 = websocket.clone();

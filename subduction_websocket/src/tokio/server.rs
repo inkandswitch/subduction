@@ -88,7 +88,7 @@ where
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
 {
-    /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
+    /// Create a new [`TokioWebSocketServer`] to manage connections to a [`Subduction`].
     ///
     /// The signer from the Subduction instance is used to authenticate incoming
     /// connections during the handshake phase.
@@ -243,7 +243,7 @@ where
         })
     }
 
-    /// Create a new [`WebSocketServer`] with storage and policy.
+    /// Create a new [`TokioWebSocketServer`] with storage and policy.
     ///
     /// This is a convenience method that creates the Subduction instance
     /// and spawns the background tasks.
@@ -268,7 +268,7 @@ where
     where
         M: Clone,
         S: core::fmt::Debug,
-        UnifiedWebSocket<O>: core::fmt::Debug,
+        UnifiedWebSocket<O, SyncMessage>: core::fmt::Debug,
     {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
 
@@ -348,7 +348,7 @@ where
     /// [`handshake::respond`]: subduction_core::connection::handshake::respond
     pub async fn register(
         &self,
-        authenticated: Authenticated<UnifiedWebSocket<O>, Sendable>,
+        authenticated: Authenticated<UnifiedWebSocket<O, SyncMessage>, Sendable>,
     ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
         self.subduction.register(authenticated).await
     }
@@ -572,7 +572,7 @@ where
 }
 
 type TokioWebSocketSubduction<S, P, Sig, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, SyncMessage, P, Sig, M>>;
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O, SyncMessage>, SyncMessage, P, Sig, M>>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]

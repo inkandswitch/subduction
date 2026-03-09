@@ -315,9 +315,10 @@ let challenge = signed_challenge.payload();  // Hypothetical unsafe API
 
 `Signed<T>` intentionally provides **no direct access** to the payload. The only way to access it is through `try_verify()`, which returns `Verified<T>`:
 
-```
-T ──seal──► Signed<T> ──try_verify──► Verified<T>
-              (unverified)              (witness)
+```mermaid
+graph LR
+    T["T"] -->|seal| S["Signed&lt;T&gt;<br/>(unverified)"]
+    S -->|try_verify| V["Verified&lt;T&gt;<br/>(witness)"]
 ```
 
 ### Types

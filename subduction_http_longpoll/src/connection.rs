@@ -13,11 +13,10 @@
 //! the caller pre-registers a oneshot channel keyed by [`RequestId`], sends the
 //! request, and waits on the oneshot receiver with a timeout.
 //!
-//! The connection is parameterized over a channel message type `M`. By default
-//! `M = SyncMessage`, which preserves backward compatibility with all existing
-//! server/client code. When the `ephemeral` feature is enabled, callers may
-//! use `M = WireMessage` to multiplex sync and ephemeral traffic on a single
-//! connection.
+//! The connection is parameterized over a channel message type `M` — typically
+//! [`SyncMessage`] for sync-only traffic. When the `ephemeral` feature is
+//! enabled, callers may use `WireMessage` to multiplex sync and ephemeral
+//! traffic on a single connection.
 
 use alloc::sync::Arc;
 use core::{
@@ -165,12 +164,11 @@ struct Inner<O, M> {
 /// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio` for native,
 /// or a browser-based timeout for Wasm).
 ///
-/// The `M` parameter is the channel message type. Defaults to [`SyncMessage`]
-/// for backward compatibility. Use
-/// [`WireMessage`](subduction_ephemeral::wire::WireMessage) (with the
+/// The `M` parameter is the channel message type — typically [`SyncMessage`].
+/// Use [`WireMessage`](subduction_ephemeral::wire::WireMessage) (with the
 /// `ephemeral` feature) to multiplex sync and ephemeral traffic.
 #[derive(Debug, Clone)]
-pub struct HttpLongPollConnection<O, M = SyncMessage> {
+pub struct HttpLongPollConnection<O, M> {
     inner: Arc<Inner<O, M>>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
     outbound_rx: async_channel::Receiver<M>,
@@ -532,7 +530,7 @@ mod tests {
     #[tokio::test]
     async fn next_request_id_increments() {
         let peer_id = PeerId::new([1u8; 32]);
-        let conn: HttpLongPollConnection<TestTimeout> =
+        let conn: HttpLongPollConnection<TestTimeout, SyncMessage> =
             HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let id1 =
@@ -556,7 +554,7 @@ mod tests {
         use subduction_core::connection::message::RemoveSubscriptions;
 
         let peer_id = PeerId::new([2u8; 32]);
-        let conn: HttpLongPollConnection<TestTimeout> =
+        let conn: HttpLongPollConnection<TestTimeout, SyncMessage> =
             HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
@@ -577,7 +575,7 @@ mod tests {
         use subduction_core::connection::message::RemoveSubscriptions;
 
         let peer_id = PeerId::new([3u8; 32]);
-        let conn: HttpLongPollConnection<TestTimeout> =
+        let conn: HttpLongPollConnection<TestTimeout, SyncMessage> =
             HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {

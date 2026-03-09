@@ -11,14 +11,14 @@ use async_lock::Mutex;
 use future_form::Sendable;
 use rand::{RngCore, rngs::OsRng};
 use subduction_core::{
-    connection::{authenticated::Authenticated, message::SyncMessage, timeout::Timeout},
+    connection::{authenticated::Authenticated, timeout::Timeout},
     peer::id::PeerId,
 };
 
 use crate::connection::HttpLongPollConnection;
 
 // NOTE: SessionStore and SessionEntry are concrete on `Sendable` (not generic
-// over `K: FutureForm`) because `HttpLongPollConnection<O>` only implements
+// over `K: FutureForm`) because `HttpLongPollConnection<O, M>` only implements
 // `Connection<Sendable>`. This mirrors the `subduction_websocket` pattern.
 
 /// An opaque session identifier, assigned after successful handshake.
@@ -88,21 +88,15 @@ const fn hex_digit(b: u8) -> Option<u8> {
 
 /// Thread-safe session store mapping [`SessionId`] to connection state.
 ///
-/// The `M` parameter is the channel message type — [`SyncMessage`] by default.
+/// The `M` parameter is the channel message type — typically [`SyncMessage`].
 #[derive(Debug, Clone)]
-pub struct SessionStore<
-    O: Timeout<Sendable> + Send + Sync,
-    M: Clone + Send + Sync + 'static = SyncMessage,
-> {
+pub struct SessionStore<O: Timeout<Sendable> + Send + Sync, M: Clone + Send + Sync + 'static> {
     pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<O, M>>>>,
 }
 
 /// A single session entry containing the connection and peer identity.
 #[derive(Debug, Clone)]
-pub struct SessionEntry<
-    O: Timeout<Sendable> + Send + Sync,
-    M: Clone + Send + Sync + 'static = SyncMessage,
-> {
+pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync, M: Clone + Send + Sync + 'static> {
     /// The peer's identity.
     pub peer_id: PeerId,
 

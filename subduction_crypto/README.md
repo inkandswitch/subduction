@@ -11,23 +11,21 @@ This crate provides Ed25519-signed payloads with a type-state pattern that encod
 
 ## Type-State Flow
 
-```
-                         Local Authoring
-                         ===============
+```mermaid
+graph LR
+    subgraph Local Authoring
+        Parts["(parts, blob)"] -->|"VerifiedMeta::seal"| VM1["VerifiedMeta&lt;T&gt;"]
+        VM1 -->|into_signed| Signed1["Signed&lt;T&gt;"]
+        VM1 -.->|store| DB1[(Storage)]
+        Signed1 -.->|wire| Net1([Network])
+    end
 
-  (parts, blob) ──VerifiedMeta::seal──► VerifiedMeta<T> ──into_signed──► Signed<T>
-                                              │                              │
-                                              │                              │
-                                            store                          wire
-
-
-                        Remote Receiving
-                        ================
-
-  Signed<T> ──try_verify──► VerifiedSignature<T> ──VerifiedMeta::new──► VerifiedMeta<T>
-      │                                                                       │
-      │                                                                       │
-    wire                                                                    store
+    subgraph Remote Receiving
+        Signed2["Signed&lt;T&gt;"] -->|try_verify| VS["VerifiedSignature&lt;T&gt;"]
+        VS -->|"VerifiedMeta::new"| VM2["VerifiedMeta&lt;T&gt;"]
+        Net2([Network]) -.->|wire| Signed2
+        VM2 -.->|store| DB2[(Storage)]
+    end
 ```
 
 ## Key Types

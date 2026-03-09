@@ -24,13 +24,13 @@ use subduction_websocket::tokio::unified::UnifiedWebSocket;
 #[derive(Debug, Clone)]
 pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Send + Sync> {
     /// WebSocket transport (accepted or dialed).
-    WebSocket(UnifiedWebSocket<O>),
+    WebSocket(UnifiedWebSocket<O, SyncMessage>),
 
     /// HTTP long-poll transport.
-    HttpLongPoll(HttpLongPollConnection<O>),
+    HttpLongPoll(HttpLongPollConnection<O, SyncMessage>),
 
     /// Iroh QUIC transport.
-    Iroh(IrohConnection<O>),
+    Iroh(IrohConnection<O, SyncMessage>),
 }
 
 /// Error type for send operations across transports.

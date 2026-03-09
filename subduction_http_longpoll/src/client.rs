@@ -52,7 +52,7 @@ use crate::{
 
 /// Result of a successful connection, containing the authenticated connection
 /// and background task futures that the caller must spawn.
-pub struct ConnectResult<K: FutureForm, O, M = SyncMessage>
+pub struct ConnectResult<K: FutureForm, O, M>
 where
     HttpLongPollConnection<O, M>: subduction_core::connection::Connection<K, SyncMessage>,
 {
@@ -128,7 +128,7 @@ impl<H, O> HttpLongPollClient<H, O> {
 ///
 /// Prefer the convenience methods [`HttpLongPollClient::connect`] and
 /// [`HttpLongPollClient::connect_discover`] over calling this trait directly.
-pub trait Connect<K: FutureForm, Sig: Signer<K>, M: ChannelMessage = SyncMessage> {
+pub trait Connect<K: FutureForm, Sig: Signer<K>, M: ChannelMessage> {
     /// The timeout strategy for the resulting connection.
     type Timeout;
 
@@ -254,10 +254,11 @@ impl<H, O> HttpLongPollClient<H, O> {
         signer: &'a Sig,
         expected_peer_id: PeerId,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    ) -> K::Future<'a, Result<ConnectResult<K, O, SyncMessage>, ClientError>>
     where
         Self: Connect<K, Sig, SyncMessage, Timeout = O>,
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
+        HttpLongPollConnection<O, SyncMessage>:
+            subduction_core::connection::Connection<K, SyncMessage>,
     {
         Connect::<K, Sig, SyncMessage>::connect_with_audience(
             self,
@@ -281,10 +282,11 @@ impl<H, O> HttpLongPollClient<H, O> {
         signer: &'a Sig,
         service_name: &str,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    ) -> K::Future<'a, Result<ConnectResult<K, O, SyncMessage>, ClientError>>
     where
         Self: Connect<K, Sig, SyncMessage, Timeout = O>,
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
+        HttpLongPollConnection<O, SyncMessage>:
+            subduction_core::connection::Connection<K, SyncMessage>,
     {
         Connect::<K, Sig, SyncMessage>::connect_with_audience(
             self,

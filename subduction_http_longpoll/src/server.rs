@@ -25,6 +25,7 @@ use subduction_core::{
     connection::{
         authenticated::Authenticated,
         handshake::{self, Audience},
+        message::SyncMessage,
         nonce_cache::NonceCache,
         timeout::Timeout,
     },
@@ -46,7 +47,7 @@ use crate::{
 /// Server-side handler state, shared across request handlers.
 #[derive(Debug, Clone)]
 pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync> {
-    sessions: SessionStore<O>,
+    sessions: SessionStore<O, SyncMessage>,
     signer: Sig,
     nonce_cache: Arc<NonceCache>,
     our_peer_id: PeerId,
@@ -102,7 +103,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
     /// Access the session store.
     #[must_use]
-    pub const fn sessions(&self) -> &SessionStore<O> {
+    pub const fn sessions(&self) -> &SessionStore<O, SyncMessage> {
         &self.sessions
     }
 
@@ -334,7 +335,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     pub async fn take_authenticated(
         &self,
         session_id: &SessionId,
-    ) -> Option<Authenticated<HttpLongPollConnection<O>, Sendable>> {
+    ) -> Option<Authenticated<HttpLongPollConnection<O, SyncMessage>, Sendable>> {
         let mut sessions = self.sessions.sessions.lock().await;
         sessions
             .get_mut(session_id)

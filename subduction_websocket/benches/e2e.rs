@@ -54,6 +54,9 @@ use subduction_websocket::{
     tokio::{TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer},
 };
 
+/// Concrete type alias for benchmarks — always uses `SyncMessage` channel.
+type BenchClient = TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>;
+
 const HANDSHAKE_MAX_DRIFT: Duration = Duration::from_secs(60);
 const TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -106,7 +109,7 @@ type ClientSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
         SyncMessage,
         OpenPolicy,
         MemorySigner,
@@ -153,7 +156,7 @@ fn assert_full_sync(
         subduction_core::connection::stats::SyncStats,
         Vec<(
             subduction_core::connection::authenticated::Authenticated<
-                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+                TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
                 Sendable,
             >,
             subduction_websocket::error::CallError,
@@ -163,7 +166,7 @@ fn assert_full_sync(
             subduction_core::subduction::error::IoError<
                 Sendable,
                 MemoryStorage,
-                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+                TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
                 SyncMessage,
             >,
         )>,
@@ -193,7 +196,7 @@ async fn connected_client(
         .signer(client_signer.clone())
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>();
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>>();
 
     // `listener_fut` already runs `Subduction::listen()` internally —
     // do NOT spawn an additional `client.listen()` call.
@@ -204,7 +207,7 @@ async fn connected_client(
         .parse()
         .expect("valid uri");
 
-    let (client_ws, ws_listener, ws_sender) = TokioWebSocketClient::new(
+    let (client_ws, ws_listener, ws_sender) = BenchClient::new(
         uri,
         TimeoutTokio,
         TIMEOUT,
@@ -250,7 +253,7 @@ fn bench_handshake(c: &mut Criterion) {
                             .parse()
                             .expect("valid uri");
 
-                    let (_ws, listener, sender) = TokioWebSocketClient::new(
+                    let (_ws, listener, sender) = BenchClient::new(
                         uri,
                         TimeoutTokio,
                         TIMEOUT,

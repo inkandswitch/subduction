@@ -14,24 +14,13 @@ This document explains the key engineering patterns and abstractions used in Sub
 
 The `FutureForm` trait (from `future_form`) is the foundation for making Subduction work across both native Rust (with Tokio) and WebAssembly (single-threaded, no Send/Sync).
 
-```
-                    ┌───────────────────────────┐
-                    │        FutureForm         │
-                    │  (trait from future_form) │
-                    └────────────┬───────────────┘
-                                 │
-              ┌──────────────────┴────────────────┐
-              ▼                                   ▼
-     ┌────────────────┐                  ┌─────────────────┐
-     │    Sendable    │                  │     Local       │
-     │  (Send + Sync) │                  │  (single-thread)│
-     │                │                  │                 │
-     │  BoxFuture<T>  │                  │ LocalBoxFuture  │
-     └────────────────┘                  └─────────────────┘
-              │                                   │
-              ▼                                   ▼
-        Tokio runtime                      Wasm runtime
-        Multi-threaded                     JS event loop
+```mermaid
+graph TD
+    FF["FutureForm<br/>(trait from future_form)"]
+    FF --> S["Sendable<br/>(Send + Sync)<br/>BoxFuture&lt;T&gt;"]
+    FF --> L["Local<br/>(single-thread)<br/>LocalBoxFuture"]
+    S --> Tokio["Tokio runtime<br/>Multi-threaded"]
+    L --> Wasm["Wasm runtime<br/>JS event loop"]
 ```
 
 **Why?** JavaScript's single-threaded model means futures can't be `Send`. But we want the same core logic to work in both environments. `FutureForm` lets us write generic code that works with either.
@@ -168,27 +157,19 @@ This enables efficient sync: compare summaries at higher depths first, then dril
 
 ## Connection Lifecycle
 
-```
-Client                                          Server
-  │                                               │
-  │  1. TCP/WebSocket connect                     │
-  │  ─────────────────────────────────────────►   │
-  │                                               │
-  │  2. Signed<Challenge>                         │
-  │  ─────────────────────────────────────────►   │
-  │     { audience, timestamp, nonce }            │
-  │     Client identity from signature            │
-  │                                               │
-  │                      3. Signed<Response>      │
-  │  ◄─────────────────────────────────────────   │
-  │     { challenge_digest, server_timestamp }    │
-  │     Server identity from signature            │
-  │                                               │
-  │  4. ConnectionPolicy::authorize_connect()     │
-  │     checked on both sides                     │
-  │                                               │
-  ▼                                               ▼
-Authenticated                              Authenticated
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant S as Server
+
+    C->>S: 1. TCP/WebSocket connect
+    C->>S: 2. Signed&lt;Challenge&gt;
+    Note right of C: { audience, timestamp, nonce }<br/>Client identity from signature
+    S->>C: 3. Signed&lt;Response&gt;
+    Note left of S: { challenge_digest, server_timestamp }<br/>Server identity from signature
+    Note over C,S: 4. ConnectionPolicy::authorize_connect()<br/>checked on both sides
+    Note over C: Authenticated
+    Note over S: Authenticated
 ```
 
 ## Error Handling Pattern

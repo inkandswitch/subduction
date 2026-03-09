@@ -68,7 +68,7 @@ pub type WasmLongPollConnection =
 
 /// Type alias for the long-poll connection used in wasm (sync-only).
 #[cfg(not(feature = "ephemeral"))]
-pub type WasmLongPollConnection = HttpLongPollConnection<FuturesTimerTimeout>;
+pub type WasmLongPollConnection = HttpLongPollConnection<FuturesTimerTimeout, SyncMessage>;
 
 /// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
 /// [`Connection`](super::JsConnection) interface so it can be used as a
@@ -281,7 +281,7 @@ async fn cfg_connect(
     client: &HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout>,
     signer: &JsSigner,
     expected_peer_id: &WasmPeerId,
-) -> Result<ConnectResult<Local, FuturesTimerTimeout>, LongPollConnectionError> {
+) -> Result<ConnectResult<Local, FuturesTimerTimeout, SyncMessage>, LongPollConnectionError> {
     client
         .connect(signer, expected_peer_id.clone().into(), js_now())
         .await
@@ -312,7 +312,7 @@ async fn cfg_connect_discover(
     client: &HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout>,
     signer: &JsSigner,
     service_name: &str,
-) -> Result<ConnectResult<Local, FuturesTimerTimeout>, LongPollConnectionError> {
+) -> Result<ConnectResult<Local, FuturesTimerTimeout, SyncMessage>, LongPollConnectionError> {
     client
         .connect_discover(signer, service_name, js_now())
         .await

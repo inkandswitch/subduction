@@ -15,26 +15,18 @@ typing indicators, presence, and other application-level events.
 
 ## Architecture
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Physical Connection                         │
-│                                                                    │
-│  ┌──────────────────────┐    ┌──────────────────────────────────┐  │
-│  │    SUM\x00 envelope  │    │    SUE\x00 envelope              │  │
-│  │    SyncMessage       │    │    EphemeralMessage               │  │
-│  └──────────┬───────────┘    └──────────────┬───────────────────┘  │
-│             │                               │                      │
-│             ▼                               ▼                      │
-│  ┌──────────────────────┐    ┌──────────────────────────────────┐  │
-│  │    SyncHandler       │    │    EphemeralHandler               │  │
-│  │    (persist + sync)  │    │    (fan-out + callbacks)          │  │
-│  └──────────────────────┘    └──────────────────────────────────┘  │
-│                                                                    │
-│  ┌──────────────────────────────────────────────────────────────┐  │
-│  │  ComposedHandler<SyncHandler, EphemeralHandler>              │  │
-│  │  Dispatches WireMessage to the correct sub-handler           │  │
-│  └──────────────────────────────────────────────────────────────┘  │
-└─────────────────────────────────────────────────────────────────────┘
+```mermaid
+graph TD
+    subgraph Physical Connection
+        SUM["SUM\x00 envelope<br/>SyncMessage"]
+        SUE["SUE\x00 envelope<br/>EphemeralMessage"]
+        SH["SyncHandler<br/>(persist + sync)"]
+        EH["EphemeralHandler<br/>(fan-out + callbacks)"]
+        CH["ComposedHandler&lt;SyncHandler, EphemeralHandler&gt;<br/>Dispatches WireMessage to the correct sub-handler"]
+
+        SUM --> SH
+        SUE --> EH
+    end
 ```
 
 ## Wire Format
@@ -133,45 +125,56 @@ Contains only the rejected IDs; accepted IDs are implied by omission.
 
 ### Subscribe + Receive
 
-```
-  Subscriber                              Publisher
-  ──────────                              ─────────
-  Subscribe { ids: [A, B] }  ──────────>
-                                          (server records subscription)
+```mermaid
+sequenceDiagram
+    participant Sub as Subscriber
+    participant Srv as Server
+    participant Pub as Publisher
 
-                             <──────────  Ephemeral { id: A, payload }
-                             <──────────  Ephemeral { id: B, payload }
+    Sub->>Srv: Subscribe { ids: [A, B] }
+    Note right of Srv: records subscription
 
-  Unsubscribe { ids: [A] }  ──────────>
-                                          (server removes A subscription)
+    Pub->>Srv: Ephemeral { id: A, payload }
+    Srv->>Sub: Ephemeral { id: A, payload }
+    Pub->>Srv: Ephemeral { id: B, payload }
+    Srv->>Sub: Ephemeral { id: B, payload }
 
-                             <──────────  Ephemeral { id: B, payload }
-                                          (A no longer forwarded)
+    Sub->>Srv: Unsubscribe { ids: [A] }
+    Note right of Srv: removes A subscription
+
+    Pub->>Srv: Ephemeral { id: B, payload }
+    Srv->>Sub: Ephemeral { id: B, payload }
+    Note right of Srv: A no longer forwarded
 ```
 
 ### Subscribe Rejection
 
-```
-  Subscriber                              Server
-  ──────────                              ──────
-  Subscribe { ids: [A, B] }  ──────────>
-                                          authorize_subscribe(peer, A) → Ok
-                                          authorize_subscribe(peer, B) → Err
-                             <──────────  SubscribeRejected { ids: [B] }
+```mermaid
+sequenceDiagram
+    participant Sub as Subscriber
+    participant Srv as Server
+
+    Sub->>Srv: Subscribe { ids: [A, B] }
+    Note right of Srv: authorize_subscribe(peer, A) → Ok
+    Note right of Srv: authorize_subscribe(peer, B) → Err
+    Srv->>Sub: SubscribeRejected { ids: [B] }
 ```
 
 Only rejected IDs are returned. Subscription for A proceeds silently.
 
 ### Publish + Fan-Out
 
-```
-  Publisher                               Server                        Subscriber
-  ─────────                               ──────                        ──────────
-  Ephemeral { id, payload }  ──────────>
-                                          authorize_publish(peer, id) → Ok
-                                          filter_authorized_subscribers(id, peers)
-                                          fan-out to each authorized subscriber
-                                                                   <──  Ephemeral { id, payload }
+```mermaid
+sequenceDiagram
+    participant Pub as Publisher
+    participant Srv as Server
+    participant Sub as Subscriber
+
+    Pub->>Srv: Ephemeral { id, payload }
+    Note right of Srv: authorize_publish(peer, id) → Ok
+    Note right of Srv: filter_authorized_subscribers(id, peers)
+    Srv->>Sub: Ephemeral { id, payload }
+    Note right of Srv: fan-out to each authorized subscriber
 ```
 
 The server re-checks authorization at fan-out time (not just subscribe time),
@@ -200,7 +203,7 @@ identical bytes to encoding `msg` directly. Decoding reads the 4-byte
 schema header to determine the variant.
 
 `SyncMessage` is boxed (~344 bytes) while `EphemeralMessage` is small
-(~56 bytes), avoiding clippy's large-enum-variant warning.
+(~56 bytes), avoiding Clippy's large-enum-variant warning.
 
 ## ComposedHandler
 
