@@ -1,0 +1,42 @@
+[package]
+name = "subduction_ephemeral"
+version = "0.1.0"
+description = "Ephemeral (non-persisted) messaging for Subduction"
+
+categories = ["web-programming"]
+keywords = ["sync", "subduction", "ephemeral", "presence"]
+readme = "./README.md"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+async-channel = { workspace = true }
+async-lock = { workspace = true }
+bijou64 = { workspace = true }
+future_form = { workspace = true }
+futures = { workspace = true }
+nonempty = { workspace = true }
+sedimentree_core = { workspace = true }
+subduction_core = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+subduction_ephemeral = { path = ".", features = ["std"] }
+
+[features]
+default = []
+std = [
+  "async-channel/std",
+  "async-lock/std",
+  "futures/std",
+  "nonempty/std",
+  "sedimentree_core/std",
+  "subduction_core/std",
+  "thiserror/std",
+]
+
+[lints]
+workspace = true

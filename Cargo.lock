@@ -5048,6 +5048,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "subduction_ephemeral"
+version = "0.1.0"
+dependencies = [
+ "async-channel",
+ "async-lock",
+ "bijou64",
+ "future_form",
+ "futures 0.3.32",
+ "nonempty 0.12.0",
+ "sedimentree_core",
+ "subduction_core",
+ "subduction_ephemeral",
+ "thiserror 2.0.18",
+ "tracing",
+]
+
+[[package]]
 name = "subduction_http_longpoll"
 version = "0.3.0"
 dependencies = [

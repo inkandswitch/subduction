@@ -11,6 +11,7 @@ members = [
   "subduction_cli",
   "subduction_core",
   "subduction_crypto",
+  "subduction_ephemeral",
   "subduction_http_longpoll",
   "subduction_iroh",
   "subduction_keyhive_policy",
@@ -39,6 +40,7 @@ sedimentree_fs_storage = { version = "0.5.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.5.1", path = "sedimentree_wasm", default-features = false }
 subduction_core = { version = "0.5.0", path = "subduction_core", default-features = false }
 subduction_crypto = { version = "0.2.0", path = "subduction_crypto", default-features = false }
+subduction_ephemeral = { version = "0.1.0", path = "subduction_ephemeral", default-features = false }
 subduction_http_longpoll = { version = "0.3.0", path = "subduction_http_longpoll", default-features = false }
 subduction_iroh = { version = "0.2.0", path = "subduction_iroh" }
 subduction_wasm = { version = "0.5.1", path = "subduction_wasm", default-features = false }
