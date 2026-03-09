@@ -17,7 +17,7 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, SyncMessage, SyncResult},
-        test_utils::{SyncChannelMock, MockConnection, TestSpawn, TokioSpawn, test_signer},
+        test_utils::{MockConnection, SyncChannelMock, TestSpawn, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},

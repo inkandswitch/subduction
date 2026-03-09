@@ -43,19 +43,22 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 
 use crate::{
-    SESSION_ID_HEADER, connection::HttpLongPollConnection, error::ClientError,
-    http_client::HttpClient, session::SessionId,
+    SESSION_ID_HEADER,
+    connection::{ChannelMessage, HttpLongPollConnection},
+    error::ClientError,
+    http_client::HttpClient,
+    session::SessionId,
 };
 
 /// Result of a successful connection, containing the authenticated connection
 /// and background task futures that the caller must spawn.
-pub struct ConnectResult<K: future_form::FutureForm, O>
+pub struct ConnectResult<K: FutureForm, O, M = SyncMessage>
 where
-    HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
+    HttpLongPollConnection<O, M>: subduction_core::connection::Connection<K, SyncMessage>,
 {
     /// The authenticated connection, ready for registration with Subduction.
     pub authenticated:
-        subduction_core::connection::authenticated::Authenticated<HttpLongPollConnection<O>, K>,
+        subduction_core::connection::authenticated::Authenticated<HttpLongPollConnection<O, M>, K>,
 
     /// The session ID assigned by the server.
     pub session_id: SessionId,
@@ -67,9 +70,9 @@ where
     pub send_task: K::Future<'static, ()>,
 }
 
-impl<K: future_form::FutureForm, O> core::fmt::Debug for ConnectResult<K, O>
+impl<K: FutureForm, O, M> core::fmt::Debug for ConnectResult<K, O, M>
 where
-    HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
+    HttpLongPollConnection<O, M>: subduction_core::connection::Connection<K, SyncMessage>,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectResult")
@@ -125,7 +128,7 @@ impl<H, O> HttpLongPollClient<H, O> {
 ///
 /// Prefer the convenience methods [`HttpLongPollClient::connect`] and
 /// [`HttpLongPollClient::connect_discover`] over calling this trait directly.
-pub trait Connect<K: FutureForm, Sig: Signer<K>> {
+pub trait Connect<K: FutureForm, Sig: Signer<K>, M: ChannelMessage = SyncMessage> {
     /// The timeout strategy for the resulting connection.
     type Timeout;
 
@@ -134,20 +137,21 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
     /// # Errors
     ///
     /// Returns [`ClientError`] if the handshake or connection setup fails.
+    #[allow(clippy::type_complexity)]
     fn connect_with_audience<'a>(
         &'a self,
         signer: &'a Sig,
         audience: Audience,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, Self::Timeout>, ClientError>>
+    ) -> K::Future<'a, Result<ConnectResult<K, Self::Timeout, M>, ClientError>>
     where
-        HttpLongPollConnection<Self::Timeout>:
+        HttpLongPollConnection<Self::Timeout, M>:
             subduction_core::connection::Connection<K, SyncMessage>;
 }
 
-#[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
-impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
-    Connect<K, Sig> for HttpLongPollClient<H, O>
+#[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, M: ChannelMessage, Local where M: ChannelMessage)]
+impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static, M>
+    Connect<K, Sig, M> for HttpLongPollClient<H, O>
 {
     type Timeout = O;
 
@@ -156,9 +160,9 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
         signer: &'a Sig,
         audience: Audience,
         now: TimestampSeconds,
-    ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
+    ) -> K::Future<'a, Result<ConnectResult<K, O, M>, ClientError>>
     where
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
+        HttpLongPollConnection<O, M>: subduction_core::connection::Connection<K, SyncMessage>,
     {
         let http = self.http.clone();
         let base_url = self.base_url.clone();
@@ -184,8 +188,11 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
                         .session_id
                         .expect("session_id set during handshake send");
 
-                    let conn =
-                        HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
+                    let conn = HttpLongPollConnection::<O, M>::new(
+                        peer_id,
+                        default_time_limit,
+                        timeout.clone(),
+                    );
 
                     (conn, session_id)
                 },
@@ -209,7 +216,8 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
             let poll_conn = conn.clone();
 
             let poll_task = K::from_future(async move {
-                poll_loop(poll_http, poll_url, session_id, poll_conn, cancel_rx).await;
+                poll_loop::<K, H, O, M>(poll_http, poll_url, session_id, poll_conn, cancel_rx)
+                    .await;
             });
 
             let send_url = format!("{base_url}/lp/send");
@@ -217,7 +225,8 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
             let send_conn = conn;
 
             let send_task = K::from_future(async move {
-                send_loop(send_http, send_url, session_id, send_conn, send_cancel_rx).await;
+                send_loop::<K, H, O, M>(send_http, send_url, session_id, send_conn, send_cancel_rx)
+                    .await;
             });
 
             Ok(ConnectResult {
@@ -247,10 +256,15 @@ impl<H, O> HttpLongPollClient<H, O> {
         now: TimestampSeconds,
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
-        Self: Connect<K, Sig, Timeout = O>,
+        Self: Connect<K, Sig, SyncMessage, Timeout = O>,
         HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
     {
-        self.connect_with_audience(signer, Audience::known(expected_peer_id), now)
+        Connect::<K, Sig, SyncMessage>::connect_with_audience(
+            self,
+            signer,
+            Audience::known(expected_peer_id),
+            now,
+        )
     }
 
     /// Connect to the server using service discovery.
@@ -269,10 +283,66 @@ impl<H, O> HttpLongPollClient<H, O> {
         now: TimestampSeconds,
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
-        Self: Connect<K, Sig, Timeout = O>,
+        Self: Connect<K, Sig, SyncMessage, Timeout = O>,
         HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
     {
-        self.connect_with_audience(signer, Audience::discover(service_name.as_bytes()), now)
+        Connect::<K, Sig, SyncMessage>::connect_with_audience(
+            self,
+            signer,
+            Audience::discover(service_name.as_bytes()),
+            now,
+        )
+    }
+
+    /// Connect to the server with a known peer ID, using a custom channel
+    /// message type.
+    ///
+    /// Use this with `M = WireMessage` (from `subduction_ephemeral`) to
+    /// multiplex sync and ephemeral traffic on the same connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the handshake or connection setup fails.
+    pub fn connect_typed<'a, K: FutureForm, Sig: Signer<K>, M: ChannelMessage>(
+        &'a self,
+        signer: &'a Sig,
+        expected_peer_id: PeerId,
+        now: TimestampSeconds,
+    ) -> K::Future<'a, Result<ConnectResult<K, O, M>, ClientError>>
+    where
+        Self: Connect<K, Sig, M, Timeout = O>,
+        HttpLongPollConnection<O, M>: subduction_core::connection::Connection<K, SyncMessage>,
+    {
+        Connect::<K, Sig, M>::connect_with_audience(
+            self,
+            signer,
+            Audience::known(expected_peer_id),
+            now,
+        )
+    }
+
+    /// Connect to the server using service discovery, with a custom channel
+    /// message type.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ClientError`] if the handshake or connection setup fails.
+    pub fn connect_discover_typed<'a, K: FutureForm, Sig: Signer<K>, M: ChannelMessage>(
+        &'a self,
+        signer: &'a Sig,
+        service_name: &str,
+        now: TimestampSeconds,
+    ) -> K::Future<'a, Result<ConnectResult<K, O, M>, ClientError>>
+    where
+        Self: Connect<K, Sig, M, Timeout = O>,
+        HttpLongPollConnection<O, M>: subduction_core::connection::Connection<K, SyncMessage>,
+    {
+        Connect::<K, Sig, M>::connect_with_audience(
+            self,
+            signer,
+            Audience::discover(service_name.as_bytes()),
+            now,
+        )
     }
 }
 
@@ -282,11 +352,11 @@ impl<H, O> HttpLongPollClient<H, O> {
 
 /// Background task that continuously polls `POST /lp/recv` and pushes
 /// messages into the connection's inbound channel.
-async fn poll_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
+async fn poll_loop<K: FutureForm, H: HttpClient<K>, O, M: ChannelMessage>(
     http: H,
     url: String,
     session_id: SessionId,
-    conn: HttpLongPollConnection<O>,
+    conn: HttpLongPollConnection<O, M>,
     cancel: async_channel::Receiver<()>,
 ) {
     loop {
@@ -306,7 +376,7 @@ async fn poll_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
             }
             Either::Left((result, _)) => match result {
                 Ok(resp) => match resp.status {
-                    200 => match SyncMessage::try_decode(&resp.body) {
+                    200 => match M::try_decode(&resp.body) {
                         Ok(msg) => {
                             if conn.push_inbound(msg).await.is_err() {
                                 tracing::error!("inbound channel closed");
@@ -340,11 +410,11 @@ async fn poll_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
 
 /// Background task that drains the connection's outbound channel and sends
 /// each message via `POST /lp/send`.
-async fn send_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
+async fn send_loop<K: FutureForm, H: HttpClient<K>, O, M: ChannelMessage>(
     http: H,
     url: String,
     session_id: SessionId,
-    conn: HttpLongPollConnection<O>,
+    conn: HttpLongPollConnection<O, M>,
     cancel: async_channel::Receiver<()>,
 ) {
     loop {
@@ -399,7 +469,7 @@ async fn send_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
 /// 2. `recv()` — returns the response bytes captured during `send()`
 ///
 /// This maps the streaming `Handshake` interface to a single HTTP round-trip.
-struct ClientHttpHandshake<K: future_form::FutureForm, H: HttpClient<K>> {
+struct ClientHttpHandshake<K: FutureForm, H: HttpClient<K>> {
     http: H,
     base_url: String,
     session_id: Option<SessionId>,
@@ -408,9 +478,7 @@ struct ClientHttpHandshake<K: future_form::FutureForm, H: HttpClient<K>> {
 }
 
 #[future_form(Sendable where H: Send, Local)]
-impl<K: future_form::FutureForm, H: HttpClient<K>> handshake::Handshake<K>
-    for &mut ClientHttpHandshake<K, H>
-{
+impl<K: FutureForm, H: HttpClient<K>> handshake::Handshake<K> for &mut ClientHttpHandshake<K, H> {
     type Error = ClientError;
 
     fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>> {

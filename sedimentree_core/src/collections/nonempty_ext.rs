@@ -49,7 +49,7 @@ impl<T: PartialEq> NonEmptyExt<T> for NonEmpty<T> {
 }
 
 #[cfg(test)]
-#[allow(clippy::panic, clippy::wildcard_enum_match_arm)]
+#[allow(clippy::panic)]
 mod tests {
     use super::*;
 
@@ -64,7 +64,8 @@ mod tests {
                 assert_eq!(remaining.len(), 2);
                 assert!(!remaining.contains(&1));
             }
-            _ => panic!("expected Removed"),
+            RemoveResult::NotFound(_) => panic!("expected Removed, got NotFound"),
+            RemoveResult::WasLast(_) => panic!("expected Removed, got WasLast"),
         }
     }
 
@@ -80,7 +81,8 @@ mod tests {
                 assert!(remaining.contains(&1));
                 assert!(remaining.contains(&3));
             }
-            _ => panic!("expected Removed"),
+            RemoveResult::NotFound(_) => panic!("expected Removed, got NotFound"),
+            RemoveResult::WasLast(_) => panic!("expected Removed, got WasLast"),
         }
     }
 
@@ -90,7 +92,8 @@ mod tests {
 
         match ne.remove_item(&42) {
             RemoveResult::WasLast(value) => assert_eq!(value, 42),
-            _ => panic!("expected WasLast"),
+            RemoveResult::NotFound(_) => panic!("expected WasLast, got NotFound"),
+            RemoveResult::Removed(_) => panic!("expected WasLast, got Removed"),
         }
     }
 
@@ -103,7 +106,8 @@ mod tests {
             RemoveResult::NotFound(remaining) => {
                 assert_eq!(remaining.len(), 2);
             }
-            _ => panic!("expected NotFound"),
+            RemoveResult::Removed(_) => panic!("expected NotFound, got Removed"),
+            RemoveResult::WasLast(_) => panic!("expected NotFound, got WasLast"),
         }
     }
 }

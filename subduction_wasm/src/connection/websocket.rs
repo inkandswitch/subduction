@@ -22,6 +22,7 @@ use futures::{
     channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
 };
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_core::{
     connection::{
         Connection, Roundtrip,
@@ -31,7 +32,21 @@ use subduction_core::{
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::nonce::Nonce;
+#[cfg(feature = "ephemeral")]
+use subduction_ephemeral::{message::EphemeralMessage, wire::WireMessage};
 use thiserror::Error;
+
+/// The message type carried by the internal inbound channel.
+///
+/// When `ephemeral` is enabled, this is [`WireMessage`] so that both sync
+/// and ephemeral frames can be routed through a single channel.
+/// Otherwise it is [`SyncMessage`].
+#[cfg(feature = "ephemeral")]
+type InboundMessage = WireMessage;
+
+/// The message type carried by the internal inbound channel.
+#[cfg(not(feature = "ephemeral"))]
+type InboundMessage = SyncMessage;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use wasm_bindgen_futures::JsFuture;
 use web_sys::{
@@ -49,6 +64,39 @@ use subduction_core::connection::{
     handshake::{self, Audience},
 };
 
+/// Try to extract a [`BatchSyncResponse`] reference from an inbound channel message.
+#[cfg(feature = "ephemeral")]
+fn extract_batch_sync_response(msg: &InboundMessage) -> Option<&BatchSyncResponse> {
+    match msg {
+        WireMessage::Sync(sync_msg) => match sync_msg.as_ref() {
+            SyncMessage::BatchSyncResponse(resp) => Some(resp),
+            SyncMessage::LooseCommit { .. }
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::DataRequestRejected(_) => None,
+        },
+        WireMessage::Ephemeral(_) => None,
+    }
+}
+
+/// Try to extract a [`BatchSyncResponse`] reference from an inbound channel message.
+#[cfg(not(feature = "ephemeral"))]
+fn extract_batch_sync_response(msg: &InboundMessage) -> Option<&BatchSyncResponse> {
+    match msg {
+        SyncMessage::BatchSyncResponse(resp) => Some(resp),
+        SyncMessage::LooseCommit { .. }
+        | SyncMessage::Fragment { .. }
+        | SyncMessage::BlobsRequest { .. }
+        | SyncMessage::BlobsResponse { .. }
+        | SyncMessage::BatchSyncRequest(_)
+        | SyncMessage::RemoveSubscriptions(_)
+        | SyncMessage::DataRequestRejected(_) => None,
+    }
+}
+
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
@@ -60,7 +108,7 @@ pub struct WasmWebSocket {
     socket: WebSocket,
 
     pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
-    inbound_reader: async_channel::Receiver<SyncMessage>,
+    inbound_reader: async_channel::Receiver<InboundMessage>,
 }
 
 impl WasmWebSocket {
@@ -69,7 +117,7 @@ impl WasmWebSocket {
     /// This sets up message handlers and returns a `WasmWebSocket`.
     /// The WebSocket MUST be in OPEN state.
     fn setup_open_socket(ws: WebSocket, peer_id: PeerId, timeout_ms: u32) -> Self {
-        let (inbound_writer, inbound_reader) = async_channel::bounded::<SyncMessage>(64);
+        let (inbound_writer, inbound_reader) = async_channel::bounded::<InboundMessage>(64);
 
         let pending = Arc::new(Mutex::new(Map::<
             RequestId,
@@ -82,57 +130,34 @@ impl WasmWebSocket {
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
                 tracing::debug!("WS received {} bytes", bytes.len());
-                match SyncMessage::try_decode(&bytes) {
-                    Ok(msg) => {
+                match InboundMessage::try_decode(&bytes) {
+                    Ok(inbound_msg) => {
                         tracing::trace!("WS message decoded: {} bytes", bytes.len());
                         let inner_pending = closure_pending.clone();
                         let inner_inbound_writer = inbound_writer.clone();
 
                         wasm_bindgen_futures::spawn_local(async move {
-                            match msg {
-                                SyncMessage::BatchSyncResponse(resp) => {
-                                    tracing::debug!(
-                                        "BatchSyncResponse received: {:?}",
-                                        resp.result
-                                    );
-                                    let req_id = resp.req_id;
-                                    let removed = { inner_pending.lock().await.remove(&req_id) };
-                                    if let Some(waiting) = removed {
-                                        tracing::trace!("dispatching to waiter {:?}", req_id);
-                                        let result = waiting.send(resp);
-                                        debug_assert!(result.is_ok());
-                                        if result.is_err() {
-                                            tracing::error!(
-                                                "oneshot channel closed before sending response for req_id {:?}",
-                                                req_id
-                                            );
-                                        }
-                                    } else {
-                                        tracing::trace!(
-                                            "dispatching to inbound channel {:?}",
-                                            resp.req_id
+                            // Route BatchSyncResponse to pending waiters (for call/roundtrip).
+                            if let Some(resp) = extract_batch_sync_response(&inbound_msg) {
+                                let req_id = resp.req_id;
+                                let removed = { inner_pending.lock().await.remove(&req_id) };
+                                if let Some(waiting) = removed {
+                                    tracing::trace!("dispatching to waiter {:?}", req_id);
+                                    let result = waiting.send(resp.clone());
+                                    debug_assert!(result.is_ok());
+                                    if result.is_err() {
+                                        tracing::error!(
+                                            "oneshot channel closed before sending response for req_id {:?}",
+                                            req_id
                                         );
-                                        if let Err(e) = inner_inbound_writer
-                                            .clone()
-                                            .send(SyncMessage::BatchSyncResponse(resp))
-                                            .await
-                                        {
-                                            tracing::error!("failed to send inbound message: {e}");
-                                        }
                                     }
+                                    return;
                                 }
-                                other @ (SyncMessage::LooseCommit { .. }
-                                | SyncMessage::Fragment { .. }
-                                | SyncMessage::BlobsRequest { .. }
-                                | SyncMessage::BlobsResponse { .. }
-                                | SyncMessage::BatchSyncRequest(_)
-                                | SyncMessage::RemoveSubscriptions(_)
-                                | SyncMessage::DataRequestRejected(_)) => {
-                                    tracing::debug!("other message type received");
-                                    if let Err(e) = inner_inbound_writer.clone().send(other).await {
-                                        tracing::error!("failed to send inbound message: {e}");
-                                    }
-                                }
+                            }
+
+                            // All other messages go to the inbound channel.
+                            if let Err(e) = inner_inbound_writer.send(inbound_msg).await {
+                                tracing::error!("failed to send inbound message: {e}");
                             }
                         });
                     }
@@ -441,7 +466,7 @@ impl WasmWebSocket {
     /// Disconnect from the peer gracefully.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn wasm_disconnect(&self) {
-        match self.disconnect().await {
+        match Connection::<Local, SyncMessage>::disconnect(self).await {
             Ok(()) => (),
             Err(_infallible) => {}
         }
@@ -455,7 +480,7 @@ impl WasmWebSocket {
     #[wasm_bindgen(js_name = send)]
     pub async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
         let msg: SyncMessage = wasm_message.into();
-        self.send(&msg).await?;
+        Connection::<Local, SyncMessage>::send(self, &msg).await?;
         Ok(())
     }
 
@@ -466,7 +491,7 @@ impl WasmWebSocket {
     /// Returns [`ReadFromClosedChannel`] if the channel has been closed.
     #[wasm_bindgen(js_name = recv)]
     pub async fn wasm_recv(&self) -> Result<WasmMessage, ReadFromClosedChannel> {
-        let msg = self.recv().await?;
+        let msg = Connection::<Local, SyncMessage>::recv(self).await?;
         Ok(msg.into())
     }
 
@@ -504,6 +529,16 @@ impl PartialEq for WasmWebSocket {
     }
 }
 
+// ── Connection impls ────────────────────────────────────────────────────
+//
+// The `SyncMessage` impl always exists and encodes/decodes directly on
+// the socket. When `ephemeral` is enabled, the internal channel carries
+// `WireMessage` and three additional impls are provided:
+//
+// - `WireMessage`        — used by `listen()`'s connection loop for `recv()`
+// - `SyncMessage`        — wraps via `WireMessage::Sync` for `SyncHandler` fan-out
+// - `EphemeralMessage`   — wraps via `WireMessage::Ephemeral` for `EphemeralHandler`
+
 impl Connection<Local, SyncMessage> for WasmWebSocket {
     type SendError = SendError;
     type RecvError = ReadFromClosedChannel;
@@ -518,8 +553,6 @@ impl Connection<Local, SyncMessage> for WasmWebSocket {
     }
 
     fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
-        let request_id = message.request_id();
-
         let msg_bytes = message.encode();
 
         async move {
@@ -527,7 +560,7 @@ impl Connection<Local, SyncMessage> for WasmWebSocket {
                 .send_with_u8_array(msg_bytes.as_slice())
                 .map_err(SendError::SocketSend)?;
 
-            tracing::debug!("sent outbound message id {:?}", request_id);
+            tracing::debug!("sent outbound SyncMessage");
 
             Ok(())
         }
@@ -536,16 +569,130 @@ impl Connection<Local, SyncMessage> for WasmWebSocket {
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         async {
-            tracing::debug!("waiting for inbound message");
-            let msg = self
-                .inbound_reader
-                .recv()
-                .await
-                .map_err(|_| ReadFromClosedChannel)?;
-            tracing::info!("received inbound message id {:?}", msg.request_id());
-            Ok(msg)
+            loop {
+                let msg = self
+                    .inbound_reader
+                    .recv()
+                    .await
+                    .map_err(|_| ReadFromClosedChannel)?;
+
+                #[cfg(feature = "ephemeral")]
+                {
+                    if let WireMessage::Sync(sync_msg) = msg {
+                        return Ok(*sync_msg);
+                    }
+                    // Skip non-sync messages (shouldn't happen in normal flow)
+                }
+
+                #[cfg(not(feature = "ephemeral"))]
+                {
+                    return Ok(msg);
+                }
+            }
         }
         .boxed_local()
+    }
+}
+
+// ── Ephemeral Connection impls (feature-gated) ─────────────────────────
+
+#[cfg(feature = "ephemeral")]
+#[allow(clippy::wildcard_imports)]
+mod ephemeral_conn_impls {
+    use super::*;
+
+    impl Connection<Local, WireMessage> for WasmWebSocket {
+        type SendError = SendError;
+        type RecvError = ReadFromClosedChannel;
+        type DisconnectionError = Infallible;
+
+        fn peer_id(&self) -> PeerId {
+            self.peer_id
+        }
+
+        fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+            async { Ok(()) }.boxed_local()
+        }
+
+        fn send(&self, message: &WireMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+            let msg_bytes = message.encode();
+
+            async move {
+                self.socket
+                    .send_with_u8_array(msg_bytes.as_slice())
+                    .map_err(SendError::SocketSend)?;
+
+                tracing::debug!("sent outbound WireMessage");
+
+                Ok(())
+            }
+            .boxed_local()
+        }
+
+        fn recv(&self) -> LocalBoxFuture<'_, Result<WireMessage, Self::RecvError>> {
+            async {
+                tracing::debug!("waiting for inbound WireMessage");
+                let msg = self
+                    .inbound_reader
+                    .recv()
+                    .await
+                    .map_err(|_| ReadFromClosedChannel)?;
+                tracing::debug!("received inbound WireMessage");
+                Ok(msg)
+            }
+            .boxed_local()
+        }
+    }
+
+    impl Connection<Local, EphemeralMessage> for WasmWebSocket {
+        type SendError = SendError;
+        type RecvError = ReadFromClosedChannel;
+        type DisconnectionError = Infallible;
+
+        fn peer_id(&self) -> PeerId {
+            self.peer_id
+        }
+
+        fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+            async { Ok(()) }.boxed_local()
+        }
+
+        fn send(
+            &self,
+            message: &EphemeralMessage,
+        ) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+            let msg_bytes = message.encode();
+
+            async move {
+                self.socket
+                    .send_with_u8_array(msg_bytes.as_slice())
+                    .map_err(SendError::SocketSend)?;
+
+                tracing::debug!("sent outbound EphemeralMessage");
+
+                Ok(())
+            }
+            .boxed_local()
+        }
+
+        fn recv(&self) -> LocalBoxFuture<'_, Result<EphemeralMessage, Self::RecvError>> {
+            // Not used in practice — the connection loop receives `WireMessage`
+            // and the ComposedHandler dispatches to EphemeralHandler.
+            async {
+                loop {
+                    let wire = self
+                        .inbound_reader
+                        .recv()
+                        .await
+                        .map_err(|_| ReadFromClosedChannel)?;
+                    if let WireMessage::Ephemeral(msg) = wire {
+                        return Ok(msg);
+                    }
+                    // Skip non-ephemeral messages (shouldn't happen in normal flow)
+                }
+            }
+            .boxed_local()
+        }
     }
 }
 

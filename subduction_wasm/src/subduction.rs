@@ -26,14 +26,15 @@ use sedimentree_core::{
     loose_commit::LooseCommit,
     sedimentree::Sedimentree,
 };
+#[cfg(not(feature = "ephemeral"))]
+use subduction_core::subduction::builder::SubductionBuilder;
 use subduction_core::{
     connection::{handshake::DiscoveryId, manager::Spawn, message::SyncMessage},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        Subduction, error::HydrationError, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -71,6 +72,15 @@ use futures::{
     stream::{AbortHandle, Abortable},
 };
 
+#[cfg(feature = "ephemeral")]
+use subduction_ephemeral::{
+    composed::{ComposedError, ComposedHandler},
+    config::{EphemeralConfig, EphemeralEvent},
+    handler::{EphemeralHandler, EphemeralHandlerError},
+    policy::OpenEphemeralPolicy,
+    wire::WireMessage,
+};
+
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 const WASM_SHARD_COUNT: usize = 4;
 
@@ -88,6 +98,174 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Wire message type alias — switches with ephemeral feature
+// ---------------------------------------------------------------------------
+
+/// The wire message type used by this node.
+///
+/// When the `ephemeral` feature is enabled, both sync and ephemeral
+/// traffic are multiplexed through [`WireMessage`]. Otherwise,
+/// only [`SyncMessage`] flows through the connection.
+#[cfg(feature = "ephemeral")]
+pub(crate) type WasmWireMessage = WireMessage;
+
+#[cfg(not(feature = "ephemeral"))]
+pub(crate) type WasmWireMessage = SyncMessage;
+
+// ---------------------------------------------------------------------------
+// Ephemeral handler wrapper (orphan-rule workaround)
+// ---------------------------------------------------------------------------
+
+/// Type alias for the concrete `SyncHandler` used in wasm.
+#[cfg(feature = "ephemeral")]
+type WasmSyncHandler = subduction_core::handler::sync::SyncHandler<
+    Local,
+    JsStorage,
+    WasmUnifiedTransport,
+    OpenPolicy,
+    WasmHashMetric,
+    WASM_SHARD_COUNT,
+>;
+
+/// Type alias for the concrete `EphemeralHandler` used in wasm.
+#[cfg(feature = "ephemeral")]
+type WasmEphemeralHandler = EphemeralHandler<Local, WasmUnifiedTransport, OpenEphemeralPolicy>;
+
+/// Thin handler wrapper that delegates to [`ComposedHandler`] and
+/// converts its [`ComposedError`] into [`ListenError<..., WireMessage>`].
+///
+/// This is necessary because of the orphan rule: we cannot implement
+/// `Into<ListenError<..., WireMessage>>` for `ComposedError<..., ...>`
+/// from either `subduction_core` or `subduction_ephemeral`, so we
+/// produce the correct `HandlerError` type directly.
+#[cfg(feature = "ephemeral")]
+struct WasmComposedHandler {
+    inner: ComposedHandler<WasmSyncHandler, WasmEphemeralHandler>,
+}
+
+#[cfg(feature = "ephemeral")]
+impl core::fmt::Debug for WasmComposedHandler {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("WasmComposedHandler")
+            .finish_non_exhaustive()
+    }
+}
+
+/// Concrete `ListenError` for the wasm ephemeral path.
+#[cfg(feature = "ephemeral")]
+type WasmListenError = subduction_core::subduction::error::ListenError<
+    Local,
+    JsStorage,
+    WasmUnifiedTransport,
+    WireMessage,
+>;
+
+#[cfg(feature = "ephemeral")]
+impl subduction_core::handler::Handler<Local, WasmUnifiedTransport> for WasmComposedHandler {
+    type Message = WireMessage;
+    type HandlerError = WasmListenError;
+
+    fn handle<'a>(
+        &'a self,
+        conn: &'a subduction_core::connection::authenticated::Authenticated<
+            WasmUnifiedTransport,
+            Local,
+        >,
+        message: WireMessage,
+    ) -> LocalBoxFuture<'a, Result<(), Self::HandlerError>> {
+        let fut = subduction_core::handler::Handler::<Local, WasmUnifiedTransport>::handle(
+            &self.inner,
+            conn,
+            message,
+        );
+        async move { fut.await.map_err(convert_composed_error) }.boxed_local()
+    }
+
+    fn on_peer_disconnect(&self, peer: PeerId) -> LocalBoxFuture<'_, ()> {
+        subduction_core::handler::Handler::<Local, WasmUnifiedTransport>::on_peer_disconnect(
+            &self.inner,
+            peer,
+        )
+    }
+}
+
+/// Convert a [`ComposedError`] into a [`ListenError<..., WireMessage>`].
+///
+/// This is possible because all three `Connection<Local, *>` impls on
+/// [`WasmUnifiedTransport`] share the same concrete error types.
+#[cfg(feature = "ephemeral")]
+#[allow(clippy::type_complexity)]
+fn convert_composed_error(
+    err: ComposedError<
+        subduction_core::subduction::error::ListenError<
+            Local,
+            JsStorage,
+            WasmUnifiedTransport,
+            SyncMessage,
+        >,
+        EphemeralHandlerError<
+            <WasmUnifiedTransport as subduction_core::connection::Connection<
+                Local,
+                subduction_ephemeral::message::EphemeralMessage,
+            >>::SendError,
+        >,
+    >,
+) -> WasmListenError {
+    match err {
+        ComposedError::Sync(listen_err) => convert_sync_listen_error(listen_err),
+        ComposedError::Ephemeral(eph_err) => convert_ephemeral_error(eph_err),
+    }
+}
+
+/// Convert a sync `ListenError<..., SyncMessage>` into `ListenError<..., WireMessage>`.
+///
+/// The concrete error variants are identical because `WasmUnifiedTransport`
+/// uses the same associated error types for all message parameterizations.
+#[cfg(feature = "ephemeral")]
+fn convert_sync_listen_error(
+    err: subduction_core::subduction::error::ListenError<
+        Local,
+        JsStorage,
+        WasmUnifiedTransport,
+        SyncMessage,
+    >,
+) -> WasmListenError {
+    use subduction_core::subduction::error::{IoError, ListenError};
+
+    match err {
+        ListenError::IoError(io_err) => ListenError::IoError(match io_err {
+            IoError::Storage(e) => IoError::Storage(e),
+            IoError::ConnSend(e) => IoError::ConnSend(e),
+            IoError::ConnRecv(e) => IoError::ConnRecv(e),
+            IoError::ConnCall(e) => IoError::ConnCall(e),
+            IoError::BlobMismatch(e) => IoError::BlobMismatch(e),
+        }),
+        ListenError::TrySendError => ListenError::TrySendError,
+    }
+}
+
+/// Convert an [`EphemeralHandlerError`] into `ListenError<..., WireMessage>`.
+#[cfg(feature = "ephemeral")]
+fn convert_ephemeral_error(
+    err: EphemeralHandlerError<
+        <WasmUnifiedTransport as subduction_core::connection::Connection<
+            Local,
+            subduction_ephemeral::message::EphemeralMessage,
+        >>::SendError,
+    >,
+) -> WasmListenError {
+    use subduction_core::subduction::error::{IoError, ListenError};
+
+    match err {
+        EphemeralHandlerError::Send(send_err) => ListenError::IoError(IoError::ConnSend(send_err)),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WasmSubduction
+// ---------------------------------------------------------------------------
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 pub struct WasmSubduction {
@@ -97,21 +275,33 @@ pub struct WasmSubduction {
             Local,
             JsStorage,
             WasmUnifiedTransport,
-            SyncMessage,
+            WasmWireMessage,
             OpenPolicy,
             JsSigner,
             WasmHashMetric,
             WASM_SHARD_COUNT,
         >,
     >,
-    js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
+
+    /// Reference to the JS storage object for callback registration.
+    js_storage: JsValue,
+
+    /// The ephemeral handler, for calling `publish()`.
+    #[cfg(feature = "ephemeral")]
+    ephemeral_handler: Arc<WasmEphemeralHandler>,
+
+    /// Receiver for inbound ephemeral events from peers.
+    #[cfg(feature = "ephemeral")]
+    ephemeral_rx: async_channel::Receiver<EphemeralEvent>,
 }
 
 impl core::fmt::Debug for WasmSubduction {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("WasmSubduction")
-            .field("js_storage", &self.js_storage)
-            .finish_non_exhaustive()
+        let mut d = f.debug_struct("WasmSubduction");
+        d.field("js_storage", &self.js_storage);
+        #[cfg(feature = "ephemeral")]
+        d.field("ephemeral", &true);
+        d.finish_non_exhaustive()
     }
 }
 
@@ -153,38 +343,47 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
-            .signer(signer)
-            .storage(storage, Arc::new(OpenPolicy))
-            .spawner(WasmSpawn)
-            .depth_metric(depth_metric)
-            .max_pending_blob_requests(max_pending);
+        #[cfg(not(feature = "ephemeral"))]
+        {
+            let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+                .signer(signer)
+                .storage(storage, Arc::new(OpenPolicy))
+                .spawner(WasmSpawn)
+                .depth_metric(depth_metric)
+                .max_pending_blob_requests(max_pending);
 
-        if let Some(id) = discovery_id {
-            builder = builder.discovery_id(id);
+            if let Some(id) = discovery_id {
+                builder = builder.discovery_id(id);
+            }
+
+            let (core, _handler, listener_fut, manager_fut) = builder.build();
+
+            spawn_subduction_tasks(listener_fut, manager_fut);
+
+            Self { core, js_storage }
         }
 
-        let (core, _handler, listener_fut, manager_fut) = builder.build();
+        #[cfg(feature = "ephemeral")]
+        {
+            let (core, ephemeral_handler, ephemeral_rx, listener_fut, manager_fut) =
+                build_ephemeral(
+                    signer,
+                    storage,
+                    discovery_id,
+                    depth_metric,
+                    max_pending,
+                    None,
+                );
 
-        wasm_bindgen_futures::spawn_local(async move {
-            let manager = manager_fut.fuse();
-            let listener = listener_fut.fuse();
+            spawn_subduction_tasks(listener_fut, manager_fut);
 
-            match select(manager, listener).await {
-                Either::Left((manager_result, _pin)) => {
-                    if let Err(Aborted) = manager_result {
-                        tracing::error!("Subduction manager aborted");
-                    }
-                }
-                Either::Right((listener_result, _pin)) => {
-                    if let Err(Aborted) = listener_result {
-                        tracing::error!("Subduction listener aborted");
-                    }
-                }
+            Self {
+                core,
+                js_storage,
+                ephemeral_handler,
+                ephemeral_rx,
             }
-        });
-
-        Self { core, js_storage }
+        }
     }
 
     /// Hydrate a [`Subduction`] instance from external storage.
@@ -263,39 +462,48 @@ impl WasmSubduction {
                 .await;
         }
 
-        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
-            .signer(signer)
-            .storage(storage, Arc::new(OpenPolicy))
-            .spawner(WasmSpawn)
-            .depth_metric(depth_metric)
-            .max_pending_blob_requests(max_pending)
-            .sedimentrees(sedimentrees);
+        #[cfg(not(feature = "ephemeral"))]
+        {
+            let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+                .signer(signer)
+                .storage(storage, Arc::new(OpenPolicy))
+                .spawner(WasmSpawn)
+                .depth_metric(depth_metric)
+                .max_pending_blob_requests(max_pending)
+                .sedimentrees(sedimentrees);
 
-        if let Some(id) = discovery_id {
-            builder = builder.discovery_id(id);
+            if let Some(id) = discovery_id {
+                builder = builder.discovery_id(id);
+            }
+
+            let (core, _handler, listener_fut, manager_fut) = builder.build();
+
+            spawn_subduction_tasks(listener_fut, manager_fut);
+
+            Ok(Self { core, js_storage })
         }
 
-        let (core, _handler, listener_fut, manager_fut) = builder.build();
+        #[cfg(feature = "ephemeral")]
+        {
+            let (core, ephemeral_handler, ephemeral_rx, listener_fut, manager_fut) =
+                build_ephemeral(
+                    signer,
+                    storage,
+                    discovery_id,
+                    depth_metric,
+                    max_pending,
+                    Some(sedimentrees),
+                );
 
-        wasm_bindgen_futures::spawn_local(async move {
-            let manager = manager_fut.fuse();
-            let listener = listener_fut.fuse();
+            spawn_subduction_tasks(listener_fut, manager_fut);
 
-            match select(manager, listener).await {
-                Either::Left((manager_result, _pin)) => {
-                    if let Err(Aborted) = manager_result {
-                        tracing::error!("Subduction manager aborted");
-                    }
-                }
-                Either::Right((listener_result, _pin)) => {
-                    if let Err(Aborted) = listener_result {
-                        tracing::error!("Subduction listener aborted");
-                    }
-                }
-            }
-        });
-
-        Ok(Self { core, js_storage })
+            Ok(Self {
+                core,
+                js_storage,
+                ephemeral_handler,
+                ephemeral_rx,
+            })
+        }
     }
 
     /// Add a Sedimentree.
@@ -839,6 +1047,202 @@ impl WasmSubduction {
     pub fn storage(&self) -> JsValue {
         self.js_storage.clone()
     }
+
+    /// Register a callback for incoming ephemeral messages.
+    ///
+    /// The callback receives `(sedimentreeId: Uint8Array, senderPeerId: Uint8Array, payload: Uint8Array)`
+    /// for every ephemeral message delivered by connected peers.
+    ///
+    /// Only one callback can be active at a time. Calling `onEphemeral`
+    /// again replaces the previous drain loop.
+    ///
+    /// Requires the `ephemeral` feature (enabled by default).
+    #[cfg(feature = "ephemeral")]
+    #[wasm_bindgen(js_name = onEphemeral)]
+    pub fn on_ephemeral(&self, callback: js_sys::Function) {
+        let rx = self.ephemeral_rx.clone();
+        wasm_bindgen_futures::spawn_local(async move {
+            while let Ok(event) = rx.recv().await {
+                let id_bytes = Uint8Array::from(event.id.as_bytes().as_slice());
+                let sender_bytes = Uint8Array::from(event.sender.as_bytes().as_slice());
+                let payload_bytes = Uint8Array::from(event.payload.as_slice());
+
+                if let Err(e) = callback.call3(
+                    &JsValue::NULL,
+                    &id_bytes.into(),
+                    &sender_bytes.into(),
+                    &payload_bytes.into(),
+                ) {
+                    tracing::warn!("onEphemeral callback threw: {:?}", e);
+                }
+            }
+            tracing::debug!("onEphemeral drain loop ended (channel closed)");
+        });
+    }
+
+    /// Publish an ephemeral message to all subscribers of a sedimentree.
+    ///
+    /// The message is _not_ persisted — it is delivered to connected
+    /// peers that have subscribed to `id` via the ephemeral protocol.
+    ///
+    /// Requires the `ephemeral` feature (enabled by default).
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The sedimentree ID / topic to publish to
+    /// * `payload` - The opaque payload bytes
+    #[cfg(feature = "ephemeral")]
+    #[wasm_bindgen(js_name = publishEphemeral)]
+    pub async fn publish_ephemeral(&self, id: &WasmSedimentreeId, payload: &Uint8Array) {
+        self.ephemeral_handler
+            .publish(id.clone().into(), payload.to_vec())
+            .await;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Spawn helper (shared by both cfg paths)
+// ---------------------------------------------------------------------------
+
+/// Type alias for the `Subduction` core when the ephemeral feature is on.
+#[cfg(feature = "ephemeral")]
+type WasmSubductionCore = Subduction<
+    'static,
+    Local,
+    JsStorage,
+    WasmUnifiedTransport,
+    WireMessage,
+    OpenPolicy,
+    JsSigner,
+    WasmHashMetric,
+    WASM_SHARD_COUNT,
+>;
+
+/// Spawn the listener and connection manager futures.
+fn spawn_subduction_tasks<L, M>(listener_fut: L, manager_fut: M)
+where
+    L: core::future::Future<Output = Result<(), Aborted>> + Unpin + 'static,
+    M: core::future::Future<Output = Result<(), Aborted>> + Unpin + 'static,
+{
+    wasm_bindgen_futures::spawn_local(async move {
+        let manager = manager_fut.fuse();
+        let listener = listener_fut.fuse();
+
+        match select(manager, listener).await {
+            Either::Left((manager_result, _pin)) => {
+                if let Err(Aborted) = manager_result {
+                    tracing::error!("Subduction manager aborted");
+                }
+            }
+            Either::Right((listener_result, _pin)) => {
+                if let Err(Aborted) = listener_result {
+                    tracing::error!("Subduction listener aborted");
+                }
+            }
+        }
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Ephemeral builder (manual Subduction::new with ComposedHandler)
+// ---------------------------------------------------------------------------
+
+/// Build a [`Subduction`] instance wired up with a [`ComposedHandler`]
+/// that routes sync and ephemeral traffic.
+///
+/// Returns the core, ephemeral handler, ephemeral event receiver, and the
+/// two background task futures.
+#[cfg(feature = "ephemeral")]
+#[allow(clippy::type_complexity)]
+fn build_ephemeral(
+    signer: JsSigner,
+    storage: JsStorage,
+    discovery_id: Option<DiscoveryId>,
+    depth_metric: WasmHashMetric,
+    max_pending: usize,
+    sedimentrees: Option<Arc<ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT>>>,
+) -> (
+    Arc<WasmSubductionCore>,
+    Arc<WasmEphemeralHandler>,
+    async_channel::Receiver<EphemeralEvent>,
+    subduction_core::subduction::ListenerFuture<
+        'static,
+        Local,
+        JsStorage,
+        WasmUnifiedTransport,
+        WireMessage,
+        OpenPolicy,
+        JsSigner,
+        WasmHashMetric,
+        WASM_SHARD_COUNT,
+    >,
+    subduction_core::connection::manager::ManagerFuture<Local>,
+) {
+    use async_lock::Mutex;
+    use nonempty::NonEmpty;
+    use subduction_core::{
+        connection::{authenticated::Authenticated, nonce_cache::NonceCache},
+        handler::sync::SyncHandler,
+        storage::powerbox::StoragePowerbox,
+        subduction::pending_blob_requests::PendingBlobRequests,
+    };
+
+    let sedimentrees = sedimentrees.unwrap_or_else(|| Arc::new(ShardedMap::new()));
+
+    let connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<WasmUnifiedTransport, Local>>>>> =
+        Arc::new(Mutex::new(Map::new()));
+    let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
+        Arc::new(Mutex::new(Map::new()));
+    let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
+    let nonce_cache = NonceCache::default();
+
+    let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
+
+    // Build sync sub-handler
+    let sync_handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        powerbox.clone(),
+        pending_blob_requests.clone(),
+        depth_metric.clone(),
+    ));
+
+    // Build ephemeral sub-handler
+    let (ephemeral_handler, ephemeral_rx) = EphemeralHandler::new(
+        connections.clone(),
+        OpenEphemeralPolicy,
+        EphemeralConfig::default(),
+    );
+    let ephemeral_handler = Arc::new(ephemeral_handler);
+
+    // Compose into a single handler
+    let composed = ComposedHandler::new(sync_handler, ephemeral_handler.clone());
+    let handler = Arc::new(WasmComposedHandler { inner: composed });
+
+    // Build Subduction manually (same as build_with_handler, but we
+    // constructed the connections map ourselves so both handlers share it).
+    let (core, listener_fut, manager_fut) = Subduction::new(
+        handler,
+        discovery_id,
+        signer,
+        sedimentrees,
+        connections,
+        subscriptions,
+        powerbox,
+        pending_blob_requests,
+        nonce_cache,
+        depth_metric,
+        WasmSpawn,
+    );
+
+    (
+        core,
+        ephemeral_handler,
+        ephemeral_rx,
+        listener_fut,
+        manager_fut,
+    )
 }
 
 /// Result of a peer batch sync request.

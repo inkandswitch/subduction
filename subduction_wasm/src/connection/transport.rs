@@ -15,6 +15,8 @@ use subduction_core::{
     },
     peer::id::PeerId,
 };
+#[cfg(feature = "ephemeral")]
+use subduction_ephemeral::{message::EphemeralMessage, wire::WireMessage};
 
 /// A unified connection covering both WebSocket and HTTP long-poll transports.
 #[derive(Debug, Clone)]
@@ -139,6 +141,114 @@ impl Connection<Local, SyncMessage> for WasmUnifiedTransport {
             }
             Self::LongPoll(lp) => {
                 let fut = Connection::<Local, SyncMessage>::recv(lp);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+        }
+    }
+}
+
+#[cfg(feature = "ephemeral")]
+impl Connection<Local, WireMessage> for WasmUnifiedTransport {
+    type SendError = TransportSendError;
+    type RecvError = TransportRecvError;
+    type DisconnectionError = TransportDisconnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        match self {
+            Self::WebSocket(ws) => Connection::<Local, WireMessage>::peer_id(ws),
+            Self::LongPoll(lp) => Connection::<Local, WireMessage>::peer_id(lp),
+        }
+    }
+
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        match self {
+            Self::WebSocket(ws) => {
+                let fut = Connection::<Local, WireMessage>::disconnect(ws);
+                async move { fut.await.map_err(TransportDisconnectionError::WebSocket) }
+                    .boxed_local()
+            }
+            Self::LongPoll(lp) => {
+                let fut = Connection::<Local, WireMessage>::disconnect(lp);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+        }
+    }
+
+    fn send(&self, message: &WireMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        match self {
+            Self::WebSocket(ws) => {
+                let fut = Connection::<Local, WireMessage>::send(ws, message);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+            Self::LongPoll(lp) => {
+                let fut = Connection::<Local, WireMessage>::send(lp, message);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+        }
+    }
+
+    fn recv(&self) -> LocalBoxFuture<'_, Result<WireMessage, Self::RecvError>> {
+        match self {
+            Self::WebSocket(ws) => {
+                let fut = Connection::<Local, WireMessage>::recv(ws);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+            Self::LongPoll(lp) => {
+                let fut = Connection::<Local, WireMessage>::recv(lp);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+        }
+    }
+}
+
+#[cfg(feature = "ephemeral")]
+impl Connection<Local, EphemeralMessage> for WasmUnifiedTransport {
+    type SendError = TransportSendError;
+    type RecvError = TransportRecvError;
+    type DisconnectionError = TransportDisconnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        match self {
+            Self::WebSocket(ws) => Connection::<Local, EphemeralMessage>::peer_id(ws),
+            Self::LongPoll(lp) => Connection::<Local, EphemeralMessage>::peer_id(lp),
+        }
+    }
+
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        match self {
+            Self::WebSocket(ws) => {
+                let fut = Connection::<Local, EphemeralMessage>::disconnect(ws);
+                async move { fut.await.map_err(TransportDisconnectionError::WebSocket) }
+                    .boxed_local()
+            }
+            Self::LongPoll(lp) => {
+                let fut = Connection::<Local, EphemeralMessage>::disconnect(lp);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+        }
+    }
+
+    fn send(&self, message: &EphemeralMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        match self {
+            Self::WebSocket(ws) => {
+                let fut = Connection::<Local, EphemeralMessage>::send(ws, message);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+            Self::LongPoll(lp) => {
+                let fut = Connection::<Local, EphemeralMessage>::send(lp, message);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+        }
+    }
+
+    fn recv(&self) -> LocalBoxFuture<'_, Result<EphemeralMessage, Self::RecvError>> {
+        match self {
+            Self::WebSocket(ws) => {
+                let fut = Connection::<Local, EphemeralMessage>::recv(ws);
+                async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+            Self::LongPoll(lp) => {
+                let fut = Connection::<Local, EphemeralMessage>::recv(lp);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
         }

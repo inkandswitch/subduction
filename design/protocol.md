@@ -49,13 +49,26 @@ The 4-byte schema header identifies the payload type and version:
 ╚═════════════════╩═══════════╩═════════╝
 ```
 
-| Prefix           | Namespace                                     |
-|------------------|-----------------------------------------------|
-| `ST` (0x53 0x54) | Sedimentree types (`LooseCommit`, `Fragment`) |
-| `SU` (0x53 0x55) | Subduction types (`Challenge`, `Response`)    |
+| Prefix           | Namespace                                          |
+|------------------|----------------------------------------------------|
+| `ST` (0x53 0x54) | Sedimentree types (`LooseCommit`, `Fragment`)      |
+| `SU` (0x53 0x55) | Subduction types (handshake, sync, ephemeral)      |
 
 The type byte identifies the specific type within the namespace.
 The version byte enables forward-compatible evolution per type.
+
+#### Concrete Schemas
+
+| Schema   | Full Bytes              | Description                                                       |
+|----------|-------------------------|-------------------------------------------------------------------|
+| `STC\x00`| `0x53 0x54 0x43 0x00`   | Sedimentree `LooseCommit` (signed)                                |
+| `STF\x00`| `0x53 0x54 0x46 0x00`   | Sedimentree `Fragment` (signed)                                   |
+| `SUC\x00`| `0x53 0x55 0x43 0x00`   | Subduction Challenge (handshake, signed)                          |
+| `SUR\x00`| `0x53 0x55 0x52 0x00`   | Subduction Response (handshake, signed)                           |
+| `SUM\x00`| `0x53 0x55 0x4D 0x00`   | Subduction sync Message envelope                                  |
+| `SUE\x00`| `0x53 0x55 0x45 0x00`   | Subduction Ephemeral message envelope (see [ephemeral.md])        |
+
+[ephemeral.md]: ephemeral.md
 
 **Validation:** Decoders reject messages with unknown prefixes or unsupported versions.
 

@@ -12,9 +12,16 @@
 //! The `call()` method uses the same pending-map + oneshot pattern as WebSocket:
 //! the caller pre-registers a oneshot channel keyed by [`RequestId`], sends the
 //! request, and waits on the oneshot receiver with a timeout.
+//!
+//! The connection is parameterized over a channel message type `M`. By default
+//! `M = SyncMessage`, which preserves backward compatibility with all existing
+//! server/client code. When the `ephemeral` feature is enabled, callers may
+//! use `M = WireMessage` to multiplex sync and ephemeral traffic on a single
+//! connection.
 
 use alloc::sync::Arc;
 use core::{
+    fmt::Debug,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -41,12 +48,93 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 /// Channel capacity for inbound messages (client → server via `/lp/send`).
 const INBOUND_CHANNEL_CAPACITY: usize = 128;
 
+/// Trait for message types that can carry [`SyncMessage`] over the internal
+/// channels.
+///
+/// Implemented for [`SyncMessage`] (identity) and, with the `ephemeral`
+/// feature, for [`WireMessage`](subduction_ephemeral::wire::WireMessage).
+pub trait ChannelMessage:
+    Clone
+    + Debug
+    + Send
+    + Sync
+    + sedimentree_core::codec::encode::Encode
+    + sedimentree_core::codec::decode::Decode
+    + 'static
+{
+    /// Wrap a [`SyncMessage`] into this channel type.
+    fn wrap_sync(msg: SyncMessage) -> Self;
+
+    /// Try to extract a [`BatchSyncResponse`] without consuming the message.
+    ///
+    /// Returns `Some` if this message is (or wraps) a [`BatchSyncResponse`].
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse>;
+
+    /// Try to unwrap into a [`SyncMessage`].
+    ///
+    /// Returns `None` if the message is not a sync message (e.g., ephemeral).
+    fn into_sync(self) -> Option<SyncMessage>;
+}
+
+impl ChannelMessage for SyncMessage {
+    fn wrap_sync(msg: SyncMessage) -> Self {
+        msg
+    }
+
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            SyncMessage::BatchSyncResponse(resp) => Some(resp),
+            SyncMessage::LooseCommit { .. }
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::DataRequestRejected(_) => None,
+        }
+    }
+
+    fn into_sync(self) -> Option<SyncMessage> {
+        Some(self)
+    }
+}
+
+#[cfg(feature = "ephemeral")]
+impl ChannelMessage for subduction_ephemeral::wire::WireMessage {
+    fn wrap_sync(msg: SyncMessage) -> Self {
+        Self::Sync(alloc::boxed::Box::new(msg))
+    }
+
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            Self::Sync(sync_msg) => match sync_msg.as_ref() {
+                SyncMessage::BatchSyncResponse(resp) => Some(resp),
+                SyncMessage::LooseCommit { .. }
+                | SyncMessage::Fragment { .. }
+                | SyncMessage::BlobsRequest { .. }
+                | SyncMessage::BlobsResponse { .. }
+                | SyncMessage::BatchSyncRequest(_)
+                | SyncMessage::RemoveSubscriptions(_)
+                | SyncMessage::DataRequestRejected(_) => None,
+            },
+            Self::Ephemeral(_) => None,
+        }
+    }
+
+    fn into_sync(self) -> Option<SyncMessage> {
+        match self {
+            Self::Sync(msg) => Some(*msg),
+            Self::Ephemeral(_) => None,
+        }
+    }
+}
+
 /// Shared interior state for an HTTP long-poll connection.
 ///
 /// This struct is wrapped in an `Arc` so that clones share the same channels
 /// and pending-request map — exactly like the WebSocket transport.
 #[derive(Debug)]
-struct Inner<O> {
+struct Inner<O, M> {
     peer_id: PeerId,
     chan_id: u64,
     req_id_counter: AtomicU64,
@@ -56,11 +144,11 @@ struct Inner<O> {
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
 
     /// Messages from `send()` / `call()` → picked up by `/lp/recv` handler.
-    outbound_tx: async_channel::Sender<SyncMessage>,
+    outbound_tx: async_channel::Sender<M>,
 
     /// Messages from `/lp/send` handler → picked up by `recv()`.
-    inbound_writer: async_channel::Sender<SyncMessage>,
-    inbound_reader: async_channel::Receiver<SyncMessage>,
+    inbound_writer: async_channel::Sender<M>,
+    inbound_reader: async_channel::Receiver<M>,
 
     /// Keeps background poll/send tasks alive. Dropping this closes the cancel
     /// channel, which signals the tasks to exit. Set via
@@ -76,14 +164,19 @@ struct Inner<O> {
 ///
 /// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio` for native,
 /// or a browser-based timeout for Wasm).
+///
+/// The `M` parameter is the channel message type. Defaults to [`SyncMessage`]
+/// for backward compatibility. Use
+/// [`WireMessage`](subduction_ephemeral::wire::WireMessage) (with the
+/// `ephemeral` feature) to multiplex sync and ephemeral traffic.
 #[derive(Debug, Clone)]
-pub struct HttpLongPollConnection<O> {
-    inner: Arc<Inner<O>>,
+pub struct HttpLongPollConnection<O, M = SyncMessage> {
+    inner: Arc<Inner<O, M>>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
-    outbound_rx: async_channel::Receiver<SyncMessage>,
+    outbound_rx: async_channel::Receiver<M>,
 }
 
-impl<O> HttpLongPollConnection<O> {
+impl<O, M: ChannelMessage> HttpLongPollConnection<O, M> {
     /// Create a new HTTP long-poll connection for the given peer.
     #[must_use]
     pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
@@ -118,43 +211,30 @@ impl<O> HttpLongPollConnection<O> {
         *self.inner.cancel_guard.lock().await = Some(guard);
     }
 
-    /// Push a message from the client (via `POST /lp/send`) into the inbound channel.
+    /// Push a message into the inbound channel.
     ///
-    /// The server handler calls this when it receives a message from the client.
-    /// `BatchSyncResponse` messages are routed to waiting `call()` oneshots.
+    /// Called by HTTP handlers (server's `POST /lp/send`) or the client poll
+    /// loop when a message arrives from the remote peer.
+    ///
+    /// [`BatchSyncResponse`] messages are routed to waiting `call()` oneshots.
     ///
     /// # Errors
     ///
     /// Returns an error if the inbound channel is full or closed.
-    pub async fn push_inbound(
-        &self,
-        msg: SyncMessage,
-    ) -> Result<(), async_channel::SendError<SyncMessage>> {
-        match msg {
-            SyncMessage::BatchSyncResponse(resp) => {
-                let req_id = resp.req_id;
-                if let Some(waiting) = self.inner.pending.lock().await.remove(&req_id) {
-                    if waiting.send(resp).is_err() {
-                        tracing::error!(
-                            "oneshot closed before sending response for req_id {req_id:?}"
-                        );
-                    }
-                    Ok(())
-                } else {
-                    self.inner
-                        .inbound_writer
-                        .send(SyncMessage::BatchSyncResponse(resp))
-                        .await
+    pub async fn push_inbound(&self, msg: M) -> Result<(), async_channel::SendError<M>> {
+        // Route BatchSyncResponse to pending waiters (for call/roundtrip).
+        if let Some(resp) = msg.as_batch_sync_response() {
+            let req_id = resp.req_id;
+            if let Some(waiting) = self.inner.pending.lock().await.remove(&req_id) {
+                if waiting.send(resp.clone()).is_err() {
+                    tracing::error!("oneshot closed before sending response for req_id {req_id:?}");
                 }
+                return Ok(());
             }
-            other @ (SyncMessage::LooseCommit { .. }
-            | SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
-            | SyncMessage::BatchSyncRequest(_)
-            | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_)) => self.inner.inbound_writer.send(other).await,
         }
+
+        // All other messages go to the inbound channel.
+        self.inner.inbound_writer.send(msg).await
     }
 
     /// Pull the next outbound message destined for the client (via `POST /lp/recv`).
@@ -164,7 +244,7 @@ impl<O> HttpLongPollConnection<O> {
     /// # Errors
     ///
     /// Returns an error if the outbound channel is closed.
-    pub async fn pull_outbound(&self) -> Result<SyncMessage, async_channel::RecvError> {
+    pub async fn pull_outbound(&self) -> Result<M, async_channel::RecvError> {
         self.outbound_rx.recv().await
     }
 
@@ -181,8 +261,8 @@ impl<O> HttpLongPollConnection<O> {
     }
 }
 
-#[future_form(Sendable where O: Send + Sync, Local)]
-impl<K: FutureForm, O: Timeout<K>> Connection<K, SyncMessage> for HttpLongPollConnection<O> {
+#[future_form(Sendable where O: Send + Sync, M: ChannelMessage, Local where M: ChannelMessage)]
+impl<K: FutureForm, O: Timeout<K>, M> Connection<K, SyncMessage> for HttpLongPollConnection<O, M> {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
@@ -207,7 +287,7 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K, SyncMessage> for HttpLongPollCo
             self.inner.peer_id
         );
 
-        let msg = message.clone();
+        let msg = M::wrap_sync(message.clone());
         let tx = self.inner.outbound_tx.clone();
         K::from_future(async move {
             tx.send(msg).await.map_err(|_| SendError)?;
@@ -224,20 +304,27 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K, SyncMessage> for HttpLongPollCo
         );
 
         K::from_future(async move {
-            let msg = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel closed unexpectedly");
-                RecvError
-            })?;
+            loop {
+                let msg = chan.recv().await.map_err(|_| {
+                    tracing::error!("inbound channel closed unexpectedly");
+                    RecvError
+                })?;
 
-            tracing::debug!("recv: inbound message {msg:?}");
-            Ok(msg)
+                if let Some(sync_msg) = msg.into_sync() {
+                    tracing::debug!("recv: inbound message {sync_msg:?}");
+                    return Ok(sync_msg);
+                }
+
+                // Skip non-sync messages (e.g., ephemeral when M = WireMessage)
+                tracing::trace!("recv<SyncMessage>: skipping non-sync channel message");
+            }
         })
     }
 }
 
-#[future_form(Sendable where O: Send + Sync, Local)]
-impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
-    for HttpLongPollConnection<O>
+#[future_form(Sendable where O: Send + Sync, M: ChannelMessage, Local where M: ChannelMessage)]
+impl<K: FutureForm, O: Timeout<K>, M> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
+    for HttpLongPollConnection<O, M>
 {
     type CallError = CallError;
 
@@ -269,7 +356,7 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
             let (tx, rx) = oneshot::channel();
             inner.pending.lock().await.insert(req_id, tx);
 
-            let msg = SyncMessage::BatchSyncRequest(req);
+            let msg = M::wrap_sync(SyncMessage::BatchSyncRequest(req));
             outbound_tx
                 .send(msg)
                 .await
@@ -302,7 +389,109 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
     }
 }
 
-impl<O> PartialEq for HttpLongPollConnection<O> {
+// ── Ephemeral Connection impls ──────────────────────────────────────────
+
+#[cfg(feature = "ephemeral")]
+#[allow(clippy::wildcard_imports)]
+mod ephemeral_impls {
+    use super::*;
+    use subduction_ephemeral::{message::EphemeralMessage, wire::WireMessage};
+
+    #[future_form(Sendable where O: Send + Sync, Local)]
+    impl<K: FutureForm, O: Timeout<K>> Connection<K, WireMessage>
+        for HttpLongPollConnection<O, WireMessage>
+    {
+        type SendError = SendError;
+        type RecvError = RecvError;
+        type DisconnectionError = DisconnectionError;
+
+        fn peer_id(&self) -> PeerId {
+            self.inner.peer_id
+        }
+
+        fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+            tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll<WireMessage>::disconnect");
+            let conn = self.clone();
+            K::from_future(async move {
+                conn.close();
+                Ok(())
+            })
+        }
+
+        fn send(&self, message: &WireMessage) -> K::Future<'_, Result<(), Self::SendError>> {
+            let msg = message.clone();
+            let tx = self.inner.outbound_tx.clone();
+            K::from_future(async move {
+                tx.send(msg).await.map_err(|_| SendError)?;
+                Ok(())
+            })
+        }
+
+        fn recv(&self) -> K::Future<'_, Result<WireMessage, Self::RecvError>> {
+            let chan = self.inner.inbound_reader.clone();
+            K::from_future(async move {
+                chan.recv().await.map_err(|_| {
+                    tracing::error!("inbound channel closed unexpectedly");
+                    RecvError
+                })
+            })
+        }
+    }
+
+    #[future_form(Sendable where O: Send + Sync, Local)]
+    impl<K: FutureForm, O: Timeout<K>> Connection<K, EphemeralMessage>
+        for HttpLongPollConnection<O, WireMessage>
+    {
+        type SendError = SendError;
+        type RecvError = RecvError;
+        type DisconnectionError = DisconnectionError;
+
+        fn peer_id(&self) -> PeerId {
+            self.inner.peer_id
+        }
+
+        fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+            tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll<EphemeralMessage>::disconnect");
+            let conn = self.clone();
+            K::from_future(async move {
+                conn.close();
+                Ok(())
+            })
+        }
+
+        fn send(&self, message: &EphemeralMessage) -> K::Future<'_, Result<(), Self::SendError>> {
+            let msg = WireMessage::Ephemeral(message.clone());
+            let tx = self.inner.outbound_tx.clone();
+            K::from_future(async move {
+                tx.send(msg).await.map_err(|_| SendError)?;
+                Ok(())
+            })
+        }
+
+        fn recv(&self) -> K::Future<'_, Result<EphemeralMessage, Self::RecvError>> {
+            let chan = self.inner.inbound_reader.clone();
+            K::from_future(async move {
+                loop {
+                    let wire = chan.recv().await.map_err(|_| {
+                        tracing::error!("inbound channel closed unexpectedly");
+                        RecvError
+                    })?;
+
+                    if let WireMessage::Ephemeral(msg) = wire {
+                        return Ok(msg);
+                    }
+
+                    // Skip non-ephemeral messages
+                    tracing::trace!(
+                        "recv<EphemeralMessage>: skipping non-ephemeral channel message"
+                    );
+                }
+            })
+        }
+    }
+}
+
+impl<O, M> PartialEq for HttpLongPollConnection<O, M> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -343,7 +532,8 @@ mod tests {
     #[tokio::test]
     async fn next_request_id_increments() {
         let peer_id = PeerId::new([1u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn: HttpLongPollConnection<TestTimeout> =
+            HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let id1 =
             Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
@@ -366,7 +556,8 @@ mod tests {
         use subduction_core::connection::message::RemoveSubscriptions;
 
         let peer_id = PeerId::new([2u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn: HttpLongPollConnection<TestTimeout> =
+            HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
@@ -386,7 +577,8 @@ mod tests {
         use subduction_core::connection::message::RemoveSubscriptions;
 
         let peer_id = PeerId::new([3u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn: HttpLongPollConnection<TestTimeout> =
+            HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],

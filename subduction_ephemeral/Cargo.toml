@@ -24,7 +24,10 @@ thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
 subduction_ephemeral = { path = ".", features = ["std"] }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [features]
 default = []

@@ -410,10 +410,7 @@ impl<M: Encode + Decode + Clone + 'static> Connection<Local, M> for ChannelMockC
         Local::from_future(async { Ok(()) })
     }
 
-    fn send(
-        &self,
-        message: &M,
-    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &M) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         let tx = self.outbound_tx.clone();
         let message = message.clone();
         Local::from_future(async move { tx.send(message).await })
@@ -513,8 +510,8 @@ impl<C: PartialEq> PartialEq for CallbackOnRecvConnection<C> {
     }
 }
 
-impl<C: Connection<Sendable, M> + Send, M: Encode + Decode + Send + 'static>
-    Connection<Sendable, M> for CallbackOnRecvConnection<C>
+impl<C: Connection<Sendable, M> + Send, M: Encode + Decode + Send + 'static> Connection<Sendable, M>
+    for CallbackOnRecvConnection<C>
 where
     C::RecvError: Send,
 {
@@ -582,10 +579,7 @@ impl<C: Connection<Local, M>, M: Encode + Decode + 'static> Connection<Local, M>
         self.inner.disconnect()
     }
 
-    fn send(
-        &self,
-        message: &M,
-    ) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &M) -> <Local as FutureForm>::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
 
@@ -710,8 +704,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_mock_connection_send_recv() -> TestResult {
         let peer_id = PeerId::new([1u8; 32]);
-        let (conn, handle) =
-            ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
+        let (conn, handle) = ChannelMockConnection::<SyncMessage>::new_with_handle(peer_id);
 
         let msg = SyncMessage::BlobsRequest {
             id: SedimentreeId::new([0u8; 32]),

@@ -55,8 +55,8 @@ pub enum ServerError {
     MessageDecode(sedimentree_core::codec::error::DecodeError),
 
     /// Internal channel error.
-    #[error("channel send error: {0}")]
-    ChanSend(Box<async_channel::SendError<subduction_core::connection::message::SyncMessage>>),
+    #[error("channel send error")]
+    ChanSend,
 
     /// The HTTP handshake adapter produced no response bytes.
     #[error("handshake produced no response")]

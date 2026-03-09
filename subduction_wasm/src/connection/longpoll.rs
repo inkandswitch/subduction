@@ -14,7 +14,9 @@ use subduction_core::connection::{
     timeout::{TimedOut, Timeout},
 };
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection, session::SessionId,
+    client::{ConnectResult, HttpLongPollClient},
+    connection::HttpLongPollConnection,
+    session::SessionId,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -56,6 +58,16 @@ impl Timeout<Local> for FuturesTimerTimeout {
 }
 
 /// Type alias for the long-poll connection used in wasm.
+///
+/// When `ephemeral` is enabled, the channel message type is
+/// [`WireMessage`](subduction_ephemeral::wire::WireMessage) so that both
+/// sync and ephemeral traffic can flow through the connection.
+#[cfg(feature = "ephemeral")]
+pub type WasmLongPollConnection =
+    HttpLongPollConnection<FuturesTimerTimeout, subduction_ephemeral::wire::WireMessage>;
+
+/// Type alias for the long-poll connection used in wasm (sync-only).
+#[cfg(not(feature = "ephemeral"))]
 pub type WasmLongPollConnection = HttpLongPollConnection<FuturesTimerTimeout>;
 
 /// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
@@ -235,6 +247,82 @@ fn js_now() -> subduction_core::timestamp::TimestampSeconds {
 #[derive(Debug, Clone, Copy)]
 pub struct WasmLongPoll;
 
+// ---------------------------------------------------------------------------
+// Private helpers: cfg-dependent connect dispatch
+//
+// Each pair of functions (`cfg_connect` / `cfg_connect_discover`) returns a
+// `ConnectResult` parameterized by the channel message type matching
+// `WasmLongPollConnection`:
+//   - ephemeral on  → `WireMessage`
+//   - ephemeral off → `SyncMessage` (the default)
+// ---------------------------------------------------------------------------
+
+#[cfg(feature = "ephemeral")]
+async fn cfg_connect(
+    client: &HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout>,
+    signer: &JsSigner,
+    expected_peer_id: &WasmPeerId,
+) -> Result<
+    ConnectResult<Local, FuturesTimerTimeout, subduction_ephemeral::wire::WireMessage>,
+    LongPollConnectionError,
+> {
+    client
+        .connect_typed::<Local, _, subduction_ephemeral::wire::WireMessage>(
+            signer,
+            expected_peer_id.clone().into(),
+            js_now(),
+        )
+        .await
+        .map_err(|e| LongPollConnectionError::Connection(e.to_string()))
+}
+
+#[cfg(not(feature = "ephemeral"))]
+async fn cfg_connect(
+    client: &HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout>,
+    signer: &JsSigner,
+    expected_peer_id: &WasmPeerId,
+) -> Result<ConnectResult<Local, FuturesTimerTimeout>, LongPollConnectionError> {
+    client
+        .connect(signer, expected_peer_id.clone().into(), js_now())
+        .await
+        .map_err(|e| LongPollConnectionError::Connection(e.to_string()))
+}
+
+#[cfg(feature = "ephemeral")]
+async fn cfg_connect_discover(
+    client: &HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout>,
+    signer: &JsSigner,
+    service_name: &str,
+) -> Result<
+    ConnectResult<Local, FuturesTimerTimeout, subduction_ephemeral::wire::WireMessage>,
+    LongPollConnectionError,
+> {
+    client
+        .connect_discover_typed::<Local, _, subduction_ephemeral::wire::WireMessage>(
+            signer,
+            service_name,
+            js_now(),
+        )
+        .await
+        .map_err(|e| LongPollConnectionError::Connection(e.to_string()))
+}
+
+#[cfg(not(feature = "ephemeral"))]
+async fn cfg_connect_discover(
+    client: &HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout>,
+    signer: &JsSigner,
+    service_name: &str,
+) -> Result<ConnectResult<Local, FuturesTimerTimeout>, LongPollConnectionError> {
+    client
+        .connect_discover(signer, service_name, js_now())
+        .await
+        .map_err(|e| LongPollConnectionError::Connection(e.to_string()))
+}
+
+// ---------------------------------------------------------------------------
+// Public / crate-internal API
+// ---------------------------------------------------------------------------
+
 #[wasm_bindgen(js_class = SubductionLongPoll)]
 impl WasmLongPoll {
     /// Connect to a server with a known peer ID.
@@ -260,12 +348,8 @@ impl WasmLongPoll {
         let default_time_limit = Duration::from_millis(timeout_ms.into());
         let client = make_client(base_url, default_time_limit);
 
-        let result = client
-            .connect(signer, expected_peer_id.clone().into(), js_now())
-            .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+        let result = cfg_connect(&client, signer, expected_peer_id).await?;
 
-        // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
         wasm_bindgen_futures::spawn_local(result.send_task);
 
@@ -299,12 +383,8 @@ impl WasmLongPoll {
         let client = make_client(base_url, default_time_limit);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
-        let result = client
-            .connect_discover(signer, &service_name, js_now())
-            .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+        let result = cfg_connect_discover(&client, signer, &service_name).await?;
 
-        // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
         wasm_bindgen_futures::spawn_local(result.send_task);
 
@@ -325,12 +405,8 @@ impl WasmLongPoll {
         let default_time_limit = Duration::from_millis(timeout_milliseconds.into());
         let client = make_client(base_url, default_time_limit);
 
-        let result = client
-            .connect(signer, expected_peer_id.clone().into(), js_now())
-            .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+        let result = cfg_connect(&client, signer, expected_peer_id).await?;
 
-        // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
         wasm_bindgen_futures::spawn_local(result.send_task);
 
@@ -350,12 +426,8 @@ impl WasmLongPoll {
         let client = make_client(base_url, default_time_limit);
         let service_name = service_name.unwrap_or_else(|| base_url.to_string());
 
-        let result = client
-            .connect_discover(signer, &service_name, js_now())
-            .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+        let result = cfg_connect_discover(&client, signer, &service_name).await?;
 
-        // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
         wasm_bindgen_futures::spawn_local(result.send_task);
 

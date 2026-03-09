@@ -258,7 +258,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
             .connection
             .push_inbound(msg)
             .await
-            .map_err(|e| ServerError::ChanSend(Box::new(e)))?;
+            .map_err(|_| ServerError::ChanSend)?;
 
         Ok(Response::builder()
             .status(StatusCode::NO_CONTENT)

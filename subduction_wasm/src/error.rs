@@ -12,9 +12,12 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use crate::connection::{
-    transport::WasmUnifiedTransport,
-    websocket::{CallError, WebSocketAuthenticatedConnectionError},
+use crate::{
+    connection::{
+        transport::WasmUnifiedTransport,
+        websocket::{CallError, WebSocketAuthenticatedConnectionError},
+    },
+    subduction::WasmWireMessage,
 };
 use sedimentree_wasm::storage::JsStorage;
 
@@ -37,7 +40,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmUnifiedTransport, SyncMessage>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmUnifiedTransport, WasmWireMessage>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -54,7 +57,7 @@ impl From<WasmIoError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmWriteError(
-    #[from] WriteError<Local, JsStorage, WasmUnifiedTransport, SyncMessage, Infallible>,
+    #[from] WriteError<Local, JsStorage, WasmUnifiedTransport, WasmWireMessage, Infallible>,
 );
 
 impl From<WasmWriteError> for JsValue {
@@ -69,7 +72,7 @@ impl From<WasmWriteError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmAttachError(
-    #[from] AttachError<Local, JsStorage, WasmUnifiedTransport, SyncMessage, Infallible>,
+    #[from] AttachError<Local, JsStorage, WasmUnifiedTransport, WasmWireMessage, Infallible>,
 );
 
 impl From<WasmAttachError> for JsValue {
@@ -118,7 +121,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmListenError(
-    #[from] ListenError<Local, JsStorage, WasmUnifiedTransport, SyncMessage>,
+    #[from] ListenError<Local, JsStorage, WasmUnifiedTransport, WasmWireMessage>,
 );
 
 impl From<WasmListenError> for JsValue {

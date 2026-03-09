@@ -34,7 +34,9 @@ sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
+subduction_ephemeral = { workspace = true, optional = true }
 futures-timer = { workspace = true }
+nonempty = { workspace = true }
 subduction_http_longpoll = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 tracing = { workspace = true }
@@ -80,8 +82,9 @@ getrandom_03 = { package = "getrandom", version = "0.3", features = ["wasm_js"] 
 wasm-bindgen-test = "0.2"
 
 [features]
-default = ["console_error_panic_hook", "standalone"]
+default = ["console_error_panic_hook", "ephemeral", "standalone"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
+ephemeral = ["dep:subduction_ephemeral", "subduction_http_longpoll/ephemeral"]
 # Enable the #[wasm_bindgen(start)] entry point. Disable when using
 # subduction_wasm as a dependency of another cdylib crate that defines
 # its own start function (wasm-bindgen allows only one per module).
