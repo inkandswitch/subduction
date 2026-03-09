@@ -10,8 +10,8 @@ use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use subduction_core::{
     connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     peer::id::PeerId,
 };
@@ -92,62 +92,69 @@ pub enum TransportDisconnectionError {
     LongPoll(#[from] subduction_http_longpoll::error::DisconnectionError),
 }
 
-impl Connection<Local> for WasmUnifiedTransport {
+impl Connection<Local, SyncMessage> for WasmUnifiedTransport {
     type SendError = TransportSendError;
     type RecvError = TransportRecvError;
-    type CallError = TransportCallError;
     type DisconnectionError = TransportDisconnectionError;
 
     fn peer_id(&self) -> PeerId {
         match self {
-            Self::WebSocket(ws) => Connection::<Local>::peer_id(ws),
-            Self::LongPoll(lp) => Connection::<Local>::peer_id(lp),
-        }
-    }
-
-    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        match self {
-            Self::WebSocket(ws) => Connection::<Local>::next_request_id(ws),
-            Self::LongPoll(lp) => Connection::<Local>::next_request_id(lp),
+            Self::WebSocket(ws) => Connection::<Local, SyncMessage>::peer_id(ws),
+            Self::LongPoll(lp) => Connection::<Local, SyncMessage>::peer_id(lp),
         }
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         match self {
             Self::WebSocket(ws) => {
-                let fut = Connection::<Local>::disconnect(ws);
+                let fut = Connection::<Local, SyncMessage>::disconnect(ws);
                 async move { fut.await.map_err(TransportDisconnectionError::WebSocket) }
                     .boxed_local()
             }
             Self::LongPoll(lp) => {
-                let fut = Connection::<Local>::disconnect(lp);
+                let fut = Connection::<Local, SyncMessage>::disconnect(lp);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
         }
     }
 
-    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         match self {
             Self::WebSocket(ws) => {
-                let fut = Connection::<Local>::send(ws, message);
+                let fut = Connection::<Local, SyncMessage>::send(ws, message);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
             Self::LongPoll(lp) => {
-                let fut = Connection::<Local>::send(lp, message);
+                let fut = Connection::<Local, SyncMessage>::send(lp, message);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
         }
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         match self {
             Self::WebSocket(ws) => {
-                let fut = Connection::<Local>::recv(ws);
+                let fut = Connection::<Local, SyncMessage>::recv(ws);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
             Self::LongPoll(lp) => {
-                let fut = Connection::<Local>::recv(lp);
+                let fut = Connection::<Local, SyncMessage>::recv(lp);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+        }
+    }
+}
+
+impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WasmUnifiedTransport {
+    type CallError = TransportCallError;
+
+    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
+        match self {
+            Self::WebSocket(ws) => {
+                Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::next_request_id(ws)
+            }
+            Self::LongPoll(lp) => {
+                Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::next_request_id(lp)
             }
         }
     }
@@ -159,13 +166,13 @@ impl Connection<Local> for WasmUnifiedTransport {
     ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         match self {
             Self::WebSocket(ws) => async move {
-                Connection::<Local>::call(ws, req, timeout)
+                Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::call(ws, req, timeout)
                     .await
                     .map_err(Into::into)
             }
             .boxed_local(),
             Self::LongPoll(lp) => async move {
-                Connection::<Local>::call(lp, req, timeout)
+                Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::call(lp, req, timeout)
                     .await
                     .map_err(Into::into)
             }

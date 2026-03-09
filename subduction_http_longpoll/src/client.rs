@@ -34,7 +34,7 @@ use futures::{
 use subduction_core::{
     connection::{
         handshake::{self, Audience, HandshakeMessage},
-        message::Message,
+        message::SyncMessage,
         timeout::Timeout,
     },
     peer::id::PeerId,
@@ -51,7 +51,7 @@ use crate::{
 /// and background task futures that the caller must spawn.
 pub struct ConnectResult<K: future_form::FutureForm, O>
 where
-    HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+    HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
 {
     /// The authenticated connection, ready for registration with Subduction.
     pub authenticated:
@@ -69,7 +69,7 @@ where
 
 impl<K: future_form::FutureForm, O> core::fmt::Debug for ConnectResult<K, O>
 where
-    HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+    HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectResult")
@@ -141,7 +141,8 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
         now: TimestampSeconds,
     ) -> K::Future<'a, Result<ConnectResult<K, Self::Timeout>, ClientError>>
     where
-        HttpLongPollConnection<Self::Timeout>: subduction_core::connection::Connection<K>;
+        HttpLongPollConnection<Self::Timeout>:
+            subduction_core::connection::Connection<K, SyncMessage>;
 }
 
 #[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
@@ -157,7 +158,7 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
         now: TimestampSeconds,
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+        HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
     {
         let http = self.http.clone();
         let base_url = self.base_url.clone();
@@ -247,7 +248,7 @@ impl<H, O> HttpLongPollClient<H, O> {
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
         Self: Connect<K, Sig, Timeout = O>,
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+        HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
     {
         self.connect_with_audience(signer, Audience::known(expected_peer_id), now)
     }
@@ -269,7 +270,7 @@ impl<H, O> HttpLongPollClient<H, O> {
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
         Self: Connect<K, Sig, Timeout = O>,
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+        HttpLongPollConnection<O>: subduction_core::connection::Connection<K, SyncMessage>,
     {
         self.connect_with_audience(signer, Audience::discover(service_name.as_bytes()), now)
     }
@@ -305,7 +306,7 @@ async fn poll_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
             }
             Either::Left((result, _)) => match result {
                 Ok(resp) => match resp.status {
-                    200 => match Message::try_decode(&resp.body) {
+                    200 => match SyncMessage::try_decode(&resp.body) {
                         Ok(msg) => {
                             if conn.push_inbound(msg).await.is_err() {
                                 tracing::error!("inbound channel closed");

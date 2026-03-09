@@ -4,7 +4,7 @@ use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
-    connection::{Connection, ConnectionDisallowed},
+    connection::{Connection, ConnectionDisallowed, message::SyncMessage},
     subduction::error::{
         AttachError, HydrationError, IoError, ListenError, RegistrationError, WriteError,
     },
@@ -213,7 +213,7 @@ impl From<WasmRegistrationError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmDisconnectionError(
-    #[from] <WasmUnifiedTransport as Connection<Local>>::DisconnectionError,
+    #[from] <WasmUnifiedTransport as Connection<Local, SyncMessage>>::DisconnectionError,
 );
 
 impl From<WasmDisconnectionError> for JsValue {

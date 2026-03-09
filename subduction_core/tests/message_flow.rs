@@ -18,7 +18,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::Message,
+        message::SyncMessage,
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
@@ -61,7 +61,7 @@ async fn test_sendable_single_commit() -> TestResult {
 
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit,
             blob,
@@ -111,7 +111,7 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 
         handle
             .inbound_tx
-            .send(Message::LooseCommit {
+            .send(SyncMessage::LooseCommit {
                 id: sedimentree_id,
                 commit,
                 blob,
@@ -160,7 +160,7 @@ async fn test_sendable_same_sedimentree() -> TestResult {
 
         handle
             .inbound_tx
-            .send(Message::LooseCommit {
+            .send(SyncMessage::LooseCommit {
                 id: sedimentree_id,
                 commit,
                 blob,
@@ -210,7 +210,7 @@ async fn test_local_single_commit() -> TestResult {
 
             handle
                 .inbound_tx
-                .send(Message::LooseCommit {
+                .send(SyncMessage::LooseCommit {
                     id: sedimentree_id,
                     commit,
                     blob,
@@ -266,7 +266,7 @@ async fn test_local_multiple_sequential() -> TestResult {
 
                 handle
                     .inbound_tx
-                    .send(Message::LooseCommit {
+                    .send(SyncMessage::LooseCommit {
                         id: sedimentree_id,
                         commit,
                         blob,
@@ -321,7 +321,7 @@ async fn test_local_same_sedimentree() -> TestResult {
 
                 handle
                     .inbound_tx
-                    .send(Message::LooseCommit {
+                    .send(SyncMessage::LooseCommit {
                         id: sedimentree_id,
                         commit,
                         blob,

@@ -39,7 +39,7 @@
 //! | Prefix | Crate | Types |
 //! |--------|-------|-------|
 //! | `ST` | `sedimentree_core` | `LooseCommit`, `Fragment` |
-//! | `SU` | `subduction_core` | `Challenge`, `Response`, `Message` |
+//! | `SU` | `subduction_core` | `Challenge`, `Response`, `SyncMessage` |
 
 pub mod decode;
 pub mod encode;

@@ -26,8 +26,8 @@ use rand::{RngCore, rngs::OsRng};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
         timeout::{TimedOut, Timeout},
     },
     peer::id::PeerId,
@@ -56,11 +56,11 @@ struct Inner<O> {
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
 
     /// Messages from `send()` / `call()` → picked up by `/lp/recv` handler.
-    outbound_tx: async_channel::Sender<Message>,
+    outbound_tx: async_channel::Sender<SyncMessage>,
 
     /// Messages from `/lp/send` handler → picked up by `recv()`.
-    inbound_writer: async_channel::Sender<Message>,
-    inbound_reader: async_channel::Receiver<Message>,
+    inbound_writer: async_channel::Sender<SyncMessage>,
+    inbound_reader: async_channel::Receiver<SyncMessage>,
 
     /// Keeps background poll/send tasks alive. Dropping this closes the cancel
     /// channel, which signals the tasks to exit. Set via
@@ -80,7 +80,7 @@ struct Inner<O> {
 pub struct HttpLongPollConnection<O> {
     inner: Arc<Inner<O>>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
-    outbound_rx: async_channel::Receiver<Message>,
+    outbound_rx: async_channel::Receiver<SyncMessage>,
 }
 
 impl<O> HttpLongPollConnection<O> {
@@ -128,10 +128,10 @@ impl<O> HttpLongPollConnection<O> {
     /// Returns an error if the inbound channel is full or closed.
     pub async fn push_inbound(
         &self,
-        msg: Message,
-    ) -> Result<(), async_channel::SendError<Message>> {
+        msg: SyncMessage,
+    ) -> Result<(), async_channel::SendError<SyncMessage>> {
         match msg {
-            Message::BatchSyncResponse(resp) => {
+            SyncMessage::BatchSyncResponse(resp) => {
                 let req_id = resp.req_id;
                 if let Some(waiting) = self.inner.pending.lock().await.remove(&req_id) {
                     if waiting.send(resp).is_err() {
@@ -143,17 +143,17 @@ impl<O> HttpLongPollConnection<O> {
                 } else {
                     self.inner
                         .inbound_writer
-                        .send(Message::BatchSyncResponse(resp))
+                        .send(SyncMessage::BatchSyncResponse(resp))
                         .await
                 }
             }
-            other @ (Message::LooseCommit { .. }
-            | Message::Fragment { .. }
-            | Message::BlobsRequest { .. }
-            | Message::BlobsResponse { .. }
-            | Message::BatchSyncRequest(_)
-            | Message::RemoveSubscriptions(_)
-            | Message::DataRequestRejected(_)) => self.inner.inbound_writer.send(other).await,
+            other @ (SyncMessage::LooseCommit { .. }
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::DataRequestRejected(_)) => self.inner.inbound_writer.send(other).await,
         }
     }
 
@@ -164,7 +164,7 @@ impl<O> HttpLongPollConnection<O> {
     /// # Errors
     ///
     /// Returns an error if the outbound channel is closed.
-    pub async fn pull_outbound(&self) -> Result<Message, async_channel::RecvError> {
+    pub async fn pull_outbound(&self) -> Result<SyncMessage, async_channel::RecvError> {
         self.outbound_rx.recv().await
     }
 
@@ -182,25 +182,13 @@ impl<O> HttpLongPollConnection<O> {
 }
 
 #[future_form(Sendable where O: Send + Sync, Local)]
-impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
+impl<K: FutureForm, O: Timeout<K>> Connection<K, SyncMessage> for HttpLongPollConnection<O> {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
     fn peer_id(&self) -> PeerId {
         self.inner.peer_id
-    }
-
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        K::from_future(async {
-            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated request id {counter:?}");
-            RequestId {
-                requestor: self.inner.peer_id,
-                nonce: counter,
-            }
-        })
     }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
@@ -212,7 +200,7 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
         })
     }
 
-    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> K::Future<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "http-lp: sending outbound message id {:?} to peer {}",
             message.request_id(),
@@ -227,7 +215,7 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
         })
     }
 
-    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> K::Future<'_, Result<SyncMessage, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
         tracing::debug!(
             chan_id = self.inner.chan_id,
@@ -243,6 +231,24 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
 
             tracing::debug!("recv: inbound message {msg:?}");
             Ok(msg)
+        })
+    }
+}
+
+#[future_form(Sendable where O: Send + Sync, Local)]
+impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
+    for HttpLongPollConnection<O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
+        K::from_future(async {
+            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated request id {counter:?}");
+            RequestId {
+                requestor: self.inner.peer_id,
+                nonce: counter,
+            }
         })
     }
 
@@ -263,7 +269,7 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
             let (tx, rx) = oneshot::channel();
             inner.pending.lock().await.insert(req_id, tx);
 
-            let msg = Message::BatchSyncRequest(req);
+            let msg = SyncMessage::BatchSyncRequest(req);
             outbound_tx
                 .send(msg)
                 .await
@@ -339,9 +345,15 @@ mod tests {
         let peer_id = PeerId::new([1u8; 32]);
         let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
-        let id1 = Connection::<Sendable>::next_request_id(&conn).await;
-        let id2 = Connection::<Sendable>::next_request_id(&conn).await;
-        let id3 = Connection::<Sendable>::next_request_id(&conn).await;
+        let id1 =
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
+                .await;
+        let id2 =
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
+                .await;
+        let id3 =
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
+                .await;
 
         assert_eq!(id1.requestor, peer_id);
         assert_eq!(id2.nonce, id1.nonce + 1);
@@ -356,14 +368,16 @@ mod tests {
         let peer_id = PeerId::new([2u8; 32]);
         let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
-        let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
+        let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
         });
 
         conn.push_inbound(msg.clone()).await.expect("push ok");
-        let received = Connection::<Sendable>::recv(&conn).await.expect("recv ok");
+        let received = Connection::<Sendable, SyncMessage>::recv(&conn)
+            .await
+            .expect("recv ok");
 
-        assert!(matches!(received, Message::RemoveSubscriptions(_)));
+        assert!(matches!(received, SyncMessage::RemoveSubscriptions(_)));
     }
 
     #[tokio::test]
@@ -374,15 +388,15 @@ mod tests {
         let peer_id = PeerId::new([3u8; 32]);
         let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
 
-        let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
+        let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
         });
 
-        Connection::<Sendable>::send(&conn, &msg)
+        Connection::<Sendable, SyncMessage>::send(&conn, &msg)
             .await
             .expect("send ok");
         let pulled = conn.pull_outbound().await.expect("pull ok");
 
-        assert!(matches!(pulled, Message::RemoveSubscriptions(_)));
+        assert!(matches!(pulled, SyncMessage::RemoveSubscriptions(_)));
     }
 }

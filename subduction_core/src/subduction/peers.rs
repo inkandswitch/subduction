@@ -21,7 +21,7 @@ use sedimentree_core::{
 };
 
 use crate::{
-    connection::{Connection, authenticated::Authenticated},
+    connection::{Connection, authenticated::Authenticated, message::SyncMessage},
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     storage::{powerbox::StoragePowerbox, traits::Storage},
@@ -60,7 +60,7 @@ pub(crate) async fn remove_peer_from_subscriptions(
 pub(crate) async fn get_authorized_subscriber_conns<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
 >(
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
@@ -114,7 +114,10 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `Some(false)` — connection removed, peer still has other connections
 /// - `Some(true)` — connection removed, was the peer's last connection
 /// - `None` — connection was not found
-pub(crate) async fn unregister<F: FutureForm, C: Connection<F> + PartialEq + Clone + 'static>(
+pub(crate) async fn unregister<
+    F: FutureForm,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+>(
     connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>,
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
     conn: &Authenticated<C, F>,

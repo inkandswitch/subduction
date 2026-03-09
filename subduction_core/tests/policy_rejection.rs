@@ -16,7 +16,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::{BatchSyncResponse, Message, SyncResult},
+        message::{BatchSyncResponse, SyncMessage, SyncResult},
         test_utils::{ChannelMockConnection, MockConnection, TestSpawn, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
@@ -365,7 +365,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     // Send a BatchSyncRequest — the fetch policy should reject it
     handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(
+        .send(SyncMessage::BatchSyncRequest(
             subduction_core::connection::message::BatchSyncRequest {
                 id: sedimentree_id,
                 req_id: subduction_core::connection::message::RequestId {
@@ -390,7 +390,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
         .await?
         .map_err(|e| format!("channel closed: {e}"))?;
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, id, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, id, .. }) = response else {
         panic!("expected BatchSyncResponse, got {response:?}");
     };
 

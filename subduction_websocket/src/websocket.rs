@@ -20,8 +20,8 @@ use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     peer::id::PeerId,
 };
@@ -110,34 +110,21 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
 
     pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
-    inbound_writer: async_channel::Sender<Message>,
-    inbound_reader: async_channel::Receiver<Message>,
+    inbound_writer: async_channel::Sender<SyncMessage>,
+    inbound_reader: async_channel::Receiver<SyncMessage>,
 
     _phantom: PhantomData<K>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Local>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Local, SyncMessage>
     for WebSocket<T, Local, O>
 {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
     fn peer_id(&self) -> PeerId {
         self.peer_id
-    }
-
-    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: self.peer_id,
-                nonce: counter,
-            }
-        }
-        .boxed_local()
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
@@ -145,7 +132,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
         async { Ok(()) }.boxed_local()
     }
 
-    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "ws: sending outbound with message id {:?} to peer_id {}",
             message.request_id(),
@@ -165,7 +152,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
         .boxed_local()
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
         tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
 
@@ -177,6 +164,24 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
 
             tracing::debug!("recv: inbound message {msg:?}");
             Ok(msg)
+        }
+        .boxed_local()
+    }
+}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
+    Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Local, O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
+        async {
+            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated message id {:?}", counter);
+            RequestId {
+                requestor: self.peer_id,
+                nonce: counter,
+            }
         }
         .boxed_local()
     }
@@ -195,7 +200,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let msg_bytes = Message::BatchSyncRequest(req).encode();
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
@@ -341,7 +346,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
-                    let msg = Message::try_decode(&bytes).map_err(|e| {
+                    let msg = SyncMessage::try_decode(&bytes).map_err(|e| {
                         tracing::error!(
                             "failed to deserialize inbound message from peer {:?}: {}",
                             self.peer_id,
@@ -358,7 +363,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                     );
 
                     match msg {
-                        Message::BatchSyncResponse(resp) => {
+                        SyncMessage::BatchSyncResponse(resp) => {
                             tracing::info!(
                                 "received BatchSyncResponse for req_id {:?}",
                                 resp.req_id
@@ -375,7 +380,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                                 }
                             } else {
                                 self.inbound_writer
-                                    .send(Message::BatchSyncResponse(resp))
+                                    .send(SyncMessage::BatchSyncResponse(resp))
                                     .await
                                     .map_err(|e| {
                                         tracing::error!(
@@ -387,13 +392,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                                     })?;
                             }
                         }
-                        other @ (Message::LooseCommit { .. }
-                        | Message::Fragment { .. }
-                        | Message::BlobsRequest { .. }
-                        | Message::BlobsResponse { .. }
-                        | Message::BatchSyncRequest(_)
-                        | Message::RemoveSubscriptions(_)
-                        | Message::DataRequestRejected(_)) => {
+                        other @ (SyncMessage::LooseCommit { .. }
+                        | SyncMessage::Fragment { .. }
+                        | SyncMessage::BlobsRequest { .. }
+                        | SyncMessage::BlobsResponse { .. }
+                        | SyncMessage::BatchSyncRequest(_)
+                        | SyncMessage::RemoveSubscriptions(_)
+                        | SyncMessage::DataRequestRejected(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {
                                 tracing::error!(
                                     "failed to send inbound message to channel {}: {}",
@@ -462,28 +467,15 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Connection<Sendable>
-    for WebSocket<T, Sendable, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
+    Connection<Sendable, SyncMessage> for WebSocket<T, Sendable, O>
 {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
     fn peer_id(&self) -> PeerId {
         self.peer_id
-    }
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: self.peer_id,
-                nonce: counter,
-            }
-        }
-        .boxed()
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
@@ -491,7 +483,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
         async { Ok(()) }.boxed()
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "sending outbound message id {:?} / {message:?}",
             message.request_id()
@@ -510,7 +502,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
         .boxed()
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
         tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
 
@@ -522,6 +514,24 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
 
             tracing::debug!("recv: inbound message {msg:?}");
             Ok(msg)
+        }
+        .boxed()
+    }
+}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
+    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Sendable, O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
+        async {
+            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated message id {:?}", counter);
+            RequestId {
+                requestor: self.peer_id,
+                nonce: counter,
+            }
         }
         .boxed()
     }
@@ -540,7 +550,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let msg_bytes = Message::BatchSyncRequest(req).encode();
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))

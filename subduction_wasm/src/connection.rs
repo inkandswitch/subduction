@@ -18,8 +18,8 @@ use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::Promise;
 use subduction_core::{
     connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     peer::id::PeerId,
 };
@@ -41,8 +41,8 @@ const TS: &str = r#"
 export interface Connection {
     peerId(): PeerId;
     disconnect(): Promise<void>;
-    send(message: Message): Promise<void>;
-    recv(): Promise<Message>;
+    send(message: SyncMessage): Promise<void>;
+    recv(): Promise<SyncMessage>;
     nextRequestId(): Promise<RequestId>;
     call(request: BatchSyncRequest, timeoutMs: number | null): Promise<BatchSyncResponse>;
 }
@@ -101,11 +101,10 @@ impl PartialEq for JsConnection {
     }
 }
 
-impl Connection<Local> for JsConnection {
+impl Connection<Local, SyncMessage> for JsConnection {
     type DisconnectionError = JsConnectionError;
     type SendError = JsConnectionError;
     type RecvError = JsConnectionError;
-    type CallError = JsConnectionError;
 
     fn peer_id(&self) -> PeerId {
         self.js_peer_id().into()
@@ -121,7 +120,7 @@ impl Connection<Local> for JsConnection {
         .boxed_local()
     }
 
-    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let wasm_msg = WasmMessage::from(message.clone());
         async move {
             JsFuture::from(self.js_send(wasm_msg))
@@ -132,7 +131,7 @@ impl Connection<Local> for JsConnection {
         .boxed_local()
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         async move {
             let js_value = JsFuture::from(self.js_recv())
                 .await
@@ -141,7 +140,7 @@ impl Connection<Local> for JsConnection {
                 js_value
                     .dyn_into()
                     .map_err(|value| JsConnectionError::UnexpectedJsType {
-                        expected: "Message",
+                        expected: "SyncMessage",
                         value,
                     })?;
             let wasm_msg = WasmMessage::from(&js_msg);
@@ -149,6 +148,10 @@ impl Connection<Local> for JsConnection {
         }
         .boxed_local()
     }
+}
+
+impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for JsConnection {
+    type CallError = JsConnectionError;
 
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         async move {

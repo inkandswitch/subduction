@@ -10,8 +10,8 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::{
     connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
         timeout::Timeout,
     },
     peer::id::PeerId,
@@ -97,75 +97,92 @@ pub(crate) enum TransportDisconnectionError {
     Iroh(#[from] subduction_iroh::error::DisconnectionError),
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTransport<O> {
+impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for UnifiedTransport<O> {
     type SendError = TransportSendError;
     type RecvError = TransportRecvError;
-    type CallError = TransportCallError;
     type DisconnectionError = TransportDisconnectionError;
 
     fn peer_id(&self) -> PeerId {
         match self {
-            Self::WebSocket(ws) => Connection::<Sendable>::peer_id(ws),
-            Self::HttpLongPoll(lp) => Connection::<Sendable>::peer_id(lp),
-            Self::Iroh(iroh) => Connection::<Sendable>::peer_id(iroh),
-        }
-    }
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        match self {
-            Self::WebSocket(ws) => Connection::<Sendable>::next_request_id(ws),
-            Self::HttpLongPoll(lp) => Connection::<Sendable>::next_request_id(lp),
-            Self::Iroh(iroh) => Connection::<Sendable>::next_request_id(iroh),
+            Self::WebSocket(ws) => Connection::<Sendable, SyncMessage>::peer_id(ws),
+            Self::HttpLongPoll(lp) => Connection::<Sendable, SyncMessage>::peer_id(lp),
+            Self::Iroh(iroh) => Connection::<Sendable, SyncMessage>::peer_id(iroh),
         }
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         match self {
             Self::WebSocket(ws) => Box::pin(async {
-                Connection::<Sendable>::disconnect(ws)
+                Connection::<Sendable, SyncMessage>::disconnect(ws)
                     .await
                     .map_err(Into::into)
             }),
             Self::HttpLongPoll(lp) => Box::pin(async {
-                Connection::<Sendable>::disconnect(lp)
+                Connection::<Sendable, SyncMessage>::disconnect(lp)
                     .await
                     .map_err(Into::into)
             }),
             Self::Iroh(iroh) => Box::pin(async {
-                Connection::<Sendable>::disconnect(iroh)
+                Connection::<Sendable, SyncMessage>::disconnect(iroh)
                     .await
                     .map_err(Into::into)
             }),
         }
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
         match self {
             Self::WebSocket(ws) => {
-                let fut = Connection::<Sendable>::send(ws, message);
+                let fut = Connection::<Sendable, SyncMessage>::send(ws, message);
                 Box::pin(async move { fut.await.map_err(Into::into) })
             }
             Self::HttpLongPoll(lp) => {
-                let fut = Connection::<Sendable>::send(lp, message);
+                let fut = Connection::<Sendable, SyncMessage>::send(lp, message);
                 Box::pin(async move { fut.await.map_err(Into::into) })
             }
             Self::Iroh(iroh) => {
-                let fut = Connection::<Sendable>::send(iroh, message);
+                let fut = Connection::<Sendable, SyncMessage>::send(iroh, message);
                 Box::pin(async move { fut.await.map_err(Into::into) })
             }
         }
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
+        match self {
+            Self::WebSocket(ws) => Box::pin(async {
+                Connection::<Sendable, SyncMessage>::recv(ws)
+                    .await
+                    .map_err(Into::into)
+            }),
+            Self::HttpLongPoll(lp) => Box::pin(async {
+                Connection::<Sendable, SyncMessage>::recv(lp)
+                    .await
+                    .map_err(Into::into)
+            }),
+            Self::Iroh(iroh) => Box::pin(async {
+                Connection::<Sendable, SyncMessage>::recv(iroh)
+                    .await
+                    .map_err(Into::into)
+            }),
+        }
+    }
+}
+
+impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
+    for UnifiedTransport<O>
+{
+    type CallError = TransportCallError;
+
+    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         match self {
             Self::WebSocket(ws) => {
-                Box::pin(async { Connection::<Sendable>::recv(ws).await.map_err(Into::into) })
+                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(ws)
             }
             Self::HttpLongPoll(lp) => {
-                Box::pin(async { Connection::<Sendable>::recv(lp).await.map_err(Into::into) })
+                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(lp)
             }
             Self::Iroh(iroh) => {
-                Box::pin(async { Connection::<Sendable>::recv(iroh).await.map_err(Into::into) })
+                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(iroh)
             }
         }
     }
@@ -177,17 +194,17 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
     ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         match self {
             Self::WebSocket(ws) => Box::pin(async move {
-                Connection::<Sendable>::call(ws, req, timeout)
+                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(ws, req, timeout)
                     .await
                     .map_err(Into::into)
             }),
             Self::HttpLongPoll(lp) => Box::pin(async move {
-                Connection::<Sendable>::call(lp, req, timeout)
+                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(lp, req, timeout)
                     .await
                     .map_err(Into::into)
             }),
             Self::Iroh(iroh) => Box::pin(async move {
-                Connection::<Sendable>::call(iroh, req, timeout)
+                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(iroh, req, timeout)
                     .await
                     .map_err(Into::into)
             }),

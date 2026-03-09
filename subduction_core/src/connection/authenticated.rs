@@ -6,10 +6,11 @@
 use core::{marker::PhantomData, time::Duration};
 
 use future_form::FutureForm;
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use super::{
-    Connection, Reconnect,
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    Connection, Reconnect, Roundtrip,
+    message::{RequestId, SyncMessage},
 };
 use crate::peer::id::PeerId;
 
@@ -21,7 +22,7 @@ use crate::peer::id::PeerId;
 ///
 /// # Type Parameters
 ///
-/// * `C` — The connection type, which must implement [`Connection<K>`]
+/// * `C` — The connection type (struct bound relaxed to `Clone`)
 /// * `K` — The [`FutureForm`] (e.g., [`Sendable`] or [`Local`])
 ///
 /// [`Sendable`]: future_form::Sendable
@@ -53,12 +54,12 @@ use crate::peer::id::PeerId;
 /// // Now register() accepts the authenticated connection
 /// subduction.register(authenticated).await?;
 /// ```
-pub struct Authenticated<C: Connection<K>, K: FutureForm> {
+pub struct Authenticated<C: Clone, K: FutureForm> {
     inner: C,
     _marker: PhantomData<fn() -> K>,
 }
 
-impl<C: Connection<K>, K: FutureForm> Clone for Authenticated<C, K> {
+impl<C: Clone, K: FutureForm> Clone for Authenticated<C, K> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -67,13 +68,13 @@ impl<C: Connection<K>, K: FutureForm> Clone for Authenticated<C, K> {
     }
 }
 
-impl<C: Connection<K>, K: FutureForm> PartialEq for Authenticated<C, K> {
+impl<C: Clone + PartialEq, K: FutureForm> PartialEq for Authenticated<C, K> {
     fn eq(&self, other: &Self) -> bool {
         self.inner == other.inner
     }
 }
 
-impl<C: Connection<K> + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Authenticated<C, K> {
+impl<C: Clone + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Authenticated<C, K> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Authenticated")
             .field("inner", &self.inner)
@@ -81,7 +82,7 @@ impl<C: Connection<K> + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Au
     }
 }
 
-impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
+impl<C: Connection<K, SyncMessage>, K: FutureForm> Authenticated<C, K> {
     /// Construct from a successful handshake.
     ///
     /// This is only accessible within the `connection` module.
@@ -97,15 +98,9 @@ impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
         }
     }
 
-    /// Construct for testing purposes only.
-    ///
-    /// This bypasses handshake verification and should only be used in tests.
-    #[cfg(any(test, feature = "test_utils"))]
-    pub fn new_for_test(inner: C) -> Self {
-        Self {
-            inner,
-            _marker: PhantomData,
-        }
+    /// The verified peer identity.
+    pub fn peer_id(&self) -> PeerId {
+        self.inner.peer_id()
     }
 
     /// Transform the inner connection while preserving the authentication proof.
@@ -122,16 +117,24 @@ impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
     /// around `C` that adds functionality (reconnection, logging, etc.)
     /// without changing the underlying authenticated channel.
     #[must_use]
-    pub fn map<D: Connection<K>>(self, f: impl FnOnce(C) -> D) -> Authenticated<D, K> {
+    pub fn map<D: Connection<K, SyncMessage>>(self, f: impl FnOnce(C) -> D) -> Authenticated<D, K> {
         Authenticated {
             inner: f(self.inner),
             _marker: PhantomData,
         }
     }
+}
 
-    /// The verified peer identity.
-    pub fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
+impl<C: Clone, K: FutureForm> Authenticated<C, K> {
+    /// Construct for testing purposes only.
+    ///
+    /// This bypasses handshake verification and should only be used in tests.
+    #[cfg(any(test, feature = "test_utils"))]
+    pub fn new_for_test(inner: C) -> Self {
+        Self {
+            inner,
+            _marker: PhantomData,
+        }
     }
 
     /// Access the inner connection.
@@ -145,11 +148,14 @@ impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
     }
 }
 
-impl<C: Connection<K>, K: FutureForm> Connection<K> for Authenticated<C, K> {
+// ── Delegation impls ────────────────────────────────────────────────────
+
+impl<C: Connection<K, M>, K: FutureForm, M: Encode + Decode> Connection<K, M>
+    for Authenticated<C, K>
+{
     type DisconnectionError = C::DisconnectionError;
     type SendError = C::SendError;
     type RecvError = C::RecvError;
-    type CallError = C::CallError;
 
     fn peer_id(&self) -> PeerId {
         self.inner.peer_id()
@@ -159,13 +165,21 @@ impl<C: Connection<K>, K: FutureForm> Connection<K> for Authenticated<C, K> {
         self.inner.disconnect()
     }
 
-    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &M) -> K::Future<'_, Result<(), Self::SendError>> {
         self.inner.send(message)
     }
 
-    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>> {
         self.inner.recv()
     }
+}
+
+impl<C, K, Req, Resp> Roundtrip<K, Req, Resp> for Authenticated<C, K>
+where
+    C: Roundtrip<K, Req, Resp>,
+    K: FutureForm,
+{
+    type CallError = C::CallError;
 
     fn next_request_id(&self) -> K::Future<'_, RequestId> {
         self.inner.next_request_id()
@@ -173,14 +187,16 @@ impl<C: Connection<K>, K: FutureForm> Connection<K> for Authenticated<C, K> {
 
     fn call(
         &self,
-        req: BatchSyncRequest,
+        req: Req,
         timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> K::Future<'_, Result<Resp, Self::CallError>> {
         self.inner.call(req, timeout)
     }
 }
 
-impl<C: Reconnect<K>, K: FutureForm> Reconnect<K> for Authenticated<C, K> {
+impl<C: Reconnect<K, M>, K: FutureForm, M: Encode + Decode> Reconnect<K, M>
+    for Authenticated<C, K>
+{
     type ReconnectionError = C::ReconnectionError;
 
     fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ReconnectionError>> {

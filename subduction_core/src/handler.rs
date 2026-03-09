@@ -1,4 +1,4 @@
-//! Message handler trait for the Subduction sync protocol.
+//! `SyncMessage` handler trait for the Subduction sync protocol.
 //!
 //! The [`Handler`] trait decouples _what to do with a message_ from
 //! _how messages arrive_. It receives decoded messages from authenticated
@@ -27,15 +27,15 @@
 //! impl<K, C> Handler<K, C> for MyHandler
 //! where
 //!     K: FutureForm,
-//!     C: Connection<K>,
+//!     C: Connection<K, SyncMessage>,
 //! {
-//!     type Message = Message;
+//!     type Message = SyncMessage;
 //!     type HandlerError = MyError;
 //!
 //!     fn handle<'a>(
 //!         &'a self,
 //!         conn: &'a Authenticated<C, K>,
-//!         message: Message,
+//!         message: SyncMessage,
 //!     ) -> K::Future<'a, Result<(), MyError>> {
 //!         K::from_future(async move {
 //!             // process message ...
@@ -55,7 +55,7 @@ pub mod sync;
 use future_form::FutureForm;
 use sedimentree_core::codec::decode::Decode;
 
-use crate::connection::{Connection, authenticated::Authenticated};
+use crate::connection::authenticated::Authenticated;
 
 /// A handler for messages received from authenticated peers.
 ///
@@ -67,7 +67,8 @@ use crate::connection::{Connection, authenticated::Authenticated};
 ///
 /// The message type [`M`](Handler::Message) must implement [`Decode`]
 /// so it can be deserialized from the wire. Encoding of outgoing
-/// responses is handled by the [`Connection`] layer, not the handler.
+/// responses is handled by the [`Connection`](crate::connection::Connection)
+/// layer, not the handler.
 ///
 /// # Error Semantics
 ///
@@ -75,11 +76,19 @@ use crate::connection::{Connection, authenticated::Authenticated};
 /// connection is broken and should be dropped. If a handler wants to
 /// be lenient about a particular message, it should return `Ok(())`
 /// and log the issue internally.
-pub trait Handler<K: FutureForm, C: Connection<K>> {
+///
+/// # Type Parameters
+///
+/// `C` is minimally bounded (`Clone`) because [`Authenticated<C, K>`]
+/// requires it. Individual impls specify their own additional bounds
+/// (e.g., `C: Connection<K, SyncMessage>`).
+///
+/// [`Authenticated<C, K>`]: crate::connection::authenticated::Authenticated
+pub trait Handler<K: FutureForm, C: Clone> {
     /// The message type this handler processes.
     ///
     /// Must support wire decoding. For the standard Subduction
-    /// protocol, this is [`Message`](crate::connection::message::Message).
+    /// protocol, this is [`SyncMessage`](crate::connection::message::SyncMessage).
     type Message: Decode;
 
     /// Error type returned by the handler.

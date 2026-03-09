@@ -15,7 +15,7 @@
 //! ## What's NOT Tested Here
 //!
 //! - Actual sync protocol execution (see integration tests)
-//! - Message serialization/deserialization
+//! - `SyncMessage` serialization/deserialization
 //! - WebSocket round-trip latency
 //! - Storage I/O
 //! - Async runtime overhead
@@ -362,7 +362,7 @@ mod id {
 
 mod message {
     use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-    use subduction_core::connection::message::Message;
+    use subduction_core::connection::message::SyncMessage;
 
     use super::generators::{
         batch_sync_request_from_seed, batch_sync_response_from_seed, blob_digest_from_seed,
@@ -370,7 +370,7 @@ mod message {
         signed_loose_commit_from_seed,
     };
 
-    /// Benchmark Message enum construction with various payloads.
+    /// Benchmark `SyncMessage` enum construction with various payloads.
     ///
     /// **Intent**: Measure the cost of building protocol messages. These are constructed
     /// during sync operations before serialization.
@@ -391,7 +391,7 @@ mod message {
                     let id = sedimentree_id_from_seed(12345);
                     let commit = signed_loose_commit_from_seed(12345);
                     let blob = blob_from_seed(12345, size);
-                    b.iter(|| Message::LooseCommit {
+                    b.iter(|| SyncMessage::LooseCommit {
                         id: black_box(id),
                         commit: black_box(commit.clone()),
                         blob: black_box(blob.clone()),
@@ -411,7 +411,7 @@ mod message {
                     let id = sedimentree_id_from_seed(12345);
                     let fragment = signed_fragment_from_seed(12345);
                     let blob = blob_from_seed(12345, size);
-                    b.iter(|| Message::Fragment {
+                    b.iter(|| SyncMessage::Fragment {
                         id: black_box(id),
                         fragment: black_box(fragment.clone()),
                         blob: black_box(blob.clone()),
@@ -430,7 +430,7 @@ mod message {
                 &num_digests,
                 |b, &n| {
                     let digests: Vec<_> = (0..n).map(|i| blob_digest_from_seed(i as u64)).collect();
-                    b.iter(|| Message::BlobsRequest {
+                    b.iter(|| SyncMessage::BlobsRequest {
                         id: black_box(sedimentree_id_from_seed(1)),
                         digests: black_box(digests.clone()),
                     });
@@ -449,7 +449,7 @@ mod message {
                 &(num_blobs, blob_size),
                 |b, &(n, size)| {
                     let blobs: Vec<_> = (0..n).map(|i| blob_from_seed(i as u64, size)).collect();
-                    b.iter(|| Message::BlobsResponse {
+                    b.iter(|| SyncMessage::BlobsResponse {
                         id: black_box(sedimentree_id_from_seed(1)),
                         blobs: black_box(blobs.clone()),
                     });
@@ -470,7 +470,7 @@ mod message {
         let mut group = c.benchmark_group("message_request_id");
 
         // Messages without request IDs (should return None quickly)
-        let msg_loose = Message::LooseCommit {
+        let msg_loose = SyncMessage::LooseCommit {
             id: sedimentree_id_from_seed(1),
             commit: signed_loose_commit_from_seed(1),
             blob: blob_from_seed(1, 64),
@@ -479,7 +479,7 @@ mod message {
             b.iter(|| black_box(&msg_loose).request_id());
         });
 
-        let msg_blobs_req = Message::BlobsRequest {
+        let msg_blobs_req = SyncMessage::BlobsRequest {
             id: sedimentree_id_from_seed(1),
             digests: vec![blob_digest_from_seed(1)],
         };
@@ -488,13 +488,13 @@ mod message {
         });
 
         // Messages with request IDs
-        let msg_batch_req = Message::BatchSyncRequest(batch_sync_request_from_seed(1));
+        let msg_batch_req = SyncMessage::BatchSyncRequest(batch_sync_request_from_seed(1));
         group.bench_function("batch_sync_request_some", |b| {
             b.iter(|| black_box(&msg_batch_req).request_id());
         });
 
         let msg_batch_resp =
-            Message::BatchSyncResponse(batch_sync_response_from_seed(1, 5, 3, 256));
+            SyncMessage::BatchSyncResponse(batch_sync_response_from_seed(1, 5, 3, 256));
         group.bench_function("batch_sync_response_some", |b| {
             b.iter(|| black_box(&msg_batch_resp).request_id());
         });
@@ -509,7 +509,7 @@ mod sync {
     use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, black_box};
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{
-        BatchSyncRequest, BatchSyncResponse, Message, SyncResult,
+        BatchSyncRequest, BatchSyncResponse, SyncMessage, SyncResult,
     };
 
     use super::generators::{
@@ -601,11 +601,11 @@ mod sync {
             });
         });
 
-        // Request to Message conversion
+        // Request to SyncMessage conversion
         group.bench_function("request_into_message", |b| {
             b.iter_batched(
                 || batch_sync_request_from_seed(12345),
-                |req| -> Message { req.into() },
+                |req| -> SyncMessage { req.into() },
                 BatchSize::SmallInput,
             );
         });
@@ -637,7 +637,7 @@ mod sync {
             );
         }
 
-        // Response to Message conversion
+        // Response to SyncMessage conversion
         for (commits, fragments) in [(10, 5), (50, 20)] {
             group.bench_with_input(
                 BenchmarkId::new("response_into_message", format!("{commits}c_{fragments}f")),
@@ -645,7 +645,7 @@ mod sync {
                 |b, &(c, f)| {
                     b.iter_batched(
                         || batch_sync_response_from_seed(12345, c, f, 256),
-                        |resp| -> Message { resp.into() },
+                        |resp| -> SyncMessage { resp.into() },
                         BatchSize::SmallInput,
                     );
                 },
@@ -845,7 +845,7 @@ mod collections {
 
 mod cloning {
     use criterion::{BenchmarkId, Criterion, Throughput, black_box};
-    use subduction_core::connection::{id::ConnectionId, message::Message};
+    use subduction_core::connection::{id::ConnectionId, message::SyncMessage};
 
     use super::generators::{
         batch_sync_response_from_seed, blob_from_seed, request_id_from_seed,
@@ -911,8 +911,8 @@ mod cloning {
             );
         }
 
-        // Message variants
-        let msg_loose = Message::LooseCommit {
+        // SyncMessage variants
+        let msg_loose = SyncMessage::LooseCommit {
             id: sedimentree_id_from_seed(1),
             commit: signed_loose_commit_from_seed(1),
             blob: blob_from_seed(1, 256),
@@ -921,7 +921,7 @@ mod cloning {
             b.iter(|| black_box(&msg_loose).clone());
         });
 
-        let msg_fragment = Message::Fragment {
+        let msg_fragment = SyncMessage::Fragment {
             id: sedimentree_id_from_seed(1),
             fragment: signed_fragment_from_seed(1),
             blob: blob_from_seed(1, 1024),
@@ -931,14 +931,14 @@ mod cloning {
         });
 
         let msg_batch_resp =
-            Message::BatchSyncResponse(batch_sync_response_from_seed(1, 20, 10, 256));
+            SyncMessage::BatchSyncResponse(batch_sync_response_from_seed(1, 20, 10, 256));
         group.bench_function("message/batch_sync_response_20c_10f", |b| {
             b.iter(|| black_box(&msg_batch_resp).clone());
         });
 
         // Large message (stress test)
         let msg_large_resp =
-            Message::BatchSyncResponse(batch_sync_response_from_seed(1, 100, 50, 1024));
+            SyncMessage::BatchSyncResponse(batch_sync_response_from_seed(1, 100, 50, 1024));
         group.bench_function("message/batch_sync_response_100c_50f_1kb", |b| {
             b.iter(|| black_box(&msg_large_resp).clone());
         });

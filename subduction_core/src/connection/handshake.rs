@@ -64,7 +64,7 @@ use core::time::Duration;
 use future_form::FutureForm;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{Connection, authenticated::Authenticated, message::SyncMessage};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::{
     codec::{
@@ -725,7 +725,7 @@ pub enum AuthenticateError<E> {
     #[error("transport error: {0}")]
     Transport(E),
 
-    /// Message decoding error.
+    /// `SyncMessage` decoding error.
     #[error("decode error: {0}")]
     Decode(#[from] DecodeError),
 
@@ -797,7 +797,13 @@ pub struct RespondResult {
 /// Panics if encoding of the challenge message fails (should never happen
 /// with well-formed types).
 #[allow(clippy::expect_used)]
-pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
+pub async fn initiate<
+    K: FutureForm,
+    H: Handshake<K>,
+    C: Connection<K, SyncMessage>,
+    E,
+    S: Signer<K>,
+>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> (C, E),
     signer: &S,
@@ -871,7 +877,13 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
 /// Panics if encoding of the response or rejection message fails (should
 /// never happen with well-formed types).
 #[allow(clippy::expect_used, clippy::too_many_arguments)]
-pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
+pub async fn respond<
+    K: FutureForm,
+    H: Handshake<K>,
+    C: Connection<K, SyncMessage>,
+    E,
+    S: Signer<K>,
+>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> (C, E),
     signer: &S,

@@ -64,7 +64,7 @@
 //!
 //! - [`subduction`] — Main sync manager, builder, and API guide
 //! - [`connection`] — Connection traits and handshake protocol
-//! - [`handler`] — Message handler trait for dispatch extensibility
+//! - [`handler`] — [`SyncMessage`] handler trait for dispatch extensibility
 //! - [`policy`] — Authorization policies ([`ConnectionPolicy`], [`StoragePolicy`])
 //! - [`storage`] — Storage capabilities ([`Fetcher`], [`Putter`], [`Destroyer`])
 //! - [`peer`] — Peer identity ([`PeerId`])

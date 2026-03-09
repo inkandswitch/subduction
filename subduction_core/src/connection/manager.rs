@@ -16,8 +16,9 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::stream::AbortHandle;
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use super::{Connection, id::ConnectionId, message::Message};
+use super::{Connection, id::ConnectionId};
 
 /// Internal task identifier for abort handle tracking.
 ///
@@ -63,7 +64,7 @@ pub trait Spawn<K: FutureForm> {
 ///
 /// Unlike [`SelectAll`]-based approaches, each connection runs in its own task,
 /// providing isolation and (on multi-threaded runtimes) true parallelism.
-pub struct ConnectionManager<K: FutureForm, C, S: Spawn<K>> {
+pub struct ConnectionManager<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> {
     spawner: S,
 
     /// Counter for generating internal task IDs.
@@ -82,7 +83,7 @@ pub struct ConnectionManager<K: FutureForm, C, S: Spawn<K>> {
     commands: async_channel::Receiver<Command<C>>,
 
     /// Outbound messages from all connections.
-    messages: async_channel::Sender<(C, Message)>,
+    messages: async_channel::Sender<(C, M)>,
 
     /// Notification when a connection closes (either normally or due to error).
     ///
@@ -93,13 +94,13 @@ pub struct ConnectionManager<K: FutureForm, C, S: Spawn<K>> {
     _marker: core::marker::PhantomData<K>,
 }
 
-impl<K: FutureForm, C, S: Spawn<K>> ConnectionManager<K, C, S> {
+impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> ConnectionManager<K, C, M, S> {
     /// Create a new [`ConnectionManager`].
     #[must_use]
     pub fn new(
         spawner: S,
         commands: async_channel::Receiver<Command<C>>,
-        messages: async_channel::Sender<(C, Message)>,
+        messages: async_channel::Sender<(C, M)>,
         closed: async_channel::Sender<(ConnectionId, C)>,
     ) -> Self {
         Self {
@@ -120,7 +121,9 @@ impl<K: FutureForm, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     }
 }
 
-impl<K: FutureForm, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
+impl<K: FutureForm, C: Connection<K, M>, M: Encode + Decode, S: Spawn<K>>
+    ConnectionManager<K, C, M, S>
+{
     async fn remove_connection_by_ref(&self, conn: &C) {
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(_, _, _, c)| c == conn) {
@@ -146,24 +149,24 @@ impl<K: FutureForm, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
 
 /// Trait for running the connection manager.
 ///
-/// This trait enables generic code to call `run()` on `ConnectionManager<K, C, S>`
-/// without knowing whether K is Sendable or Local.
-pub trait RunManager<C>: FutureForm + Sized {
+/// This trait enables generic code to call `run()` on `ConnectionManager<K, C, M, S>`
+/// without knowing whether K is `Sendable` or `Local`.
+pub trait RunManager<C, M: Encode + Decode>: FutureForm + Sized {
     /// Run the manager, processing commands to add/remove connections.
     fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
-        manager: ConnectionManager<Self, C, S>,
+        manager: ConnectionManager<Self, C, M, S>,
     ) -> Self::Future<'static, ()>
     where
-        C: Connection<Self> + Clone + 'static;
+        C: Connection<Self, M> + Clone + 'static;
 }
 
-impl<K: FutureForm + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
-    ConnectionManager<K, C, S>
+impl<K: FutureForm + RunManager<C, M>, C, M: Encode + Decode, S: Spawn<K> + Send + Sync + 'static>
+    ConnectionManager<K, C, M, S>
 {
     /// Run the manager, processing commands to add/remove connections.
     pub fn run(self) -> K::Future<'static, ()>
     where
-        C: Connection<K> + Clone + 'static,
+        C: Connection<K, M> + Clone + 'static,
     {
         K::run_manager(self)
     }
@@ -171,12 +174,12 @@ impl<K: FutureForm + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
 
 // Implementations of RunManager for Sendable and Local
 #[future_form(
-    Sendable where C: Connection<Sendable> + Clone + Send + Sync + 'static, C::RecvError: Send,
-    Local where C: Connection<Local> + Clone + 'static
+    Sendable where C: Connection<Sendable, M> + Clone + Send + Sync + 'static, C::RecvError: Send, M: Send + Sync + 'static,
+    Local where C: Connection<Local, M> + Clone + 'static, M: 'static
 )]
-impl<K: FutureForm, C> RunManager<C> for K {
+impl<K: FutureForm, C, M: Encode + Decode> RunManager<C, M> for K {
     fn run_manager<S: Spawn<Self> + Send + Sync + 'static>(
-        manager: ConnectionManager<Self, C, S>,
+        manager: ConnectionManager<Self, C, M, S>,
     ) -> Self::Future<'static, ()> {
         K::from_future(async move {
             while let Ok(cmd) = manager.commands.recv().await {
@@ -273,9 +276,9 @@ impl<K: FutureForm, C> RunManager<C> for K {
     }
 }
 
-async fn connection_loop<K: FutureForm, C: Connection<K>>(
+async fn connection_loop<K: FutureForm, C: Connection<K, M>, M: Encode + Decode>(
     conn: C,
-    messages: async_channel::Sender<(C, Message)>,
+    messages: async_channel::Sender<(C, M)>,
 ) {
     let peer_id = conn.peer_id();
     loop {
@@ -295,7 +298,9 @@ async fn connection_loop<K: FutureForm, C: Connection<K>>(
     }
 }
 
-impl<K: FutureForm, C, S: Spawn<K>> core::fmt::Debug for ConnectionManager<K, C, S> {
+impl<K: FutureForm, C, M: Encode + Decode, S: Spawn<K>> core::fmt::Debug
+    for ConnectionManager<K, C, M, S>
+{
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectionManager").finish_non_exhaustive()
     }

@@ -67,7 +67,11 @@ use sedimentree_core::{
 
 use crate::{
     connection::{
-        Connection, authenticated::Authenticated, manager::Spawn, nonce_cache::NonceCache,
+        Connection, Roundtrip,
+        authenticated::Authenticated,
+        manager::Spawn,
+        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
+        nonce_cache::NonceCache,
     },
     handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
@@ -337,14 +341,14 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
         F: StartListener<'a, S, C, P, Sig, M, SyncHandler<F, S, C, P, M, N>, N>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq + Clone + 'a,
+        C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         M: Clone,
         SyncHandler<F, S, C, P, M, N>: Handler<F, C>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message:
-            From<super::super::connection::message::Message>,
+            From<super::super::connection::message::SyncMessage>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self
@@ -418,12 +422,12 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
         F: StartListener<'a, S, C, P, Sig, M, H, N>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq + Clone + 'a,
+        C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
-        H::Message: From<super::super::connection::message::Message>,
+        H::Message: From<super::super::connection::message::SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self

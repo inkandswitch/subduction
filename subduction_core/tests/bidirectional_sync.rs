@@ -21,7 +21,7 @@ use futures::future::Aborted;
 use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult},
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
         test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
@@ -121,7 +121,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
         make_test_commit(&sedimentree_id, b"commit A - alice has this").await;
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit: commit_a.clone(),
             blob: blob_a.clone(),
@@ -152,7 +152,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
     // Send the request as a message
     handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(request))
+        .send(SyncMessage::BatchSyncRequest(request))
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -164,7 +164,7 @@ async fn test_responder_requests_missing_commits() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
@@ -226,7 +226,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
 
     handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(request))
+        .send(SyncMessage::BatchSyncRequest(request))
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -237,7 +237,7 @@ async fn test_responder_requests_commits_from_requestor() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
@@ -292,7 +292,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Give Alice commit A
     alice_handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit: commit_a.clone(),
             blob: blob_a.clone(),
@@ -320,7 +320,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Give Bob commit B
     bob_handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit: commit_b.clone(),
             blob: blob_b.clone(),
@@ -353,7 +353,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
 
     alice_handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(request))
+        .send(SyncMessage::BatchSyncRequest(request))
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -365,7 +365,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
             .await?
             .expect("should receive response from Alice");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
@@ -388,7 +388,7 @@ async fn test_full_bidirectional_sync_flow() -> TestResult {
     // Feed the response to Bob (simulating Bob receiving Alice's response)
     bob_handle
         .inbound_tx
-        .send(Message::BatchSyncResponse(BatchSyncResponse {
+        .send(SyncMessage::BatchSyncResponse(BatchSyncResponse {
             id: sedimentree_id,
             req_id: RequestId {
                 requestor: bob_peer_id,
@@ -455,7 +455,7 @@ async fn test_responder_requests_fragments() -> TestResult {
 
     handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(request))
+        .send(SyncMessage::BatchSyncRequest(request))
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -463,7 +463,7 @@ async fn test_responder_requests_fragments() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
@@ -502,7 +502,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
     // Give Alice the commit
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit: commit.clone(),
             blob: blob.clone(),
@@ -530,7 +530,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
 
     handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(request))
+        .send(SyncMessage::BatchSyncRequest(request))
         .await?;
     tokio::time::sleep(Duration::from_millis(50)).await;
 
@@ -538,7 +538,7 @@ async fn test_no_requesting_when_in_sync() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
     };
     let SyncResult::Ok(diff) = result else {
