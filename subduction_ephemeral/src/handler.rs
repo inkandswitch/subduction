@@ -26,7 +26,7 @@ use sedimentree_core::{
     id::SedimentreeId,
 };
 use subduction_core::{
-    connection::{authenticated::Authenticated, Connection},
+    connection::{Connection, authenticated::Authenticated},
     handler::Handler,
     peer::id::PeerId,
 };
@@ -126,10 +126,7 @@ impl<F: FutureForm, C: Clone + 'static, E: EphemeralPolicy<F>> EphemeralHandler<
             return;
         }
 
-        let msg = EphemeralMessage::Ephemeral {
-            id,
-            payload,
-        };
+        let msg = EphemeralMessage::Ephemeral { id, payload };
 
         let conns = self.connections.lock().await;
         for peer in &authorized_peers {
@@ -179,9 +176,7 @@ impl<K: FutureForm, C, E> Handler<K, C> for EphemeralHandler<K, C, E> {
         conn: &'a Authenticated<C, K>,
         message: EphemeralMessage,
     ) -> K::Future<'a, Result<(), Self::HandlerError>> {
-        K::from_future(async move {
-            self.dispatch(conn, message).await
-        })
+        K::from_future(async move { self.dispatch(conn, message).await })
     }
 }
 

@@ -17,9 +17,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
+use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
 
-use crate::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
+use crate::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 
 /// Composed wire message carrying either sync or ephemeral traffic.
 ///
@@ -75,19 +75,17 @@ impl Decode for WireMessage {
             });
         }
 
-        let schema: [u8; 4] = buf
-            .get(0..4)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(DecodeError::MessageTooShort {
-                type_name: "WireMessage schema",
-                need: 4,
-                have: buf.len(),
-            })?;
+        let schema: [u8; 4] =
+            buf.get(0..4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(DecodeError::MessageTooShort {
+                    type_name: "WireMessage schema",
+                    need: 4,
+                    have: buf.len(),
+                })?;
 
         match schema {
-            MESSAGE_SCHEMA => {
-                SyncMessage::try_decode(buf).map(|m| WireMessage::Sync(Box::new(m)))
-            }
+            MESSAGE_SCHEMA => SyncMessage::try_decode(buf).map(|m| WireMessage::Sync(Box::new(m))),
             EPHEMERAL_SCHEMA => EphemeralMessage::try_decode(buf).map(WireMessage::Ephemeral),
             _ => Err(InvalidSchema {
                 expected: MESSAGE_SCHEMA, // Use sync as the "expected" — both are valid

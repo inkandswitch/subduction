@@ -99,9 +99,9 @@ impl EphemeralMessage {
     pub const fn sedimentree_id(&self) -> Option<SedimentreeId> {
         match self {
             Self::Ephemeral { id, .. } => Some(*id),
-            Self::Subscribe { .. }
-            | Self::Unsubscribe { .. }
-            | Self::SubscribeRejected { .. } => None,
+            Self::Subscribe { .. } | Self::Unsubscribe { .. } | Self::SubscribeRejected { .. } => {
+                None
+            }
         }
     }
 
@@ -198,14 +198,15 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
         });
     }
 
-    let schema: [u8; 4] = bytes
-        .get(0..4)
-        .and_then(|s| s.try_into().ok())
-        .ok_or(DecodeError::MessageTooShort {
-            type_name: "EphemeralMessage schema",
-            need: 4,
-            have: bytes.len(),
-        })?;
+    let schema: [u8; 4] =
+        bytes
+            .get(0..4)
+            .and_then(|s| s.try_into().ok())
+            .ok_or(DecodeError::MessageTooShort {
+                type_name: "EphemeralMessage schema",
+                need: 4,
+                have: bytes.len(),
+            })?;
     if schema != EPHEMERAL_SCHEMA {
         return Err(InvalidSchema {
             expected: EPHEMERAL_SCHEMA,
@@ -214,16 +215,13 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
         .into());
     }
 
-    let total_size = u32::from_be_bytes(
-        bytes
-            .get(4..8)
-            .and_then(|s| s.try_into().ok())
-            .ok_or(DecodeError::MessageTooShort {
-                type_name: "EphemeralMessage total_size",
-                need: 8,
-                have: bytes.len(),
-            })?,
-    ) as usize;
+    let total_size = u32::from_be_bytes(bytes.get(4..8).and_then(|s| s.try_into().ok()).ok_or(
+        DecodeError::MessageTooShort {
+            type_name: "EphemeralMessage total_size",
+            need: 8,
+            have: bytes.len(),
+        },
+    )?) as usize;
     if bytes.len() != total_size {
         return Err(SizeMismatch {
             declared: total_size,
@@ -237,21 +235,19 @@ fn decode_message(bytes: &[u8]) -> Result<EphemeralMessage, DecodeError> {
         need: 9,
         have: bytes.len(),
     })?;
-    let payload = bytes.get(ENVELOPE_HEADER_SIZE..).ok_or(
-        DecodeError::MessageTooShort {
+    let payload = bytes
+        .get(ENVELOPE_HEADER_SIZE..)
+        .ok_or(DecodeError::MessageTooShort {
             type_name: "EphemeralMessage payload",
             need: ENVELOPE_HEADER_SIZE,
             have: bytes.len(),
-        },
-    )?;
+        })?;
 
     let (min_payload_size, type_name) = match tag {
         tags::EPHEMERAL => (min_sizes::EPHEMERAL, "Ephemeral"),
         tags::SUBSCRIBE => (min_sizes::SUBSCRIBE, "EphemeralSubscribe"),
         tags::UNSUBSCRIBE => (min_sizes::UNSUBSCRIBE, "EphemeralUnsubscribe"),
-        tags::SUBSCRIBE_REJECTED => {
-            (min_sizes::SUBSCRIBE_REJECTED, "EphemeralSubscribeRejected")
-        }
+        tags::SUBSCRIBE_REJECTED => (min_sizes::SUBSCRIBE_REJECTED, "EphemeralSubscribeRejected"),
         _ => {
             return Err(InvalidEnumTag {
                 tag,
