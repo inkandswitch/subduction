@@ -66,6 +66,7 @@ fn new_dispatch_subduction() -> (
             Sendable,
             MemoryStorage,
             ChannelMockConnection,
+            SyncMessage,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
             CountLeadingZeroBytes,

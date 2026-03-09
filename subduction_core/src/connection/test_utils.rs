@@ -611,6 +611,7 @@ pub fn new_test_subduction() -> (
             Sendable,
             MemoryStorage,
             MockConnection,
+            SyncMessage,
             OpenPolicy,
             MemorySigner,
             CountLeadingZeroBytes,

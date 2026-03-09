@@ -31,7 +31,7 @@ use std::{
 use future_form::Sendable;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::test_utils::TokioSpawn,
+    connection::{message::SyncMessage, test_utils::TokioSpawn},
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
@@ -53,6 +53,7 @@ type TestSubduction = Arc<
         Sendable,
         MemoryStorage,
         HttpLongPollConnection<FuturesTimerTimeout>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,

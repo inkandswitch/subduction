@@ -14,7 +14,7 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::handshake::Audience,
+    connection::{handshake::Audience, message::SyncMessage},
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -47,6 +47,7 @@ type TestSubduction = Arc<
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
     >,
@@ -73,6 +74,7 @@ fn setup_client_subduction(
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,

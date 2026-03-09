@@ -12,7 +12,9 @@
 use alloc::sync::Arc;
 
 use future_form::{FutureForm, Local, Sendable};
-use subduction_core::{connection::authenticated::Authenticated, handler::Handler, peer::id::PeerId};
+use subduction_core::{
+    connection::authenticated::Authenticated, handler::Handler, peer::id::PeerId,
+};
 use thiserror::Error;
 
 use crate::wire::WireMessage;

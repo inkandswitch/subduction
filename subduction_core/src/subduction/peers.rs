@@ -20,8 +20,10 @@ use sedimentree_core::{
     id::SedimentreeId,
 };
 
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
+
 use crate::{
-    connection::{Connection, authenticated::Authenticated, message::SyncMessage},
+    connection::{Connection, authenticated::Authenticated},
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     storage::{powerbox::StoragePowerbox, traits::Storage},
@@ -60,8 +62,9 @@ pub(crate) async fn remove_peer_from_subscriptions(
 pub(crate) async fn get_authorized_subscriber_conns<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, W> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
+    W: Encode + Decode,
 >(
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
     storage: &StoragePowerbox<S, P>,
@@ -116,7 +119,8 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `None` — connection was not found
 pub(crate) async fn unregister<
     F: FutureForm,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, W> + PartialEq + Clone + 'static,
+    W: Encode + Decode,
 >(
     connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>,
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,

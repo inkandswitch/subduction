@@ -16,10 +16,12 @@ use sedimentree_core::{
 };
 use subduction_crypto::verified_meta::VerifiedMeta;
 
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
+
 use crate::{
     connection::{
         Connection, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, SyncDiff, SyncMessage},
+        message::{BatchSyncRequest, BatchSyncResponse, SyncDiff},
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
@@ -36,7 +38,8 @@ use super::error::IoError;
 pub(crate) async fn recv_batch_sync_response<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, W> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    W: Encode + Decode,
     P: StoragePolicy<F>,
     const N: usize,
 >(
@@ -45,7 +48,7 @@ pub(crate) async fn recv_batch_sync_response<
     from: &PeerId,
     id: SedimentreeId,
     diff: SyncDiff,
-) -> Result<(), IoError<F, S, C>> {
+) -> Result<(), IoError<F, S, C, W>> {
     tracing::info!(
         "received batch sync response for sedimentree {:?} from peer {:?} with {} missing commits and {} missing fragments",
         id,

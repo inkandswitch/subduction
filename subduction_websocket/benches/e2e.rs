@@ -42,7 +42,7 @@ use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{handshake::Audience, nonce_cache::NonceCache},
+    connection::{handshake::Audience, message::SyncMessage, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -107,6 +107,7 @@ type ClientSubduction = Arc<
         Sendable,
         MemoryStorage,
         TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
     >,
@@ -163,6 +164,7 @@ fn assert_full_sync(
                 Sendable,
                 MemoryStorage,
                 TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+                SyncMessage,
             >,
         )>,
     ),

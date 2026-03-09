@@ -17,6 +17,7 @@ use subduction_core::{
     connection::{
         authenticated::Authenticated,
         handshake::{self, Audience, AuthenticateError, DiscoveryId},
+        message::SyncMessage,
         nonce_cache::NonceCache,
     },
     peer::id::PeerId,
@@ -571,7 +572,7 @@ where
 }
 
 type TokioWebSocketSubduction<S, P, Sig, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, P, Sig, M>>;
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, SyncMessage, P, Sig, M>>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]

@@ -37,7 +37,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmUnifiedTransport>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmUnifiedTransport, SyncMessage>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -53,7 +53,9 @@ impl From<WasmIoError> for JsValue {
 /// including policy rejections.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, WasmUnifiedTransport, Infallible>);
+pub struct WasmWriteError(
+    #[from] WriteError<Local, JsStorage, WasmUnifiedTransport, SyncMessage, Infallible>,
+);
 
 impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
@@ -66,7 +68,9 @@ impl From<WasmWriteError> for JsValue {
 /// A Wasm wrapper around the [`AttachError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmAttachError(#[from] AttachError<Local, JsStorage, WasmUnifiedTransport, Infallible>);
+pub struct WasmAttachError(
+    #[from] AttachError<Local, JsStorage, WasmUnifiedTransport, SyncMessage, Infallible>,
+);
 
 impl From<WasmAttachError> for JsValue {
     fn from(err: WasmAttachError) -> Self {
@@ -113,7 +117,9 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, WasmUnifiedTransport>);
+pub struct WasmListenError(
+    #[from] ListenError<Local, JsStorage, WasmUnifiedTransport, SyncMessage>,
+);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {

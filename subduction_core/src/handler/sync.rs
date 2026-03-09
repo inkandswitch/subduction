@@ -196,7 +196,7 @@ impl<
 )]
 impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K, S, C, P, M, N> {
     type Message = SyncMessage;
-    type HandlerError = ListenError<K, S, C>;
+    type HandlerError = ListenError<K, S, C, SyncMessage>;
 
     fn handle<'a>(
         &'a self,
@@ -235,7 +235,7 @@ impl<
         &self,
         conn: &Authenticated<C, F>,
         message: SyncMessage,
-    ) -> Result<(), ListenError<F, S, C>> {
+    ) -> Result<(), ListenError<F, S, C, SyncMessage>> {
         let from = conn.peer_id();
         tracing::info!(
             from = %from,
@@ -352,7 +352,7 @@ impl<
         id: SedimentreeId,
         signed_commit: &Signed<LooseCommit>,
         blob: Blob,
-    ) -> Result<bool, IoError<F, S, C>> {
+    ) -> Result<bool, IoError<F, S, C, SyncMessage>> {
         let verified = match signed_commit.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -429,7 +429,7 @@ impl<
         id: SedimentreeId,
         signed_fragment: &Signed<Fragment>,
         blob: Blob,
-    ) -> Result<bool, IoError<F, S, C>> {
+    ) -> Result<bool, IoError<F, S, C, SyncMessage>> {
         let verified = match signed_fragment.try_verify() {
             Ok(v) => v,
             Err(e) => {
@@ -507,7 +507,7 @@ impl<
         their_fingerprints: &FingerprintSummary,
         req_id: RequestId,
         conn: &Authenticated<C, F>,
-    ) -> Result<(), ListenError<F, S, C>> {
+    ) -> Result<(), ListenError<F, S, C, SyncMessage>> {
         tracing::info!("recv_batch_sync_request for sedimentree {:?}", id);
 
         let peer_id = conn.peer_id();
@@ -650,7 +650,7 @@ impl<
         from: &PeerId,
         id: SedimentreeId,
         diff: SyncDiff,
-    ) -> Result<(), IoError<F, S, C>> {
+    ) -> Result<(), IoError<F, S, C, SyncMessage>> {
         ingest::recv_batch_sync_response(&self.sedimentrees, &self.storage, from, id, diff).await?;
         self.minimize_tree(id).await;
         Ok(())
@@ -661,7 +661,7 @@ impl<
         conn: &Authenticated<C, F>,
         id: SedimentreeId,
         digests: &[Digest<Blob>],
-    ) -> Result<(), BlobRequestErr<F, S, C>> {
+    ) -> Result<(), BlobRequestErr<F, S, C, SyncMessage>> {
         let mut blobs = Vec::new();
         let mut missing = Vec::new();
         for digest in digests {

@@ -24,6 +24,7 @@ use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::Sedimentre
 use subduction_core::{
     connection::{
         handshake::{Audience, DiscoveryId},
+        message::SyncMessage,
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
     },
@@ -46,6 +47,7 @@ type TestSubduction = Arc<
         Sendable,
         MemoryStorage,
         IrohConnection<FuturesTimerTimeout>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,

@@ -12,6 +12,7 @@ use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     connection::{
         handshake::{self, Audience, DiscoveryId},
+        message::SyncMessage,
         nonce_cache::NonceCache,
     },
     peer::id::PeerId,
@@ -42,6 +43,7 @@ type CliSubduction = Arc<
         future_form::Sendable,
         MetricsStorage<FsStorage>,
         UnifiedTransport<FuturesTimerTimeout>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
