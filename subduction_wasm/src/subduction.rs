@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -34,7 +34,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, error::HydrationError, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        error::HydrationError, pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -43,10 +43,10 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
-        JsConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
         websocket::WasmWebSocket,
+        JsConnection,
     },
     error::{
         WasmAttachError, WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
@@ -81,6 +81,40 @@ use subduction_ephemeral::{
 
 #[cfg(feature = "ephemeral")]
 use crate::wire::WireMessage;
+
+// ── Keyhive types ──────────────────────────────────────────────────────
+
+#[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+use keyhive_core::{
+    crypto::signer::memory::MemorySigner as KeyhiveMemorySigner, keyhive::Keyhive,
+    listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+};
+
+#[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+use subduction_keyhive::{KeyhivePeerId, KeyhiveSyncManager, MemoryKeyhiveStorage};
+
+/// Type alias for the keyhive instance used in Wasm (in-memory storage).
+#[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+type WasmKeyhive = Keyhive<
+    KeyhiveMemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    NoListener,
+    rand::rngs::OsRng,
+>;
+
+/// Type alias for the keyhive sync manager used in Wasm.
+#[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+type WasmKeyhiveSyncManager = KeyhiveSyncManager<
+    KeyhiveMemorySigner,
+    [u8; 32],
+    Vec<u8>,
+    MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+    NoListener,
+    rand::rngs::OsRng,
+    MemoryKeyhiveStorage,
+>;
 
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 const WASM_SHARD_COUNT: usize = 4;
@@ -134,11 +168,19 @@ type WasmSyncHandler = subduction_core::handler::sync::SyncHandler<
 type WasmEphemeralHandler = EphemeralHandler<Local, WasmUnifiedTransport, OpenEphemeralPolicy>;
 
 /// Composed handler that dispatches [`WireMessage`] variants to
-/// sync and ephemeral sub-handlers.
+/// sync, ephemeral, and (optionally) keyhive sub-handlers.
 #[cfg(feature = "ephemeral")]
 struct WasmComposedHandler {
     sync: alloc::sync::Arc<WasmSyncHandler>,
     ephemeral: alloc::sync::Arc<WasmEphemeralHandler>,
+
+    /// Keyhive sync manager, set once via [`WasmSubduction::enable_keyhive`].
+    ///
+    /// Wrapped in `async_lock::OnceCell` so the handler remains `Sync`.
+    /// Initialized by [`WasmSubduction::enable_keyhive`]; reads are
+    /// lock-free after initialization (`OnceCell::get` is non-blocking).
+    #[cfg(feature = "keyhive")]
+    keyhive: async_lock::OnceCell<alloc::sync::Arc<WasmKeyhiveSyncManager>>,
 }
 
 #[cfg(feature = "ephemeral")]
@@ -187,8 +229,21 @@ impl subduction_core::handler::Handler<Local, WasmUnifiedTransport> for WasmComp
                 )
                 .await
                 .map_err(convert_ephemeral_error),
+                #[cfg(feature = "keyhive")]
+                WireMessage::Keyhive(wire_bytes) => {
+                    if let Some(keyhive) = self.keyhive.get() {
+                        handle_keyhive_inbound(keyhive, conn, wire_bytes).await
+                    } else {
+                        tracing::warn!(
+                            "received keyhive message but enableKeyhive() has not been called"
+                        );
+                        Ok(())
+                    }
+                }
+
+                #[cfg(not(feature = "keyhive"))]
                 WireMessage::Keyhive(_) => {
-                    tracing::warn!("received keyhive message but no keyhive handler configured");
+                    tracing::warn!("received keyhive message but keyhive feature not enabled");
                     Ok(())
                 }
             }
@@ -208,6 +263,12 @@ impl subduction_core::handler::Handler<Local, WasmUnifiedTransport> for WasmComp
                 peer,
             )
             .await;
+
+            #[cfg(feature = "keyhive")]
+            if let Some(keyhive) = self.keyhive.get() {
+                keyhive.remove_peer(peer.as_bytes()).await;
+                tracing::debug!(peer = %peer, "removed keyhive peer mapping on disconnect");
+            }
         }
         .boxed_local()
     }
@@ -258,6 +319,78 @@ fn convert_ephemeral_error(
 }
 
 // ---------------------------------------------------------------------------
+// Keyhive inbound handler (Local — no relay needed)
+// ---------------------------------------------------------------------------
+
+/// Handle an inbound keyhive message on the Wasm `Local` executor.
+///
+/// Resolves the peer's keyhive ID, creates a collecting send function,
+/// delegates to [`KeyhiveSyncManager::handle_inbound`], and sends all
+/// outbound responses back through the connection.
+#[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+async fn handle_keyhive_inbound(
+    sync_manager: &WasmKeyhiveSyncManager,
+    conn: &subduction_core::connection::authenticated::Authenticated<WasmUnifiedTransport, Local>,
+    wire_bytes: Vec<u8>,
+) -> Result<(), WasmListenError> {
+    use subduction_core::{
+        connection::Connection,
+        subduction::error::{IoError, ListenError},
+    };
+
+    let peer_id = conn.peer_id();
+
+    // Resolve or auto-register the keyhive peer ID
+    let from_keyhive_id =
+        if let Some(khid) = sync_manager.keyhive_peer_id_for(peer_id.as_bytes()).await {
+            khid
+        } else {
+            let khid = KeyhivePeerId::from_bytes(*peer_id.as_bytes());
+            tracing::debug!(peer = %peer_id, "auto-registering keyhive peer mapping");
+            sync_manager
+                .register_peer(*peer_id.as_bytes(), khid.clone())
+                .await;
+            khid
+        };
+
+    // Collecting send function: accumulates outbound bytes in a RefCell.
+    let outbound: core::cell::RefCell<Vec<Vec<u8>>> = core::cell::RefCell::new(Vec::new());
+
+    let send_fn = |bytes: Vec<u8>| {
+        outbound.borrow_mut().push(bytes);
+        async { Ok::<(), WasmKeyhiveCollectError>(()) }
+    };
+
+    sync_manager
+        .handle_inbound(&from_keyhive_id, wire_bytes, send_fn)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "keyhive sync error");
+            ListenError::TrySendError
+        })?;
+
+    // Send collected outbound messages through the connection
+    for response_bytes in outbound.into_inner() {
+        let msg = WireMessage::Keyhive(response_bytes);
+        Connection::<Local, WireMessage>::send(conn.inner(), &msg)
+            .await
+            .map_err(IoError::ConnSend)
+            .map_err(ListenError::IoError)?;
+    }
+
+    Ok(())
+}
+
+/// Error type for the collecting send function.
+///
+/// The collecting send function never actually fails (it just pushes to
+/// a `Vec`), but `AsyncSendFn` requires an error type.
+#[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("collecting send (unreachable)")]
+struct WasmKeyhiveCollectError;
+
+// ---------------------------------------------------------------------------
 // WasmSubduction
 // ---------------------------------------------------------------------------
 
@@ -288,6 +421,11 @@ pub struct WasmSubduction {
     /// Receiver for inbound ephemeral events from peers.
     #[cfg(feature = "ephemeral")]
     ephemeral_rx: async_channel::Receiver<EphemeralEvent>,
+
+    /// Reference to the composed handler, for setting the keyhive sync
+    /// manager via [`enable_keyhive()`](WasmSubduction::enable_keyhive).
+    #[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+    handler: Arc<WasmComposedHandler>,
 }
 
 impl core::fmt::Debug for WasmSubduction {
@@ -360,23 +498,34 @@ impl WasmSubduction {
 
         #[cfg(feature = "ephemeral")]
         {
-            let (core, ephemeral_handler, ephemeral_rx, listener_fut, manager_fut) =
-                build_ephemeral(
-                    signer,
-                    storage,
-                    discovery_id,
-                    depth_metric,
-                    max_pending,
-                    None,
-                );
+            let (
+                core,
+                composed_handler,
+                ephemeral_handler,
+                ephemeral_rx,
+                listener_fut,
+                manager_fut,
+            ) = build_ephemeral(
+                signer,
+                storage,
+                discovery_id,
+                depth_metric,
+                max_pending,
+                None,
+            );
 
             spawn_subduction_tasks(listener_fut, manager_fut);
+
+            #[cfg(not(feature = "keyhive"))]
+            drop(composed_handler);
 
             Self {
                 core,
                 js_storage,
                 ephemeral_handler,
                 ephemeral_rx,
+                #[cfg(feature = "keyhive")]
+                handler: composed_handler,
             }
         }
     }
@@ -480,23 +629,34 @@ impl WasmSubduction {
 
         #[cfg(feature = "ephemeral")]
         {
-            let (core, ephemeral_handler, ephemeral_rx, listener_fut, manager_fut) =
-                build_ephemeral(
-                    signer,
-                    storage,
-                    discovery_id,
-                    depth_metric,
-                    max_pending,
-                    Some(sedimentrees),
-                );
+            let (
+                core,
+                composed_handler,
+                ephemeral_handler,
+                ephemeral_rx,
+                listener_fut,
+                manager_fut,
+            ) = build_ephemeral(
+                signer,
+                storage,
+                discovery_id,
+                depth_metric,
+                max_pending,
+                Some(sedimentrees),
+            );
 
             spawn_subduction_tasks(listener_fut, manager_fut);
+
+            #[cfg(not(feature = "keyhive"))]
+            drop(composed_handler);
 
             Ok(Self {
                 core,
                 js_storage,
                 ephemeral_handler,
                 ephemeral_rx,
+                #[cfg(feature = "keyhive")]
+                handler: composed_handler,
             })
         }
     }
@@ -1093,6 +1253,66 @@ impl WasmSubduction {
             .publish(id.clone().into(), payload.to_vec())
             .await;
     }
+
+    /// Initialize keyhive and wire it into the composed handler.
+    ///
+    /// Generates a new keyhive identity with an in-memory ciphertext store
+    /// and in-memory keyhive storage. Must be called _once_ before keyhive
+    /// messages can be processed. Subsequent calls are no-ops.
+    ///
+    /// Returns the keyhive peer ID (raw bytes) for this node.
+    ///
+    /// Requires both the `ephemeral` and `keyhive` features.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if keyhive generation fails.
+    #[cfg(all(feature = "ephemeral", feature = "keyhive"))]
+    #[wasm_bindgen(js_name = enableKeyhive)]
+    pub async fn enable_keyhive(&self) -> Result<Uint8Array, JsValue> {
+        use async_lock::Mutex;
+
+        // If already initialized, return the existing peer ID
+        if let Some(mgr) = self.handler.keyhive.get() {
+            let id_bytes = mgr.peer_id().verifying_key();
+            return Ok(Uint8Array::from(id_bytes.as_slice()));
+        }
+
+        let mut csprng = rand::rngs::OsRng;
+        let signer = KeyhiveMemorySigner::generate(&mut csprng);
+        let keyhive =
+            WasmKeyhive::generate(signer, MemoryCiphertextStore::new(), NoListener, csprng)
+                .await
+                .map_err(|e| {
+                    JsValue::from_str(&alloc::format!("keyhive generation failed: {e}"))
+                })?;
+
+        let id: keyhive_core::principal::identifier::Identifier = keyhive.id().into();
+        let peer_id = KeyhivePeerId::from_bytes(id.to_bytes());
+
+        let contact_card = keyhive
+            .contact_card()
+            .await
+            .map_err(|e| JsValue::from_str(&alloc::format!("contact card failed: {e}")))?;
+        let mut cc_buf = Vec::new();
+        ciborium::into_writer(&contact_card, &mut cc_buf)
+            .map_err(|e| JsValue::from_str(&alloc::format!("contact card CBOR failed: {e}")))?;
+
+        let storage = MemoryKeyhiveStorage::new();
+        let keyhive = Arc::new(Mutex::new(keyhive));
+        let sync_manager = Arc::new(WasmKeyhiveSyncManager::new(
+            keyhive,
+            storage,
+            peer_id.clone(),
+            cc_buf,
+        ));
+
+        // Set the OnceCell; if another call raced us, ignore the error
+        drop(self.handler.keyhive.set(sync_manager).await);
+
+        let id_bytes = peer_id.verifying_key();
+        Ok(Uint8Array::from(id_bytes.as_slice()))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1145,8 +1365,8 @@ where
 /// Build a [`Subduction`] instance wired up with a [`ComposedHandler`]
 /// that routes sync and ephemeral traffic.
 ///
-/// Returns the core, ephemeral handler, ephemeral event receiver, and the
-/// two background task futures.
+/// Returns the core, composed handler, ephemeral handler, ephemeral event
+/// receiver, and the two background task futures.
 #[cfg(feature = "ephemeral")]
 #[allow(clippy::type_complexity)]
 fn build_ephemeral(
@@ -1158,6 +1378,7 @@ fn build_ephemeral(
     sedimentrees: Option<Arc<ShardedMap<SedimentreeId, Sedimentree, WASM_SHARD_COUNT>>>,
 ) -> (
     Arc<WasmSubductionCore>,
+    Arc<WasmComposedHandler>,
     Arc<WasmEphemeralHandler>,
     async_channel::Receiver<EphemeralEvent>,
     subduction_core::subduction::ListenerFuture<
@@ -1215,12 +1436,14 @@ fn build_ephemeral(
     let handler = Arc::new(WasmComposedHandler {
         sync: sync_handler,
         ephemeral: ephemeral_handler.clone(),
+        #[cfg(feature = "keyhive")]
+        keyhive: async_lock::OnceCell::new(),
     });
 
     // Build Subduction manually (same as build_with_handler, but we
     // constructed the connections map ourselves so both handlers share it).
     let (core, listener_fut, manager_fut) = Subduction::new(
-        handler,
+        handler.clone(),
         discovery_id,
         signer,
         sedimentrees,
@@ -1235,6 +1458,7 @@ fn build_ephemeral(
 
     (
         core,
+        handler,
         ephemeral_handler,
         ephemeral_rx,
         listener_fut,

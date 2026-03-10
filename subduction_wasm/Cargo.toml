@@ -21,23 +21,27 @@ crate-type = ["cdylib", "rlib"]
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 base58 = { workspace = true }
-ed25519-dalek = { workspace = true }
+ciborium = { workspace = true, optional = true }
 console_error_panic_hook = { workspace = true, optional = true }
+ed25519-dalek = { workspace = true }
 from_js_ref = { workspace = true }
-futures = { workspace = true }
 future_form = { workspace = true }
+futures = { workspace = true }
+futures-timer = { workspace = true }
 futures-util = { workspace = true }
 getrandom = { workspace = true, features = ["js"] }
 js-sys = { workspace = true }
+keyhive_core = { workspace = true, optional = true }
+nonempty = { workspace = true }
 rand = { workspace = true }
 sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
 subduction_ephemeral = { workspace = true, optional = true }
-futures-timer = { workspace = true }
-nonempty = { workspace = true }
 subduction_http_longpoll = { workspace = true, default-features = false }
+subduction_keyhive = { workspace = true, features = ["serde"], optional = true }
+subduction_keyhive_policy = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 wasm-bindgen = { workspace = true }
@@ -85,6 +89,7 @@ wasm-bindgen-test = "0.2"
 default = ["console_error_panic_hook", "ephemeral", "standalone"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
 ephemeral = ["dep:subduction_ephemeral"]
+keyhive = ["dep:ciborium", "dep:keyhive_core", "dep:subduction_keyhive", "dep:subduction_keyhive_policy"]
 # Enable the #[wasm_bindgen(start)] entry point. Disable when using
 # subduction_wasm as a dependency of another cdylib crate that defines
 # its own start function (wasm-bindgen allows only one per module).
