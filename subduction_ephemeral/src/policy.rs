@@ -28,6 +28,11 @@
 //!
 //! [`StoragePolicy`]: subduction_core::policy::storage::StoragePolicy
 
+#[cfg(feature = "keyhive")]
+pub mod keyhive;
+#[cfg(feature = "keyhive")]
+pub mod keyhive_actor;
+
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
