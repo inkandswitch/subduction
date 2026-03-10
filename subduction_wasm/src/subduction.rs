@@ -74,12 +74,13 @@ use futures::{
 
 #[cfg(feature = "ephemeral")]
 use subduction_ephemeral::{
-    composed::{ComposedError, ComposedHandler},
     config::{EphemeralConfig, EphemeralEvent},
     handler::{EphemeralHandler, EphemeralHandlerError},
     policy::OpenEphemeralPolicy,
-    wire::WireMessage,
 };
+
+#[cfg(feature = "ephemeral")]
+use crate::wire::WireMessage;
 
 /// Number of shards for the sedimentree map in Wasm (smaller for client-side).
 const WASM_SHARD_COUNT: usize = 4;
@@ -132,16 +133,12 @@ type WasmSyncHandler = subduction_core::handler::sync::SyncHandler<
 #[cfg(feature = "ephemeral")]
 type WasmEphemeralHandler = EphemeralHandler<Local, WasmUnifiedTransport, OpenEphemeralPolicy>;
 
-/// Thin handler wrapper that delegates to [`ComposedHandler`] and
-/// converts its [`ComposedError`] into [`ListenError<..., WireMessage>`].
-///
-/// This is necessary because of the orphan rule: we cannot implement
-/// `Into<ListenError<..., WireMessage>>` for `ComposedError<..., ...>`
-/// from either `subduction_core` or `subduction_ephemeral`, so we
-/// produce the correct `HandlerError` type directly.
+/// Composed handler that dispatches [`WireMessage`] variants to
+/// sync and ephemeral sub-handlers.
 #[cfg(feature = "ephemeral")]
 struct WasmComposedHandler {
-    inner: ComposedHandler<WasmSyncHandler, WasmEphemeralHandler>,
+    sync: alloc::sync::Arc<WasmSyncHandler>,
+    ephemeral: alloc::sync::Arc<WasmEphemeralHandler>,
 }
 
 #[cfg(feature = "ephemeral")]
@@ -174,47 +171,45 @@ impl subduction_core::handler::Handler<Local, WasmUnifiedTransport> for WasmComp
         >,
         message: WireMessage,
     ) -> LocalBoxFuture<'a, Result<(), Self::HandlerError>> {
-        let fut = subduction_core::handler::Handler::<Local, WasmUnifiedTransport>::handle(
-            &self.inner,
-            conn,
-            message,
-        );
-        async move { fut.await.map_err(convert_composed_error) }.boxed_local()
+        async move {
+            match message {
+                WireMessage::Sync(m) => subduction_core::handler::Handler::<
+                    Local,
+                    WasmUnifiedTransport,
+                >::handle(self.sync.as_ref(), conn, *m)
+                .await
+                .map_err(convert_sync_listen_error),
+                WireMessage::Ephemeral(m) => subduction_core::handler::Handler::<
+                    Local,
+                    WasmUnifiedTransport,
+                >::handle(
+                    self.ephemeral.as_ref(), conn, m
+                )
+                .await
+                .map_err(convert_ephemeral_error),
+                WireMessage::Keyhive(_) => {
+                    tracing::warn!("received keyhive message but no keyhive handler configured");
+                    Ok(())
+                }
+            }
+        }
+        .boxed_local()
     }
 
     fn on_peer_disconnect(&self, peer: PeerId) -> LocalBoxFuture<'_, ()> {
-        subduction_core::handler::Handler::<Local, WasmUnifiedTransport>::on_peer_disconnect(
-            &self.inner,
-            peer,
-        )
-    }
-}
-
-/// Convert a [`ComposedError`] into a [`ListenError<..., WireMessage>`].
-///
-/// This is possible because all three `Connection<Local, *>` impls on
-/// [`WasmUnifiedTransport`] share the same concrete error types.
-#[cfg(feature = "ephemeral")]
-#[allow(clippy::type_complexity)]
-fn convert_composed_error(
-    err: ComposedError<
-        subduction_core::subduction::error::ListenError<
-            Local,
-            JsStorage,
-            WasmUnifiedTransport,
-            SyncMessage,
-        >,
-        EphemeralHandlerError<
-            <WasmUnifiedTransport as subduction_core::connection::Connection<
-                Local,
-                subduction_ephemeral::message::EphemeralMessage,
-            >>::SendError,
-        >,
-    >,
-) -> WasmListenError {
-    match err {
-        ComposedError::Sync(listen_err) => convert_sync_listen_error(listen_err),
-        ComposedError::Ephemeral(eph_err) => convert_ephemeral_error(eph_err),
+        async move {
+            subduction_core::handler::Handler::<Local, WasmUnifiedTransport>::on_peer_disconnect(
+                self.sync.as_ref(),
+                peer,
+            )
+            .await;
+            subduction_core::handler::Handler::<Local, WasmUnifiedTransport>::on_peer_disconnect(
+                self.ephemeral.as_ref(),
+                peer,
+            )
+            .await;
+        }
+        .boxed_local()
     }
 }
 
@@ -1217,8 +1212,10 @@ fn build_ephemeral(
     let ephemeral_handler = Arc::new(ephemeral_handler);
 
     // Compose into a single handler
-    let composed = ComposedHandler::new(sync_handler, ephemeral_handler.clone());
-    let handler = Arc::new(WasmComposedHandler { inner: composed });
+    let handler = Arc::new(WasmComposedHandler {
+        sync: sync_handler,
+        ephemeral: ephemeral_handler.clone(),
+    });
 
     // Build Subduction manually (same as build_with_handler, but we
     // constructed the connections map ourselves so both handlers share it).

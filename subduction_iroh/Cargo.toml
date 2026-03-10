@@ -23,7 +23,6 @@ rand = { workspace = true, features = ["getrandom"] }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true }
-subduction_ephemeral = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -42,7 +41,6 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"]
 
 [features]
 default = ["server"]
-ephemeral = ["dep:subduction_ephemeral"]
 server = []
 
 [lints]

@@ -299,8 +299,8 @@ impl<H, O> HttpLongPollClient<H, O> {
     /// Connect to the server with a known peer ID, using a custom channel
     /// message type.
     ///
-    /// Use this with `M = WireMessage` (from `subduction_ephemeral`) to
-    /// multiplex sync and ephemeral traffic on the same connection.
+    /// Use this with a custom wire message type to multiplex multiple
+    /// message protocols on the same connection.
     ///
     /// # Errors
     ///

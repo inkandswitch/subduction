@@ -41,3 +41,5 @@ pub mod peer_id;
 pub mod signer;
 pub mod subduction;
 pub mod sync_stats;
+#[cfg(feature = "ephemeral")]
+pub mod wire;

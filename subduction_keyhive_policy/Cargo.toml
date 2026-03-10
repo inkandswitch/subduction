@@ -12,6 +12,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+async-lock = { workspace = true }
 ed25519-dalek = { workspace = true }
 future_form = { workspace = true }
 futures = { workspace = true }
@@ -21,7 +22,9 @@ sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true, features = ["derive"] }
 subduction_core = { workspace = true, default-features = false }
 subduction_ephemeral = { workspace = true, default-features = false }
+subduction_keyhive = { path = "../subduction_keyhive", default-features = false, features = ["serde"] }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 

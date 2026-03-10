@@ -15,6 +15,8 @@ use core::{
 };
 use sedimentree_core::collections::Map;
 
+#[cfg(feature = "ephemeral")]
+use crate::wire::WireMessage;
 use async_lock::Mutex;
 use future_form::Local;
 use futures::{
@@ -33,7 +35,7 @@ use subduction_core::{
 };
 use subduction_crypto::nonce::Nonce;
 #[cfg(feature = "ephemeral")]
-use subduction_ephemeral::{message::EphemeralMessage, wire::WireMessage};
+use subduction_ephemeral::message::EphemeralMessage;
 use thiserror::Error;
 
 /// The message type carried by the internal inbound channel.

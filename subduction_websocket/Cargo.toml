@@ -26,7 +26,6 @@ rand = { workspace = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
-subduction_ephemeral = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, optional = true, features = ["time"] }
 tokio-util = { workspace = true, optional = true }
@@ -52,7 +51,6 @@ harness = false
 
 [features]
 default = ["std"]
-ephemeral = ["dep:subduction_ephemeral"]
 futures-timer = ["std", "dep:futures-timer"]
 std = [
   "async-channel/std",

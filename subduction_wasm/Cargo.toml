@@ -84,7 +84,7 @@ wasm-bindgen-test = "0.2"
 [features]
 default = ["console_error_panic_hook", "ephemeral", "standalone"]
 console_error_panic_hook = ["dep:console_error_panic_hook"]
-ephemeral = ["dep:subduction_ephemeral", "subduction_http_longpoll/ephemeral"]
+ephemeral = ["dep:subduction_ephemeral"]
 # Enable the #[wasm_bindgen(start)] entry point. Disable when using
 # subduction_wasm as a dependency of another cdylib crate that defines
 # its own start function (wasm-bindgen allows only one per module).

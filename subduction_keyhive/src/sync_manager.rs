@@ -48,9 +48,6 @@ use crate::{
     wire::KeyhiveMessage,
 };
 
-/// Shared keyhive instance behind a mutex.
-type SharedKeyhive<Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<Signer, T, P, C, L, R>>>;
-
 /// Keyhive sync manager.
 ///
 /// Bridges keyhive's operation sync protocol with subduction's transport.
@@ -63,6 +60,7 @@ type SharedKeyhive<Signer, T, P, C, L, R> = Arc<Mutex<Keyhive<Signer, T, P, C, L
 /// The application retains its own `Arc<Mutex<Keyhive>>` clone for direct
 /// keyhive mutations (create groups, add members, etc.). The sync manager
 /// holds another clone for peer reconciliation and policy checks.
+#[allow(clippy::type_complexity)]
 pub struct KeyhiveSyncManager<Signer, T, P, C, L, R, Store>
 where
     Signer: AsyncSigner + Clone,
@@ -73,7 +71,7 @@ where
     R: rand::CryptoRng + rand::RngCore,
     Store: KeyhiveStorage<Local>,
 {
-    keyhive: SharedKeyhive<Signer, T, P, C, L, R>,
+    keyhive: Arc<Mutex<Keyhive<Signer, T, P, C, L, R>>>,
     storage: Store,
     peer_id: KeyhivePeerId,
     contact_card_bytes: Vec<u8>,
@@ -116,8 +114,9 @@ where
     ///
     /// The caller retains their own `Arc<Mutex<Keyhive>>` clone for direct
     /// keyhive mutations.
+    #[allow(clippy::type_complexity)]
     pub fn new(
-        keyhive: SharedKeyhive<Signer, T, P, C, L, R>,
+        keyhive: Arc<Mutex<Keyhive<Signer, T, P, C, L, R>>>,
         storage: Store,
         peer_id: KeyhivePeerId,
         contact_card_bytes: Vec<u8>,
@@ -139,7 +138,8 @@ where
 
     /// A reference to the shared keyhive instance.
     #[must_use]
-    pub const fn keyhive(&self) -> &SharedKeyhive<Signer, T, P, C, L, R> {
+    #[allow(clippy::type_complexity)]
+    pub const fn keyhive(&self) -> &Arc<Mutex<Keyhive<Signer, T, P, C, L, R>>> {
         &self.keyhive
     }
 

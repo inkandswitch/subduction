@@ -6,6 +6,8 @@
 use core::time::Duration;
 
 use super::{longpoll::WasmLongPollConnection, websocket::WasmWebSocket};
+#[cfg(feature = "ephemeral")]
+use crate::wire::WireMessage;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use subduction_core::{
@@ -16,7 +18,7 @@ use subduction_core::{
     peer::id::PeerId,
 };
 #[cfg(feature = "ephemeral")]
-use subduction_ephemeral::{message::EphemeralMessage, wire::WireMessage};
+use subduction_ephemeral::message::EphemeralMessage;
 
 /// A unified connection covering both WebSocket and HTTP long-poll transports.
 #[derive(Debug, Clone)]
@@ -50,6 +52,11 @@ pub enum TransportSendError {
     /// HTTP long-poll send error.
     #[error(transparent)]
     LongPoll(#[from] subduction_http_longpoll::error::SendError),
+
+    /// HTTP long-poll send error (raw channel).
+    #[cfg(feature = "ephemeral")]
+    #[error(transparent)]
+    LongPollChannel(#[from] super::longpoll::ephemeral_conn_impls::LongPollSendError),
 }
 
 /// Error type for recv operations across transports.
@@ -62,6 +69,11 @@ pub enum TransportRecvError {
     /// HTTP long-poll recv error.
     #[error(transparent)]
     LongPoll(#[from] subduction_http_longpoll::error::RecvError),
+
+    /// HTTP long-poll recv error (raw channel).
+    #[cfg(feature = "ephemeral")]
+    #[error(transparent)]
+    LongPollChannel(#[from] super::longpoll::ephemeral_conn_impls::LongPollRecvError),
 }
 
 /// Error type for call operations across transports.
@@ -210,7 +222,7 @@ impl Connection<Local, EphemeralMessage> for WasmUnifiedTransport {
     fn peer_id(&self) -> PeerId {
         match self {
             Self::WebSocket(ws) => Connection::<Local, EphemeralMessage>::peer_id(ws),
-            Self::LongPoll(lp) => Connection::<Local, EphemeralMessage>::peer_id(lp),
+            Self::LongPoll(lp) => Connection::<Local, SyncMessage>::peer_id(lp),
         }
     }
 
@@ -222,7 +234,7 @@ impl Connection<Local, EphemeralMessage> for WasmUnifiedTransport {
                     .boxed_local()
             }
             Self::LongPoll(lp) => {
-                let fut = Connection::<Local, EphemeralMessage>::disconnect(lp);
+                let fut = Connection::<Local, SyncMessage>::disconnect(lp);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
         }
@@ -235,8 +247,14 @@ impl Connection<Local, EphemeralMessage> for WasmUnifiedTransport {
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
             Self::LongPoll(lp) => {
-                let fut = Connection::<Local, EphemeralMessage>::send(lp, message);
-                async move { fut.await.map_err(Into::into) }.boxed_local()
+                // Wrap ephemeral message in WireMessage for the longpoll channel.
+                let wire_msg = WireMessage::Ephemeral(message.clone());
+                async move {
+                    lp.push_outbound(wire_msg).await.map_err(|_| {
+                        super::longpoll::ephemeral_conn_impls::LongPollSendError.into()
+                    })
+                }
+                .boxed_local()
             }
         }
     }
@@ -248,8 +266,24 @@ impl Connection<Local, EphemeralMessage> for WasmUnifiedTransport {
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
             Self::LongPoll(lp) => {
-                let fut = Connection::<Local, EphemeralMessage>::recv(lp);
-                async move { fut.await.map_err(Into::into) }.boxed_local()
+                // Read from the longpoll channel and filter for ephemeral messages.
+                async move {
+                    loop {
+                        let wire = lp.recv_inbound().await.map_err(|_| {
+                            TransportRecvError::LongPollChannel(
+                                super::longpoll::ephemeral_conn_impls::LongPollRecvError,
+                            )
+                        })?;
+
+                        if let WireMessage::Ephemeral(msg) = wire {
+                            return Ok(msg);
+                        }
+                        tracing::trace!(
+                            "recv<EphemeralMessage>: skipping non-ephemeral longpoll message"
+                        );
+                    }
+                }
+                .boxed_local()
             }
         }
     }

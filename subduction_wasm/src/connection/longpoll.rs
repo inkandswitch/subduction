@@ -60,11 +60,11 @@ impl Timeout<Local> for FuturesTimerTimeout {
 /// Type alias for the long-poll connection used in wasm.
 ///
 /// When `ephemeral` is enabled, the channel message type is
-/// [`WireMessage`](subduction_ephemeral::wire::WireMessage) so that both
-/// sync and ephemeral traffic can flow through the connection.
+/// [`WireMessage`](crate::wire::WireMessage) so that both sync and
+/// ephemeral traffic can flow through the connection.
 #[cfg(feature = "ephemeral")]
 pub type WasmLongPollConnection =
-    HttpLongPollConnection<FuturesTimerTimeout, subduction_ephemeral::wire::WireMessage>;
+    HttpLongPollConnection<FuturesTimerTimeout, crate::wire::WireMessage>;
 
 /// Type alias for the long-poll connection used in wasm (sync-only).
 #[cfg(not(feature = "ephemeral"))]
@@ -263,11 +263,11 @@ async fn cfg_connect(
     signer: &JsSigner,
     expected_peer_id: &WasmPeerId,
 ) -> Result<
-    ConnectResult<Local, FuturesTimerTimeout, subduction_ephemeral::wire::WireMessage>,
+    ConnectResult<Local, FuturesTimerTimeout, crate::wire::WireMessage>,
     LongPollConnectionError,
 > {
     client
-        .connect_typed::<Local, _, subduction_ephemeral::wire::WireMessage>(
+        .connect_typed::<Local, _, crate::wire::WireMessage>(
             signer,
             expected_peer_id.clone().into(),
             js_now(),
@@ -294,11 +294,11 @@ async fn cfg_connect_discover(
     signer: &JsSigner,
     service_name: &str,
 ) -> Result<
-    ConnectResult<Local, FuturesTimerTimeout, subduction_ephemeral::wire::WireMessage>,
+    ConnectResult<Local, FuturesTimerTimeout, crate::wire::WireMessage>,
     LongPollConnectionError,
 > {
     client
-        .connect_discover_typed::<Local, _, subduction_ephemeral::wire::WireMessage>(
+        .connect_discover_typed::<Local, _, crate::wire::WireMessage>(
             signer,
             service_name,
             js_now(),
@@ -448,5 +448,56 @@ impl From<LongPollConnectionError> for JsValue {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("LongPollConnectionError");
         js_err.into()
+    }
+}
+
+// ── Ephemeral Connection impls (feature-gated) ─────────────────────────
+//
+// When the `ephemeral` feature is enabled, `WasmLongPollConnection` is
+// `HttpLongPollConnection<FuturesTimerTimeout, WireMessage>`. The longpoll
+// crate only provides `Connection<K, SyncMessage>` (wrapping/unwrapping
+// through `ChannelMessage`). These impls add `Connection<Local, WireMessage>`
+// and `Connection<Local, EphemeralMessage>` using the raw channel accessors.
+
+#[cfg(feature = "ephemeral")]
+pub(crate) mod ephemeral_conn_impls {
+    use super::{Connection, Local, SyncMessage, WasmLongPollConnection};
+    use crate::wire::WireMessage;
+    use futures::{FutureExt, future::LocalBoxFuture};
+    use subduction_core::peer::id::PeerId;
+    use thiserror::Error;
+
+    /// Send error for ephemeral long-poll operations.
+    #[derive(Debug, Clone, Copy, Error)]
+    #[error("long-poll send failed: channel closed")]
+    pub struct LongPollSendError;
+
+    /// Recv error for ephemeral long-poll operations.
+    #[derive(Debug, Clone, Copy, Error)]
+    #[error("long-poll recv failed: channel closed")]
+    pub struct LongPollRecvError;
+
+    impl Connection<Local, WireMessage> for WasmLongPollConnection {
+        type SendError = LongPollSendError;
+        type RecvError = LongPollRecvError;
+        type DisconnectionError = subduction_http_longpoll::error::DisconnectionError;
+
+        fn peer_id(&self) -> PeerId {
+            Connection::<Local, SyncMessage>::peer_id(self)
+        }
+
+        fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+            Connection::<Local, SyncMessage>::disconnect(self)
+        }
+
+        fn send(&self, message: &WireMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+            let msg = message.clone();
+            async move { self.push_outbound(msg).await.map_err(|_| LongPollSendError) }
+                .boxed_local()
+        }
+
+        fn recv(&self) -> LocalBoxFuture<'_, Result<WireMessage, Self::RecvError>> {
+            async move { self.recv_inbound().await.map_err(|_| LongPollRecvError) }.boxed_local()
+        }
     }
 }

@@ -1,9 +1,18 @@
-//! Keyhive-based authorization policy for Subduction connections.
+//! Keyhive-based authorization policy and handler for Subduction.
 //!
 //! Implements [`ConnectionPolicy`], [`StoragePolicy`], and [`EphemeralPolicy`]
 //! by checking keyhive membership and access levels.
+//!
+//! Also provides [`KeyhiveHandler`], which bridges the [`Handler`] trait to
+//! [`KeyhiveSyncManager`] for receiving keyhive messages through the
+//! composed handler.
+//!
+//! [`Handler`]: subduction_core::handler::Handler
+//! [`KeyhiveSyncManager`]: subduction_keyhive::KeyhiveSyncManager
 
 extern crate alloc;
+
+pub mod handler;
 
 use alloc::vec::Vec;
 

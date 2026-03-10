@@ -50,8 +50,8 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// Trait for message types that can carry [`SyncMessage`] over the internal
 /// channels.
 ///
-/// Implemented for [`SyncMessage`] (identity) and, with the `ephemeral`
-/// feature, for [`WireMessage`](subduction_ephemeral::wire::WireMessage).
+/// Implemented for [`SyncMessage`] (identity). Application code can
+/// implement this for its own wire envelope types.
 pub trait ChannelMessage:
     Clone
     + Debug
@@ -95,36 +95,6 @@ impl ChannelMessage for SyncMessage {
 
     fn into_sync(self) -> Option<SyncMessage> {
         Some(self)
-    }
-}
-
-#[cfg(feature = "ephemeral")]
-impl ChannelMessage for subduction_ephemeral::wire::WireMessage {
-    fn wrap_sync(msg: SyncMessage) -> Self {
-        Self::Sync(alloc::boxed::Box::new(msg))
-    }
-
-    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
-        match self {
-            Self::Sync(sync_msg) => match sync_msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                SyncMessage::LooseCommit { .. }
-                | SyncMessage::Fragment { .. }
-                | SyncMessage::BlobsRequest { .. }
-                | SyncMessage::BlobsResponse { .. }
-                | SyncMessage::BatchSyncRequest(_)
-                | SyncMessage::RemoveSubscriptions(_)
-                | SyncMessage::DataRequestRejected(_) => None,
-            },
-            Self::Ephemeral(_) | Self::Keyhive(_) => None,
-        }
-    }
-
-    fn into_sync(self) -> Option<SyncMessage> {
-        match self {
-            Self::Sync(msg) => Some(*msg),
-            Self::Ephemeral(_) | Self::Keyhive(_) => None,
-        }
     }
 }
 
@@ -244,6 +214,32 @@ impl<O, M: ChannelMessage> HttpLongPollConnection<O, M> {
     /// Returns an error if the outbound channel is closed.
     pub async fn pull_outbound(&self) -> Result<M, async_channel::RecvError> {
         self.outbound_rx.recv().await
+    }
+
+    /// Push a message directly into the outbound channel.
+    ///
+    /// This bypasses the `Connection<K, SyncMessage>::send` wrapping and lets
+    /// callers send any `M` (e.g., a composed wire message) directly. Used by
+    /// application-level `Connection<Local, M>` impls.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the outbound channel is full or closed.
+    pub async fn push_outbound(&self, msg: M) -> Result<(), async_channel::SendError<M>> {
+        self.inner.outbound_tx.send(msg).await
+    }
+
+    /// Receive the next message directly from the inbound channel.
+    ///
+    /// This bypasses the `Connection<K, SyncMessage>::recv` unwrapping and
+    /// returns the raw `M` value. Used by application-level `Connection<Local,
+    /// M>` impls that need the full envelope (e.g., `WireMessage`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the inbound channel is closed.
+    pub async fn recv_inbound(&self) -> Result<M, async_channel::RecvError> {
+        self.inner.inbound_reader.recv().await
     }
 
     /// Close the connection's channels and cancel background tasks.
@@ -384,108 +380,6 @@ impl<K: FutureForm, O: Timeout<K>, M> Roundtrip<K, BatchSyncRequest, BatchSyncRe
                 }
             }
         })
-    }
-}
-
-// ── Ephemeral Connection impls ──────────────────────────────────────────
-
-#[cfg(feature = "ephemeral")]
-#[allow(clippy::wildcard_imports)]
-mod ephemeral_impls {
-    use super::*;
-    use subduction_ephemeral::{message::EphemeralMessage, wire::WireMessage};
-
-    #[future_form(Sendable where O: Send + Sync, Local)]
-    impl<K: FutureForm, O: Timeout<K>> Connection<K, WireMessage>
-        for HttpLongPollConnection<O, WireMessage>
-    {
-        type SendError = SendError;
-        type RecvError = RecvError;
-        type DisconnectionError = DisconnectionError;
-
-        fn peer_id(&self) -> PeerId {
-            self.inner.peer_id
-        }
-
-        fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
-            tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll<WireMessage>::disconnect");
-            let conn = self.clone();
-            K::from_future(async move {
-                conn.close();
-                Ok(())
-            })
-        }
-
-        fn send(&self, message: &WireMessage) -> K::Future<'_, Result<(), Self::SendError>> {
-            let msg = message.clone();
-            let tx = self.inner.outbound_tx.clone();
-            K::from_future(async move {
-                tx.send(msg).await.map_err(|_| SendError)?;
-                Ok(())
-            })
-        }
-
-        fn recv(&self) -> K::Future<'_, Result<WireMessage, Self::RecvError>> {
-            let chan = self.inner.inbound_reader.clone();
-            K::from_future(async move {
-                chan.recv().await.map_err(|_| {
-                    tracing::error!("inbound channel closed unexpectedly");
-                    RecvError
-                })
-            })
-        }
-    }
-
-    #[future_form(Sendable where O: Send + Sync, Local)]
-    impl<K: FutureForm, O: Timeout<K>> Connection<K, EphemeralMessage>
-        for HttpLongPollConnection<O, WireMessage>
-    {
-        type SendError = SendError;
-        type RecvError = RecvError;
-        type DisconnectionError = DisconnectionError;
-
-        fn peer_id(&self) -> PeerId {
-            self.inner.peer_id
-        }
-
-        fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
-            tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll<EphemeralMessage>::disconnect");
-            let conn = self.clone();
-            K::from_future(async move {
-                conn.close();
-                Ok(())
-            })
-        }
-
-        fn send(&self, message: &EphemeralMessage) -> K::Future<'_, Result<(), Self::SendError>> {
-            let msg = WireMessage::Ephemeral(message.clone());
-            let tx = self.inner.outbound_tx.clone();
-            K::from_future(async move {
-                tx.send(msg).await.map_err(|_| SendError)?;
-                Ok(())
-            })
-        }
-
-        fn recv(&self) -> K::Future<'_, Result<EphemeralMessage, Self::RecvError>> {
-            let chan = self.inner.inbound_reader.clone();
-            K::from_future(async move {
-                loop {
-                    let wire = chan.recv().await.map_err(|_| {
-                        tracing::error!("inbound channel closed unexpectedly");
-                        RecvError
-                    })?;
-
-                    if let WireMessage::Ephemeral(msg) = wire {
-                        return Ok(msg);
-                    }
-
-                    // Skip non-ephemeral messages
-                    tracing::trace!(
-                        "recv<EphemeralMessage>: skipping non-ephemeral channel message"
-                    );
-                }
-            })
-        }
     }
 }
 

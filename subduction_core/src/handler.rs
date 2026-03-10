@@ -1,7 +1,7 @@
-//! `SyncMessage` handler trait for the Subduction sync protocol.
+//! Message handler trait for the Subduction sync protocol.
 //!
 //! The [`Handler`] trait decouples _what to do with a message_ from
-//! _how messages arrive_. It receives decoded messages from authenticated
+//! _how messages arrive_. It receives messages from authenticated
 //! peers and processes them, returning success or an error that signals
 //! the connection should be dropped.
 //!
@@ -11,11 +11,6 @@
 //! (storage, connections, subscriptions, etc.) via [`Arc`]s passed at
 //! construction time. The [`Subduction`] listen loop calls
 //! [`Handler::handle`] for each message received from the wire.
-//!
-//! The message type must implement [`Decode`] so that it can be
-//! deserialized from the wire. The handler only _receives_ decoded
-//! messages — encoding of outgoing responses is handled by
-//! [`Connection::send`].
 //!
 //! # Example
 //!
@@ -47,13 +42,11 @@
 //!
 //! [`Arc`]: alloc::sync::Arc
 //! [`Subduction`]: crate::subduction::Subduction
-//! [`Decode`]: sedimentree_core::codec::decode::Decode
 //! [`Connection::send`]: crate::connection::Connection::send
 
 pub mod sync;
 
 use future_form::FutureForm;
-use sedimentree_core::codec::decode::Decode;
 
 use crate::{connection::authenticated::Authenticated, peer::id::PeerId};
 
@@ -62,13 +55,6 @@ use crate::{connection::authenticated::Authenticated, peer::id::PeerId};
 /// Implementors define what to do when a message arrives on a connection.
 /// Any resources the handler needs (storage, sedimentrees, peer state, etc.)
 /// must be provided at construction time.
-///
-/// # Wire Compatibility
-///
-/// The message type [`M`](Handler::Message) must implement [`Decode`]
-/// so it can be deserialized from the wire. Encoding of outgoing
-/// responses is handled by the [`Connection`](crate::connection::Connection)
-/// layer, not the handler.
 ///
 /// # Error Semantics
 ///
@@ -87,9 +73,11 @@ use crate::{connection::authenticated::Authenticated, peer::id::PeerId};
 pub trait Handler<K: FutureForm, C: Clone> {
     /// The message type this handler processes.
     ///
-    /// Must support wire decoding. For the standard Subduction
-    /// protocol, this is [`SyncMessage`](crate::connection::message::SyncMessage).
-    type Message: Decode;
+    /// For the standard Subduction protocol, this is
+    /// [`SyncMessage`](crate::connection::message::SyncMessage).
+    /// Composed handlers typically use a wire envelope type (e.g.,
+    /// `WireMessage`) and dispatch to sub-handlers via pattern matching.
+    type Message;
 
     /// Error type returned by the handler.
     type HandlerError: core::error::Error;

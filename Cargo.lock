@@ -5094,7 +5094,6 @@ dependencies = [
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
- "subduction_ephemeral",
  "subduction_websocket",
  "testresult",
  "thiserror 2.0.18",
@@ -5118,7 +5117,6 @@ dependencies = [
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
- "subduction_ephemeral",
  "subduction_websocket",
  "testresult",
  "thiserror 2.0.18",
@@ -5153,6 +5151,7 @@ dependencies = [
 name = "subduction_keyhive_policy"
 version = "0.1.0"
 dependencies = [
+ "async-lock",
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures 0.3.32",
@@ -5162,7 +5161,9 @@ dependencies = [
  "serde",
  "subduction_core",
  "subduction_ephemeral",
+ "subduction_keyhive",
  "thiserror 2.0.18",
+ "tracing",
 ]
 
 [[package]]
@@ -5219,7 +5220,6 @@ dependencies = [
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
- "subduction_ephemeral",
  "testresult",
  "thiserror 2.0.18",
  "tokio",

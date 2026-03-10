@@ -28,7 +28,6 @@ reqwest = { workspace = true, optional = true }
 sedimentree_core = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
-subduction_ephemeral = { workspace = true, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
@@ -54,7 +53,6 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"]
 [features]
 default = ["std", "server", "reqwest", "rustls-tls"]
 bolero = []
-ephemeral = ["dep:subduction_ephemeral"]
 native-tls = ["reqwest", "reqwest/native-tls"]
 reqwest = ["dep:reqwest", "std"]
 rustls-tls = ["reqwest", "reqwest/rustls-tls"]

@@ -52,8 +52,8 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// Trait for message types that can carry [`SyncMessage`] over internal
 /// channels.
 ///
-/// Implemented for [`SyncMessage`] (identity) and, with the `ephemeral`
-/// feature, for [`WireMessage`](subduction_ephemeral::wire::WireMessage).
+/// Implemented for [`SyncMessage`] (identity). Application code can
+/// implement this for its own wire envelope types.
 pub trait ChannelMessage: Clone + Debug + Send + Sync + Encode + Decode + 'static {
     /// Wrap a [`SyncMessage`] into this channel type.
     fn wrap_sync(msg: SyncMessage) -> Self;
@@ -89,36 +89,6 @@ impl ChannelMessage for SyncMessage {
 
     fn into_sync(self) -> Option<SyncMessage> {
         Some(self)
-    }
-}
-
-#[cfg(feature = "ephemeral")]
-impl ChannelMessage for subduction_ephemeral::wire::WireMessage {
-    fn wrap_sync(msg: SyncMessage) -> Self {
-        Self::Sync(alloc::boxed::Box::new(msg))
-    }
-
-    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
-        match self {
-            Self::Sync(sync_msg) => match sync_msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                SyncMessage::LooseCommit { .. }
-                | SyncMessage::Fragment { .. }
-                | SyncMessage::BlobsRequest { .. }
-                | SyncMessage::BlobsResponse { .. }
-                | SyncMessage::BatchSyncRequest(_)
-                | SyncMessage::RemoveSubscriptions(_)
-                | SyncMessage::DataRequestRejected(_) => None,
-            },
-            Self::Ephemeral(_) | Self::Keyhive(_) => None,
-        }
-    }
-
-    fn into_sync(self) -> Option<SyncMessage> {
-        match self {
-            Self::Sync(msg) => Some(*msg),
-            Self::Ephemeral(_) | Self::Keyhive(_) => None,
-        }
     }
 }
 
@@ -367,131 +337,6 @@ impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage>
 }
 
 // ── Ephemeral Connection impls ──────────────────────────────────────────
-
-#[cfg(feature = "ephemeral")]
-mod ephemeral_impls {
-    use future_form::Sendable;
-    use futures::FutureExt;
-    use subduction_core::{
-        connection::{Connection, timeout::Timeout},
-        peer::id::PeerId,
-    };
-    use subduction_ephemeral::{message::EphemeralMessage, wire::WireMessage};
-
-    use super::{DisconnectionError, IrohConnection, RecvError, SendError};
-
-    impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, WireMessage>
-        for IrohConnection<O, WireMessage>
-    {
-        type SendError = SendError;
-        type RecvError = RecvError;
-        type DisconnectionError = DisconnectionError;
-
-        fn peer_id(&self) -> PeerId {
-            self.inner.peer_id
-        }
-
-        fn disconnect(
-            &self,
-        ) -> futures::future::BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-            tracing::info!(peer_id = %self.inner.peer_id, "IrohConnection<WireMessage>::disconnect");
-            let conn = self.clone();
-            async move {
-                conn.close();
-                Ok(())
-            }
-            .boxed()
-        }
-
-        fn send(
-            &self,
-            message: &WireMessage,
-        ) -> futures::future::BoxFuture<'_, Result<(), Self::SendError>> {
-            let msg = message.clone();
-            let tx = self.inner.outbound_tx.clone();
-            async move {
-                tx.send(msg).await.map_err(|_| SendError)?;
-                Ok(())
-            }
-            .boxed()
-        }
-
-        fn recv(&self) -> futures::future::BoxFuture<'_, Result<WireMessage, Self::RecvError>> {
-            let chan = self.inner.inbound_reader.clone();
-            async move {
-                chan.recv().await.map_err(|_| {
-                    tracing::error!("inbound channel closed unexpectedly");
-                    RecvError
-                })
-            }
-            .boxed()
-        }
-    }
-
-    impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, EphemeralMessage>
-        for IrohConnection<O, WireMessage>
-    {
-        type SendError = SendError;
-        type RecvError = RecvError;
-        type DisconnectionError = DisconnectionError;
-
-        fn peer_id(&self) -> PeerId {
-            self.inner.peer_id
-        }
-
-        fn disconnect(
-            &self,
-        ) -> futures::future::BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-            tracing::info!(
-                peer_id = %self.inner.peer_id,
-                "IrohConnection<EphemeralMessage>::disconnect"
-            );
-            let conn = self.clone();
-            async move {
-                conn.close();
-                Ok(())
-            }
-            .boxed()
-        }
-
-        fn send(
-            &self,
-            message: &EphemeralMessage,
-        ) -> futures::future::BoxFuture<'_, Result<(), Self::SendError>> {
-            let msg = WireMessage::Ephemeral(message.clone());
-            let tx = self.inner.outbound_tx.clone();
-            async move {
-                tx.send(msg).await.map_err(|_| SendError)?;
-                Ok(())
-            }
-            .boxed()
-        }
-
-        fn recv(
-            &self,
-        ) -> futures::future::BoxFuture<'_, Result<EphemeralMessage, Self::RecvError>> {
-            let chan = self.inner.inbound_reader.clone();
-            async move {
-                loop {
-                    let wire = chan.recv().await.map_err(|_| {
-                        tracing::error!("inbound channel closed unexpectedly");
-                        RecvError
-                    })?;
-
-                    if let WireMessage::Ephemeral(msg) = wire {
-                        return Ok(msg);
-                    }
-
-                    // Skip non-ephemeral messages
-                    tracing::trace!(
-                        "recv<EphemeralMessage>: skipping non-ephemeral channel message"
-                    );
-                }
-            }
-            .boxed()
-        }
-    }
-}
 
 impl<O, M> PartialEq for IrohConnection<O, M> {
     fn eq(&self, other: &Self) -> bool {
