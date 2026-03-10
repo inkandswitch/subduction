@@ -33,7 +33,7 @@ use keyhive_core::{
 use subduction_core::{
     connection::authenticated::Authenticated, handler::Handler, peer::id::PeerId,
 };
-use subduction_keyhive::{KeyhivePeerId, KeyhiveSyncManager, storage::KeyhiveStorage};
+use subduction_keyhive::{storage::KeyhiveStorage, KeyhivePeerId, KeyhiveSyncManager};
 
 /// Keyhive message handler.
 ///
