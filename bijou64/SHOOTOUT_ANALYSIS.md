@@ -18,14 +18,14 @@
 
 Encode to a `Vec<u8>`.
 
-| Distribution    | bijou64     | varu64 | vu64         | vu128 | leb128       | bijou64 Δ (µs) | bijou64 vs other best |
-|-----------------|-------------|--------|--------------|-------|--------------|----------------|-----------------------|
-| tiny (0-247)    | **2.31** 🏆 | 11.28  | 20.93        | 16.88 | 4.38         | −2.07          | 0.53x                 |
-| small (248-64k) | **7.52** 🏆 | 20.10  | 22.92        | 20.16 | 11.46        | −3.94          | 0.66x                 |
-| medium (64k-4B) | 19.13       | 26.32  | 22.27        | 21.59 | **13.40** 🏆 | +5.73          | 1.43x                 |
-| large (>4B)     | 12.83       | 27.55  | **11.08** 🏆 | 11.47 | 32.34        | +1.75          | 1.16x                 |
-| tier boundaries | 15.88       | 28.99  | 18.37        | 18.43 | **11.48** 🏆 | +4.40          | 1.38x                 |
-| uniform random  | 12.68       | 27.63  | **11.09** 🏆 | 11.50 | 32.69        | +1.59          | 1.14x                 |
+| Distribution    | bijou64      | varu64 | vu64         | vu128 | leb128       | bijou64 Δ (µs) | bijou64 vs other best |
+|-----------------|--------------|--------|--------------|-------|--------------|----------------|-----------------------|
+| tiny (0-247)    | **2.26** 🏆  | 10.96  | 20.69        | 16.23 | 4.21         | −1.95          | 0.54x                 |
+| small (248-64k) | 11.41        | 20.00  | 22.96        | 20.17 | **7.16** 🏆  | +4.25          | 1.59x                 |
+| medium (64k-4B) | 19.29        | 26.89  | 22.76        | 21.95 | **13.55** 🏆 | +5.74          | 1.42x                 |
+| large (>4B)     | 13.11        | 28.19  | **11.30** 🏆 | 11.70 | 33.25        | +1.81          | 1.16x                 |
+| tier boundaries | 16.26        | 29.47  | 18.52        | 19.15 | **12.03** 🏆 | +4.23          | 1.35x                 |
+| uniform random  | 13.15        | 28.10  | **11.21** 🏆 | 11.84 | 34.17        | +1.94          | 1.17x                 |
 
 ## Encode Array
 
@@ -33,25 +33,25 @@ Encode to a fixed `[u8; 9]` with no allocation. leb128 is excluded because its A
 
 | Distribution    | bijou64     | varu64 | vu64        | vu128 | bijou64 Δ (µs) | bijou64 vs other best |
 |-----------------|-------------|--------|-------------|-------|----------------|-----------------------|
-| tiny (0-247)    | **1.30** 🏆 | 5.15   | 1.66        | 2.97  | −0.36          | 0.78x                 |
-| small (248-64k) | 2.53        | 8.73   | **1.65** 🏆 | 3.58  | +0.88          | 1.53x                 |
-| medium (64k-4B) | 2.50        | 12.49  | **1.64** 🏆 | 3.55  | +0.86          | 1.52x                 |
-| large (>4B)     | 2.71        | 19.82  | **1.64** 🏆 | 3.49  | +1.07          | 1.65x                 |
-| tier boundaries | 2.50        | 16.94  | **1.64** 🏆 | 3.35  | +0.86          | 1.52x                 |
-| uniform random  | 2.49        | 20.27  | **1.64** 🏆 | 3.49  | +0.85          | 1.52x                 |
+| tiny (0-247)    | **1.27** 🏆 | 4.87   | 1.62        | 2.87  | −0.35          | 0.78x                 |
+| small (248-64k) | 2.41        | 8.67   | **1.63** 🏆 | 3.51  | +0.78          | 1.48x                 |
+| medium (64k-4B) | 2.59        | 12.38  | **1.65** 🏆 | 3.52  | +0.94          | 1.57x                 |
+| large (>4B)     | 2.75        | 19.88  | **1.64** 🏆 | 3.51  | +1.11          | 1.68x                 |
+| tier boundaries | 2.58        | 16.48  | **1.65** 🏆 | 3.41  | +0.93          | 1.56x                 |
+| uniform random  | 2.54        | 19.92  | **1.65** 🏆 | 3.53  | +0.89          | 1.54x                 |
 
 ## Decode
 
 Decode from a `&[u8]` buffer.
 
-| Distribution    | bijou64      | varu64 | vu64  | vu128       | leb128 | bijou64 Δ (µs) | bijou64 vs other best |
-|-----------------|--------------|--------|-------|-------------|--------|----------------|-----------------------|
-| tiny (0-247)    | **3.85** 🏆  | 6.32   | 14.44 | 21.57       | 11.56  | −2.47          | 0.61x                 |
-| small (248-64k) | **9.00** 🏆  | 10.49  | 15.00 | 14.88       | 14.45  | −1.49          | 0.86x                 |
-| medium (64k-4B) | **8.93** 🏆  | 16.64  | 15.62 | 10.90       | 16.27  | −1.97          | 0.82x                 |
-| large (>4B)     | 10.14        | 22.47  | 8.87  | **8.76** 🏆 | 36.42  | +1.38          | 1.16x                 |
-| tier boundaries | **10.26** 🏆 | 19.51  | 12.44 | 10.26       | 15.75  | −2.18          | 0.82x                 |
-| uniform random  | 10.08        | 22.54  | 8.90  | **8.82** 🏆 | 35.93  | +1.26          | 1.14x                 |
+| Distribution    | bijou64     | varu64 | vu64  | vu128       | leb128 | bijou64 Δ (µs) | bijou64 vs other best |
+|-----------------|-------------|--------|-------|-------------|--------|----------------|-----------------------|
+| tiny (0-247)    | **3.93** 🏆 | 6.62   | 14.40 | 22.76       | 12.57  | −2.69          | 0.59x                 |
+| small (248-64k) | **9.36** 🏆 | 10.99  | 15.43 | 15.18       | 15.24  | −1.63          | 0.85x                 |
+| medium (64k-4B) | **8.77** 🏆 | 16.24  | 15.37 | 10.70       | 16.09  | −1.93          | 0.82x                 |
+| large (>4B)     | 10.05       | 22.27  | 8.80  | **8.67** 🏆 | 35.86  | +1.38          | 1.16x                 |
+| tier boundaries | 11.59       | 19.21  | 12.27 | **10.78** 🏆| 15.39  | +0.81          | 1.07x                 |
+| uniform random  | 10.34       | 23.86  | 9.30  | **9.22** 🏆 | 35.52  | +1.12          | 1.12x                 |
 
 ## Encoded Size
 
@@ -96,14 +96,14 @@ For values 0-127, every format agrees: 1 byte, an 8x reduction over raw `u64`. T
 
 Decode a concatenated stream of encoded values. vu128 is excluded because its API requires a fixed `[u8; 9]` input.
 
-| Distribution    | bijou64      | varu64 | vu64         | leb128 | bijou64 Δ (µs) | bijou64 vs other best |
-|-----------------|--------------|--------|--------------|--------|----------------|-----------------------|
-| tiny (0-247)    | **3.81** 🏆  | 9.62   | 16.81        | 5.98   | −2.17          | 0.64x                 |
-| small (248-64k) | **8.96** 🏆  | 17.86  | 18.17        | 11.99  | −3.03          | 0.75x                 |
-| medium (64k-4B) | **8.88** 🏆  | 17.44  | 15.59        | 16.31  | −6.71          | 0.57x                 |
-| large (>4B)     | 10.30        | 23.91  | **8.97** 🏆  | 36.18  | +1.33          | 1.15x                 |
-| tier boundaries | **14.58** 🏆 | 24.09  | **14.58** 🏆 | 14.64  | −0.06          | 1.00x                 |
-| uniform random  | 10.06        | 22.99  | **8.84** 🏆  | 36.49  | +1.22          | 1.14x                 |
+| Distribution    | bijou64     | varu64 | vu64         | leb128 | bijou64 Δ (µs) | bijou64 vs other best |
+|-----------------|-------------|--------|--------------|--------|----------------|-----------------------|
+| tiny (0-247)    | **3.98** 🏆 | 9.77   | 17.51        | 7.20   | −3.22          | 0.55x                 |
+| small (248-64k) | **9.34** 🏆 | 20.82  | 18.84        | 13.02  | −3.68          | 0.72x                 |
+| medium (64k-4B) | **9.34** 🏆 | 18.12  | 16.03        | 17.02  | −6.69          | 0.58x                 |
+| large (>4B)     | 10.31       | 23.29  | **8.68** 🏆  | 35.76  | +1.63          | 1.19x                 |
+| tier boundaries | 19.76       | 23.28  | **14.14** 🏆 | 14.15  | +5.62          | 1.40x                 |
+| uniform random  | 9.81        | 22.48  | **8.57** 🏆  | 34.89  | +1.24          | 1.15x                 |
 
 ## Round Trip
 
@@ -111,19 +111,19 @@ Encode then immediately decode each value.
 
 | Distribution    | bijou64 | varu64 | vu64  | vu128       | leb128 | bijou64 Δ (µs) | bijou64 vs other best |
 |-----------------|---------|--------|-------|-------------|--------|----------------|-----------------------|
-| tiny (0-247)    | 7.38    | 10.07  | 22.58 | **5.00** 🏆 | 15.73  | +2.38          | 1.48x                 |
-| small (248-64k) | 15.77   | 17.51  | 26.36 | **7.06** 🏆 | 22.61  | +8.71          | 2.23x                 |
-| medium (64k-4B) | 17.51   | 27.46  | 21.96 | **2.78** 🏆 | 26.39  | +14.73         | 6.30x                 |
-| large (>4B)     | 24.17   | 42.15  | 11.88 | **2.54** 🏆 | 58.49  | +21.63         | 9.52x                 |
-| tier boundaries | 22.63   | 35.07  | 17.62 | **4.28** 🏆 | 24.70  | +18.35         | 5.29x                 |
-| uniform random  | 24.08   | 41.48  | 11.51 | **2.58** 🏆 | 57.20  | +21.50         | 9.33x                 |
+| tiny (0-247)    | 4.96    | 10.49  | 22.94 | **4.73** 🏆 | 13.22  | +0.23          | 1.05x                 |
+| small (248-64k) | 20.54   | 17.76  | 26.32 | **7.06** 🏆 | 22.90  | +13.48         | 2.91x                 |
+| medium (64k-4B) | 27.87   | 28.07  | 22.52 | **2.91** 🏆 | 26.93  | +24.96         | 9.58x                 |
+| large (>4B)     | 22.92   | 41.98  | 11.47 | **2.61** 🏆 | 57.63  | +20.31         | 8.78x                 |
+| tier boundaries | 27.50   | 34.70  | 17.43 | **4.23** 🏆 | 25.89  | +23.27         | 6.51x                 |
+| uniform random  | 23.57   | 43.46  | 12.07 | **2.77** 🏆 | 59.84  | +20.81         | 8.51x                 |
 
 ## Summary
 
-On this particular machine and workload, bijou64 appears to be the fastest encoder and decoder for tiny and small values -- the distributions we _believe_ dominate the protocol's hot path (blob sizes, counts, offsets under 64k). Different hardware, compiler versions, or real-world access patterns could easily shift the picture.
+On this particular machine and workload, bijou64 is the fastest _decoder_ for tiny, small, and medium values -- the distributions we _believe_ dominate the protocol's hot path (blob sizes, counts, offsets under 64k). It also wins stream decode for those same ranges. On the encode side, bijou64 leads only for tiny values; leb128 is faster for small-and-above Vec encoding, and vu64 dominates encode-to-array across all non-tiny distributions. Different hardware, compiler versions, or real-world access patterns could easily shift the picture.
 
-For large values and uniform random distributions, vu64 and vu128 come out ahead on encode and decode respectively. This is probably inherent to the format: their power-of-2 tier boundaries are cheaper to work with than bijou64's offset-adjusted boundaries.
+For large values and uniform random distributions, vu128 tends to win decode and vu64 wins stream decode. This is probably inherent to the format: their power-of-2 tier boundaries are cheaper to work with than bijou64's offset-adjusted boundaries.
 
 vu128 dominates round-trip benchmarks across all distributions. I think this is because its fixed-size `[u8; 9]` API avoids allocation overhead entirely, but I haven't confirmed that with profiling.
 
-vu64 dominates encoded-size computation -- its `leading_zeros` gives the final answer with no correction step. bijou64's per-tier offsets require one additional comparison, which seems to account for the ~3x gap, though it's possible there are other factors I'm not seeing.
+The Vec-based encode path is bijou64's weakest point outside the tiny range. The `extend_from_slice` with a variable-length tail appears to inhibit vectorisation that competitors achieve with simpler layouts. The allocation-free `encode_array` path narrows the gap considerably (1.48-1.68x behind vu64, vs 1.59x behind leb128 for Vec encode), suggesting the overhead is partly in the Vec interaction rather than the tier calculation itself.
