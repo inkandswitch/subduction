@@ -198,7 +198,7 @@ pub fn encode(value: u64, buf: &mut Vec<u8>) {
 | tier boundaries  | 12.08              | 2.50                    | 4.8x   |
 | uniform random   | 15.12              | 2.49                    | 6.1x   |
 
-bijou64 now _beats_ vu64 on `encode_array` for tiny values (1.30 vs 1.66 µs) and is within 1.5x for all other distributions. Previously it was 2--9x slower.
+bijou64 now _beats_ vu64 on `encode_array` for tiny values (1.27 vs 1.62 µs) and is within 1.7x for all other distributions. Previously it was 2--9x slower.
 
 #### `encode` (Vec path)
 
@@ -211,7 +211,7 @@ bijou64 now _beats_ vu64 on `encode_array` for tiny values (1.30 vs 1.66 µs) an
 | tier boundaries  | 25.65              | 15.88               | 1.6x   |
 | uniform random   | 22.66              | 12.68               | 1.8x   |
 
-The tiny encode improvement (4.4x) is particularly nice -- bijou64 is now the fastest encoder in the shootout for small values, ahead of leb128 (4.38 µs).
+The tiny encode improvement (4.4x) is particularly nice -- bijou64 is now the fastest encoder in the shootout for the tiny distribution (2.26 vs leb128 at 4.21 µs).
 
 ### Properties Preserved
 
