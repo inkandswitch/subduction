@@ -102,14 +102,14 @@ impl ChannelMessage for subduction_ephemeral::wire::WireMessage {
                 | SyncMessage::RemoveSubscriptions(_)
                 | SyncMessage::DataRequestRejected(_) => None,
             },
-            Self::Ephemeral(_) => None,
+            Self::Ephemeral(_) | Self::Keyhive(_) => None,
         }
     }
 
     fn into_sync(self) -> Option<SyncMessage> {
         match self {
             Self::Sync(msg) => Some(*msg),
-            Self::Ephemeral(_) => None,
+            Self::Ephemeral(_) | Self::Keyhive(_) => None,
         }
     }
 }

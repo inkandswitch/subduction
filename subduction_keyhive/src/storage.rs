@@ -15,8 +15,8 @@ use core::convert::Infallible;
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
-    future::{BoxFuture, LocalBoxFuture},
     FutureExt,
+    future::{BoxFuture, LocalBoxFuture},
 };
 
 use crate::collections::Map;

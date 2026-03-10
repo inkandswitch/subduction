@@ -17,9 +17,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema, SizeMismatch},
 };
-use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
+use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
 
-use crate::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
+use crate::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 
 /// Schema header for keyhive messages: **SU**bduction **K**eyhive v0.
 ///

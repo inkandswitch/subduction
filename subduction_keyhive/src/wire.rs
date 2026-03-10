@@ -24,6 +24,7 @@ use sedimentree_core::codec::{
     error::{DecodeError, InvalidSchema, SizeMismatch},
 };
 
+#[cfg(all(feature = "serde", feature = "std"))]
 use crate::signed_message::SignedMessage;
 
 /// Schema header for keyhive messages: **SU**bduction **K**eyhive v0.

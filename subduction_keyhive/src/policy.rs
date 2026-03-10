@@ -7,7 +7,7 @@ use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
 use future_form::Local;
-use futures::{future::LocalBoxFuture, FutureExt};
+use futures::{FutureExt, future::LocalBoxFuture};
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,
@@ -130,13 +130,13 @@ pub struct SubductionKeyhive<
 >(Keyhive<S, T, P, C, L, R>);
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> SubductionKeyhive<S, T, P, C, L, R>
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
     #[must_use]
@@ -152,13 +152,13 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
@@ -181,13 +181,13 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -294,13 +294,13 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > EphemeralPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> EphemeralPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type SubscribeDisallowed = SubscribeDisallowedError;
     type PublishDisallowed = PublishDisallowedError;
@@ -401,13 +401,13 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
 {
     fn from(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
         SubductionKeyhive(keyhive)
@@ -415,13 +415,13 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone,
-        T: ContentRef,
-        P: for<'de> Deserialize<'de>,
-        C: CiphertextStore<T, P> + Clone,
-        L: MembershipListener<S, T>,
-        R: rand::CryptoRng + rand::RngCore,
-    > From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
 {
     fn from(subduction_keyhive: SubductionKeyhive<S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0
