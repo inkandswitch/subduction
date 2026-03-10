@@ -36,12 +36,17 @@ tokio = { workspace = true, features = ["rt", "macros", "time"], optional = true
 tracing = { workspace = true }
 
 [dev-dependencies]
+async-lock = { workspace = true }
 bolero = { workspace = true, features = ["arbitrary"] }
+ciborium = { workspace = true }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 futures = { workspace = true, features = ["executor"] }
+keyhive_core = { workspace = true }
+nonempty_0_10 = { package = "nonempty", version = "0.10.0" }
 rand = { workspace = true, features = ["std_rng"] }
-subduction_core = { path = ".", features = ["bolero", "std", "test_utils"] }
+subduction_core = { path = ".", features = ["bolero", "keyhive", "std", "test_utils"] }
+subduction_keyhive = { workspace = true, features = ["serde"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
