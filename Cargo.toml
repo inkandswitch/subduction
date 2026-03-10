@@ -15,6 +15,7 @@ members = [
   "subduction_http_longpoll",
   "subduction_iroh",
   "subduction_keyhive",
+  "subduction_keyhive_policy",
   "subduction_wasm",
   "subduction_websocket"
 ]

@@ -1,0 +1,29 @@
+[package]
+name = "subduction_keyhive_policy"
+version = "0.1.0"
+description = "Keyhive-based authorization policy for Subduction"
+
+categories = ["web-programming"]
+keywords = ["sync", "subduction", "keyhive", "policy"]
+readme = "./README.md"
+
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+ed25519-dalek = { workspace = true }
+future_form = { workspace = true }
+futures = { workspace = true }
+keyhive_core = { workspace = true }
+rand = "0.8.5"
+sedimentree_core = { workspace = true, default-features = false }
+serde = { workspace = true, features = ["derive"] }
+subduction_core = { workspace = true, default-features = false }
+subduction_ephemeral = { workspace = true, default-features = false }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+
+[lints]
+workspace = true

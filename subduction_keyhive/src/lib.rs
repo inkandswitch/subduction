@@ -12,8 +12,6 @@ pub mod connection;
 pub mod error;
 pub mod message;
 pub mod peer_id;
-#[cfg(feature = "serde")]
-pub mod policy;
 pub mod signed_message;
 pub mod storage;
 pub mod wire;
@@ -33,11 +31,9 @@ pub use error::StorageError;
 pub use error::{ProtocolError, SigningError, VerificationError};
 pub use message::Message;
 pub use peer_id::KeyhivePeerId;
-#[cfg(feature = "serde")]
-pub use policy::SubductionKeyhive;
 pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
-pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
+pub use wire::{KeyhiveMessage, KEYHIVE_SCHEMA};
 
 #[cfg(feature = "serde")]
 pub use protocol::KeyhiveProtocol;

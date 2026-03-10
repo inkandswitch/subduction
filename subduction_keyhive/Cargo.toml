@@ -23,8 +23,6 @@ keyhive_core = { workspace = true }
 rand = "0.8.5"
 sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true, optional = true, features = ["derive"] }
-subduction_core = { workspace = true, default-features = false }
-subduction_ephemeral = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
