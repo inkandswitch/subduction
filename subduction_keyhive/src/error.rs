@@ -71,6 +71,7 @@ impl CborDeError {
     /// When reading from byte slices, ciborium uses `EndOfFile` as the IO
     /// error type, which doesn't implement `Error`. This method wraps the
     /// `Io` variant with [`CborEndOfFile`] instead.
+    #[must_use]
     pub fn from_slice(err: ciborium::de::Error<ciborium_io::EndOfFile>) -> Self {
         match err {
             ciborium::de::Error::Io(_) => Self(ciborium::de::Error::Io(Box::new(CborEndOfFile))),

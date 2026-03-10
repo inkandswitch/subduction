@@ -88,7 +88,59 @@ pub struct KeyhiveHandlerRelay {
     tx: async_channel::Sender<RelayRequest>,
 }
 
+/// Receiver half of the relay channel.
+///
+/// Created by [`KeyhiveHandlerRelay::channel`] and consumed by
+/// [`RelayReceiver::run`] to start the `!Send` actor loop.
+///
+/// This type is `Send`, so it can be moved into a dedicated thread
+/// where the keyhive `KeyhiveSyncManager` is constructed, and then
+/// [`run`](Self::run) is called with the `!Send` sync manager.
+#[derive(Debug)]
+pub struct RelayReceiver {
+    rx: async_channel::Receiver<RelayRequest>,
+}
+
+impl RelayReceiver {
+    /// Start the relay actor loop with the given sync manager.
+    ///
+    /// This consumes the receiver and runs until all
+    /// [`KeyhiveHandlerRelay`] handles are dropped.
+    ///
+    /// The returned future is `!Send` — the caller must run it on an
+    /// executor that supports `!Send` futures (e.g., a `LocalSet` or
+    /// `wasm_bindgen_futures::spawn_local`).
+    pub async fn run<Signer, T, P, C, L, R, Store>(
+        self,
+        sync_manager: Arc<KeyhiveSyncManager<Signer, T, P, C, L, R, Store>>,
+    ) where
+        Signer: AsyncSigner + Clone + Send + 'static,
+        T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
+        P: for<'de> serde::Deserialize<'de> + 'static,
+        C: CiphertextStore<T, P> + Clone + 'static,
+        L: MembershipListener<Signer, T> + Send + 'static,
+        R: rand::CryptoRng + rand::RngCore + 'static,
+        Store: KeyhiveStorage<Local> + 'static,
+        Store::Error: Send + Sync + 'static,
+    {
+        run_relay_actor(sync_manager, self.rx).await;
+    }
+}
+
 impl KeyhiveHandlerRelay {
+    /// Create a relay handle and its matching receiver.
+    ///
+    /// The receiver is `Send` and should be moved into the dedicated
+    /// `!Send` executor thread. Call [`RelayReceiver::run`] there with
+    /// the `KeyhiveSyncManager` to start the actor loop.
+    ///
+    /// `buffer` controls the request channel capacity.
+    #[must_use]
+    pub fn channel(buffer: usize) -> (Self, RelayReceiver) {
+        let (tx, rx) = async_channel::bounded(buffer);
+        (Self { tx }, RelayReceiver { rx })
+    }
+
     /// Create a new relay handle and its corresponding actor future.
     ///
     /// The `sync_manager` is moved into the actor future. All handler

@@ -15,10 +15,12 @@ rust-version.workspace = true
 
 [dependencies]
 ahash = { workspace = true }
+async-channel = { workspace = true }
 async-lock = { workspace = true }
 async-tungstenite = { workspace = true }
 axum = { workspace = true }
 blake3 = { workspace = true }
+ciborium = { workspace = true }
 clap = { workspace = true }
 color-eyre = { workspace = true }
 console-subscriber = { workspace = true }
@@ -31,8 +33,11 @@ http-body-util = { workspace = true }
 hyper = { workspace = true, features = ["http1", "server"] }
 hyper-util = { workspace = true, features = ["tokio", "http1", "server-auto"] }
 iroh = { workspace = true }
+keyhive_core = { workspace = true }
 metrics = { workspace = true }
 metrics-exporter-prometheus = { workspace = true }
+nonempty = { workspace = true }
+rand = { workspace = true, features = ["std", "std_rng"] }
 reqwest = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }

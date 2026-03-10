@@ -5,24 +5,42 @@ extern crate alloc;
 use alloc::sync::Arc;
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
+use async_lock::Mutex;
 use eyre::Result;
 use iroh::EndpointAddr;
-use sedimentree_core::commit::CountLeadingZeroBytes;
+use keyhive_core::{
+    crypto::signer::memory::MemorySigner as KeyhiveMemorySigner, keyhive::Keyhive,
+    listener::no_listener::NoListener, store::ciphertext::memory::MemoryCiphertextStore,
+};
+use nonempty::NonEmpty;
+use rand::rngs::OsRng;
+use sedimentree_core::{
+    collections::{Map, Set},
+    commit::CountLeadingZeroBytes,
+    id::SedimentreeId,
+};
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
     connection::{
+        authenticated::Authenticated,
         handshake::{self, Audience, DiscoveryId},
-        message::SyncMessage,
         nonce_cache::NonceCache,
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
-    storage::metrics::{MetricsStorage, RefreshMetrics},
-    subduction::{Subduction, builder::SubductionBuilder},
+    sharded_map::ShardedMap,
+    storage::{
+        metrics::{MetricsStorage, RefreshMetrics},
+        powerbox::StoragePowerbox,
+    },
+    subduction::{Subduction, pending_blob_requests::PendingBlobRequests},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;
+use subduction_keyhive::{KeyhivePeerId, KeyhiveSyncManager};
+use subduction_keyhive_policy::relay::KeyhiveHandlerRelay;
 use subduction_websocket::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::WebSocketHandshake,
@@ -34,20 +52,31 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
-use crate::{key, metrics, transport::UnifiedTransport, wire::CliWireMessage};
+use crate::{
+    handler::CliComposedHandler, key, keyhive_storage::FsKeyhiveStorage, metrics,
+    transport::UnifiedTransport, wire::CliWireMessage,
+};
+
+/// Concrete transport type used throughout the CLI server.
+type CliTransport = UnifiedTransport<FuturesTimerTimeout>;
+
+/// Shared connections map.
+type CliConnections =
+    Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<CliTransport, future_form::Sendable>>>>>;
 
 /// Type alias for the unified Subduction instance.
 ///
-/// The wire type is `SyncMessage` until the composed handler is wired in
-/// (Phase 7.3), at which point this switches to `CliWireMessage` via
-/// `build_with_handler`.
+/// Uses [`CliWireMessage`] to multiplex sync, ephemeral, and keyhive
+/// traffic over a single connection. The composed handler
+/// ([`CliComposedHandler`]) dispatches each variant to the appropriate
+/// sub-handler.
 type CliSubduction = Arc<
     Subduction<
         'static,
         future_form::Sendable,
         MetricsStorage<FsStorage>,
-        UnifiedTransport<FuturesTimerTimeout>,
-        SyncMessage,
+        CliTransport,
+        CliWireMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -163,7 +192,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     }
 
     tracing::info!("Initializing filesystem storage at {:?}", data_dir);
-    let fs_storage = FsStorage::new(data_dir)?;
+    let fs_storage = FsStorage::new(data_dir.clone())?;
     let storage = MetricsStorage::new(fs_storage);
 
     // Background metrics refresh
@@ -206,18 +235,51 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let discovery_id = Some(DiscoveryId::new(service_name.as_bytes()));
     let discovery_audience: Option<Audience> = discovery_id.map(Audience::discover_id);
 
-    // Build the Subduction instance with all defaults
-    let mut builder = SubductionBuilder::new()
-        .signer(signer.clone())
-        .storage(storage, Arc::new(OpenPolicy))
-        .spawner(TokioSpawn);
+    // ── Keyhive relay channel ──────────────────────────────────────────
+    //
+    // Create the relay channel first. The handle (sender) stays in the
+    // main runtime; the receiver is moved into a dedicated !Send thread
+    // where keyhive is initialized and the actor loop runs.
 
-    if let Some(id) = discovery_id {
-        builder = builder.discovery_id(id);
-    }
+    let (keyhive_relay, relay_receiver) = KeyhiveHandlerRelay::channel(256);
 
-    let (subduction, _handler, listener_fut, manager_fut): (CliSubduction, _, _, _) =
-        builder.build();
+    // ── Shared state (manual construction, as in wasm's build_ephemeral) ─
+
+    let sedimentrees = Arc::new(ShardedMap::new());
+    let connections: CliConnections = Arc::new(Mutex::new(Map::new()));
+    let subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>> =
+        Arc::new(Mutex::new(Map::new()));
+    let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::default()));
+    let nonce_cache = NonceCache::default();
+    let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
+
+    let sync_handler = Arc::new(SyncHandler::new(
+        sedimentrees.clone(),
+        connections.clone(),
+        subscriptions.clone(),
+        powerbox.clone(),
+        pending_blob_requests.clone(),
+        CountLeadingZeroBytes,
+    ));
+
+    let composed_handler = Arc::new(CliComposedHandler {
+        sync: sync_handler,
+        keyhive_relay,
+    });
+
+    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) = Subduction::new(
+        composed_handler,
+        discovery_id,
+        signer.clone(),
+        sedimentrees,
+        connections,
+        subscriptions,
+        powerbox,
+        pending_blob_requests,
+        nonce_cache,
+        CountLeadingZeroBytes,
+        TokioSpawn,
+    );
 
     let server_peer_id = subduction.peer_id();
 
@@ -260,13 +322,14 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     tracing::info!("Peer ID: {peer_id}");
 
     // Spawn background tasks
-    let actor_cancel = token.clone();
+    let manager_cancel = token.clone();
     let listener_cancel = token.clone();
+    let relay_cancel = token.clone();
 
     tokio::spawn(async move {
         tokio::select! {
             _ = manager_fut => {},
-            () = actor_cancel.cancelled() => {}
+            () = manager_cancel.cancelled() => {}
         }
     });
 
@@ -276,6 +339,94 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             () = listener_cancel.cancelled() => {}
         }
     });
+
+    // The keyhive relay actor is !Send (keyhive_core futures are !Send),
+    // so it runs on a dedicated single-threaded runtime with a LocalSet.
+    // Keyhive is initialized inside this thread because Keyhive itself
+    // is !Send and cannot cross a thread boundary.
+    let relay_data_dir = data_dir.clone();
+    std::thread::Builder::new()
+        .name("keyhive-relay".into())
+        .spawn(move || {
+            let rt = match tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+            {
+                Ok(rt) => rt,
+                Err(e) => {
+                    tracing::error!("failed to create keyhive relay runtime: {e}");
+                    return;
+                }
+            };
+
+            let local = tokio::task::LocalSet::new();
+            local.spawn_local(async move {
+                // Initialize keyhive inside the !Send context
+                let keyhive_storage = match FsKeyhiveStorage::new(&relay_data_dir) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        tracing::error!("failed to create keyhive storage: {e}");
+                        return;
+                    }
+                };
+
+                let mut csprng = OsRng;
+                let keyhive_signer = KeyhiveMemorySigner::generate(&mut csprng);
+                let keyhive = match Keyhive::generate(
+                    keyhive_signer,
+                    MemoryCiphertextStore::<[u8; 32], Vec<u8>>::new(),
+                    NoListener,
+                    csprng,
+                )
+                .await
+                {
+                    Ok(kh) => kh,
+                    Err(e) => {
+                        tracing::error!("failed to initialize keyhive: {e}");
+                        return;
+                    }
+                };
+
+                let keyhive_id: keyhive_core::principal::identifier::Identifier =
+                    keyhive.id().into();
+                let keyhive_peer_id = KeyhivePeerId::from_bytes(keyhive_id.to_bytes());
+
+                let contact_card = match keyhive.contact_card().await {
+                    Ok(cc) => cc,
+                    Err(e) => {
+                        tracing::error!("failed to get keyhive contact card: {e}");
+                        return;
+                    }
+                };
+                let mut cc_buf = Vec::new();
+                if let Err(e) = ciborium::into_writer(&contact_card, &mut cc_buf) {
+                    tracing::error!("failed to serialize contact card: {e}");
+                    return;
+                }
+
+                let keyhive_shared = Arc::new(async_lock::Mutex::new(keyhive));
+                let sync_manager = Arc::new(KeyhiveSyncManager::new(
+                    keyhive_shared,
+                    keyhive_storage,
+                    keyhive_peer_id,
+                    cc_buf,
+                ));
+
+                tracing::info!("keyhive relay actor started");
+
+                tokio::select! {
+                    () = relay_receiver.run(sync_manager) => {
+                        tracing::debug!("keyhive relay actor exited");
+                    }
+                    () = relay_cancel.cancelled() => {
+                        tracing::debug!("keyhive relay actor cancelled");
+                    }
+                }
+            });
+
+            rt.block_on(local);
+        })
+        .map_err(|e| eyre::eyre!("failed to spawn keyhive relay thread: {e}"))?;
 
     // Spawn the accept loop
     let accept_cancel = token.child_token();
