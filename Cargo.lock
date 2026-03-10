@@ -5151,6 +5151,7 @@ dependencies = [
 name = "subduction_keyhive_policy"
 version = "0.1.0"
 dependencies = [
+ "async-channel",
  "async-lock",
  "ed25519-dalek 2.2.0",
  "future_form",
@@ -5163,6 +5164,7 @@ dependencies = [
  "subduction_ephemeral",
  "subduction_keyhive",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 

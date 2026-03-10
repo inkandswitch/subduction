@@ -12,13 +12,14 @@
 
 extern crate alloc;
 
+pub mod actor;
 pub mod handler;
 
 use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
 use future_form::Local;
-use futures::{FutureExt, future::LocalBoxFuture};
+use futures::{future::LocalBoxFuture, FutureExt};
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,
@@ -39,6 +40,10 @@ use subduction_ephemeral::policy::EphemeralPolicy;
 /// Error returned when a connection is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectionDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The peer ID is not a valid Ed25519 public key.
     #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
@@ -51,6 +56,10 @@ pub enum ConnectionDisallowedError {
 /// Error returned when a fetch operation is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FetchDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The peer ID is not a valid Ed25519 public key.
     #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
@@ -71,6 +80,10 @@ pub enum FetchDisallowedError {
 /// Error returned when a put operation is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PutDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The author peer ID is not a valid Ed25519 public key.
     #[error("author ID is not a valid Ed25519 public key")]
     InvalidAuthorId,
@@ -91,6 +104,10 @@ pub enum PutDisallowedError {
 /// Error returned when an ephemeral subscribe is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum SubscribeDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The peer ID is not a valid Ed25519 public key.
     #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
@@ -111,6 +128,10 @@ pub enum SubscribeDisallowedError {
 /// Error returned when an ephemeral publish is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PublishDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The peer ID is not a valid Ed25519 public key.
     #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
@@ -141,13 +162,13 @@ pub struct SubductionKeyhive<
 >(Keyhive<S, T, P, C, L, R>);
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > SubductionKeyhive<S, T, P, C, L, R>
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
     #[must_use]
@@ -163,13 +184,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
@@ -192,13 +213,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -305,13 +326,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> EphemeralPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > EphemeralPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type SubscribeDisallowed = SubscribeDisallowedError;
     type PublishDisallowed = PublishDisallowedError;
@@ -412,13 +433,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
 {
     fn from(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
         SubductionKeyhive(keyhive)
@@ -426,13 +447,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
 {
     fn from(subduction_keyhive: SubductionKeyhive<S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0
