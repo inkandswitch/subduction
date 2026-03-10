@@ -53,6 +53,19 @@ Decode from a `&[u8]` buffer.
 | tier boundaries | 11.59       | 19.21  | 12.27 | **10.78** 🏆| 15.39  | +0.81          | 1.07x                 |
 | uniform random  | 10.34       | 23.86  | 9.30  | **9.22** 🏆 | 35.52  | +1.12          | 1.12x                 |
 
+## Stream Decode
+
+Decode a concatenated stream of encoded values. vu128 is excluded because its API requires a fixed `[u8; 9]` input.
+
+| Distribution    | bijou64     | varu64 | vu64         | leb128 | bijou64 Δ (µs) | bijou64 vs other best |
+|-----------------|-------------|--------|--------------|--------|----------------|-----------------------|
+| tiny (0-247)    | **3.98** 🏆 | 9.77   | 17.51        | 7.20   | −3.22          | 0.55x                 |
+| small (248-64k) | **9.34** 🏆 | 20.82  | 18.84        | 13.02  | −3.68          | 0.72x                 |
+| medium (64k-4B) | **9.34** 🏆 | 18.12  | 16.03        | 17.02  | −6.69          | 0.58x                 |
+| large (>4B)     | 10.31       | 23.29  | **8.68** 🏆  | 35.76  | +1.63          | 1.19x                 |
+| tier boundaries | 19.76       | 23.28  | **14.14** 🏆 | 14.15  | +5.62          | 1.40x                 |
+| uniform random  | 9.81        | 22.48  | **8.57** 🏆  | 34.89  | +1.24          | 1.15x                 |
+
 ## Encoded Size
 
 Bytes per value compared to a raw 8-byte `u64`. All tag-byte formats (bijou64, varu64, vu64/vu128) add 1 byte of overhead for multi-byte values. leb128 uses 1 continuation bit per byte instead.
@@ -91,19 +104,6 @@ bijou64 and varu64 share the same tag threshold (248), so their 1-byte range is 
 - **504-16383, 66040-2097151, etc.**: vu64 and leb128 win vs bijou64/varu64. vu64 packs 7 value bits into the first byte, giving it wider multi-byte tiers. This pattern also repeats at every tier.
 
 For values 0-127, every format agrees: 1 byte, an 8x reduction over raw `u64`. The trade-offs only appear in the 128-16,383 range, and which format "wins" depends on which part of that range your workload hits. Above 16,384 the formats converge again and stay within 1 byte of each other all the way to `u64::MAX`.
-
-## Stream Decode
-
-Decode a concatenated stream of encoded values. vu128 is excluded because its API requires a fixed `[u8; 9]` input.
-
-| Distribution    | bijou64     | varu64 | vu64         | leb128 | bijou64 Δ (µs) | bijou64 vs other best |
-|-----------------|-------------|--------|--------------|--------|----------------|-----------------------|
-| tiny (0-247)    | **3.98** 🏆 | 9.77   | 17.51        | 7.20   | −3.22          | 0.55x                 |
-| small (248-64k) | **9.34** 🏆 | 20.82  | 18.84        | 13.02  | −3.68          | 0.72x                 |
-| medium (64k-4B) | **9.34** 🏆 | 18.12  | 16.03        | 17.02  | −6.69          | 0.58x                 |
-| large (>4B)     | 10.31       | 23.29  | **8.68** 🏆  | 35.76  | +1.63          | 1.19x                 |
-| tier boundaries | 19.76       | 23.28  | **14.14** 🏆 | 14.15  | +5.62          | 1.40x                 |
-| uniform random  | 9.81        | 22.48  | **8.57** 🏆  | 34.89  | +1.24          | 1.15x                 |
 
 ## Round Trip
 
