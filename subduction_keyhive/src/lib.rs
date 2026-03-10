@@ -20,6 +20,8 @@ pub mod wire;
 pub mod protocol;
 #[cfg(feature = "serde")]
 pub mod storage_ops;
+#[cfg(feature = "serde")]
+pub mod sync_manager;
 
 #[cfg(all(test, feature = "serde"))]
 #[allow(clippy::expect_used, clippy::indexing_slicing)]
@@ -42,3 +44,5 @@ pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,
     save_event, save_event_bytes, save_keyhive_archive,
 };
+#[cfg(feature = "serde")]
+pub use sync_manager::{AsyncSendFn, KeyhiveSyncManager, SyncManagerError};
