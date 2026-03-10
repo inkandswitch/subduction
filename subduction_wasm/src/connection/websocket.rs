@@ -78,7 +78,7 @@ fn extract_batch_sync_response(msg: &InboundMessage) -> Option<&BatchSyncRespons
             | SyncMessage::RemoveSubscriptions(_)
             | SyncMessage::DataRequestRejected(_) => None,
         },
-        WireMessage::Ephemeral(_) => None,
+        WireMessage::Ephemeral(_) | WireMessage::Keyhive(_) => None,
     }
 }
 

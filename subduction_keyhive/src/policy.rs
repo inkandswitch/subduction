@@ -6,8 +6,8 @@
 use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
-use future_form::Sendable;
-use futures::{future::BoxFuture, FutureExt};
+use future_form::Local;
+use futures::{future::LocalBoxFuture, FutureExt};
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,
@@ -152,20 +152,20 @@ impl<
 }
 
 impl<
-        S: AsyncSigner + Clone + Send + Sync,
-        T: ContentRef + Send + Sync,
-        P: for<'de> Deserialize<'de> + Send + Sync,
-        C: CiphertextStore<T, P> + Clone + Send + Sync,
-        L: MembershipListener<S, T> + Send + Sync,
-        R: rand::CryptoRng + rand::RngCore + Send + Sync,
-    > ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
     fn authorize_connect(
         &self,
         peer_id: PeerId,
-    ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
         async move {
             let identifier = try_peer_id_to_identifier(peer_id)
                 .ok_or(ConnectionDisallowedError::InvalidPeerId)?;
@@ -176,18 +176,18 @@ impl<
 
             Err(ConnectionDisallowedError::UnknownAgent)
         }
-        .boxed()
+        .boxed_local()
     }
 }
 
 impl<
-        S: AsyncSigner + Clone + Send + Sync,
-        T: ContentRef + Send + Sync,
-        P: for<'de> Deserialize<'de> + Send + Sync,
-        C: CiphertextStore<T, P> + Clone + Send + Sync,
-        L: MembershipListener<S, T> + Send + Sync,
-        R: rand::CryptoRng + rand::RngCore + Send + Sync,
-    > StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -196,7 +196,7 @@ impl<
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::FetchDisallowed>> {
         async move {
             let identifier =
                 try_peer_id_to_identifier(peer).ok_or(FetchDisallowedError::InvalidPeerId)?;
@@ -221,7 +221,7 @@ impl<
                 Err(FetchDisallowedError::InsufficientAccess)
             }
         }
-        .boxed()
+        .boxed_local()
     }
 
     fn authorize_put(
@@ -229,7 +229,7 @@ impl<
         _requestor: PeerId,
         author: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async move {
             let identifier =
                 try_peer_id_to_identifier(author).ok_or(PutDisallowedError::InvalidAuthorId)?;
@@ -254,14 +254,14 @@ impl<
                 Err(PutDisallowedError::InsufficientAccess)
             }
         }
-        .boxed()
+        .boxed_local()
     }
 
     fn filter_authorized_fetch(
         &self,
         peer: PeerId,
         ids: Vec<SedimentreeId>,
-    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+    ) -> LocalBoxFuture<'_, Vec<SedimentreeId>> {
         async move {
             let Some(identifier) = try_peer_id_to_identifier(peer) else {
                 return Vec::new();
@@ -289,18 +289,18 @@ impl<
 
             authorized
         }
-        .boxed()
+        .boxed_local()
     }
 }
 
 impl<
-        S: AsyncSigner + Clone + Send + Sync,
-        T: ContentRef + Send + Sync,
-        P: for<'de> Deserialize<'de> + Send + Sync,
-        C: CiphertextStore<T, P> + Clone + Send + Sync,
-        L: MembershipListener<S, T> + Send + Sync,
-        R: rand::CryptoRng + rand::RngCore + Send + Sync,
-    > EphemeralPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > EphemeralPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type SubscribeDisallowed = SubscribeDisallowedError;
     type PublishDisallowed = PublishDisallowedError;
@@ -309,7 +309,7 @@ impl<
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::SubscribeDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::SubscribeDisallowed>> {
         async move {
             let identifier =
                 try_peer_id_to_identifier(peer).ok_or(SubscribeDisallowedError::InvalidPeerId)?;
@@ -334,14 +334,14 @@ impl<
                 Err(SubscribeDisallowedError::InsufficientAccess)
             }
         }
-        .boxed()
+        .boxed_local()
     }
 
     fn authorize_publish(
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::PublishDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::PublishDisallowed>> {
         async move {
             let identifier =
                 try_peer_id_to_identifier(peer).ok_or(PublishDisallowedError::InvalidPeerId)?;
@@ -366,14 +366,14 @@ impl<
                 Err(PublishDisallowedError::InsufficientAccess)
             }
         }
-        .boxed()
+        .boxed_local()
     }
 
     fn filter_authorized_subscribers(
         &self,
         sedimentree_id: SedimentreeId,
         peers: Vec<PeerId>,
-    ) -> BoxFuture<'_, Vec<PeerId>> {
+    ) -> LocalBoxFuture<'_, Vec<PeerId>> {
         async move {
             let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
                 return Vec::new();
@@ -396,7 +396,7 @@ impl<
                 })
                 .collect()
         }
-        .boxed()
+        .boxed_local()
     }
 }
 

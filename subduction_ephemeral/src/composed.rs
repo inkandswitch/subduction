@@ -101,6 +101,10 @@ where
                     .handle(conn, m)
                     .await
                     .map_err(ComposedError::Ephemeral),
+                WireMessage::Keyhive(_) => {
+                    tracing::warn!("received keyhive message but no keyhive handler configured");
+                    Ok(())
+                }
             }
         })
     }

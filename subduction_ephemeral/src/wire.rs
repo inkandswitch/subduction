@@ -15,23 +15,35 @@ use alloc::{boxed::Box, vec::Vec};
 use sedimentree_core::codec::{
     decode::Decode,
     encode::Encode,
-    error::{DecodeError, InvalidSchema},
+    error::{DecodeError, InvalidSchema, SizeMismatch},
 };
-use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
+use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
 
-use crate::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
+use crate::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
 
-/// Composed wire message carrying either sync or ephemeral traffic.
+/// Schema header for keyhive messages: **SU**bduction **K**eyhive v0.
+///
+/// Duplicated here to avoid a circular dependency on `subduction_keyhive`.
+/// Must be kept in sync with `subduction_keyhive::wire::KEYHIVE_SCHEMA`.
+pub const KEYHIVE_SCHEMA: [u8; 4] = *b"SUK\x00";
+
+/// Composed wire message carrying sync, ephemeral, or keyhive traffic.
 ///
 /// Encode delegates to the inner variant (schema headers are already
-/// distinct: `SUM\x00` vs `SUE\x00`). Decode reads the 4-byte schema
-/// header and dispatches to the appropriate decoder.
+/// distinct: `SUM\x00` vs `SUE\x00` vs `SUK\x00`). Decode reads the
+/// 4-byte schema header and dispatches to the appropriate decoder.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum WireMessage {
     /// A sync-protocol message.
     Sync(Box<SyncMessage>),
     /// An ephemeral-protocol message.
     Ephemeral(EphemeralMessage),
+    /// A keyhive-protocol message (raw framed bytes).
+    ///
+    /// Carries the complete `SUK\x00`-framed wire bytes. The handler
+    /// is responsible for decoding the inner payload via
+    /// `subduction_keyhive::KeyhiveMessage::try_decode`.
+    Keyhive(Vec<u8>),
 }
 
 impl From<SyncMessage> for WireMessage {
@@ -51,6 +63,7 @@ impl Encode for WireMessage {
         match self {
             Self::Sync(msg) => Encode::encode(msg.as_ref()),
             Self::Ephemeral(msg) => msg.encode(),
+            Self::Keyhive(raw) => raw.clone(),
         }
     }
 
@@ -58,13 +71,14 @@ impl Encode for WireMessage {
         match self {
             Self::Sync(msg) => msg.encoded_size(),
             Self::Ephemeral(msg) => msg.encoded_size(),
+            Self::Keyhive(raw) => raw.len(),
         }
     }
 }
 
 impl Decode for WireMessage {
-    /// Minimum size is the smaller of the two envelope headers (both are 9 bytes).
-    const MIN_SIZE: usize = 9; // schema(4) + total_size(4) + tag(1)
+    /// Minimum size is the smallest envelope header: `SUK` has no tag (8 bytes).
+    const MIN_SIZE: usize = 8; // schema(4) + total_size(4)
 
     fn try_decode(buf: &[u8]) -> Result<Self, DecodeError> {
         if buf.len() < 4 {
@@ -87,13 +101,46 @@ impl Decode for WireMessage {
         match schema {
             MESSAGE_SCHEMA => SyncMessage::try_decode(buf).map(|m| WireMessage::Sync(Box::new(m))),
             EPHEMERAL_SCHEMA => EphemeralMessage::try_decode(buf).map(WireMessage::Ephemeral),
+            KEYHIVE_SCHEMA => decode_keyhive_frame(buf).map(WireMessage::Keyhive),
             _ => Err(InvalidSchema {
-                expected: MESSAGE_SCHEMA, // Use sync as the "expected" — both are valid
+                expected: MESSAGE_SCHEMA, // Use sync as the "expected" — all three are valid
                 got: schema,
             }
             .into()),
         }
     }
+}
+
+/// Validate the `SUK\x00` frame envelope and return the complete framed bytes.
+///
+/// We only validate the schema + total_size here. The CBOR payload
+/// inside is decoded later by the keyhive handler.
+fn decode_keyhive_frame(buf: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    if buf.len() < 8 {
+        return Err(DecodeError::MessageTooShort {
+            type_name: "KeyhiveMessage envelope",
+            need: 8,
+            have: buf.len(),
+        });
+    }
+
+    let total_size = u32::from_be_bytes(buf.get(4..8).and_then(|s| s.try_into().ok()).ok_or(
+        DecodeError::MessageTooShort {
+            type_name: "KeyhiveMessage total_size",
+            need: 8,
+            have: buf.len(),
+        },
+    )?) as usize;
+
+    if buf.len() != total_size {
+        return Err(SizeMismatch {
+            declared: total_size,
+            actual: buf.len(),
+        }
+        .into());
+    }
+
+    Ok(buf.to_vec())
 }
 
 #[cfg(test)]
@@ -159,5 +206,38 @@ mod tests {
         let via_wire = WireMessage::Ephemeral(eph_msg).encode();
 
         assert_eq!(direct, via_wire);
+    }
+
+    #[test]
+    fn keyhive_roundtrip_through_wire() {
+        // Build a minimal SUK frame: schema(4) + total_size(4) + payload
+        let payload = vec![0xCA, 0xFE];
+        let total_size = (8 + payload.len()) as u32;
+        let mut raw = Vec::with_capacity(total_size as usize);
+        raw.extend_from_slice(&KEYHIVE_SCHEMA);
+        raw.extend_from_slice(&total_size.to_be_bytes());
+        raw.extend_from_slice(&payload);
+
+        let wire = WireMessage::Keyhive(raw.clone());
+        let encoded = wire.encode();
+        let decoded = WireMessage::try_decode(&encoded).expect("decode");
+
+        assert_eq!(decoded, WireMessage::Keyhive(raw));
+    }
+
+    #[test]
+    fn keyhive_encode_is_passthrough() {
+        let raw = {
+            let payload = vec![0x01, 0x02, 0x03];
+            let total_size = (8 + payload.len()) as u32;
+            let mut buf = Vec::new();
+            buf.extend_from_slice(&KEYHIVE_SCHEMA);
+            buf.extend_from_slice(&total_size.to_be_bytes());
+            buf.extend_from_slice(&payload);
+            buf
+        };
+
+        let wire = WireMessage::Keyhive(raw.clone());
+        assert_eq!(wire.encode(), raw);
     }
 }
