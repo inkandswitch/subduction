@@ -27,6 +27,20 @@ Encode to a `Vec<u8>`.
 | tier boundaries | 16.26        | 29.47  | 18.52        | 19.15 | **12.03** 🏆 | #2           | +4.23          | 1.35x                 |
 | uniform random  | 13.15        | 28.10  | **11.21** 🏆 | 11.84 | 34.17        | #3           | +1.94          | 1.17x                 |
 
+Bars left to right: bijou64, varu64, vu64, vu128, leb128.
+
+```mermaid
+xychart-beta
+    title "Encode (Vec) -- median µs / 4096 values"
+    x-axis ["tiny", "small", "medium", "large", "tier", "uniform"]
+    y-axis "µs" 0 --> 35
+    bar [2.26, 11.41, 19.29, 13.11, 16.26, 13.15]
+    bar [10.96, 20.00, 26.89, 28.19, 29.47, 28.10]
+    bar [20.69, 22.96, 22.76, 11.30, 18.52, 11.21]
+    bar [16.23, 20.17, 21.95, 11.70, 19.15, 11.84]
+    bar [4.21, 7.16, 13.55, 33.25, 12.03, 34.17]
+```
+
 ## Encode Array
 
 Encode to a fixed `[u8; 9]` with no allocation. leb128 is excluded because its API requires a `Write` implementor.
@@ -39,6 +53,19 @@ Encode to a fixed `[u8; 9]` with no allocation. leb128 is excluded because its A
 | large (>4B)     | 2.75        | 19.88  | **1.64** 🏆 | 3.51  | #2           | +1.11          | 1.68x                 |
 | tier boundaries | 2.58        | 16.48  | **1.65** 🏆 | 3.41  | #2           | +0.93          | 1.56x                 |
 | uniform random  | 2.54        | 19.92  | **1.65** 🏆 | 3.53  | #2           | +0.89          | 1.54x                 |
+
+Bars left to right: bijou64, varu64, vu64, vu128.
+
+```mermaid
+xychart-beta
+    title "Encode Array (no alloc) -- median µs / 4096 values"
+    x-axis ["tiny", "small", "medium", "large", "tier", "uniform"]
+    y-axis "µs" 0 --> 20
+    bar [1.27, 2.41, 2.59, 2.75, 2.58, 2.54]
+    bar [4.87, 8.67, 12.38, 19.88, 16.48, 19.92]
+    bar [1.62, 1.63, 1.65, 1.64, 1.65, 1.65]
+    bar [2.87, 3.51, 3.52, 3.51, 3.41, 3.53]
+```
 
 ## Decode
 
@@ -53,6 +80,20 @@ Decode from a `&[u8]` buffer.
 | tier boundaries | 11.59       | 19.21  | 12.27 | **10.78** 🏆| 15.39  | #2           | +0.81          | 1.07x                 |
 | uniform random  | 10.34       | 23.86  | 9.30  | **9.22** 🏆 | 35.52  | #3           | +1.12          | 1.12x                 |
 
+Bars left to right: bijou64, varu64, vu64, vu128, leb128.
+
+```mermaid
+xychart-beta
+    title "Decode -- median µs / 4096 values"
+    x-axis ["tiny", "small", "medium", "large", "tier", "uniform"]
+    y-axis "µs" 0 --> 36
+    bar [3.93, 9.36, 8.77, 10.05, 11.59, 10.34]
+    bar [6.62, 10.99, 16.24, 22.27, 19.21, 23.86]
+    bar [14.40, 15.43, 15.37, 8.80, 12.27, 9.30]
+    bar [22.76, 15.18, 10.70, 8.67, 10.78, 9.22]
+    bar [12.57, 15.24, 16.09, 35.86, 15.39, 35.52]
+```
+
 ## Stream Decode
 
 Decode a concatenated stream of encoded values. vu128 is excluded because its API requires a fixed `[u8; 9]` input.
@@ -65,6 +106,19 @@ Decode a concatenated stream of encoded values. vu128 is excluded because its AP
 | large (>4B)     | 10.31       | 23.29  | **8.68** 🏆  | 35.76  | #2           | +1.63          | 1.19x                 |
 | tier boundaries | 19.76       | 23.28  | **14.14** 🏆 | 14.15  | #3           | +5.62          | 1.40x                 |
 | uniform random  | 9.81        | 22.48  | **8.57** 🏆  | 34.89  | #2           | +1.24          | 1.15x                 |
+
+## Round Trip
+
+Encode then immediately decode each value.
+
+| Distribution    | bijou64 | varu64 | vu64  | vu128       | leb128 | bijou64 rank | bijou64 Δ (µs) | bijou64 vs other best |
+|-----------------|---------|--------|-------|-------------|--------|--------------|----------------|-----------------------|
+| tiny (0-247)    | 4.96    | 10.49  | 22.94 | **4.73** 🏆 | 13.22  | #2           | +0.23          | 1.05x                 |
+| small (248-64k) | 20.54   | 17.76  | 26.32 | **7.06** 🏆 | 22.90  | #3           | +13.48         | 2.91x                 |
+| medium (64k-4B) | 27.87   | 28.07  | 22.52 | **2.91** 🏆 | 26.93  | #4           | +24.96         | 9.58x                 |
+| large (>4B)     | 22.92   | 41.98  | 11.47 | **2.61** 🏆 | 57.63  | #3           | +20.31         | 8.78x                 |
+| tier boundaries | 27.50   | 34.70  | 17.43 | **4.23** 🏆 | 25.89  | #4           | +23.27         | 6.51x                 |
+| uniform random  | 23.57   | 43.46  | 12.07 | **2.77** 🏆 | 59.84  | #3           | +20.81         | 8.51x                 |
 
 ## Encoded Size
 
@@ -104,19 +158,6 @@ bijou64 and varu64 share the same tag threshold (248), so their 1-byte range is 
 - **504-16383, 66040-2097151, etc.**: vu64 and leb128 win vs bijou64/varu64. vu64 packs 7 value bits into the first byte, giving it wider multi-byte tiers. This pattern also repeats at every tier.
 
 For values 0-127, every format agrees: 1 byte, an 8x reduction over raw `u64`. The trade-offs only appear in the 128-16,383 range, and which format "wins" depends on which part of that range your workload hits. Above 16,384 the formats converge again and stay within 1 byte of each other all the way to `u64::MAX`.
-
-## Round Trip
-
-Encode then immediately decode each value.
-
-| Distribution    | bijou64 | varu64 | vu64  | vu128       | leb128 | bijou64 rank | bijou64 Δ (µs) | bijou64 vs other best |
-|-----------------|---------|--------|-------|-------------|--------|--------------|----------------|-----------------------|
-| tiny (0-247)    | 4.96    | 10.49  | 22.94 | **4.73** 🏆 | 13.22  | #2           | +0.23          | 1.05x                 |
-| small (248-64k) | 20.54   | 17.76  | 26.32 | **7.06** 🏆 | 22.90  | #3           | +13.48         | 2.91x                 |
-| medium (64k-4B) | 27.87   | 28.07  | 22.52 | **2.91** 🏆 | 26.93  | #4           | +24.96         | 9.58x                 |
-| large (>4B)     | 22.92   | 41.98  | 11.47 | **2.61** 🏆 | 57.63  | #3           | +20.31         | 8.78x                 |
-| tier boundaries | 27.50   | 34.70  | 17.43 | **4.23** 🏆 | 25.89  | #4           | +23.27         | 6.51x                 |
-| uniform random  | 23.57   | 43.46  | 12.07 | **2.77** 🏆 | 59.84  | #3           | +20.81         | 8.51x                 |
 
 ## Summary
 
