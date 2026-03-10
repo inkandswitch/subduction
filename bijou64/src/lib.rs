@@ -136,6 +136,12 @@ const BOUNDS: [u64; NUM_TIERS + 1] = [
 
 /// Returns the encoded length of `value` in bytes (1–9).
 ///
+/// Uses `leading_zeros` (a single `lzcnt`/`clz` instruction on most
+/// architectures) to derive a candidate tier from the value's bit-width,
+/// then applies at most one comparison to correct for the per-tier
+/// offsets. This replaces the previous 8-arm if/else chain with O(1)
+/// arithmetic.
+///
 /// # Examples
 ///
 /// ```
@@ -148,24 +154,29 @@ const BOUNDS: [u64; NUM_TIERS + 1] = [
 /// ```
 #[must_use]
 pub const fn encoded_len(value: u64) -> usize {
+    // Fast path: tier 0 values (0–247) are the most common in many
+    // workloads and need only a single well-predicted comparison.
     if value < BOUNDS[0] {
-        1
-    } else if value < BOUNDS[1] {
-        2
-    } else if value < BOUNDS[2] {
-        3
-    } else if value < BOUNDS[3] {
-        4
-    } else if value < BOUNDS[4] {
-        5
-    } else if value < BOUNDS[5] {
-        6
-    } else if value < BOUNDS[6] {
-        7
-    } else if value < BOUNDS[7] {
-        8
+        return 1;
+    }
+
+    // For multi-byte tiers, derive the tier from the value's bit-width
+    // via `leading_zeros` (a single `lzcnt`/`clz` instruction on most
+    // architectures), then correct with one comparison.
+    let bw = 64 - value.leading_zeros(); // u32, 8..=64 here
+
+    // Tier boundaries align to bit-widths 8, 9, 17, 25, 33, 41, 49, 57.
+    // For bw=8 -> candidate 2, bw 9..=16 -> 3, 17..=24 -> 4, etc.
+    // Formula: (bw - 1) / 8 + 2, which also gives 2 for bw=8.
+    let candidate = ((bw - 1) / 8 + 2) as usize;
+
+    // The candidate can be at most 1 too high because bijou64's tier
+    // offsets push the boundary slightly past each power-of-256.
+    // One comparison corrects for boundary values.
+    if value < BOUNDS[candidate - 2] {
+        candidate - 1
     } else {
-        9
+        candidate
     }
 }
 
