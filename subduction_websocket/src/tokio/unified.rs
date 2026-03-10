@@ -46,6 +46,30 @@ impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> UnifiedWebSocket<O, 
             UnifiedWebSocket::Dialed(out_ws) => out_ws.listen().await,
         }
     }
+
+    /// Send a raw wire message (bypasses `Connection<Sendable, SyncMessage>`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SendError`] if the outbound channel is closed.
+    pub async fn send_wire(&self, msg: &M) -> Result<(), crate::error::SendError> {
+        match self {
+            UnifiedWebSocket::Accepted(ws) => ws.send_wire(msg).await,
+            UnifiedWebSocket::Dialed(ws) => ws.send_wire(msg).await,
+        }
+    }
+
+    /// Receive the next unfiltered wire message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecvError`] if the inbound channel is closed.
+    pub async fn recv_wire(&self) -> Result<M, crate::error::RecvError> {
+        match self {
+            UnifiedWebSocket::Accepted(ws) => ws.recv_wire().await,
+            UnifiedWebSocket::Dialed(ws) => ws.recv_wire().await,
+        }
+    }
 }
 
 impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> Connection<Sendable, SyncMessage>

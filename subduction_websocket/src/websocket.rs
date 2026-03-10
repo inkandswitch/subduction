@@ -394,6 +394,40 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>, M: Channel
         self.peer_id
     }
 
+    /// Send a raw wire message (bypasses `Connection<K, SyncMessage>`).
+    ///
+    /// Encodes `msg` via [`Encode`] and pushes the binary frame to the
+    /// outbound channel. Use this when `M ≠ SyncMessage` and you need
+    /// to send a non-sync message variant directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SendError`] if the outbound channel is closed.
+    pub async fn send_wire(&self, msg: &M) -> Result<(), SendError> {
+        let msg_bytes = Encode::encode(msg);
+        self.outbound_tx
+            .send(tungstenite::Message::Binary(msg_bytes.into()))
+            .await
+            .map_err(|_| SendError)?;
+        Ok(())
+    }
+
+    /// Receive the next unfiltered wire message.
+    ///
+    /// Unlike `Connection<K, SyncMessage>::recv()` (which loops until a
+    /// sync message arrives), this returns the next `M` from the inbound
+    /// channel regardless of variant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecvError`] if the inbound channel is closed.
+    pub async fn recv_wire(&self) -> Result<M, RecvError> {
+        self.inbound_reader.recv().await.map_err(|_| {
+            tracing::error!("inbound channel closed unexpectedly");
+            RecvError
+        })
+    }
+
     /// Listen for incoming messages and dispatch them appropriately.
     ///
     /// # Errors

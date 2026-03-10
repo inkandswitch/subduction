@@ -34,9 +34,13 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
-use crate::{key, metrics, transport::UnifiedTransport};
+use crate::{key, metrics, transport::UnifiedTransport, wire::CliWireMessage};
 
 /// Type alias for the unified Subduction instance.
+///
+/// The wire type is `SyncMessage` until the composed handler is wired in
+/// (Phase 7.3), at which point this switches to `CliWireMessage` via
+/// `build_with_handler`.
 type CliSubduction = Arc<
     Subduction<
         'static,
@@ -527,7 +531,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 async fn accept_loop(
     tcp_listener: TcpListener,
     subduction: CliSubduction,
-    lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, CliWireMessage>,
     cancel: CancellationToken,
     timeout: FuturesTimerTimeout,
     default_time_limit: Duration,
@@ -706,7 +710,7 @@ async fn handle_http_longpoll(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
     subduction: CliSubduction,
-    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, CliWireMessage>,
 ) {
     use http_body_util::Full;
     use hyper::{

@@ -38,8 +38,10 @@ sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["std", "metrics"] }
 subduction_crypto = { workspace = true }
+subduction_ephemeral = { workspace = true }
 subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
 subduction_iroh = { workspace = true }
+subduction_keyhive = { workspace = true, features = ["serde"] }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }
@@ -59,6 +61,7 @@ subduction_crypto = { workspace = true }
 subduction_http_longpoll = { workspace = true, features = ["std", "native-tls"] }
 subduction_websocket = { workspace = true, features = ["futures-timer"] }
 tempfile = "3"
+testresult = { workspace = true }
 tokio = { workspace = true, features = ["full"] }
 
 [features]

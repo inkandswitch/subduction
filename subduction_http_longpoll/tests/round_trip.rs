@@ -138,7 +138,7 @@ impl TestServer {
 async fn accept_loop(
     tcp: TcpListener,
     subduction: TestSubduction,
-    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
     cancel: async_channel::Receiver<()>,
 ) {
     use tokio::task::JoinSet;
@@ -172,7 +172,7 @@ async fn accept_loop(
 async fn serve_http_connection(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
-    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
     subduction: TestSubduction,
 ) {
     use hyper_util::rt::TokioIo;

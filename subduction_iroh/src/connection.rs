@@ -201,6 +201,40 @@ impl<O, M: ChannelMessage> IrohConnection<O, M> {
     pub fn quic_connection(&self) -> &iroh::endpoint::Connection {
         &self.inner.quic_conn
     }
+
+    /// Send a raw wire message (bypasses `Connection<Sendable, SyncMessage>`).
+    ///
+    /// Encodes `msg` via [`Encode`] and pushes to the outbound channel.
+    /// Use this when `M ≠ SyncMessage` and you need to send a non-sync
+    /// message variant directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SendError`] if the outbound channel is closed.
+    pub async fn send_wire(&self, msg: &M) -> Result<(), SendError> {
+        self.inner
+            .outbound_tx
+            .send(msg.clone())
+            .await
+            .map_err(|_| SendError)?;
+        Ok(())
+    }
+
+    /// Receive the next unfiltered wire message.
+    ///
+    /// Unlike `Connection<Sendable, SyncMessage>::recv()` (which loops
+    /// until a sync message arrives), this returns the next `M` from the
+    /// inbound channel regardless of variant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecvError`] if the inbound channel is closed.
+    pub async fn recv_wire(&self) -> Result<M, RecvError> {
+        self.inner.inbound_reader.recv().await.map_err(|_| {
+            tracing::error!("inbound channel closed unexpectedly");
+            RecvError
+        })
+    }
 }
 
 impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> Connection<Sendable, SyncMessage>

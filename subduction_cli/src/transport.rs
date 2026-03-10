@@ -3,6 +3,15 @@
 //! Wraps [`UnifiedWebSocket`], [`HttpLongPollConnection`], and
 //! [`IrohConnection`] so the server can use a single [`Subduction`]
 //! instance for all transport types.
+//!
+//! The inner connections are parameterized over [`CliWireMessage`] so
+//! that sync, ephemeral, and keyhive traffic can be multiplexed on
+//! every physical link. Two [`Connection`] impls are provided:
+//!
+//! - `Connection<Sendable, CliWireMessage>` — passthrough, used by
+//!   the composed handler to send/receive any wire message variant.
+//! - `Connection<Sendable, SyncMessage>` — filters to sync-only
+//!   traffic, used by the core `Subduction` listen loop.
 
 use core::time::Duration;
 
@@ -20,17 +29,19 @@ use subduction_http_longpoll::connection::HttpLongPollConnection;
 use subduction_iroh::connection::IrohConnection;
 use subduction_websocket::tokio::unified::UnifiedWebSocket;
 
+use crate::wire::CliWireMessage;
+
 /// A unified connection covering all transport types the CLI server supports.
 #[derive(Debug, Clone)]
 pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Send + Sync> {
     /// WebSocket transport (accepted or dialed).
-    WebSocket(UnifiedWebSocket<O, SyncMessage>),
+    WebSocket(UnifiedWebSocket<O, CliWireMessage>),
 
     /// HTTP long-poll transport.
-    HttpLongPoll(HttpLongPollConnection<O, SyncMessage>),
+    HttpLongPoll(HttpLongPollConnection<O, CliWireMessage>),
 
     /// Iroh QUIC transport.
-    Iroh(IrohConnection<O, SyncMessage>),
+    Iroh(IrohConnection<O, CliWireMessage>),
 }
 
 /// Error type for send operations across transports.
@@ -96,6 +107,95 @@ pub(crate) enum TransportDisconnectionError {
     #[error(transparent)]
     Iroh(#[from] subduction_iroh::error::DisconnectionError),
 }
+
+// ── Connection<Sendable, CliWireMessage> — unfiltered wire access ───────
+//
+// Uses `send_wire` / `recv_wire` on WebSocket and Iroh, and
+// `push_outbound` / `recv_inbound` on HTTP long-poll to bypass the
+// `Connection<Sendable, SyncMessage>` filter layer.
+
+impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, CliWireMessage>
+    for UnifiedTransport<O>
+{
+    type SendError = TransportSendError;
+    type RecvError = TransportRecvError;
+    type DisconnectionError = TransportDisconnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        match self {
+            Self::WebSocket(ws) => Connection::<Sendable, SyncMessage>::peer_id(ws),
+            Self::HttpLongPoll(lp) => Connection::<Sendable, SyncMessage>::peer_id(lp),
+            Self::Iroh(iroh) => Connection::<Sendable, SyncMessage>::peer_id(iroh),
+        }
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        match self {
+            Self::WebSocket(ws) => Box::pin(async {
+                Connection::<Sendable, SyncMessage>::disconnect(ws)
+                    .await
+                    .map_err(Into::into)
+            }),
+            Self::HttpLongPoll(lp) => Box::pin(async {
+                Connection::<Sendable, SyncMessage>::disconnect(lp)
+                    .await
+                    .map_err(Into::into)
+            }),
+            Self::Iroh(iroh) => Box::pin(async {
+                Connection::<Sendable, SyncMessage>::disconnect(iroh)
+                    .await
+                    .map_err(Into::into)
+            }),
+        }
+    }
+
+    fn send(&self, message: &CliWireMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        let msg = message.clone();
+        match self {
+            Self::WebSocket(ws) => {
+                let ws = ws.clone();
+                Box::pin(async move { ws.send_wire(&msg).await.map_err(Into::into) })
+            }
+            Self::HttpLongPoll(lp) => {
+                let lp = lp.clone();
+                Box::pin(async move {
+                    lp.push_outbound(msg)
+                        .await
+                        .map_err(|_| subduction_http_longpoll::error::SendError)
+                        .map_err(Into::into)
+                })
+            }
+            Self::Iroh(iroh) => {
+                let iroh = iroh.clone();
+                Box::pin(async move { iroh.send_wire(&msg).await.map_err(Into::into) })
+            }
+        }
+    }
+
+    fn recv(&self) -> BoxFuture<'_, Result<CliWireMessage, Self::RecvError>> {
+        match self {
+            Self::WebSocket(ws) => {
+                let ws = ws.clone();
+                Box::pin(async move { ws.recv_wire().await.map_err(Into::into) })
+            }
+            Self::HttpLongPoll(lp) => {
+                let lp = lp.clone();
+                Box::pin(async move {
+                    lp.recv_inbound()
+                        .await
+                        .map_err(|_| subduction_http_longpoll::error::RecvError)
+                        .map_err(Into::into)
+                })
+            }
+            Self::Iroh(iroh) => {
+                let iroh = iroh.clone();
+                Box::pin(async move { iroh.recv_wire().await.map_err(Into::into) })
+            }
+        }
+    }
+}
+
+// ── Connection<Sendable, SyncMessage> — sync-only filter ───────────────
 
 impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for UnifiedTransport<O> {
     type SendError = TransportSendError;

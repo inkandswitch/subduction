@@ -25,7 +25,6 @@ use subduction_core::{
     connection::{
         authenticated::Authenticated,
         handshake::{self, Audience},
-        message::SyncMessage,
         nonce_cache::NonceCache,
         timeout::Timeout,
     },
@@ -39,15 +38,15 @@ use futures::{FutureExt, future::BoxFuture};
 
 use crate::{
     DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
-    connection::HttpLongPollConnection,
+    connection::{ChannelMessage, HttpLongPollConnection},
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
 };
 
 /// Server-side handler state, shared across request handlers.
 #[derive(Debug, Clone)]
-pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync> {
-    sessions: SessionStore<O, SyncMessage>,
+pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> {
+    sessions: SessionStore<O, M>,
     signer: Sig,
     nonce_cache: Arc<NonceCache>,
     our_peer_id: PeerId,
@@ -59,8 +58,11 @@ pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync> {
     poll_timeout: Duration,
 }
 
-impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
-    LongPollHandler<Sig, O>
+impl<
+    Sig: Signer<Sendable> + Clone + Send + Sync,
+    O: Timeout<Sendable> + Clone + Send + Sync,
+    M: ChannelMessage,
+> LongPollHandler<Sig, O, M>
 {
     /// Create a new long-poll handler.
     #[must_use]
@@ -103,7 +105,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
     /// Access the session store.
     #[must_use]
-    pub const fn sessions(&self) -> &SessionStore<O, SyncMessage> {
+    pub const fn sessions(&self) -> &SessionStore<O, M> {
         &self.sessions
     }
 
@@ -232,7 +234,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
     /// Handle `POST /lp/send`.
     ///
-    /// The client sends a binary-encoded `SyncMessage` in the body.
+    /// The client sends a binary-encoded message in the body.
     async fn handle_send(
         &self,
         req: Request<Incoming>,
@@ -246,14 +248,9 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
         let body = read_body(req, self.max_body_size).await?;
 
-        let msg = subduction_core::connection::message::SyncMessage::try_decode(&body)
-            .map_err(ServerError::MessageDecode)?;
+        let msg = M::try_decode(&body).map_err(ServerError::MessageDecode)?;
 
-        tracing::debug!(
-            "POST /lp/send: peer {} message {:?}",
-            entry.peer_id,
-            msg.request_id()
-        );
+        tracing::debug!("POST /lp/send: peer {} message {:?}", entry.peer_id, msg);
 
         entry
             .connection
@@ -286,8 +283,8 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
         match self.timeout.timeout(self.poll_timeout, pull_fut).await {
             Ok(Ok(msg)) => {
-                let encoded = msg.encode();
-                tracing::debug!("POST /lp/recv: delivering message {:?}", msg.request_id(),);
+                let encoded = sedimentree_core::codec::encode::Encode::encode(&msg);
+                tracing::debug!("POST /lp/recv: delivering message {:?}", msg);
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("content-type", "application/octet-stream")
@@ -335,7 +332,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     pub async fn take_authenticated(
         &self,
         session_id: &SessionId,
-    ) -> Option<Authenticated<HttpLongPollConnection<O, SyncMessage>, Sendable>> {
+    ) -> Option<Authenticated<HttpLongPollConnection<O, M>, Sendable>> {
         let mut sessions = self.sessions.sessions.lock().await;
         sessions
             .get_mut(session_id)
