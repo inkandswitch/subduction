@@ -89,8 +89,8 @@ Criterion benchmarks, 4096 values per distribution, median time in µs:
 |------------------|-------------------|-------------------------|--------|
 | tiny (0--247)    | 1.35              | 1.30                    | ~same  |
 | small (248--64k) | 2.68              | 2.84                    | ~same  |
-| medium (64k--4G) | 6.35              | 2.76                    | 2.3x   |
-| large (>4G)      | 6.30              | 2.78                    | 2.3x   |
+| medium (64k--4B) | 6.35              | 2.76                    | 2.3x   |
+| large (>4B)      | 6.30              | 2.78                    | 2.3x   |
 | tier boundaries  | 4.76              | 2.75                    | 1.7x   |
 | uniform random   | 6.37              | 2.67                    | 2.4x   |
 
@@ -111,6 +111,108 @@ The optimised implementation preserves:
 - `forbid(unsafe_code)`
 - Identical output for every `u64` value (verified by the existing `encoded_len_matches` property test, which checks `encoded_len(v)` against `encode_array(v).1` for random values across all tiers)
 
-### Future Work
+## `encode_array` and `encode`: The Same Trick, Applied to Encoding
 
-The same `leading_zeros`-based tier derivation could apply to `encode_array`, which uses an analogous 8-arm if/else chain today. The tricky part is that each arm constructs a different array literal -- different tag byte, different offset subtraction, different byte positions for the big-endian payload. Unifying that into a branchless path without `unsafe` or losing `const fn` compatibility is an open question. It's entirely possible there's a clean way to do it; I haven't found one yet.
+### Background
+
+The original `encode_array` had the same 8-arm if/else structure as `encoded_len` -- each arm tested against a tier boundary and then constructed a literal `[u8; 9]` with the tag byte and big-endian payload hardcoded at the right positions. The `encode` function was a thin wrapper: call `encode_array`, then `extend_from_slice` the relevant prefix into the Vec.
+
+This was _fine_ for tiny values (same first-comparison fast path), but medium-to-large values walked the full branch chain. The encode path was where bijou64 looked worst in the shootout -- consistently 4th or 5th across distributions.
+
+### The Approach
+
+The same `leading_zeros` trick from `encoded_len` applies here. Once you know the tier, the rest is mechanical:
+
+- Tag byte: `247 + tier`
+- Offset: `OFFSETS[tier]`
+- Payload: `(value - offset).to_be_bytes()` -- always 8 bytes, last `tier` of which are relevant
+- Output length: `tier + 1`
+
+The challenge I'd flagged as an open question in the `encoded_len` section turned out to be solvable with a `while` loop copying byte-by-byte. It's not pretty, but it's `const fn` compatible and the compiler handles it well:
+
+```rust
+pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
+    if value < BOUNDS[0] {
+        return ([(value & 0xFF) as u8, 0, 0, 0, 0, 0, 0, 0, 0], 1);
+    }
+
+    let bw = 64 - value.leading_zeros();
+    let mut tier = ((bw - 1) / 8 + 1) as usize;
+    if value < BOUNDS[tier - 1] {
+        tier -= 1;
+    }
+
+    let tag = (247 + tier) as u8;
+    let payload = (value - OFFSETS[tier]).to_be_bytes();
+
+    let mut buf = [0u8; MAX_BYTES];
+    buf[0] = tag;
+    let start = 8 - tier;
+    let mut i = 0;
+    while i < tier {
+        buf[1 + i] = payload[start + i];
+        i += 1;
+    }
+
+    (buf, tier + 1)
+}
+```
+
+### A Subtlety with `encode` (the Vec path)
+
+The first version of this change applied the `leading_zeros` trick to `encode_array` and left `encode` as a wrapper that called it. This _regressed_ the Vec-pushing path by 8--29% on multi-byte distributions -- while `encode_array` itself got dramatically faster.
+
+The reason: the old code returned array _literals_ with constant lengths. The compiler could see that `([0xF8, be[7], 0, 0, 0, 0, 0, 0, 0], 2)` had exactly 2 live bytes and emit a fixed-size copy. The new code builds the array with a `while` loop and returns a runtime-variable `tier + 1` as the length. `extend_from_slice(&arr[..len])` with a non-constant `len` generates worse code for the Vec copy.
+
+The fix was to give `encode` its own implementation that writes directly to the Vec -- push the tag byte, then `extend_from_slice` the relevant tail of the `to_be_bytes()` array. This avoids the intermediate `[u8; 9]` entirely:
+
+```rust
+pub fn encode(value: u64, buf: &mut Vec<u8>) {
+    if value < BOUNDS[0] {
+        buf.push((value & 0xFF) as u8);
+        return;
+    }
+
+    let bw = 64 - value.leading_zeros();
+    let mut tier = ((bw - 1) / 8 + 1) as usize;
+    if value < BOUNDS[tier - 1] {
+        tier -= 1;
+    }
+
+    buf.push((247 + tier) as u8);
+    let be = (value - OFFSETS[tier]).to_be_bytes();
+    buf.extend_from_slice(&be[8 - tier..]);
+}
+```
+
+### What We Measured
+
+#### `encode_array` (no-alloc path)
+
+| Distribution     | Before (if-chain) | After (`leading_zeros`) | Change |
+|------------------|--------------------|-------------------------|--------|
+| tiny (0--247)    | 3.79               | 1.30                    | 2.9x   |
+| small (248--64k) | 7.68               | 2.53                    | 3.0x   |
+| medium (64k--4B) | 10.12              | 2.50                    | 4.0x   |
+| large (>4B)      | 15.14              | 2.71                    | 5.6x   |
+| tier boundaries  | 12.08              | 2.50                    | 4.8x   |
+| uniform random   | 15.12              | 2.49                    | 6.1x   |
+
+bijou64 now _beats_ vu64 on `encode_array` for tiny values (1.30 vs 1.66 µs) and is within 1.5x for all other distributions. Previously it was 2--9x slower.
+
+#### `encode` (Vec path)
+
+| Distribution     | Before (if-chain) | After (direct push) | Change |
+|------------------|--------------------|---------------------|--------|
+| tiny (0--247)    | 10.27              | 2.31                | 4.4x   |
+| small (248--64k) | 21.87              | 11.46               | 1.9x   |
+| medium (64k--4B) | 26.66              | 19.13               | 1.4x   |
+| large (>4B)      | 22.92              | 12.83               | 1.8x   |
+| tier boundaries  | 25.65              | 15.88               | 1.6x   |
+| uniform random   | 22.66              | 12.68               | 1.8x   |
+
+The tiny encode improvement (4.4x) is particularly nice -- bijou64 is now the fastest encoder in the shootout for small values, ahead of leb128 (4.38 µs).
+
+### Properties Preserved
+
+Same as `encoded_len`: `const fn` (for `encode_array`), `no_std`, `forbid(unsafe_code)`, identical output for all `u64` values.

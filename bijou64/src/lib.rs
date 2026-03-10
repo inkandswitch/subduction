@@ -182,11 +182,6 @@ pub const fn encoded_len(value: u64) -> usize {
 
 /// Encodes `value` as a `bijou64`, appending bytes to `buf`.
 ///
-/// # Panics
-///
-/// Cannot panic in practice: [`encode_array`]'s exhaustive `if`/`else`
-/// chain guarantees the returned length is in `1..=MAX_BYTES`.
-///
 /// # Examples
 ///
 /// ```
@@ -198,19 +193,32 @@ pub const fn encoded_len(value: u64) -> usize {
 /// bijou64::encode(248, &mut buf);
 /// assert_eq!(buf, [0xF8, 0x00]);
 /// ```
-#[allow(clippy::expect_used)] // Invariant: encode_array's exhaustive if/else guarantees len ∈ 1..=MAX_BYTES
+#[allow(clippy::cast_possible_truncation)]
 pub fn encode(value: u64, buf: &mut Vec<u8>) {
-    let (arr, len) = encode_array(value);
-    buf.extend_from_slice(
-        arr.get(..len)
-            .expect("encode_array returned out-of-range len"),
-    );
+    if value < BOUNDS[0] {
+        buf.push((value & 0xFF) as u8);
+        return;
+    }
+
+    // Derive tier from bit-width (same logic as encode_array / encoded_len).
+    let bw = 64 - value.leading_zeros();
+    let mut tier = ((bw - 1) / 8 + 1) as usize;
+    if value < BOUNDS[tier - 1] {
+        tier -= 1;
+    }
+
+    buf.push((247 + tier) as u8);
+    let be = (value - OFFSETS[tier]).to_be_bytes();
+    buf.extend_from_slice(&be[8 - tier..]);
 }
 
 /// Encodes `value` as a `bijou64` into a fixed-size array.
 ///
 /// Returns `(bytes, len)` where `bytes` is a 9-byte array with the
 /// encoding in `bytes[..len]`.
+///
+/// Uses `leading_zeros` to derive the tier in O(1) rather than walking
+/// an if/else chain. See [`encoded_len`] for the same technique.
 ///
 /// # Examples
 ///
@@ -219,46 +227,35 @@ pub fn encode(value: u64, buf: &mut Vec<u8>) {
 /// assert_eq!(&bytes[..len], &[0xF8, 0x34]);
 /// ```
 #[must_use]
+#[allow(clippy::cast_possible_truncation)]
 pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
+    // Tier 0: the byte _is_ the value.
     if value < BOUNDS[0] {
-        // Tier 0: single byte is the value. Mask is a no-op (value < 248)
-        // but satisfies clippy::cast_possible_truncation without an allow.
         return ([(value & 0xFF) as u8, 0, 0, 0, 0, 0, 0, 0, 0], 1);
     }
 
-    // For multi-byte tiers, compute tag + big-endian (value - offset).
-    // Fully unrolled: each arm uses only literal indices.
-    if value < BOUNDS[1] {
-        let be = (value - OFFSETS[1]).to_be_bytes();
-        ([0xF8, be[7], 0, 0, 0, 0, 0, 0, 0], 2)
-    } else if value < BOUNDS[2] {
-        let be = (value - OFFSETS[2]).to_be_bytes();
-        ([0xF9, be[6], be[7], 0, 0, 0, 0, 0, 0], 3)
-    } else if value < BOUNDS[3] {
-        let be = (value - OFFSETS[3]).to_be_bytes();
-        ([0xFA, be[5], be[6], be[7], 0, 0, 0, 0, 0], 4)
-    } else if value < BOUNDS[4] {
-        let be = (value - OFFSETS[4]).to_be_bytes();
-        ([0xFB, be[4], be[5], be[6], be[7], 0, 0, 0, 0], 5)
-    } else if value < BOUNDS[5] {
-        let be = (value - OFFSETS[5]).to_be_bytes();
-        ([0xFC, be[3], be[4], be[5], be[6], be[7], 0, 0, 0], 6)
-    } else if value < BOUNDS[6] {
-        let be = (value - OFFSETS[6]).to_be_bytes();
-        ([0xFD, be[2], be[3], be[4], be[5], be[6], be[7], 0, 0], 7)
-    } else if value < BOUNDS[7] {
-        let be = (value - OFFSETS[7]).to_be_bytes();
-        (
-            [0xFE, be[1], be[2], be[3], be[4], be[5], be[6], be[7], 0],
-            8,
-        )
-    } else {
-        let be = (value - OFFSETS[8]).to_be_bytes();
-        (
-            [0xFF, be[0], be[1], be[2], be[3], be[4], be[5], be[6], be[7]],
-            9,
-        )
+    // Derive tier from bit-width (same logic as encoded_len).
+    let bw = 64 - value.leading_zeros();
+    let mut tier = ((bw - 1) / 8 + 1) as usize; // 1..=8
+                                                // Correct: candidate can be one too high near tier boundaries.
+    if value < BOUNDS[tier - 1] {
+        tier -= 1;
     }
+
+    let tag = (247 + tier) as u8;
+    let payload = (value - OFFSETS[tier]).to_be_bytes();
+
+    // Write tag byte, then the last `tier` bytes of the payload.
+    let mut buf = [0u8; MAX_BYTES];
+    buf[0] = tag;
+    let start = 8 - tier; // first relevant byte in payload
+    let mut i = 0;
+    while i < tier {
+        buf[1 + i] = payload[start + i];
+        i += 1;
+    }
+
+    (buf, tier + 1)
 }
 
 /// Decodes a `bijou64` from the front of `buf`.
