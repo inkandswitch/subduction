@@ -27,7 +27,7 @@ Encode to a `Vec<u8>`.
 | tier boundaries | 16.26        | 29.47  | 18.52        | 19.15 | **12.03** 🏆 | #2           | +4.23          | 1.35x                 |
 | uniform random  | 13.15        | 28.10  | **11.21** 🏆 | 11.84 | 34.17        | #3           | +1.94          | 1.17x                 |
 
-Lines in order: bijou64, varu64, vu64, vu128, leb128.
+> **Legend** -- 🔵 bijou64 | 🟠 varu64 | 🔴 vu64 | 🟢 vu128 | 🟣 leb128
 
 ```mermaid
 xychart-beta
@@ -54,7 +54,7 @@ Encode to a fixed `[u8; 9]` with no allocation. leb128 is excluded because its A
 | tier boundaries | 2.58        | 16.48  | **1.65** 🏆 | 3.41  | #2           | +0.93          | 1.56x                 |
 | uniform random  | 2.54        | 19.92  | **1.65** 🏆 | 3.53  | #2           | +0.89          | 1.54x                 |
 
-Lines in order: bijou64, varu64, vu64, vu128.
+> **Legend** -- 🔵 bijou64 | 🟠 varu64 | 🔴 vu64 | 🟢 vu128
 
 ```mermaid
 xychart-beta
@@ -80,52 +80,18 @@ Decode from a `&[u8]` buffer.
 | tier boundaries | 11.59       | 19.21  | 12.27 | **10.78** 🏆| 15.39  | #2           | +0.81          | 1.07x                 |
 | uniform random  | 10.34       | 23.86  | 9.30  | **9.22** 🏆 | 35.52  | #3           | +1.12          | 1.12x                 |
 
-```mermaid
-xychart-beta
-    title "Decode -- tiny (0-247)"
-    x-axis ["bijou64", "varu64", "vu64", "vu128", "leb128"]
-    y-axis "µs" 0 --> 23
-    bar [3.93, 6.62, 14.40, 22.76, 12.57]
-```
+> **Legend** -- Line 1: bijou64 | Line 2: varu64 | Line 3: vu64 | Line 4: vu128 | Line 5: leb128
 
 ```mermaid
 xychart-beta
-    title "Decode -- small (248-64k)"
-    x-axis ["bijou64", "varu64", "vu64", "vu128", "leb128"]
-    y-axis "µs" 0 --> 16
-    bar [9.36, 10.99, 15.43, 15.18, 15.24]
-```
-
-```mermaid
-xychart-beta
-    title "Decode -- medium (64k-4B)"
-    x-axis ["bijou64", "varu64", "vu64", "vu128", "leb128"]
-    y-axis "µs" 0 --> 17
-    bar [8.77, 16.24, 15.37, 10.70, 16.09]
-```
-
-```mermaid
-xychart-beta
-    title "Decode -- large (>4B)"
-    x-axis ["bijou64", "varu64", "vu64", "vu128", "leb128"]
+    title "Decode -- median µs / 4096 values"
+    x-axis ["tiny", "small", "medium", "large", "tier", "uniform"]
     y-axis "µs" 0 --> 36
-    bar [10.05, 22.27, 8.80, 8.67, 35.86]
-```
-
-```mermaid
-xychart-beta
-    title "Decode -- tier boundaries"
-    x-axis ["bijou64", "varu64", "vu64", "vu128", "leb128"]
-    y-axis "µs" 0 --> 20
-    bar [11.59, 19.21, 12.27, 10.78, 15.39]
-```
-
-```mermaid
-xychart-beta
-    title "Decode -- uniform random"
-    x-axis ["bijou64", "varu64", "vu64", "vu128", "leb128"]
-    y-axis "µs" 0 --> 36
-    bar [10.34, 23.86, 9.30, 9.22, 35.52]
+    line [3.93, 9.36, 8.77, 10.05, 11.59, 10.34]
+    line [6.62, 10.99, 16.24, 22.27, 19.21, 23.86]
+    line [14.40, 15.43, 15.37, 8.80, 12.27, 9.30]
+    line [22.76, 15.18, 10.70, 8.67, 10.78, 9.22]
+    line [12.57, 15.24, 16.09, 35.86, 15.39, 35.52]
 ```
 
 ## Stream Decode
@@ -141,52 +107,17 @@ Decode a concatenated stream of encoded values. vu128 is excluded because its AP
 | tier boundaries | 19.76       | 23.28  | **14.14** 🏆 | 14.15  | #3           | +5.62          | 1.40x                 |
 | uniform random  | 9.81        | 22.48  | **8.57** 🏆  | 34.89  | #2           | +1.24          | 1.15x                 |
 
-```mermaid
-xychart-beta
-    title "Stream Decode -- tiny (0-247)"
-    x-axis ["bijou64", "varu64", "vu64", "leb128"]
-    y-axis "µs" 0 --> 18
-    bar [3.98, 9.77, 17.51, 7.20]
-```
+> **Legend** -- Line 1: bijou64 | Line 2: varu64 | Line 3: vu64 | Line 4: leb128
 
 ```mermaid
 xychart-beta
-    title "Stream Decode -- small (248-64k)"
-    x-axis ["bijou64", "varu64", "vu64", "leb128"]
-    y-axis "µs" 0 --> 21
-    bar [9.34, 20.82, 18.84, 13.02]
-```
-
-```mermaid
-xychart-beta
-    title "Stream Decode -- medium (64k-4B)"
-    x-axis ["bijou64", "varu64", "vu64", "leb128"]
-    y-axis "µs" 0 --> 19
-    bar [9.34, 18.12, 16.03, 17.02]
-```
-
-```mermaid
-xychart-beta
-    title "Stream Decode -- large (>4B)"
-    x-axis ["bijou64", "varu64", "vu64", "leb128"]
+    title "Stream Decode -- median µs / 4096 values"
+    x-axis ["tiny", "small", "medium", "large", "tier", "uniform"]
     y-axis "µs" 0 --> 36
-    bar [10.31, 23.29, 8.68, 35.76]
-```
-
-```mermaid
-xychart-beta
-    title "Stream Decode -- tier boundaries"
-    x-axis ["bijou64", "varu64", "vu64", "leb128"]
-    y-axis "µs" 0 --> 24
-    bar [19.76, 23.28, 14.14, 14.15]
-```
-
-```mermaid
-xychart-beta
-    title "Stream Decode -- uniform random"
-    x-axis ["bijou64", "varu64", "vu64", "leb128"]
-    y-axis "µs" 0 --> 35
-    bar [9.81, 22.48, 8.57, 34.89]
+    line [3.98, 9.34, 9.34, 10.31, 19.76, 9.81]
+    line [9.77, 20.82, 18.12, 23.29, 23.28, 22.48]
+    line [17.51, 18.84, 16.03, 8.68, 14.14, 8.57]
+    line [7.20, 13.02, 17.02, 35.76, 14.15, 34.89]
 ```
 
 ## Round Trip
@@ -202,18 +133,18 @@ Encode then immediately decode each value.
 | tier boundaries | 27.50   | 34.70  | 17.43 | **4.23** 🏆 | 25.89  | #4           | +23.27         | 6.51x                 |
 | uniform random  | 23.57   | 43.46  | 12.07 | **2.77** 🏆 | 59.84  | #3           | +20.81         | 8.51x                 |
 
-Bars left to right: bijou64, varu64, vu64, vu128, leb128.
+> **Legend** -- Line 1: bijou64 | Line 2: varu64 | Line 3: vu64 | Line 4: vu128 | Line 5: leb128
 
 ```mermaid
 xychart-beta
     title "Round Trip -- median µs / 4096 values"
     x-axis ["tiny", "small", "medium", "large", "tier", "uniform"]
     y-axis "µs" 0 --> 60
-    bar [4.96, 20.54, 27.87, 22.92, 27.50, 23.57]
-    bar [10.49, 17.76, 28.07, 41.98, 34.70, 43.46]
-    bar [22.94, 26.32, 22.52, 11.47, 17.43, 12.07]
-    bar [4.73, 7.06, 2.91, 2.61, 4.23, 2.77]
-    bar [13.22, 22.90, 26.93, 57.63, 25.89, 59.84]
+    line [4.96, 20.54, 27.87, 22.92, 27.50, 23.57]
+    line [10.49, 17.76, 28.07, 41.98, 34.70, 43.46]
+    line [22.94, 26.32, 22.52, 11.47, 17.43, 12.07]
+    line [4.73, 7.06, 2.91, 2.61, 4.23, 2.77]
+    line [13.22, 22.90, 26.93, 57.63, 25.89, 59.84]
 ```
 
 ## Encoded Size
