@@ -22,9 +22,9 @@ use subduction_core::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
 use subduction_ephemeral::policy::{
+    EphemeralPolicy,
     keyhive::{PublishDisallowedError, SubscribeDisallowedError},
     keyhive_actor::{self, SyncManagerActorHandle},
-    EphemeralPolicy,
 };
 use subduction_keyhive::{KeyhivePeerId, KeyhiveSyncManager, MemoryKeyhiveStorage};
 use testresult::TestResult;

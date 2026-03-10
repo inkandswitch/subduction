@@ -23,8 +23,8 @@ use subduction_core::{
     policy::{
         connection::ConnectionPolicy,
         keyhive::{
-            try_peer_id_to_identifier, try_sedimentree_id_to_document_id,
             ConnectionDisallowedError, FetchDisallowedError, PutDisallowedError,
+            try_peer_id_to_identifier, try_sedimentree_id_to_document_id,
         },
         storage::StoragePolicy,
     },
