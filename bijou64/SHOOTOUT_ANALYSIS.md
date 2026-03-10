@@ -80,7 +80,7 @@ Decode from a `&[u8]` buffer.
 | tier boundaries | 11.59       | 19.21  | 12.27 | **10.78** 🏆| 15.39  | #2           | +0.81          | 1.07x                 |
 | uniform random  | 10.34       | 23.86  | 9.30  | **9.22** 🏆 | 35.52  | #3           | +1.12          | 1.12x                 |
 
-> **Legend** -- Line 1: bijou64 | Line 2: varu64 | Line 3: vu64 | Line 4: vu128 | Line 5: leb128
+> **Legend** -- 🔵 bijou64 | 🟠 varu64 | 🔴 vu64 | 🟢 vu128 | 🟣 leb128
 
 ```mermaid
 xychart-beta
@@ -107,7 +107,7 @@ Decode a concatenated stream of encoded values. vu128 is excluded because its AP
 | tier boundaries | 19.76       | 23.28  | **14.14** 🏆 | 14.15  | #3           | +5.62          | 1.40x                 |
 | uniform random  | 9.81        | 22.48  | **8.57** 🏆  | 34.89  | #2           | +1.24          | 1.15x                 |
 
-> **Legend** -- Line 1: bijou64 | Line 2: varu64 | Line 3: vu64 | Line 4: leb128
+> **Legend** -- 🔵 bijou64 | 🟠 varu64 | 🔴 vu64 | 🟢 leb128
 
 ```mermaid
 xychart-beta
@@ -133,7 +133,7 @@ Encode then immediately decode each value.
 | tier boundaries | 27.50   | 34.70  | 17.43 | **4.23** 🏆 | 25.89  | #4           | +23.27         | 6.51x                 |
 | uniform random  | 23.57   | 43.46  | 12.07 | **2.77** 🏆 | 59.84  | #3           | +20.81         | 8.51x                 |
 
-> **Legend** -- Line 1: bijou64 | Line 2: varu64 | Line 3: vu64 | Line 4: vu128 | Line 5: leb128
+> **Legend** -- 🔵 bijou64 | 🟠 varu64 | 🔴 vu64 | 🟢 vu128 | 🟣 leb128
 
 ```mermaid
 xychart-beta
