@@ -43,6 +43,7 @@ subduction_crypto = { version = "0.2.0", path = "subduction_crypto", default-fea
 subduction_ephemeral = { version = "0.1.0", path = "subduction_ephemeral", default-features = false }
 subduction_http_longpoll = { version = "0.3.0", path = "subduction_http_longpoll", default-features = false }
 subduction_keyhive = { version = "0.2.0", path = "subduction_keyhive", default-features = false }
+subduction_keyhive_policy = { version = "0.1.0", path = "subduction_keyhive_policy", default-features = false }
 subduction_iroh = { version = "0.2.0", path = "subduction_iroh" }
 subduction_wasm = { version = "0.5.1", path = "subduction_wasm", default-features = false }
 subduction_websocket = { version = "0.5.0", path = "subduction_websocket", default-features = false }

@@ -2,6 +2,7 @@
 
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
+mod handler;
 mod key;
 mod keyhive_storage;
 pub mod metrics;

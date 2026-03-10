@@ -58,7 +58,7 @@ impl KeyhiveMessage {
     ///
     /// Returns an error if CBOR serialization fails.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn from_signed(msg: &SignedMessage) -> Result<Self, crate::signed_message::CborError> {
+    pub fn from_signed(msg: &SignedMessage) -> Result<Self, crate::error::CborSerError> {
         msg.to_cbor().map(|payload| Self { payload })
     }
 
@@ -68,7 +68,7 @@ impl KeyhiveMessage {
     ///
     /// Returns an error if CBOR deserialization fails.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn into_signed(self) -> Result<SignedMessage, crate::signed_message::CborError> {
+    pub fn into_signed(self) -> Result<SignedMessage, crate::error::CborDeError> {
         SignedMessage::from_cbor(&self.payload)
     }
 
@@ -167,6 +167,7 @@ impl Decode for KeyhiveMessage {
 #[allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
 mod tests {
     use super::*;
+    use alloc::vec;
 
     #[test]
     fn empty_payload_roundtrip() {

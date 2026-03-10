@@ -22,7 +22,7 @@
 //! Lock keyhive, perform reads/writes, drop the lock, _then_ do connection
 //! I/O. Never hold the keyhive lock across a `.send()` or `.recv()` await.
 
-use alloc::{string::ToString, sync::Arc, vec::Vec};
+use alloc::{sync::Arc, vec::Vec};
 
 use async_lock::Mutex;
 use future_form::Local;
@@ -39,7 +39,7 @@ use keyhive_core::{
 
 use crate::{
     collections::{Map, Set},
-    error::{SigningError, StorageError, VerificationError},
+    error::{CborDeError, CborSerError, SigningError, StorageError, VerificationError},
     message::{EventBytes, EventHash, Message},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
@@ -102,13 +102,14 @@ where
 
 impl<Signer, T, P, C, L, R, Store> KeyhiveSyncManager<Signer, T, P, C, L, R, Store>
 where
-    Signer: AsyncSigner + Clone,
-    T: ContentRef + serde::de::DeserializeOwned,
+    Signer: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<Signer, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore,
     Store: KeyhiveStorage<Local>,
+    Store::Error: Send + Sync + 'static,
 {
     /// Create a new keyhive sync manager.
     ///
@@ -264,11 +265,11 @@ where
         let keyhive_msg = <KeyhiveMessage as sedimentree_core::codec::decode::Decode>::try_decode(
             &raw_wire_bytes,
         )
-        .map_err(|e| SyncManagerError::Decode(e.to_string()))?;
+        .map_err(SyncManagerError::WireDecode)?;
 
         let signed_msg = keyhive_msg
             .into_signed()
-            .map_err(|e| SyncManagerError::Decode(e.to_string()))?;
+            .map_err(SyncManagerError::Decode)?;
 
         let verified = signed_msg
             .verify(from_keyhive_id)
@@ -280,8 +281,8 @@ where
                 .map_err(InternalError::into_sync_manager_error)?;
         }
 
-        let message: Message = cbor_deserialize(&verified.payload)
-            .map_err(|e| SyncManagerError::Decode(e.to_string()))?;
+        let message: Message =
+            cbor_deserialize(&verified.payload).map_err(SyncManagerError::Storage)?;
 
         match &message {
             Message::SyncRequest { .. } => self.handle_sync_request(message, &send_fn).await,
@@ -352,8 +353,7 @@ where
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes = cbor_serialize(event)
-                    .map_err(|e| SyncManagerError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event).map_err(SyncManagerError::Storage)?;
                 found_ops.push(bytes);
             }
         }
@@ -413,7 +413,7 @@ where
         if !found_events.is_empty() {
             self.ingest_events(&found_events)
                 .await
-                .map_err(|e| SyncManagerError::Decode(e.to_string()))?;
+                .map_err(SyncManagerError::Storage)?;
         }
 
         if !requested_hashes.is_empty() {
@@ -462,7 +462,7 @@ where
         if !ops.is_empty() {
             self.ingest_events(&ops)
                 .await
-                .map_err(|e| SyncManagerError::Decode(e.to_string()))?;
+                .map_err(SyncManagerError::Storage)?;
         }
 
         Ok(())
@@ -533,8 +533,7 @@ where
         F: AsyncSendFn<E>,
         E: core::error::Error + 'static,
     {
-        let msg_bytes =
-            cbor_serialize(&message).map_err(|e| SyncManagerError::Serialization(e.to_string()))?;
+        let msg_bytes = cbor_serialize(&message).map_err(SyncManagerError::Storage)?;
 
         // Lock keyhive, sign, drop lock — then do I/O
         let signed: Signed<Vec<u8>> = {
@@ -545,8 +544,7 @@ where
                 .map_err(|e| SyncManagerError::Signing(SigningError::SigningFailed(e)))?
         };
 
-        let signed_bytes =
-            cbor_serialize(&signed).map_err(|e| SyncManagerError::Serialization(e.to_string()))?;
+        let signed_bytes = cbor_serialize(&signed).map_err(SyncManagerError::Storage)?;
 
         let signed_message = if include_contact_card {
             SignedMessage::with_contact_card(signed_bytes, self.contact_card_bytes.clone())
@@ -555,7 +553,7 @@ where
         };
 
         let keyhive_msg = KeyhiveMessage::from_signed(&signed_message)
-            .map_err(|e| SyncManagerError::Serialization(e.to_string()))?;
+            .map_err(SyncManagerError::Serialization)?;
 
         let wire_bytes = sedimentree_core::codec::encode::Encode::encode(&keyhive_msg);
 
@@ -786,7 +784,7 @@ impl InternalError {
     fn into_sync_manager_error<E: core::error::Error + 'static>(self) -> SyncManagerError<E> {
         match self {
             Self::InvalidIdentifier(e) => SyncManagerError::InvalidIdentifier(e),
-            Self::Storage(e) => SyncManagerError::Decode(e.to_string()),
+            Self::Storage(e) => SyncManagerError::Storage(e),
             Self::ReceiveContactCard(e) => SyncManagerError::ReceiveContactCard(e),
         }
     }
@@ -807,13 +805,21 @@ pub enum SyncManagerError<E: core::error::Error + 'static> {
     #[error("verification error")]
     Verification(#[from] VerificationError),
 
-    /// Failed to decode a message.
-    #[error("decode error: {0}")]
-    Decode(alloc::string::String),
+    /// Failed to decode a wire message.
+    #[error("wire decode error")]
+    WireDecode(#[source] sedimentree_core::codec::error::DecodeError),
+
+    /// Failed to deserialize CBOR data.
+    #[error("CBOR deserialization error")]
+    Decode(#[source] CborDeError),
 
     /// Failed to serialize a message.
-    #[error("serialization error: {0}")]
-    Serialization(alloc::string::String),
+    #[error("serialization error")]
+    Serialization(#[source] CborSerError),
+
+    /// A storage operation failed during sync.
+    #[error("storage error")]
+    Storage(#[source] StorageError),
 
     /// Failed to convert peer ID to identifier.
     #[error("invalid peer identifier")]
@@ -871,12 +877,13 @@ where
 fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
     let mut buf = Vec::new();
     ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        .map_err(|e| StorageError::Serialization(CborSerError::from_writer(e)))?;
     Ok(buf)
 }
 
 fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+    ciborium::from_reader(bytes)
+        .map_err(|e| StorageError::Deserialization(CborDeError::from_slice(e)))
 }
 
 const fn digest_to_bytes<U: serde::Serialize>(digest: &Digest<U>) -> [u8; 32] {

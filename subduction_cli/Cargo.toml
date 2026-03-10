@@ -42,6 +42,7 @@ subduction_ephemeral = { workspace = true }
 subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
 subduction_iroh = { workspace = true }
 subduction_keyhive = { workspace = true, features = ["serde"] }
+subduction_keyhive_policy = { workspace = true }
 subduction_websocket = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true, features = ["full", "tracing"] }

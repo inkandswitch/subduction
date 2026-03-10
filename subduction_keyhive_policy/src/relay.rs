@@ -44,7 +44,9 @@ use keyhive_core::{
     listener::membership::MembershipListener, store::ciphertext::CiphertextStore,
 };
 use subduction_core::peer::id::PeerId;
-use subduction_keyhive::{storage::KeyhiveStorage, KeyhivePeerId, KeyhiveSyncManager};
+use subduction_keyhive::{
+    KeyhivePeerId, KeyhiveSyncManager, SyncManagerError, storage::KeyhiveStorage,
+};
 
 use future_form::Local;
 
@@ -73,8 +75,8 @@ pub enum RelayError {
     ActorGone,
 
     /// The keyhive sync manager returned an error.
-    #[error("keyhive sync error: {0}")]
-    Sync(String),
+    #[error(transparent)]
+    SyncManager(SyncManagerError<CollectError>),
 }
 
 /// `Send`-safe handle to the keyhive handler relay actor.
@@ -102,13 +104,14 @@ impl KeyhiveHandlerRelay {
         buffer: usize,
     ) -> (Self, impl core::future::Future<Output = ()>)
     where
-        Signer: AsyncSigner + Clone + 'static,
-        T: ContentRef + serde::de::DeserializeOwned + 'static,
+        Signer: AsyncSigner + Clone + Send + 'static,
+        T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
         P: for<'de> serde::Deserialize<'de> + 'static,
         C: CiphertextStore<T, P> + Clone + 'static,
-        L: MembershipListener<Signer, T> + 'static,
+        L: MembershipListener<Signer, T> + Send + 'static,
         R: rand::CryptoRng + rand::RngCore + 'static,
         Store: KeyhiveStorage<Local> + 'static,
+        Store::Error: Send + Sync + 'static,
     {
         let (tx, rx) = async_channel::bounded(buffer);
         let handle = Self { tx };
@@ -164,13 +167,14 @@ async fn run_relay_actor<Signer, T, P, C, L, R, Store>(
     sync_manager: Arc<KeyhiveSyncManager<Signer, T, P, C, L, R, Store>>,
     rx: async_channel::Receiver<RelayRequest>,
 ) where
-    Signer: AsyncSigner + Clone + 'static,
-    T: ContentRef + serde::de::DeserializeOwned + 'static,
+    Signer: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de> + 'static,
     C: CiphertextStore<T, P> + Clone + 'static,
-    L: MembershipListener<Signer, T> + 'static,
+    L: MembershipListener<Signer, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore + 'static,
     Store: KeyhiveStorage<Local> + 'static,
+    Store::Error: Send + Sync + 'static,
 {
     while let Ok(req) = rx.recv().await {
         match req {
@@ -203,13 +207,14 @@ async fn handle_inbound_request<Signer, T, P, C, L, R, Store>(
     wire_bytes: Vec<u8>,
 ) -> Result<Vec<Vec<u8>>, RelayError>
 where
-    Signer: AsyncSigner + Clone + 'static,
-    T: ContentRef + serde::de::DeserializeOwned + 'static,
+    Signer: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de> + 'static,
     C: CiphertextStore<T, P> + Clone + 'static,
-    L: MembershipListener<Signer, T> + 'static,
+    L: MembershipListener<Signer, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore + 'static,
     Store: KeyhiveStorage<Local> + 'static,
+    Store::Error: Send + Sync + 'static,
 {
     let from_keyhive_id = resolve_keyhive_peer_id(sync_manager, peer_id).await;
 
@@ -225,7 +230,7 @@ where
     sync_manager
         .handle_inbound(&from_keyhive_id, wire_bytes, send_fn)
         .await
-        .map_err(|e| RelayError::Sync(e.to_string()))?;
+        .map_err(RelayError::SyncManager)?;
 
     Ok(outbound.into_inner())
 }
@@ -240,13 +245,14 @@ async fn resolve_keyhive_peer_id<Signer, T, P, C, L, R, Store>(
     peer_id: PeerId,
 ) -> KeyhivePeerId
 where
-    Signer: AsyncSigner + Clone,
-    T: ContentRef + serde::de::DeserializeOwned,
+    Signer: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<Signer, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore,
     Store: KeyhiveStorage<Local>,
+    Store::Error: Send + Sync + 'static,
 {
     if let Some(khid) = mgr.keyhive_peer_id_for(peer_id.as_bytes()).await {
         return khid;
@@ -261,10 +267,12 @@ where
     khid
 }
 
-/// Placeholder error for the collecting send function.
+/// Error type for the collecting send function.
 ///
 /// The collecting send function never actually fails (it just pushes to
-/// a `Vec`), but `AsyncSendFn` requires an error type.
-#[derive(Debug, thiserror::Error)]
+/// a `Vec`), but `AsyncSendFn` requires an error type. This is public
+/// so that [`RelayError::SyncManager`] can name the concrete
+/// `SyncManagerError<CollectError>` without type erasure.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("collecting send (unreachable)")]
-struct CollectError;
+pub struct CollectError;

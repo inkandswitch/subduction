@@ -4,27 +4,13 @@
 //! This module provides the wrapper type that combines the signed data
 //! with an optional contact card.
 
-use alloc::{string::String, vec::Vec};
-use core::fmt;
+use alloc::vec::Vec;
 
 #[cfg(all(feature = "serde", feature = "std"))]
-use crate::error::VerificationError;
+use crate::error::{CborDeError, CborSerError, VerificationError};
 use crate::peer_id::KeyhivePeerId;
 #[cfg(all(feature = "serde", feature = "std"))]
 use keyhive_core::crypto::signed::Signed;
-
-/// Error type for CBOR serialization/deserialization.
-#[derive(Debug, Clone)]
-pub struct CborError(pub String);
-
-impl fmt::Display for CborError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "CBOR error: {}", self.0)
-    }
-}
-
-#[cfg(feature = "std")]
-impl std::error::Error for CborError {}
 
 /// A signed message for transmission over the network.
 ///
@@ -89,10 +75,8 @@ impl SignedMessage {
         self,
         expected_sender: &KeyhivePeerId,
     ) -> Result<VerifiedMessage, VerificationError> {
-        use alloc::string::ToString;
-
         let signed: Signed<Vec<u8>> = ciborium::de::from_reader(self.signed.as_slice())
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+            .map_err(|e| VerificationError::Deserialization(CborDeError::from_slice(e)))?;
 
         signed
             .try_verify()
@@ -126,11 +110,9 @@ impl SignedMessage {
     ///
     /// Returns an error if CBOR serialization fails.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn to_cbor(&self) -> Result<Vec<u8>, CborError> {
-        use alloc::string::ToString;
-
+    pub fn to_cbor(&self) -> Result<Vec<u8>, CborSerError> {
         let mut buf = Vec::new();
-        ciborium::ser::into_writer(self, &mut buf).map_err(|e| CborError(e.to_string()))?;
+        ciborium::ser::into_writer(self, &mut buf).map_err(CborSerError::from_writer)?;
         Ok(buf)
     }
 
@@ -140,10 +122,8 @@ impl SignedMessage {
     ///
     /// Returns an error if CBOR deserialization fails.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn from_cbor(bytes: &[u8]) -> Result<Self, CborError> {
-        use alloc::string::ToString;
-
-        ciborium::de::from_reader(bytes).map_err(|e| CborError(e.to_string()))
+    pub fn from_cbor(bytes: &[u8]) -> Result<Self, CborDeError> {
+        ciborium::de::from_reader(bytes).map_err(CborDeError::from_slice)
     }
 }
 

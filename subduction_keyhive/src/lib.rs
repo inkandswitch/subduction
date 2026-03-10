@@ -28,7 +28,7 @@ pub mod sync_manager;
 mod test_utils;
 
 pub use connection::KeyhiveConnection;
-pub use error::StorageError;
+pub use error::{CborDeError, CborSerError, StorageError};
 #[cfg(feature = "std")]
 pub use error::{ProtocolError, SigningError, VerificationError};
 pub use message::Message;

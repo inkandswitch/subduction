@@ -33,7 +33,7 @@ use keyhive_core::{
 use subduction_core::{
     connection::authenticated::Authenticated, handler::Handler, peer::id::PeerId,
 };
-use subduction_keyhive::{storage::KeyhiveStorage, KeyhivePeerId, KeyhiveSyncManager};
+use subduction_keyhive::{KeyhivePeerId, KeyhiveSyncManager, storage::KeyhiveStorage};
 
 /// Keyhive message handler.
 ///
@@ -137,13 +137,14 @@ where
         + sedimentree_core::codec::decode::Decode
         + From<Vec<u8>>
         + 'static,
-    Signer: AsyncSigner + Clone + 'static,
-    T: ContentRef + serde::de::DeserializeOwned + 'static,
+    Signer: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de> + 'static,
     C: CiphertextStore<T, P> + Clone + 'static,
-    L: MembershipListener<Signer, T> + 'static,
+    L: MembershipListener<Signer, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore + 'static,
     Store: KeyhiveStorage<Local> + 'static,
+    Store::Error: Send + Sync + 'static,
 {
     type Message = Vec<u8>;
     type HandlerError =
@@ -187,13 +188,14 @@ async fn resolve_keyhive_peer_id<Signer, T, P, C, L, R, Store>(
     peer_id: PeerId,
 ) -> KeyhivePeerId
 where
-    Signer: AsyncSigner + Clone,
-    T: ContentRef + serde::de::DeserializeOwned,
+    Signer: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<Signer, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore,
     Store: KeyhiveStorage<Local>,
+    Store::Error: Send + Sync + 'static,
 {
     if let Some(khid) = mgr.keyhive_peer_id_for(peer_id.as_bytes()).await {
         return khid;

@@ -14,7 +14,7 @@
 //! Contact card exchange is also handled for cases where peers don't yet know
 //! each other's identity.
 
-use alloc::{string::ToString, sync::Arc, vec, vec::Vec};
+use alloc::{sync::Arc, vec, vec::Vec};
 
 use async_lock::Mutex;
 use keyhive_core::{
@@ -31,7 +31,7 @@ use keyhive_core::{
 use crate::{
     collections::{Map, Set},
     connection::KeyhiveConnection,
-    error::{ProtocolError, SigningError, StorageError, VerificationError},
+    error::{CborDeError, CborSerError, ProtocolError, SigningError, StorageError},
     message::{EventBytes, EventHash, Message},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
@@ -89,16 +89,17 @@ where
 
 impl<Signer, T, P, C, L, R, Conn, Store, K> KeyhiveProtocol<Signer, T, P, C, L, R, Conn, Store, K>
 where
-    Signer: AsyncSigner + Clone,
-    T: ContentRef + serde::de::DeserializeOwned,
+    Signer: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<Signer, T>,
+    L: MembershipListener<Signer, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore,
     Conn: KeyhiveConnection<K>,
     Conn::SendError: 'static,
     Conn::DisconnectError: 'static,
     Store: KeyhiveStorage<K>,
+    Store::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     /// Create a new protocol handler.
@@ -223,8 +224,8 @@ where
             self.ingest_contact_card(cc_bytes).await?;
         }
 
-        let message: Message = cbor_deserialize(&verified.payload)
-            .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
+        let message: Message =
+            cbor_deserialize(&verified.payload).map_err(ProtocolError::Storage)?;
 
         match &message {
             Message::SyncRequest { .. } => self.handle_sync_request(message).await,
@@ -283,8 +284,7 @@ where
         for (digest, event) in &local_hashes {
             let h = digest_to_bytes(digest);
             if !peer_found_set.contains(&h) && !peer_pending_set.contains(&h) {
-                let bytes = cbor_serialize(event)
-                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event).map_err(ProtocolError::Storage)?;
                 found_ops.push(bytes);
             }
         }
@@ -445,8 +445,7 @@ where
         message: Message,
         include_contact_card: bool,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let msg_bytes =
-            cbor_serialize(&message).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        let msg_bytes = cbor_serialize(&message).map_err(ProtocolError::Storage)?;
 
         let signed: Signed<Vec<u8>> = {
             let keyhive = self.keyhive.lock().await;
@@ -456,8 +455,7 @@ where
                 .map_err(SigningError::SigningFailed)?
         };
 
-        let signed_bytes =
-            cbor_serialize(&signed).map_err(|e| SigningError::Serialization(e.to_string()))?;
+        let signed_bytes = cbor_serialize(&signed).map_err(ProtocolError::Storage)?;
 
         let signed_message = if include_contact_card {
             SignedMessage::with_contact_card(signed_bytes, self.contact_card_bytes.clone())
@@ -545,8 +543,7 @@ where
         for (digest, event) in &events {
             let h = digest_to_bytes(digest);
             if requested_set.contains(&h) {
-                let bytes = cbor_serialize(event)
-                    .map_err(|e| ProtocolError::Serialization(e.to_string()))?;
+                let bytes = cbor_serialize(event).map_err(ProtocolError::Storage)?;
                 result.push(bytes);
             }
         }
@@ -566,7 +563,7 @@ where
             .iter()
             .map(|bytes| cbor_deserialize(bytes))
             .collect::<Result<_, _>>()
-            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
+            .map_err(ProtocolError::Storage)?;
 
         let pending = {
             let keyhive = self.keyhive.lock().await;
@@ -633,8 +630,8 @@ where
         &self,
         cc_bytes: &[u8],
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let contact_card: ContactCard = cbor_deserialize(cc_bytes)
-            .map_err(|e| ProtocolError::Deserialization(e.to_string()))?;
+        let contact_card: ContactCard =
+            cbor_deserialize(cc_bytes).map_err(ProtocolError::Storage)?;
 
         let keyhive = self.keyhive.lock().await;
         keyhive
@@ -717,13 +714,14 @@ where
 fn cbor_serialize<V: serde::Serialize>(value: &V) -> Result<Vec<u8>, StorageError> {
     let mut buf = Vec::new();
     ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(e.to_string()))?;
+        .map_err(|e| StorageError::Serialization(CborSerError::from_writer(e)))?;
     Ok(buf)
 }
 
 /// Deserialize a value from CBOR bytes.
 fn cbor_deserialize<V: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<V, StorageError> {
-    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
+    ciborium::from_reader(bytes)
+        .map_err(|e| StorageError::Deserialization(CborDeError::from_slice(e)))
 }
 
 /// Convert a `Digest` to a 32-byte array.

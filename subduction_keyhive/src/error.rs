@@ -1,19 +1,97 @@
 //! Error types for the keyhive protocol.
 
-use alloc::string::String;
+extern crate alloc;
+
+use alloc::boxed::Box;
 
 use thiserror::Error;
 
 #[cfg(feature = "std")]
 use crate::peer_id::KeyhivePeerId;
 
+/// CBOR serialization error (newtype around ciborium).
+#[derive(Debug, Error)]
+#[error("CBOR serialization error: {0}")]
+pub struct CborSerError(
+    #[source] pub ciborium::ser::Error<alloc::boxed::Box<dyn core::error::Error + Send + Sync>>,
+);
+
+impl CborSerError {
+    /// Wrap a concrete ciborium serialization error.
+    ///
+    /// The writer-specific IO error is erased into a boxed trait object
+    /// so that `CborSerError` doesn't depend on the writer type.
+    pub fn from_writer<W: core::error::Error + Send + Sync + 'static>(
+        err: ciborium::ser::Error<W>,
+    ) -> Self {
+        match err {
+            ciborium::ser::Error::Io(e) => Self(ciborium::ser::Error::Io(Box::new(e))),
+            ciborium::ser::Error::Value(s) => Self(ciborium::ser::Error::Value(s)),
+        }
+    }
+}
+
+/// CBOR deserialization error (newtype around ciborium).
+#[derive(Debug, Error)]
+#[error("CBOR deserialization error: {0}")]
+pub struct CborDeError(
+    #[source] pub ciborium::de::Error<alloc::boxed::Box<dyn core::error::Error + Send + Sync>>,
+);
+
+/// Wrapper to give `ciborium_io::EndOfFile` an `Error` impl.
+///
+/// ciborium's no-std reader error type (`EndOfFile`) only implements `Debug`,
+/// not `Display`/`Error`. This newtype bridges the gap.
+#[derive(Clone, Copy, Debug, Error)]
+#[error("unexpected end of CBOR input")]
+pub struct CborEndOfFile;
+
+impl CborDeError {
+    /// Wrap a concrete ciborium deserialization error.
+    ///
+    /// The reader-specific IO error is erased into a boxed trait object
+    /// so that `CborDeError` doesn't depend on the reader type.
+    pub fn from_reader<R: core::error::Error + Send + Sync + 'static>(
+        err: ciborium::de::Error<R>,
+    ) -> Self {
+        match err {
+            ciborium::de::Error::Io(e) => Self(ciborium::de::Error::Io(Box::new(e))),
+            ciborium::de::Error::Syntax(offset) => Self(ciborium::de::Error::Syntax(offset)),
+            ciborium::de::Error::Semantic(offset, msg) => {
+                Self(ciborium::de::Error::Semantic(offset, msg))
+            }
+            ciborium::de::Error::RecursionLimitExceeded => {
+                Self(ciborium::de::Error::RecursionLimitExceeded)
+            }
+        }
+    }
+
+    /// Wrap a ciborium deserialization error from a `&[u8]` reader.
+    ///
+    /// When reading from byte slices, ciborium uses `EndOfFile` as the IO
+    /// error type, which doesn't implement `Error`. This method wraps the
+    /// `Io` variant with [`CborEndOfFile`] instead.
+    pub fn from_slice(err: ciborium::de::Error<ciborium_io::EndOfFile>) -> Self {
+        match err {
+            ciborium::de::Error::Io(_) => Self(ciborium::de::Error::Io(Box::new(CborEndOfFile))),
+            ciborium::de::Error::Syntax(offset) => Self(ciborium::de::Error::Syntax(offset)),
+            ciborium::de::Error::Semantic(offset, msg) => {
+                Self(ciborium::de::Error::Semantic(offset, msg))
+            }
+            ciborium::de::Error::RecursionLimitExceeded => {
+                Self(ciborium::de::Error::RecursionLimitExceeded)
+            }
+        }
+    }
+}
+
 /// Errors that can occur during message signing.
 #[cfg(feature = "std")]
 #[derive(Debug, Error)]
 pub enum SigningError {
     /// Failed to serialize the message payload.
-    #[error("failed to serialize payload: {0}")]
-    Serialization(String),
+    #[error("failed to serialize payload")]
+    Serialization(#[source] CborSerError),
 
     /// The signing operation failed.
     #[error("signing failed")]
@@ -25,8 +103,8 @@ pub enum SigningError {
 #[derive(Debug, Error)]
 pub enum VerificationError {
     /// Failed to deserialize the signed message.
-    #[error("failed to deserialize signed message: {0}")]
-    Deserialization(String),
+    #[error("failed to deserialize signed message")]
+    Deserialization(#[source] CborDeError),
 
     /// The signature is invalid.
     #[error("invalid signature")]
@@ -79,35 +157,46 @@ pub enum ProtocolError<SendErr: core::error::Error + 'static> {
     #[error("failed to receive contact card")]
     ReceiveContactCard(#[source] keyhive_core::principal::individual::ReceivePrekeyOpError),
 
-    /// Serialization failed.
-    #[error("serialization error: {0}")]
-    Serialization(String),
+    /// A storage operation failed.
+    #[error("storage error")]
+    Storage(#[source] StorageError),
 
-    /// Deserialization failed.
-    #[error("deserialization error: {0}")]
-    Deserialization(String),
+    /// CBOR serialization failed.
+    #[error("serialization error")]
+    Serialization(#[source] CborSerError),
+
+    /// CBOR deserialization failed.
+    #[error("deserialization error")]
+    Deserialization(#[source] CborDeError),
 }
 
 /// Errors that can occur during storage operations.
+///
+/// Storage backend errors are erased into `Box<dyn Error + Send + Sync>`
+/// so that `StorageError` stays concrete and doesn't leak the backend type.
 #[derive(Debug, Error)]
 pub enum StorageError {
     /// Failed to save data.
-    #[error("failed to save: {0}")]
-    Save(String),
+    #[error("failed to save")]
+    Save(#[source] Box<dyn core::error::Error + Send + Sync>),
 
     /// Failed to load data.
-    #[error("failed to load: {0}")]
-    Load(String),
+    #[error("failed to load")]
+    Load(#[source] Box<dyn core::error::Error + Send + Sync>),
 
     /// Failed to delete data.
-    #[error("failed to delete: {0}")]
-    Delete(String),
+    #[error("failed to delete")]
+    Delete(#[source] Box<dyn core::error::Error + Send + Sync>),
 
     /// Failed to serialize data.
-    #[error("serialization error: {0}")]
-    Serialization(String),
+    #[error("serialization error")]
+    Serialization(#[source] CborSerError),
 
     /// Failed to deserialize data.
-    #[error("deserialization error: {0}")]
-    Deserialization(String),
+    #[error("deserialization error")]
+    Deserialization(#[source] CborDeError),
+
+    /// Keyhive archive ingestion failed.
+    #[error("archive ingestion failed")]
+    ArchiveIngestion(#[source] Box<dyn core::error::Error + Send + Sync>),
 }
