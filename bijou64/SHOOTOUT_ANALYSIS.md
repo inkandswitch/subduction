@@ -98,7 +98,7 @@ bijou64 achieves canonicality structurally: its disjoint tier ranges make overlo
 
 The cost of canonicality varies wildly by crate. bijou64 and the plain decode numbers are identical because there's nothing extra to check. varu64 and vu64 pay their runtime check regardless -- their numbers here match the regular decode table. vu128 and leb128 take a significant hit from the re-encode step, especially for large values where leb128's byte-at-a-time `Write`/`Read` API makes the round trip expensive (56µs vs 36µs without the check).
 
-For protocols that _require_ canonical encoding -- and content-addressed systems generally do -- this is the table that matters.
+For protocols that _require_ canonical encoding, this is the table that matters.
 
 ## Stream Decode
 
@@ -165,6 +165,6 @@ On this particular machine and workload, bijou64 is the fastest _decoder_ for ti
 
 For large values and uniform random distributions, vu64 tends to win decode and stream decode. This is probably inherent to the format: its power-of-2 tier boundaries are cheaper to work with than bijou64's offset-adjusted boundaries.
 
-The canonical decode benchmark tells the most important story for content-addressed protocols. bijou64 wins 4 of 6 distributions and trails vu64 by only 1.12-1.14x on the remaining two -- while getting canonicality for free. The crates that _don't_ natively guarantee canonicality (vu128, leb128) pay a steep re-encode penalty, with leb128 reaching 56µs for large values. For any system that needs deterministic serialisation, bijou64's structural canonicality is a meaningful advantage.
+The canonical decode benchmark tells the most important story for protocols like Subduction that need to ensure a small security surface area. bijou64 wins 4 of 6 distributions and trails vu64 by only 1.12-1.14x on the remaining two -- while getting canonicality for free. The crates that _don't_ natively guarantee canonicality (vu128, leb128) pay a steep re-encode penalty, with leb128 reaching 56µs for large values. For any system that needs deterministic serialisation, bijou64's structural canonicality is a meaningful advantage.
 
 The Vec-based encode path is bijou64's weakest point outside the tiny range. The `extend_from_slice` with a variable-length tail appears to inhibit vectorisation that competitors achieve with simpler layouts. The allocation-free `encode_array` path narrows the gap considerably (1.48-1.68x behind vu64, vs 1.59x behind leb128 for Vec encode), suggesting the overhead is partly in the Vec interaction rather than the tier calculation itself.
