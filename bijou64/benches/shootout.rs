@@ -365,80 +365,6 @@ fn bench_encode_array(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_round_trip(c: &mut Criterion) {
-    for (dist_name, values) in &distributions() {
-        let mut group = c.benchmark_group(format!("round_trip/{dist_name}"));
-        group.throughput(Throughput::Elements(BATCH as u64));
-
-        group.bench_function(BenchmarkId::new("bijou64", ""), |b| {
-            b.iter(|| {
-                let mut sum = 0u64;
-                for &v in values {
-                    let (arr, len) = bijou64::encode_array(v);
-                    let (decoded, _) = bijou64::decode(&arr[..len]).unwrap();
-                    sum = sum.wrapping_add(decoded);
-                }
-                sum
-            });
-        });
-
-        group.bench_function(BenchmarkId::new("varu64", ""), |b| {
-            b.iter(|| {
-                let mut sum = 0u64;
-                let mut buf = [0u8; 9];
-                for &v in values {
-                    let n = varu64::encode(v, &mut buf);
-                    let (decoded, _) = varu64::decode(&buf[..n]).unwrap();
-                    sum = sum.wrapping_add(decoded);
-                }
-                sum
-            });
-        });
-
-        group.bench_function(BenchmarkId::new("vu64", ""), |b| {
-            b.iter(|| {
-                let mut sum = 0u64;
-                for &v in values {
-                    let encoded = vu64::encode(v);
-                    let decoded = vu64::decode(encoded.as_ref()).unwrap();
-                    sum = sum.wrapping_add(decoded);
-                }
-                sum
-            });
-        });
-
-        group.bench_function(BenchmarkId::new("vu128", ""), |b| {
-            b.iter(|| {
-                let mut sum = 0u64;
-                let mut buf = [0u8; 9];
-                for &v in values {
-                    let _n = vu128::encode_u64(&mut buf, v);
-                    let (decoded, _) = vu128::decode_u64(&buf);
-                    sum = sum.wrapping_add(decoded);
-                }
-                sum
-            });
-        });
-
-        group.bench_function(BenchmarkId::new("leb128", ""), |b| {
-            b.iter(|| {
-                let mut sum = 0u64;
-                let mut buf = Vec::with_capacity(10);
-                for &v in values {
-                    buf.clear();
-                    leb128::write::unsigned(&mut buf, v).unwrap();
-                    let mut cursor = buf.as_slice();
-                    let decoded = leb128::read::unsigned(&mut cursor).unwrap();
-                    sum = sum.wrapping_add(decoded);
-                }
-                sum
-            });
-        });
-
-        group.finish();
-    }
-}
-
 fn bench_encoded_size(c: &mut Criterion) {
     let mut group = c.benchmark_group("encoded_size");
 
@@ -553,6 +479,103 @@ fn bench_stream_decode(c: &mut Criterion) {
     }
 }
 
+/// Canonical decode: decode + verify that the encoding is minimal.
+///
+/// bijou64 is canonical by construction (disjoint tier ranges).
+/// varu64 and vu64 always perform a runtime canonicality check.
+/// vu128 and leb128 accept overlong encodings, so we wrap them
+/// with a re-encode-and-compare-length check.
+fn bench_canonical_decode(c: &mut Criterion) {
+    for (dist_name, values) in &distributions() {
+        let mut group = c.benchmark_group(format!("canonical_decode/{dist_name}"));
+        group.throughput(Throughput::Elements(BATCH as u64));
+
+        let (bijou_buf, bijou_off) = pre_encode_bijou64(values);
+        let (varu_buf, varu_off) = pre_encode_varu64(values);
+        let (vu64_buf, vu64_off) = pre_encode_vu64(values);
+        let (vu_buf, vu_off) = pre_encode_vu128(values);
+        let (leb_buf, leb_off) = pre_encode_leb128(values);
+
+        // bijou64: canonical by construction — same as regular decode
+        group.bench_function(BenchmarkId::new("bijou64", ""), |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &off in &bijou_off {
+                    let (v, _) = bijou64::decode(&bijou_buf[off..]).unwrap();
+                    sum = sum.wrapping_add(v);
+                }
+                sum
+            });
+        });
+
+        // varu64: always checks canonicality — same as regular decode
+        group.bench_function(BenchmarkId::new("varu64", ""), |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &off in &varu_off {
+                    let (v, _) = varu64::decode(&varu_buf[off..]).unwrap();
+                    sum = sum.wrapping_add(v);
+                }
+                sum
+            });
+        });
+
+        // vu64: always checks canonicality — same as regular decode
+        group.bench_function(BenchmarkId::new("vu64", ""), |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &off in &vu64_off {
+                    let v = vu64::decode(&vu64_buf[off..]).unwrap();
+                    sum = sum.wrapping_add(v);
+                }
+                sum
+            });
+        });
+
+        // vu128: decode + re-encode + compare length
+        group.bench_function(BenchmarkId::new("vu128", ""), |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                for &off in &vu_off {
+                    let remaining = &vu_buf[off..];
+                    let mut tmp = [0u8; 9];
+                    let copy_len = remaining.len().min(9);
+                    tmp[..copy_len].copy_from_slice(&remaining[..copy_len]);
+                    let (v, consumed) = vu128::decode_u64(&tmp);
+                    // Re-encode and verify length matches
+                    let mut re = [0u8; 9];
+                    let canonical_len = vu128::encode_u64(&mut re, v);
+                    assert_eq!(consumed, canonical_len, "non-canonical vu128 encoding");
+                    sum = sum.wrapping_add(v);
+                }
+                sum
+            });
+        });
+
+        // leb128: decode + re-encode + compare length
+        group.bench_function(BenchmarkId::new("leb128", ""), |b| {
+            b.iter(|| {
+                let mut sum = 0u64;
+                let mut re_buf = Vec::with_capacity(10);
+                for &off in &leb_off {
+                    let mut cursor = &leb_buf[off..];
+                    let before = cursor.len();
+                    let v = leb128::read::unsigned(&mut cursor).unwrap();
+                    let consumed = before - cursor.len();
+                    // Re-encode and verify length matches
+                    re_buf.clear();
+                    leb128::write::unsigned(&mut re_buf, v).unwrap();
+                    assert_eq!(consumed, re_buf.len(), "non-canonical leb128 encoding");
+                    sum = sum.wrapping_add(v);
+                }
+                sum
+            });
+        });
+
+        group.finish();
+    }
+}
+
 criterion_group! {
     name = benches;
     config = Criterion::default()
@@ -561,8 +584,8 @@ criterion_group! {
         bench_encode,
         bench_decode,
         bench_encode_array,
-        bench_round_trip,
         bench_encoded_size,
         bench_stream_decode,
+        bench_canonical_decode,
 }
 criterion_main!(benches);
