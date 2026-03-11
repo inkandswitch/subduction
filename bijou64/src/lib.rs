@@ -237,7 +237,7 @@ pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
     // Derive tier from bit-width (same logic as encoded_len).
     let bw = 64 - value.leading_zeros();
     let mut tier = ((bw - 1) / 8 + 1) as usize; // 1..=8
-                                                // Correct: candidate can be one too high near tier boundaries.
+    // Correct: candidate can be one too high near tier boundaries.
     if value < BOUNDS[tier - 1] {
         tier -= 1;
     }

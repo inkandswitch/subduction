@@ -14,9 +14,9 @@
 
 #![allow(missing_docs, unreachable_pub)]
 
-use criterion::{criterion_group, criterion_main, BatchSize, BenchmarkId, Criterion, Throughput};
+use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 // ---------------------------------------------------------------------------
 // Value distributions
