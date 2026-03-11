@@ -39,6 +39,7 @@ BigCo
 blake
 bijou64
 BIJective
+branchless
 BlobDigest
 BlobLen
 BlobSize
@@ -68,6 +69,7 @@ CommitFPCount
 CommitFPs
 composable
 concap
+const
 CPUs
 CRDT
 CRDTs
@@ -127,6 +129,7 @@ GroupId
 HChaCha
 HSM
 HSMs
+hardcoded
 hexdump
 html
 http
@@ -135,6 +138,7 @@ https
 Idempotency
 img
 impl
+implementor
 IndexedDB
 instantiation
 instantiations
@@ -173,6 +177,7 @@ Memoization
 MemorySigner
 MessagePack
 MiCKey
+minimality
 minicbor
 misconfiguration
 mitigations
@@ -189,6 +194,7 @@ natively
 NetworkSubsystem
 Newtypes
 NixOS
+no-alloc
 nodejs
 non-extractable
 NonceCache
@@ -200,6 +206,8 @@ ns
 OCap
 ocap
 Ockham
+Optimisation
+optimised
 OCAP's
 OpenPGP
 OpenPolicy
@@ -293,6 +301,7 @@ systemd
 targetId
 TCP
 teardown
+th
 TLS
 TODO
 TODOs
