@@ -1,6 +1,6 @@
 [package]
 name = "bijou64"
-version = "0.1.0"
+version = "0.1.1"
 description = "Bijective variable-length encoding for unsigned 64-bit integers"
 authors = ["Brooklyn Zelenka <hello@brooklynzelenka.com>"]
 
@@ -22,7 +22,18 @@ thiserror = { workspace = true }
 arbitrary = { workspace = true, optional = false, features = ["derive"] }
 bijou64 = { path = ".", features = ["bolero"] }
 bolero = { workspace = true, features = ["arbitrary"] }
+criterion = { workspace = true }
+criterion_pprof = { workspace = true }
+leb128 = "0.2"
+rand = { workspace = true, features = ["small_rng"] }
 testresult = { workspace = true }
+varu64 = "0.7"
+vu64 = "0.2"
+vu128 = "1.1"
+
+[[bench]]
+name = "shootout"
+harness = false
 
 [features]
 default = []

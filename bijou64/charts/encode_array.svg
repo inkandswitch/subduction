@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 628 350" width="628" height="350" style="background:#fff; font-family:'Inter', 'Helvetica Neue', Arial, sans-serif">
+  <text x="288.0" y="24" text-anchor="middle" font-size="14" font-weight="600" fill="#1e293b">Encode Array (no alloc) — median µs per value</text>
+  <line x1="58" y1="300.0" x2="518" y2="300.0" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="50" y="304.0" text-anchor="end" font-size="11" fill="#64748b">0</text>
+  <line x1="58" y1="248.0" x2="518" y2="248.0" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="50" y="252.0" text-anchor="end" font-size="11" fill="#64748b">5</text>
+  <line x1="58" y1="196.0" x2="518" y2="196.0" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="50" y="200.0" text-anchor="end" font-size="11" fill="#64748b">10</text>
+  <line x1="58" y1="144.0" x2="518" y2="144.0" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="50" y="148.0" text-anchor="end" font-size="11" fill="#64748b">15</text>
+  <line x1="58" y1="92.0" x2="518" y2="92.0" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="50" y="96.0" text-anchor="end" font-size="11" fill="#64748b">20</text>
+  <line x1="58" y1="40.0" x2="518" y2="40.0" stroke="#e2e8f0" stroke-width="1"/>
+  <text x="50" y="44.0" text-anchor="end" font-size="11" fill="#64748b">25</text>
+  <text x="58.0" y="320" text-anchor="middle" font-size="11" fill="#64748b">tiny</text>
+  <text x="150.0" y="320" text-anchor="middle" font-size="11" fill="#64748b">small</text>
+  <text x="242.0" y="320" text-anchor="middle" font-size="11" fill="#64748b">medium</text>
+  <text x="334.0" y="320" text-anchor="middle" font-size="11" fill="#64748b">large</text>
+  <text x="426.0" y="320" text-anchor="middle" font-size="11" fill="#64748b">tier</text>
+  <text x="518.0" y="320" text-anchor="middle" font-size="11" fill="#64748b">uniform</text>
+  <text x="14" y="170.0" text-anchor="middle" font-size="12" fill="#64748b" transform="rotate(-90 14 170.0)">µs</text>
+  <line x1="58" y1="300" x2="518" y2="300" stroke="#94a3b8" stroke-width="1.5"/>
+  <line x1="58" y1="40" x2="58" y2="300" stroke="#94a3b8" stroke-width="1.5"/>
+  <polyline points="58.0,286.8 150.0,274.9 242.0,273.1 334.0,271.4 426.0,273.2 518.0,273.6" fill="none" stroke="#16a34a" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="58.0" cy="286.8" r="3.5" fill="#16a34a" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="150.0" cy="274.9" r="3.5" fill="#16a34a" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="242.0" cy="273.1" r="3.5" fill="#16a34a" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="334.0" cy="271.4" r="3.5" fill="#16a34a" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="426.0" cy="273.2" r="3.5" fill="#16a34a" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="518.0" cy="273.6" r="3.5" fill="#16a34a" stroke="#fff" stroke-width="1.5"/>
+  <polyline points="58.0,249.4 150.0,209.8 242.0,171.2 334.0,93.2 426.0,128.6 518.0,92.8" fill="none" stroke="#d97706" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="58.0" cy="249.4" r="3.5" fill="#d97706" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="150.0" cy="209.8" r="3.5" fill="#d97706" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="242.0" cy="171.2" r="3.5" fill="#d97706" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="334.0" cy="93.2" r="3.5" fill="#d97706" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="426.0" cy="128.6" r="3.5" fill="#d97706" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="518.0" cy="92.8" r="3.5" fill="#d97706" stroke="#fff" stroke-width="1.5"/>
+  <polyline points="58.0,283.2 150.0,283.0 242.0,282.8 334.0,282.9 426.0,282.8 518.0,282.8" fill="none" stroke="#dc2626" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="58.0" cy="283.2" r="3.5" fill="#dc2626" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="150.0" cy="283.0" r="3.5" fill="#dc2626" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="242.0" cy="282.8" r="3.5" fill="#dc2626" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="334.0" cy="282.9" r="3.5" fill="#dc2626" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="426.0" cy="282.8" r="3.5" fill="#dc2626" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="518.0" cy="282.8" r="3.5" fill="#dc2626" stroke="#fff" stroke-width="1.5"/>
+  <polyline points="58.0,270.2 150.0,263.5 242.0,263.4 334.0,263.5 426.0,264.5 518.0,263.3" fill="none" stroke="#2563eb" stroke-width="2.5" stroke-linejoin="round"/>
+  <circle cx="58.0" cy="270.2" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="150.0" cy="263.5" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="242.0" cy="263.4" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="334.0" cy="263.5" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="426.0" cy="264.5" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.5"/>
+  <circle cx="518.0" cy="263.3" r="3.5" fill="#2563eb" stroke="#fff" stroke-width="1.5"/>
+  <line x1="534" y1="50" x2="554" y2="50" stroke="#16a34a" stroke-width="2.5"/>
+  <circle cx="544" cy="50" r="3" fill="#16a34a" stroke="#fff" stroke-width="1"/>
+  <text x="560" y="54" font-size="11" fill="#1e293b">bijou64</text>
+  <line x1="534" y1="72" x2="554" y2="72" stroke="#d97706" stroke-width="2.5"/>
+  <circle cx="544" cy="72" r="3" fill="#d97706" stroke="#fff" stroke-width="1"/>
+  <text x="560" y="76" font-size="11" fill="#1e293b">varu64</text>
+  <line x1="534" y1="94" x2="554" y2="94" stroke="#dc2626" stroke-width="2.5"/>
+  <circle cx="544" cy="94" r="3" fill="#dc2626" stroke="#fff" stroke-width="1"/>
+  <text x="560" y="98" font-size="11" fill="#1e293b">vu64</text>
+  <line x1="534" y1="116" x2="554" y2="116" stroke="#2563eb" stroke-width="2.5"/>
+  <circle cx="544" cy="116" r="3" fill="#2563eb" stroke="#fff" stroke-width="1"/>
+  <text x="560" y="120" font-size="11" fill="#1e293b">vu128</text>
+</svg>

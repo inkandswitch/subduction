@@ -21,19 +21,19 @@
 //! previous tier, making all tier ranges disjoint by construction:
 //!
 //! ```text
-//! ┌───────────┬──────────────────┬──────────────────────────────────────────────────┐
-//! │ Tag       │ Additional bytes │ Value range                                      │
-//! ├───────────┼──────────────────┼──────────────────────────────────────────────────┤
-//! │ 0x00-0xF7 │ 0                │ 0 -- 247                                         │
-//! │ 0xF8      │ 1                │ 248 -- 503                                       │
-//! │ 0xF9      │ 2                │ 504 -- 66,039                                    │
-//! │ 0xFA      │ 3                │ 66,040 -- 16,843,255                             │
-//! │ 0xFB      │ 4                │ 16,843,256 -- 4,311,810,551                      │
-//! │ 0xFC      │ 5                │ 4,311,810,552 -- 1,103,823,438,327               │
-//! │ 0xFD      │ 6                │ 1,103,823,438,328 -- 282,578,800,148,983         │
-//! │ 0xFE      │ 7                │ 282,578,800,148,984 -- 72,340,172,838,076,919    │
-//! │ 0xFF      │ 8                │ 72,340,172,838,076,920 -- u64::MAX               │
-//! └───────────┴──────────────────┴──────────────────────────────────────────────────┘
+//! ┌───────────┬──────────────────┬─────────────────────────────────────────────────┐
+//! │ Tag       │ Additional bytes │ Value range                                     │
+//! ├───────────┼──────────────────┼─────────────────────────────────────────────────┤
+//! │ 0x00-0xF7 │ 0                │ 0 - 247                                         │
+//! │ 0xF8      │ 1                │ 248 - 503                                       │
+//! │ 0xF9      │ 2                │ 504 - 66,039                                    │
+//! │ 0xFA      │ 3                │ 66,040 - 16,843,255                             │
+//! │ 0xFB      │ 4                │ 16,843,256 - 4,311,810,551                      │
+//! │ 0xFC      │ 5                │ 4,311,810,552 - 1,103,823,438,327               │
+//! │ 0xFD      │ 6                │ 1,103,823,438,328 - 282,578,800,148,983         │
+//! │ 0xFE      │ 7                │ 282,578,800,148,984 - 72,340,172,838,076,919    │
+//! │ 0xFF      │ 8                │ 72,340,172,838,076,920 - u64::MAX               │
+//! └───────────┴──────────────────┴─────────────────────────────────────────────────┘
 //! ```
 //!
 //! # Canonicality
@@ -136,6 +136,12 @@ const BOUNDS: [u64; NUM_TIERS + 1] = [
 
 /// Returns the encoded length of `value` in bytes (1–9).
 ///
+/// Uses `leading_zeros` (a single `lzcnt`/`clz` instruction on most
+/// architectures) to derive a candidate tier from the value's bit-width,
+/// then applies at most one comparison to correct for the per-tier
+/// offsets. This replaces the previous 8-arm if/else chain with O(1)
+/// arithmetic.
+///
 /// # Examples
 ///
 /// ```
@@ -148,33 +154,38 @@ const BOUNDS: [u64; NUM_TIERS + 1] = [
 /// ```
 #[must_use]
 pub const fn encoded_len(value: u64) -> usize {
+    // Fast path: tier 0 values (0–247) are the most common in many
+    // workloads and need only a single well-predicted comparison.
     if value < BOUNDS[0] {
-        1
-    } else if value < BOUNDS[1] {
-        2
-    } else if value < BOUNDS[2] {
-        3
-    } else if value < BOUNDS[3] {
-        4
-    } else if value < BOUNDS[4] {
-        5
-    } else if value < BOUNDS[5] {
-        6
-    } else if value < BOUNDS[6] {
-        7
-    } else if value < BOUNDS[7] {
-        8
+        return 1;
+    }
+
+    // For multi-byte tiers, derive the tier from the value's bit-width
+    // via `leading_zeros` (a single `lzcnt`/`clz` instruction on most
+    // architectures), then correct with one comparison.
+    let bw = 64 - value.leading_zeros(); // u32, 8..=64 here
+
+    // Tier boundaries align to bit-widths 8, 9, 17, 25, 33, 41, 49, 57.
+    // For bw=8 -> candidate 2, bw 9..=16 -> 3, 17..=24 -> 4, etc.
+    // Formula: (bw - 1) / 8 + 2, which also gives 2 for bw=8.
+    let candidate = ((bw - 1) / 8 + 2) as usize;
+
+    // The candidate can be at most 1 too high because bijou64's tier
+    // offsets push the boundary slightly past each power-of-256.
+    // One comparison corrects for boundary values.
+    //
+    // SAFETY (indexing): candidate ∈ [2, 9] because bw ∈ [8, 64] after the
+    // tier-0 early return, so candidate - 2 ∈ [0, 7] — always in bounds
+    // for the 9-element BOUNDS array.
+    #[allow(clippy::indexing_slicing)]
+    if value < BOUNDS[candidate - 2] {
+        candidate - 1
     } else {
-        9
+        candidate
     }
 }
 
 /// Encodes `value` as a `bijou64`, appending bytes to `buf`.
-///
-/// # Panics
-///
-/// Cannot panic in practice: [`encode_array`]'s exhaustive `if`/`else`
-/// chain guarantees the returned length is in `1..=MAX_BYTES`.
 ///
 /// # Examples
 ///
@@ -187,19 +198,32 @@ pub const fn encoded_len(value: u64) -> usize {
 /// bijou64::encode(248, &mut buf);
 /// assert_eq!(buf, [0xF8, 0x00]);
 /// ```
-#[allow(clippy::expect_used)] // Invariant: encode_array's exhaustive if/else guarantees len ∈ 1..=MAX_BYTES
+#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
 pub fn encode(value: u64, buf: &mut Vec<u8>) {
-    let (arr, len) = encode_array(value);
-    buf.extend_from_slice(
-        arr.get(..len)
-            .expect("encode_array returned out-of-range len"),
-    );
+    if value < BOUNDS[0] {
+        buf.push((value & 0xFF) as u8);
+        return;
+    }
+
+    // Derive tier from bit-width (same logic as encode_array / encoded_len).
+    let bw = 64 - value.leading_zeros();
+    let mut tier = ((bw - 1) / 8 + 1) as usize;
+    if value < BOUNDS[tier - 1] {
+        tier -= 1;
+    }
+
+    buf.push((247 + tier) as u8);
+    let be = (value - OFFSETS[tier]).to_be_bytes();
+    buf.extend_from_slice(&be[8 - tier..]);
 }
 
 /// Encodes `value` as a `bijou64` into a fixed-size array.
 ///
 /// Returns `(bytes, len)` where `bytes` is a 9-byte array with the
 /// encoding in `bytes[..len]`.
+///
+/// Uses `leading_zeros` to derive the tier in O(1) rather than walking
+/// an if/else chain. See [`encoded_len`] for the same technique.
 ///
 /// # Examples
 ///
@@ -208,46 +232,31 @@ pub fn encode(value: u64, buf: &mut Vec<u8>) {
 /// assert_eq!(&bytes[..len], &[0xF8, 0x34]);
 /// ```
 #[must_use]
+#[allow(clippy::cast_possible_truncation, clippy::indexing_slicing)]
 pub const fn encode_array(value: u64) -> ([u8; MAX_BYTES], usize) {
     if value < BOUNDS[0] {
-        // Tier 0: single byte is the value. Mask is a no-op (value < 248)
-        // but satisfies clippy::cast_possible_truncation without an allow.
         return ([(value & 0xFF) as u8, 0, 0, 0, 0, 0, 0, 0, 0], 1);
     }
 
-    // For multi-byte tiers, compute tag + big-endian (value - offset).
-    // Fully unrolled: each arm uses only literal indices.
-    if value < BOUNDS[1] {
-        let be = (value - OFFSETS[1]).to_be_bytes();
-        ([0xF8, be[7], 0, 0, 0, 0, 0, 0, 0], 2)
-    } else if value < BOUNDS[2] {
-        let be = (value - OFFSETS[2]).to_be_bytes();
-        ([0xF9, be[6], be[7], 0, 0, 0, 0, 0, 0], 3)
-    } else if value < BOUNDS[3] {
-        let be = (value - OFFSETS[3]).to_be_bytes();
-        ([0xFA, be[5], be[6], be[7], 0, 0, 0, 0, 0], 4)
-    } else if value < BOUNDS[4] {
-        let be = (value - OFFSETS[4]).to_be_bytes();
-        ([0xFB, be[4], be[5], be[6], be[7], 0, 0, 0, 0], 5)
-    } else if value < BOUNDS[5] {
-        let be = (value - OFFSETS[5]).to_be_bytes();
-        ([0xFC, be[3], be[4], be[5], be[6], be[7], 0, 0, 0], 6)
-    } else if value < BOUNDS[6] {
-        let be = (value - OFFSETS[6]).to_be_bytes();
-        ([0xFD, be[2], be[3], be[4], be[5], be[6], be[7], 0, 0], 7)
-    } else if value < BOUNDS[7] {
-        let be = (value - OFFSETS[7]).to_be_bytes();
-        (
-            [0xFE, be[1], be[2], be[3], be[4], be[5], be[6], be[7], 0],
-            8,
-        )
-    } else {
-        let be = (value - OFFSETS[8]).to_be_bytes();
-        (
-            [0xFF, be[0], be[1], be[2], be[3], be[4], be[5], be[6], be[7]],
-            9,
-        )
+    let bw = 64 - value.leading_zeros();
+    let mut tier = ((bw - 1) / 8 + 1) as usize;
+    if value < BOUNDS[tier - 1] {
+        tier -= 1;
     }
+
+    let tag = (247 + tier) as u8;
+    let payload = (value - OFFSETS[tier]).to_be_bytes();
+
+    let mut buf = [0u8; MAX_BYTES];
+    buf[0] = tag;
+    let start = 8 - tier; // first relevant byte in payload
+    let mut i = 0;
+    while i < tier {
+        buf[1 + i] = payload[start + i];
+        i += 1;
+    }
+
+    (buf, tier + 1)
 }
 
 /// Decodes a `bijou64` from the front of `buf`.
