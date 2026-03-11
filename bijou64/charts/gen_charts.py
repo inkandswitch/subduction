@@ -19,7 +19,7 @@ DISTRIBUTIONS = ["tiny", "small", "medium", "large", "tier", "uniform"]
 CHARTS = [
     {
         "filename": "encode_vec.svg",
-        "title": "Encode (Vec) — median µs / 4096 values",
+        "title": "Encode (Vec) — median µs per value",
         "series": [
             ("bijou64", [2.26, 11.41, 19.29, 13.11, 16.26, 13.15]),
             ("varu64",  [10.96, 20.00, 26.89, 28.19, 29.47, 28.10]),
@@ -30,7 +30,7 @@ CHARTS = [
     },
     {
         "filename": "encode_array.svg",
-        "title": "Encode Array (no alloc) — median µs / 4096 values",
+        "title": "Encode Array (no alloc) — median µs per value",
         "series": [
             ("bijou64", [1.27, 2.41, 2.59, 2.75, 2.58, 2.54]),
             ("varu64",  [4.87, 8.67, 12.38, 19.88, 16.48, 19.92]),
@@ -40,7 +40,7 @@ CHARTS = [
     },
     {
         "filename": "decode.svg",
-        "title": "Decode — median µs / 4096 values",
+        "title": "Decode — median µs per value",
         "series": [
             ("bijou64", [3.93, 9.36, 8.77, 10.05, 11.59, 10.34]),
             ("varu64",  [6.62, 10.99, 16.24, 22.27, 19.21, 23.86]),
@@ -51,7 +51,7 @@ CHARTS = [
     },
     {
         "filename": "canonical_decode.svg",
-        "title": "Canonical Decode — median µs / 4096 values",
+        "title": "Canonical Decode — median µs per value",
         "series": [
             ("bijou64", [3.85, 8.93, 8.88, 10.46, 11.68, 10.27]),
             ("varu64",  [6.34, 10.50, 16.41, 22.88, 19.48, 22.62]),
@@ -62,7 +62,7 @@ CHARTS = [
     },
     {
         "filename": "stream_decode.svg",
-        "title": "Stream Decode — median µs / 4096 values",
+        "title": "Stream Decode — median µs per value",
         "series": [
             ("bijou64", [3.98, 9.34, 9.34, 10.31, 19.76, 9.81]),
             ("varu64",  [9.77, 20.82, 18.12, 23.29, 23.28, 22.48]),
