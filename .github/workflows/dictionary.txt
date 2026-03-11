@@ -156,6 +156,7 @@ keyhive
 KeyhivePolicy
 Keyoxide
 launchd
+leb
 LEB
 lexicographically
 little-endian
@@ -260,6 +261,7 @@ SedimentreeId
 Sedimentrees
 sedimentrees
 Serde
+serialisation
 serverless
 ServerTimestamp
 sexualized
@@ -312,7 +314,11 @@ unresolvable
 unwieldly
 varint
 varints
+varu
 VARU
+Vec
+Vec-based
+vectorisation
 Versionable
 VPN
 vu
@@ -332,3 +338,4 @@ xFC
 xFF
 XChaCha
 Zelenka
+µs
