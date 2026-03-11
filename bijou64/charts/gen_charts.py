@@ -74,10 +74,10 @@ CHARTS = [
 
 # Distinct, accessible palette (colour-blind friendly, high contrast on white)
 COLOURS = {
-    "bijou64": "#2563eb",  # blue
+    "bijou64": "#16a34a",  # green
     "varu64":  "#d97706",  # amber/orange
     "vu64":    "#dc2626",  # red
-    "vu128":   "#059669",  # emerald/teal
+    "vu128":   "#2563eb",  # blue
     "leb128":  "#7c3aed",  # violet
 }
 
@@ -245,7 +245,7 @@ def generate_svg(chart: dict) -> str:
 
 
 def main():
-    out_dir = os.path.join(os.path.dirname(__file__), "charts")
+    out_dir = os.path.dirname(__file__)
     os.makedirs(out_dir, exist_ok=True)
     for chart in CHARTS:
         svg = generate_svg(chart)
