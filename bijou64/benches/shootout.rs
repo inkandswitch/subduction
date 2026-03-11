@@ -12,7 +12,13 @@
 //!
 //! Run: `cargo bench -p bijou64 --bench shootout`
 
-#![allow(missing_docs, unreachable_pub)]
+#![allow(
+    missing_docs,
+    unreachable_pub,
+    clippy::doc_markdown,
+    clippy::indexing_slicing,
+    clippy::unwrap_used
+)]
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
