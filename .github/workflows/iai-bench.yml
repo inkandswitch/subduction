@@ -1,0 +1,51 @@
+name: iai-callgrind Benchmarks
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "bijou64/**"
+      - ".github/workflows/iai-bench.yml"
+  pull_request:
+    paths:
+      - "bijou64/**"
+      - ".github/workflows/iai-bench.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  iai-callgrind:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          cache: true
+
+      - name: Install Valgrind
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y valgrind
+
+      - name: Install iai-callgrind-runner
+        run: |
+          version=$(cargo metadata --format-version=1 --no-deps \
+            | jq -r '.packages[] | select(.name == "bijou64") | .dependencies[] | select(.name == "iai-callgrind") | .req' \
+            | sed 's/\^//')
+          cargo install iai-callgrind-runner --version "${version}"
+
+      - name: Run iai-callgrind benchmarks
+        run: cargo bench -p bijou64 --bench iai_shootout
+
+      - name: Upload iai results
+        uses: actions/upload-artifact@v4
+        with:
+          name: iai-callgrind-results
+          path: target/iai/
+          retention-days: 90
