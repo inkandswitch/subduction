@@ -7,7 +7,7 @@
 //! - **Small** (248–65 535): typical payload sizes
 //! - **Medium** (65 536–4 294 967 295): large blob sizes, offsets
 //! - **Large** (> 2³²): content hashes interpreted as integers, counters
-//! - **Tier boundaries**: worst-case branch-predictor stress
+//! - **Boundary**: worst-case branch-predictor stress at tier edges
 //! - **Uniform random**: unbiased full-range comparison
 //!
 //! Run: `cargo bench -p bijou64 --bench shootout`
@@ -19,6 +19,8 @@
     clippy::indexing_slicing,
     clippy::unwrap_used
 )]
+
+use std::time::Duration;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use criterion_pprof::criterion::{Output, PProfProfiler};
@@ -63,7 +65,7 @@ fn distributions() -> Vec<(&'static str, Vec<u64>)> {
                 .map(|_| rng.gen_range(u64::from(u32::MAX) + 1..=u64::MAX))
                 .collect(),
         ),
-        ("tier_boundaries", tier_boundary_values()),
+        ("boundary", boundary_values()),
         (
             "uniform_random",
             (0..BATCH).map(|_| rng.gen_range(0..=u64::MAX)).collect(),
@@ -73,7 +75,7 @@ fn distributions() -> Vec<(&'static str, Vec<u64>)> {
 
 /// Values at and around every bijou64 tier boundary — worst case for
 /// branch predictors because the tag byte alternates between tiers.
-fn tier_boundary_values() -> Vec<u64> {
+fn boundary_values() -> Vec<u64> {
     let boundaries: &[u64] = &[
         0,
         247,
@@ -585,6 +587,9 @@ fn bench_canonical_decode(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default()
+        .sample_size(200)
+        .warm_up_time(Duration::from_secs(3))
+        .measurement_time(Duration::from_secs(5))
         .with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
     targets =
         bench_encode,
