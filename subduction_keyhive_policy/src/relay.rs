@@ -45,7 +45,7 @@ use keyhive_core::{
 };
 use subduction_core::peer::id::PeerId;
 use subduction_keyhive::{
-    KeyhivePeerId, KeyhiveSyncManager, SyncManagerError, storage::KeyhiveStorage,
+    storage::KeyhiveStorage, KeyhivePeerId, KeyhiveSyncManager, SyncManagerError,
 };
 
 use future_form::Local;
@@ -328,3 +328,423 @@ where
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 #[error("collecting send (unreachable)")]
 pub struct CollectError;
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use alloc::{sync::Arc, vec, vec::Vec};
+    use async_lock::Mutex;
+    use keyhive_core::{
+        access::Access, crypto::signer::memory::MemorySigner, keyhive::Keyhive,
+        listener::no_listener::NoListener, principal::membered::Membered,
+        store::ciphertext::memory::MemoryCiphertextStore,
+    };
+    use rand::rngs::OsRng;
+    use subduction_keyhive::{KeyhivePeerId, KeyhiveSyncManager, MemoryKeyhiveStorage};
+
+    type SimpleKeyhive = Keyhive<
+        MemorySigner,
+        [u8; 32],
+        Vec<u8>,
+        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+        NoListener,
+        OsRng,
+    >;
+
+    type TestSyncManager = KeyhiveSyncManager<
+        MemorySigner,
+        [u8; 32],
+        Vec<u8>,
+        MemoryCiphertextStore<[u8; 32], Vec<u8>>,
+        NoListener,
+        OsRng,
+        MemoryKeyhiveStorage,
+    >;
+
+    async fn make_keyhive() -> SimpleKeyhive {
+        let mut csprng = OsRng;
+        let sk = MemorySigner::generate(&mut csprng);
+        Keyhive::generate(sk, MemoryCiphertextStore::new(), NoListener, csprng)
+            .await
+            .expect("keyhive generation failed")
+    }
+
+    fn keyhive_peer_id(kh: &SimpleKeyhive) -> KeyhivePeerId {
+        let id: keyhive_core::principal::identifier::Identifier = kh.id().into();
+        KeyhivePeerId::from_bytes(id.to_bytes())
+    }
+
+    /// Convert a [`KeyhivePeerId`] to a subduction [`PeerId`].
+    fn to_subduction_peer_id(khid: &KeyhivePeerId) -> PeerId {
+        PeerId::new(*khid.verifying_key())
+    }
+
+    async fn make_sync_manager(
+        keyhive: SimpleKeyhive,
+    ) -> (Arc<TestSyncManager>, Arc<Mutex<SimpleKeyhive>>) {
+        let peer_id = keyhive_peer_id(&keyhive);
+        let cc = keyhive.contact_card().await.expect("contact card");
+        let mut cc_bytes = Vec::new();
+        ciborium::into_writer(&cc, &mut cc_bytes).expect("serialize contact card");
+        let storage = MemoryKeyhiveStorage::new();
+        let shared = Arc::new(Mutex::new(keyhive));
+        let manager = Arc::new(TestSyncManager::new(
+            shared.clone(),
+            storage,
+            peer_id,
+            cc_bytes,
+        ));
+        (manager, shared)
+    }
+
+    /// Run a full relay sync round between two peers.
+    ///
+    /// The initiator sends a sync request through its relay, the responder
+    /// handles it through its relay, and responses are forwarded back.
+    async fn relay_sync_round(
+        alice_relay: &KeyhiveHandlerRelay,
+        bob_relay: &KeyhiveHandlerRelay,
+        alice_sub_id: PeerId,
+        bob_sub_id: PeerId,
+        alice_mgr: &TestSyncManager,
+    ) -> usize {
+        let mut messages = 0;
+
+        // Initiator: generate outbound sync request via the sync manager
+        let (send_fn, init_out) = {
+            let (tx, rx) = async_channel::unbounded::<Vec<u8>>();
+            let send_fn = move |bytes: Vec<u8>| {
+                let tx = tx.clone();
+                async move {
+                    tx.send(bytes).await.map_err(|_| CollectError)?;
+                    Ok::<(), CollectError>(())
+                }
+            };
+            (send_fn, rx)
+        };
+
+        let bob_khid = {
+            if let Some(khid) = alice_mgr.keyhive_peer_id_for(bob_sub_id.as_bytes()).await {
+                khid
+            } else {
+                let khid = KeyhivePeerId::from_bytes(*bob_sub_id.as_bytes());
+                alice_mgr
+                    .register_peer(*bob_sub_id.as_bytes(), khid.clone())
+                    .await;
+                khid
+            }
+        };
+
+        alice_mgr
+            .sync_with_peer(&bob_khid, &send_fn)
+            .await
+            .expect("alice sync_with_peer failed");
+
+        // Forward all outbound messages from Alice through Bob's relay
+        while let Ok(wire_bytes) = init_out.try_recv() {
+            messages += 1;
+
+            // Bob handles via relay
+            let responses = bob_relay
+                .handle_inbound(alice_sub_id, wire_bytes)
+                .await
+                .expect("bob relay handle_inbound failed");
+
+            // Forward Bob's responses through Alice's relay
+            for response_bytes in responses {
+                messages += 1;
+                let alice_responses = alice_relay
+                    .handle_inbound(bob_sub_id, response_bytes)
+                    .await
+                    .expect("alice relay handle_inbound failed");
+
+                // Alice may send further messages (e.g., SyncOps)
+                for further_bytes in alice_responses {
+                    messages += 1;
+                    drop(
+                        bob_relay
+                            .handle_inbound(alice_sub_id, further_bytes)
+                            .await
+                            .expect("bob relay handle further failed"),
+                    );
+                }
+            }
+        }
+
+        messages
+    }
+
+    /// Two peers sync keyhive state through the relay actor, verifying
+    /// that group membership converges end-to-end.
+    #[tokio::test(flavor = "current_thread")]
+    async fn relay_e2e_two_peers_group_convergence() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let alice_kh = make_keyhive().await;
+                let bob_kh = make_keyhive().await;
+
+                // Exchange contact cards at the keyhive level
+                let alice_cc = alice_kh.contact_card().await.expect("alice cc");
+                let bob_cc = bob_kh.contact_card().await.expect("bob cc");
+                alice_kh
+                    .receive_contact_card(&bob_cc)
+                    .await
+                    .expect("alice receive bob cc");
+                bob_kh
+                    .receive_contact_card(&alice_cc)
+                    .await
+                    .expect("bob receive alice cc");
+
+                let alice_khid = keyhive_peer_id(&alice_kh);
+                let bob_khid = keyhive_peer_id(&bob_kh);
+                let alice_sub_id = to_subduction_peer_id(&alice_khid);
+                let bob_sub_id = to_subduction_peer_id(&bob_khid);
+
+                // Alice creates a group and adds Bob
+                let group_id = {
+                    let group = alice_kh.generate_group(vec![]).await.expect("gen group");
+                    let gid = group.lock().await.group_id();
+                    let bob_identifier = bob_khid.to_identifier().expect("bob identifier");
+                    let bob_agent = alice_kh.get_agent(bob_identifier).await.expect("bob agent");
+                    alice_kh
+                        .add_member(
+                            bob_agent,
+                            &Membered::Group(gid, group.clone()),
+                            Access::Read,
+                            &[],
+                        )
+                        .await
+                        .expect("add bob to group");
+                    gid
+                };
+
+                // Build sync managers
+                let (alice_mgr, _alice_shared) = make_sync_manager(alice_kh).await;
+                let (bob_mgr, bob_shared) = make_sync_manager(bob_kh).await;
+
+                // Register peer mappings
+                alice_mgr
+                    .register_peer(*bob_sub_id.as_bytes(), bob_khid.clone())
+                    .await;
+                bob_mgr
+                    .register_peer(*alice_sub_id.as_bytes(), alice_khid.clone())
+                    .await;
+
+                // Create relay actors
+                let (alice_relay, alice_receiver) = KeyhiveHandlerRelay::channel(64);
+                let (bob_relay, bob_receiver) = KeyhiveHandlerRelay::channel(64);
+
+                // Spawn relay actors on the local executor
+                let alice_mgr_clone = alice_mgr.clone();
+                let bob_mgr_clone = bob_mgr.clone();
+                tokio::task::spawn_local(async move {
+                    alice_receiver.run(alice_mgr_clone).await;
+                });
+                tokio::task::spawn_local(async move {
+                    bob_receiver.run(bob_mgr_clone).await;
+                });
+
+                // Before sync: Bob should not have the group
+                {
+                    let kh = bob_shared.lock().await;
+                    assert!(
+                        kh.get_group(group_id).await.is_none(),
+                        "Bob should not have the group before sync"
+                    );
+                }
+
+                // Alice → Bob sync through relays
+                let msgs = relay_sync_round(
+                    &alice_relay,
+                    &bob_relay,
+                    alice_sub_id,
+                    bob_sub_id,
+                    &alice_mgr,
+                )
+                .await;
+
+                assert!(msgs > 0, "at least one message should have been exchanged");
+
+                // After sync: Bob should have the group
+                {
+                    let kh = bob_shared.lock().await;
+                    assert!(
+                        kh.get_group(group_id).await.is_some(),
+                        "Bob should have the group after relay sync"
+                    );
+                }
+            })
+            .await;
+    }
+
+    /// Two peers with divergent groups both converge after bidirectional
+    /// relay sync.
+    #[tokio::test(flavor = "current_thread")]
+    async fn relay_e2e_bidirectional_convergence() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let alice_kh = make_keyhive().await;
+                let bob_kh = make_keyhive().await;
+
+                // Exchange contact cards
+                let alice_cc = alice_kh.contact_card().await.expect("alice cc");
+                let bob_cc = bob_kh.contact_card().await.expect("bob cc");
+                alice_kh
+                    .receive_contact_card(&bob_cc)
+                    .await
+                    .expect("alice receive bob cc");
+                bob_kh
+                    .receive_contact_card(&alice_cc)
+                    .await
+                    .expect("bob receive alice cc");
+
+                let alice_khid = keyhive_peer_id(&alice_kh);
+                let bob_khid = keyhive_peer_id(&bob_kh);
+                let alice_sub_id = to_subduction_peer_id(&alice_khid);
+                let bob_sub_id = to_subduction_peer_id(&bob_khid);
+
+                // Alice creates her group with Bob
+                let alice_group_id = {
+                    let group = alice_kh.generate_group(vec![]).await.expect("gen group");
+                    let gid = group.lock().await.group_id();
+                    let bob_identifier = bob_khid.to_identifier().expect("bob id");
+                    let bob_agent = alice_kh.get_agent(bob_identifier).await.expect("bob agent");
+                    alice_kh
+                        .add_member(
+                            bob_agent,
+                            &Membered::Group(gid, group.clone()),
+                            Access::Read,
+                            &[],
+                        )
+                        .await
+                        .expect("add bob");
+                    gid
+                };
+
+                // Bob creates his group with Alice
+                let bob_group_id = {
+                    let group = bob_kh.generate_group(vec![]).await.expect("gen group");
+                    let gid = group.lock().await.group_id();
+                    let alice_identifier = alice_khid.to_identifier().expect("alice id");
+                    let alice_agent = bob_kh
+                        .get_agent(alice_identifier)
+                        .await
+                        .expect("alice agent");
+                    bob_kh
+                        .add_member(
+                            alice_agent,
+                            &Membered::Group(gid, group.clone()),
+                            Access::Read,
+                            &[],
+                        )
+                        .await
+                        .expect("add alice");
+                    gid
+                };
+
+                // Build sync managers
+                let (alice_mgr, alice_shared) = make_sync_manager(alice_kh).await;
+                let (bob_mgr, bob_shared) = make_sync_manager(bob_kh).await;
+
+                // Register peer mappings
+                alice_mgr
+                    .register_peer(*bob_sub_id.as_bytes(), bob_khid.clone())
+                    .await;
+                bob_mgr
+                    .register_peer(*alice_sub_id.as_bytes(), alice_khid.clone())
+                    .await;
+
+                // Create and spawn relay actors
+                let (alice_relay, alice_receiver) = KeyhiveHandlerRelay::channel(64);
+                let (bob_relay, bob_receiver) = KeyhiveHandlerRelay::channel(64);
+
+                let alice_mgr_clone = alice_mgr.clone();
+                let bob_mgr_clone = bob_mgr.clone();
+                tokio::task::spawn_local(async move {
+                    alice_receiver.run(alice_mgr_clone).await;
+                });
+                tokio::task::spawn_local(async move {
+                    bob_receiver.run(bob_mgr_clone).await;
+                });
+
+                // Alice → Bob
+                relay_sync_round(
+                    &alice_relay,
+                    &bob_relay,
+                    alice_sub_id,
+                    bob_sub_id,
+                    &alice_mgr,
+                )
+                .await;
+
+                // Bob → Alice
+                relay_sync_round(&bob_relay, &alice_relay, bob_sub_id, alice_sub_id, &bob_mgr)
+                    .await;
+
+                // Both should have both groups
+                {
+                    let alice = alice_shared.lock().await;
+                    assert!(
+                        alice.get_group(alice_group_id).await.is_some(),
+                        "Alice should have her own group"
+                    );
+                    assert!(
+                        alice.get_group(bob_group_id).await.is_some(),
+                        "Alice should have Bob's group after sync"
+                    );
+                }
+                {
+                    let bob = bob_shared.lock().await;
+                    assert!(
+                        bob.get_group(bob_group_id).await.is_some(),
+                        "Bob should have his own group"
+                    );
+                    assert!(
+                        bob.get_group(alice_group_id).await.is_some(),
+                        "Bob should have Alice's group after sync"
+                    );
+                }
+            })
+            .await;
+    }
+
+    /// Relay correctly handles peer disconnect.
+    #[tokio::test(flavor = "current_thread")]
+    async fn relay_peer_disconnect_removes_mapping() {
+        let local = tokio::task::LocalSet::new();
+        local
+            .run_until(async {
+                let alice_kh = make_keyhive().await;
+                let (alice_mgr, _) = make_sync_manager(alice_kh).await;
+
+                let (relay, receiver) = KeyhiveHandlerRelay::channel(64);
+                let mgr = alice_mgr.clone();
+                tokio::task::spawn_local(async move {
+                    receiver.run(mgr).await;
+                });
+
+                // Register a fake peer
+                let fake_bytes = [42u8; 32];
+                let fake_khid = KeyhivePeerId::from_bytes(fake_bytes);
+                let fake_sub_id = PeerId::new(fake_bytes);
+                alice_mgr.register_peer(fake_bytes, fake_khid).await;
+
+                assert!(alice_mgr.keyhive_peer_id_for(&fake_bytes).await.is_some());
+
+                // Disconnect through relay
+                relay.on_peer_disconnect(fake_sub_id).await;
+
+                // Give the actor a moment to process
+                tokio::task::yield_now().await;
+
+                assert!(
+                    alice_mgr.keyhive_peer_id_for(&fake_bytes).await.is_none(),
+                    "peer mapping should be removed after disconnect"
+                );
+            })
+            .await;
+    }
+}

@@ -71,13 +71,14 @@ pub enum PublishDisallowedError {
 
 impl<S, T, P, C, L, R, Store> EphemeralPolicy<Local> for KeyhiveSyncManager<S, T, P, C, L, R, Store>
 where
-    S: AsyncSigner + Clone,
-    T: ContentRef + serde::de::DeserializeOwned,
+    S: AsyncSigner + Clone + Send + 'static,
+    T: ContentRef + serde::de::DeserializeOwned + Send + Sync + 'static,
     P: for<'de> serde::Deserialize<'de>,
     C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
+    L: MembershipListener<S, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore,
     Store: KeyhiveStorage<Local>,
+    Store::Error: Send + Sync + 'static,
 {
     type SubscribeDisallowed = SubscribeDisallowedError;
     type PublishDisallowed = PublishDisallowedError;

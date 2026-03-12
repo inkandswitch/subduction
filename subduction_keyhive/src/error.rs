@@ -68,11 +68,14 @@ impl CborDeError {
 
     /// Wrap a ciborium deserialization error from a `&[u8]` reader.
     ///
-    /// When reading from byte slices, ciborium uses `EndOfFile` as the IO
-    /// error type, which doesn't implement `Error`. This method wraps the
-    /// `Io` variant with [`CborEndOfFile`] instead.
+    /// Depending on whether `ciborium-io` has `std` enabled (due to Cargo
+    /// feature unification), the IO error type for `&[u8]` readers is
+    /// either `ciborium_io::EndOfFile` (no-std) or `std::io::Error` (std).
+    /// Neither can be statically assumed, so this method accepts any
+    /// `Debug` type and always substitutes [`CborEndOfFile`] for the `Io`
+    /// variant — the original error is only "unexpected end of input".
     #[must_use]
-    pub fn from_slice(err: ciborium::de::Error<ciborium_io::EndOfFile>) -> Self {
+    pub fn from_slice<E: core::fmt::Debug>(err: ciborium::de::Error<E>) -> Self {
         match err {
             ciborium::de::Error::Io(_) => Self(ciborium::de::Error::Io(Box::new(CborEndOfFile))),
             ciborium::de::Error::Syntax(offset) => Self(ciborium::de::Error::Syntax(offset)),

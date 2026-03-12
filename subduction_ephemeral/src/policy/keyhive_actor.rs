@@ -229,13 +229,18 @@ impl SyncManagerActorHandle {
         buffer: usize,
     ) -> (Self, impl core::future::Future<Output = ()>)
     where
-        S: keyhive_core::crypto::signer::async_signer::AsyncSigner + Clone + 'static,
-        T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned + 'static,
+        S: keyhive_core::crypto::signer::async_signer::AsyncSigner + Clone + Send + 'static,
+        T: keyhive_core::content::reference::ContentRef
+            + serde::de::DeserializeOwned
+            + Send
+            + Sync
+            + 'static,
         P: for<'de> serde::Deserialize<'de> + 'static,
         C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone + 'static,
-        L: keyhive_core::listener::membership::MembershipListener<S, T> + 'static,
+        L: keyhive_core::listener::membership::MembershipListener<S, T> + Send + 'static,
         R: rand::CryptoRng + rand::RngCore + 'static,
         Store: subduction_keyhive::KeyhiveStorage<future_form::Local> + 'static,
+        Store::Error: Send + Sync + 'static,
     {
         let (tx, rx) = async_channel::bounded(buffer);
         let handle = Self { tx };
@@ -253,13 +258,18 @@ async fn run_actor<S, T, P, C, L, R, Store>(
     sync_manager: subduction_keyhive::KeyhiveSyncManager<S, T, P, C, L, R, Store>,
     rx: async_channel::Receiver<PolicyRequest>,
 ) where
-    S: keyhive_core::crypto::signer::async_signer::AsyncSigner + Clone + 'static,
-    T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned + 'static,
+    S: keyhive_core::crypto::signer::async_signer::AsyncSigner + Clone + Send + 'static,
+    T: keyhive_core::content::reference::ContentRef
+        + serde::de::DeserializeOwned
+        + Send
+        + Sync
+        + 'static,
     P: for<'de> serde::Deserialize<'de> + 'static,
     C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone + 'static,
-    L: keyhive_core::listener::membership::MembershipListener<S, T> + 'static,
+    L: keyhive_core::listener::membership::MembershipListener<S, T> + Send + 'static,
     R: rand::CryptoRng + rand::RngCore + 'static,
     Store: subduction_keyhive::KeyhiveStorage<future_form::Local> + 'static,
+    Store::Error: Send + Sync + 'static,
 {
     use future_form::Local;
 
