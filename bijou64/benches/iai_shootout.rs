@@ -24,7 +24,7 @@
 use std::hint::black_box;
 
 use iai_callgrind::{library_benchmark, library_benchmark_group, main};
-use rand::{rngs::SmallRng, Rng, SeedableRng};
+use rand::{Rng, SeedableRng, rngs::SmallRng};
 
 // ---------------------------------------------------------------------------
 // Value distributions (same as shootout.rs)

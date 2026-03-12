@@ -48,10 +48,14 @@ BlobsResponse
 BndryCnt
 BY-SA
 Caddy
+Callgrind
 canonicality
 CAS
 CBOR
 CBOR-encoded
+CDF
+CDFs
+CSV
 CGKA
 ChaCha
 ChaCha's
@@ -96,6 +100,7 @@ delegator
 Deployers
 deserialization
 desync
+dev
 Dev
 DiscoveryId
 DNS
@@ -115,6 +120,7 @@ faq
 Filesystem
 filesystem
 FingerprintSummary
+flamegraphs
 FIXME
 fɔːr
 FragFPCount
@@ -130,11 +136,14 @@ HChaCha
 HSM
 HSMs
 hardcoded
+heatmaps
+Heatmaps
 hexdump
 html
 http
 http-server
 https
+iai-callgrind
 Idempotency
 img
 impl
@@ -180,6 +189,7 @@ MiCKey
 minimality
 minicbor
 misconfiguration
+mispredictions
 mitigations
 mixnet
 ML-DSA
@@ -221,9 +231,11 @@ petnames
 PITM
 PKI
 plaintext
+Plotly
 pluggable
 PN
 pnpm
+pprof
 PoLA
 PQC
 pre-allocation
@@ -283,6 +295,7 @@ SipHash
 sɪksti
 sneakernets
 socio-economic
+sortable
 SPKI
 Stateful
 stateful
@@ -325,6 +338,8 @@ varint
 varints
 varu
 VARU
+Valgrind
+Valgrind's
 Vec
 Vec-based
 vectorisation

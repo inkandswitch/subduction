@@ -36,8 +36,7 @@ jobs:
       - name: Install iai-callgrind-runner
         run: |
           version=$(cargo metadata --format-version=1 --no-deps \
-            | jq -r '.packages[] | select(.name == "bijou64") | .dependencies[] | select(.name == "iai-callgrind") | .req' \
-            | sed 's/\^//')
+            | jq -r '.packages[] | select(.name == "bijou64") | .dependencies[] | select(.name == "iai-callgrind") | .req')
           cargo install iai-callgrind-runner --version "${version}"
 
       - name: Run iai-callgrind benchmarks
