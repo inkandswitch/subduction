@@ -31,23 +31,21 @@ from __future__ import annotations
 
 import csv
 import json
-import math
-import os
-import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import matplotlib
+
+matplotlib.use("Agg")  # Non-interactive backend for headless SVG generation
+
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import seaborn as sns
 from plotly.subplots import make_subplots
-
-matplotlib.use("Agg")  # Non-interactive backend for headless SVG generation
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -334,8 +332,6 @@ def compute_percentiles(results: list[BenchResult]) -> list[PercentileStats]:
         data = r.per_iter_ns
         p = np.percentile(data, PERCENTILES)
         q1, q3 = np.percentile(data, [25, 75])
-        mean = float(np.mean(data))
-        std = float(np.std(data))
 
         stats.append(
             PercentileStats(
@@ -352,7 +348,7 @@ def compute_percentiles(results: list[BenchResult]) -> list[PercentileStats]:
                 ci_lower=r.mean_ci_lower,
                 ci_upper=r.mean_ci_upper,
                 iqr=float(q3 - q1),
-                cv=std / mean if mean > 0 else 0,
+                cv=r.std_dev_ns / r.mean_ns if r.mean_ns > 0 else 0,
                 min=float(np.min(data)),
                 max=float(np.max(data)),
             )
@@ -573,7 +569,7 @@ def generate_box_plots(
 def generate_bar_charts(
     stats: list[PercentileStats], out_dir: Path
 ) -> None:
-    """Grouped bar chart (median) with p5-p95 error whiskers, per group."""
+    """Grouped bar chart (median) with min\u2013p95 error whiskers, per group."""
     _setup_style()
 
     by_group: dict[str, list[PercentileStats]] = {}
