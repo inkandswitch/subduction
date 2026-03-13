@@ -67,7 +67,8 @@ use sedimentree_core::{
 
 use crate::{
     connection::{
-        Connection, authenticated::Authenticated, manager::Spawn, nonce_cache::NonceCache,
+        Connection, authenticated::Authenticated, handshake::audience::DiscoveryId, manager::Spawn,
+        message::Message, nonce_cache::NonceCache,
     },
     handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
@@ -113,7 +114,7 @@ pub struct SubductionBuilder<
     spawner: Sp,
     storage: Sto,
 
-    discovery_id: Option<crate::connection::handshake::audience::DiscoveryId>,
+    discovery_id: Option<DiscoveryId>,
     depth_metric: M,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
@@ -233,10 +234,7 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
     ///
     /// Defaults to `None` (peer-to-peer mode only).
     #[must_use]
-    pub const fn discovery_id(
-        mut self,
-        id: crate::connection::handshake::audience::DiscoveryId,
-    ) -> Self {
+    pub const fn discovery_id(mut self, id: DiscoveryId) -> Self {
         self.discovery_id = Some(id);
         self
     }
@@ -343,8 +341,7 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         Sp: Spawn<F> + Send + Sync + 'static,
         M: Clone,
         SyncHandler<F, S, C, P, M, N>: Handler<F, C>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message:
-            From<crate::connection::message::Message>,
+        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message: From<Message>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self
@@ -423,7 +420,7 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
-        H::Message: From<crate::connection::message::Message>,
+        H::Message: From<Message>,
         H::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self
