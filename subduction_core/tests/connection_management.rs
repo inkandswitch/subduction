@@ -1,4 +1,4 @@
-//! Tests for connection management (add_connection, remove_connection, disconnect).
+//! Tests for connection management (`add_connection`, `remove_connection`, `disconnect`).
 
 use subduction_core::{
     connection::test_utils::{MockConnection, new_test_subduction},

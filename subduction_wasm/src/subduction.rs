@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -32,8 +32,8 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
+        Subduction, builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -42,10 +42,10 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
+        JsConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
         websocket::{WasmAuthenticatedWebSocket, WasmWebSocket},
-        JsConnection,
     },
     error::{
         WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
@@ -349,7 +349,7 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or add_connection fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connect)]
     pub async fn connect(
         &self,

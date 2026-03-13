@@ -9,7 +9,7 @@ use core::fmt;
 
 use async_lock::Mutex;
 use future_form::Sendable;
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use subduction_core::{
     connection::{authenticated::Authenticated, timeout::Timeout},
     peer::id::PeerId,
