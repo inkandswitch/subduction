@@ -110,8 +110,7 @@ impl Rejection {
             .first()
             .ok_or(RejectionDecodeError::TooShort { have: 0 })?;
 
-        let reason = RejectionReason::try_from(reason_byte)
-            .map_err(|_| RejectionDecodeError::InvalidReason(reason_byte))?;
+        let reason = RejectionReason::try_from(reason_byte)?;
 
         let timestamp_bytes: [u8; 8] = payload.get(1..9).and_then(|s| s.try_into().ok()).ok_or(
             RejectionDecodeError::TooShort {
@@ -137,8 +136,8 @@ pub enum RejectionDecodeError {
     },
 
     /// The reason tag byte is not a recognized [`RejectionReason`].
-    #[error("invalid rejection reason tag: {0:#04x}")]
-    InvalidReason(u8),
+    #[error(transparent)]
+    InvalidReason(#[from] InvalidEnumTag),
 }
 
 impl From<RejectionDecodeError> for DecodeError {
@@ -149,11 +148,7 @@ impl From<RejectionDecodeError> for DecodeError {
                 need: REJECTION_SIZE,
                 have,
             },
-            RejectionDecodeError::InvalidReason(tag) => InvalidEnumTag {
-                tag,
-                type_name: "RejectionReason",
-            }
-            .into(),
+            RejectionDecodeError::InvalidReason(invalid) => invalid.into(),
         }
     }
 }
