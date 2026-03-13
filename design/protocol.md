@@ -455,10 +455,10 @@ envelope tag byte:
 All sync messages use the envelope format with schema `SUM\x00`:
 
 ```
-╔════════╦══════════╦═════╦═════════════════════╗
-║ Schema ║   Size   ║ Tag ║      Payload        ║
-║   4B   ║    4B    ║ 1B  ║     (variable)      ║
-╚════════╩══════════╩═════╩═════════════════════╝
+╔════════╦══════════╦═════╦════════════╗
+║ Schema ║   Size   ║ Tag ║  Payload   ║
+║   4B   ║    4B    ║ 1B  ║ (variable) ║
+╚════════╩══════════╩═════╩════════════╝
 ```
 
 ### Message Tags
@@ -477,10 +477,10 @@ All sync messages use the envelope format with schema `SUM\x00`:
 ### LooseCommit Message (Tag 0x00)
 
 ```
-╔═══════════════╦══════════════════════╦═════════╦══════════╗
-║ SedimentreeId ║ Signed<LooseCommit>  ║ BlobLen ║   Blob   ║
-║      32B      ║       variable       ║ 1-9B    ║ variable ║
-╚═══════════════╩══════════════════════╩═════════╩══════════╝
+╔═══════════════╦═════════════════════╦═════════╦══════════╗
+║ SedimentreeId ║ Signed<LooseCommit> ║ BlobLen ║   Blob   ║
+║      32B      ║       variable      ║ 1-9B    ║ variable ║
+╚═══════════════╩═════════════════════╩═════════╩══════════╝
 ```
 
 BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
@@ -508,10 +508,10 @@ BlobLen is encoded as [`bijou64`](../bijou64/SPEC.md).
 ### BlobsResponse (Tag 0x03)
 
 ```
-╔═══════════════╦═══════╦════════════════════════════╗
-║ SedimentreeId ║ Count ║    (BlobLen + Blob)...     ║
-║      32B      ║  2B   ║ N × (bijou64 + variable)    ║
-╚═══════════════╩═══════╩════════════════════════════╝
+╔═══════════════╦═══════╦══════════════════════════╗
+║ SedimentreeId ║ Count ║    (BlobLen + Blob)...   ║
+║      32B      ║  2B   ║ N × (bijou64 + variable) ║
+╚═══════════════╩═══════╩══════════════════════════╝
 ```
 
 Each blob is encoded as `bijou64(size) || bytes[0..size]`.
@@ -519,10 +519,10 @@ Each blob is encoded as `bijou64(size) || bytes[0..size]`.
 ### BatchSyncRequest (Tag 0x04)
 
 ```
-╔═══════════════╦═══════════╦════════╦══════╦═════════════════════╦══════════════════════════════╗
-║ SedimentreeId ║ RequestId ║ Subscr ║ Seed ║ CommitFPs + FragFPs ║       Fingerprints...        ║
-║      32B      ║    40B    ║   1B   ║ 16B  ║       2B + 2B       ║ (CommitCnt + FragCnt) × 8B   ║
-╚═══════════════╩═══════════╩════════╩══════╩═════════════════════╩══════════════════════════════╝
+╔═══════════════╦═══════════╦════════╦══════╦═════════════════════╦════════════════════════════╗
+║ SedimentreeId ║ RequestId ║ Subscr ║ Seed ║ CommitFPs + FragFPs ║       Fingerprints...      ║
+║      32B      ║    40B    ║   1B   ║ 16B  ║       2B + 2B       ║ (CommitCnt + FragCnt) × 8B ║
+╚═══════════════╩═══════════╩════════╩══════╩═════════════════════╩════════════════════════════╝
 ```
 
 | Field | Size | Description |
