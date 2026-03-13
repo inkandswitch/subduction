@@ -1,4 +1,4 @@
-# bijou64
+# 💎 bijou64
 
 Bijective variable-length encoding for unsigned 64-bit integers.
 
