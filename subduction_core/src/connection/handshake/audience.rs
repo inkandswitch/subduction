@@ -23,7 +23,7 @@ impl DiscoveryId {
     #[must_use]
     pub fn new(service_identifier: &[u8]) -> Self {
         let hash = blake3::hash(service_identifier);
-        Self(*hash.as_bytes())
+        Self(hash.into())
     }
 
     /// Create a discovery ID from a pre-hashed value.

@@ -300,7 +300,7 @@ Sync messages use a framing envelope:
 
 | Field   | Purpose                                                |
 |---------|--------------------------------------------------------|
-| Schema  | `SM` prefix + version (message envelope identity)      |
+| Schema  | `SUM\x00` — Subduction Message envelope identity       |
 | Size    | Total message size in bytes (big-endian u32)           |
 | Tag     | Message type discriminant                              |
 | Payload | Type-specific fields using the same primitive encoding |
