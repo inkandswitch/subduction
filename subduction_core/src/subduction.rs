@@ -8,14 +8,14 @@
 //!
 //! | Level | Methods | Use Case |
 //! |-------|---------|----------|
-//! | **High-level** | [`attach`], [`disconnect`] | Most applications — handles sync automatically |
+//! | **High-level** | [`onboard`], [`disconnect`] | Most applications — handles sync automatically |
 //! | **Low-level** | [`register`], [`unregister`] | Custom sync logic, testing, or fine-grained control |
 //!
 //! **Prefer the high-level API** unless you need explicit control over when sync occurs.
 //!
-//! ### High-Level: `attach` / `disconnect`
+//! ### High-Level: `onboard` / `disconnect`
 //!
-//! - [`Subduction::attach`] — Register connection + perform initial batch sync
+//! - [`Subduction::onboard`] — Register connection + perform initial batch sync
 //! - [`Subduction::disconnect`] — Graceful connection shutdown
 //! - [`Subduction::disconnect_all`] — Disconnect all connections
 //! - [`Subduction::disconnect_from_peer`] — Disconnect all connections from a peer
@@ -51,7 +51,7 @@
 //! | [`add_fragment`] | Add a fragment locally and broadcast to subscribers |
 //! | [`remove_sedimentree`] | Remove a sedimentree and associated data |
 //!
-//! [`attach`]: Subduction::attach
+//! [`onboard`]: Subduction::onboard
 //! [`disconnect`]: Subduction::disconnect
 //! [`disconnect_all`]: Subduction::disconnect_all
 //! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
@@ -109,7 +109,7 @@ use core::{
     time::Duration,
 };
 use error::{
-    AttachError, IoError, ListenError, RegistrationError, SendRequestedDataError, Unauthorized,
+    IoError, ListenError, OnboardError, RegistrationError, SendRequestedDataError, Unauthorized,
     WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
@@ -554,18 +554,18 @@ impl<
      * CONNECTIONS *
      ***************/
 
-    /// Attach a new [`Connection`] and immediately syncs all known [`Sedimentree`]s.
+    /// Onboard a new [`Connection`]: register it and immediately sync all known [`Sedimentree`]s.
     ///
     /// # Errors
     ///
-    /// * Returns `AttachError::Registration` if the connection is rejected by the policy.
-    /// * Returns `AttachError::Io` if a storage or network error occurs.
-    pub async fn attach(
+    /// * Returns `OnboardError::Registration` if the connection is rejected by the policy.
+    /// * Returns `OnboardError::Io` if a storage or network error occurs.
+    pub async fn onboard(
         &self,
         conn: Authenticated<C, F>,
-    ) -> Result<bool, AttachError<F, S, C, P::ConnectionDisallowed>> {
+    ) -> Result<bool, OnboardError<F, S, C, P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
-        tracing::info!("Attaching connection to peer {}", peer_id);
+        tracing::info!("Onboarding connection to peer {}", peer_id);
 
         let fresh = self.register(conn).await?;
 
@@ -713,28 +713,27 @@ impl<
             .await
             .map_err(RegistrationError::ConnectionDisallowed)?;
 
-        let mut connections = self.connections.lock().await;
-
-        // Check if this exact connection is already registered
-        if connections
-            .get(&peer_id)
-            .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
         {
-            return Ok(false);
-        }
+            let mut connections = self.connections.lock().await;
 
-        // Add connection to the peer's connection list
-        match connections.get_mut(&peer_id) {
-            Some(peer_conns) => {
-                peer_conns.push(conn.clone());
+            // Check if this exact connection is already registered
+            if connections
+                .get(&peer_id)
+                .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
+            {
+                return Ok(false);
             }
-            None => {
-                connections.insert(peer_id, NonEmpty::new(conn.clone()));
+
+            // Add connection to the peer's connection list
+            match connections.get_mut(&peer_id) {
+                Some(peer_conns) => {
+                    peer_conns.push(conn.clone());
+                }
+                None => {
+                    connections.insert(peer_id, NonEmpty::new(conn.clone()));
+                }
             }
         }
-
-        // Release the lock before sending to avoid deadlock
-        drop(connections);
 
         self.manager_channel
             .send(Command::Add(conn))

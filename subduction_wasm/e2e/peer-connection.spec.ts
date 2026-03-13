@@ -179,7 +179,7 @@ test.describe("Peer Connection Tests", () => {
     expect(result.hasPeerId).toBe(true);
   });
 
-  test("should attach connection to Subduction instance", async ({ page }) => {
+  test("should onboard connection to Subduction instance", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
       const { Subduction, MemoryStorage, SubductionWebSocket, WebCryptoSigner } = window.subduction;
 
@@ -196,19 +196,19 @@ test.describe("Peer Connection Tests", () => {
           wsUrl.replace("ws://", "")
         );
 
-        const isNew = await syncer.attach(authenticated);
+        const isNew = await syncer.onboard(authenticated);
 
         const peerIds = await syncer.getConnectedPeerIds();
 
         return {
-          attached: true,
+          onboarded: true,
           isNew,
           peerCount: peerIds.length,
           error: null,
         };
       } catch (error) {
         return {
-          attached: false,
+          onboarded: false,
           isNew: false,
           peerCount: 0,
           error: error instanceof Error ? error.message : String(error),
@@ -217,7 +217,7 @@ test.describe("Peer Connection Tests", () => {
     }, currentWsUrl);
 
     expect(result.error).toBeNull();
-    expect(result.attached).toBe(true);
+    expect(result.onboarded).toBe(true);
     expect(result.isNew).toBe(true);
     expect(result.peerCount).toBeGreaterThan(0);
   });

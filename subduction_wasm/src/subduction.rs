@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -32,8 +32,8 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -42,14 +42,14 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
-        JsConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
         websocket::WasmWebSocket,
+        JsConnection,
     },
     error::{
-        WasmAttachError, WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
-        WasmLongPollConnectError, WasmWriteError,
+        WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
+        WasmLongPollConnectError, WasmOnboardError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -510,7 +510,7 @@ impl WasmSubduction {
             .await?)
     }
 
-    /// Attach an authenticated WebSocket connection and sync all sedimentrees.
+    /// Onboard an authenticated WebSocket connection: register it and sync all sedimentrees.
     ///
     /// The connection must have been authenticated via [`SubductionWebSocket::setup`],
     /// [`SubductionWebSocket::tryConnect`], or [`SubductionWebSocket::tryDiscover`].
@@ -521,12 +521,12 @@ impl WasmSubduction {
     ///
     /// Returns an error if registration or sync fails.
     #[wasm_bindgen]
-    pub async fn attach(
+    pub async fn onboard(
         &self,
         conn: &crate::connection::websocket::WasmAuthenticatedWebSocket,
-    ) -> Result<bool, WasmAttachError> {
+    ) -> Result<bool, WasmOnboardError> {
         self.core
-            .attach(conn.inner().clone().map(WasmUnifiedTransport::WebSocket))
+            .onboard(conn.inner().clone().map(WasmUnifiedTransport::WebSocket))
             .await
             .map_err(Into::into)
     }

@@ -100,9 +100,9 @@ pub enum RegistrationError<D> {
     SendToClosedChannel,
 }
 
-/// An error that can occur during attachment.
+/// An error that can occur during onboarding (registration + initial sync).
 #[derive(Debug, Error)]
-pub enum AttachError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, D> {
+pub enum OnboardError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, D> {
     /// An I/O error occurred.
     #[error("I/O error: {0}")]
     Io(#[from] IoError<F, S, C>),

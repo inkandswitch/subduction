@@ -25,7 +25,7 @@
 //! tokio::spawn(manager);
 //!
 //! // Connect to a peer and sync
-//! subduction.attach(connection).await?;
+//! subduction.onboard(connection).await?;
 //! subduction.full_sync().await?;
 //! ```
 //!

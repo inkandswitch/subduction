@@ -6,7 +6,7 @@ use future_form::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
     subduction::error::{
-        AttachError, HydrationError, IoError, ListenError, RegistrationError, WriteError,
+        HydrationError, IoError, ListenError, OnboardError, RegistrationError, WriteError,
     },
 };
 use thiserror::Error;
@@ -63,15 +63,17 @@ impl From<WasmWriteError> for JsValue {
     }
 }
 
-/// A Wasm wrapper around the [`AttachError`] type.
+/// A Wasm wrapper around the [`OnboardError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmAttachError(#[from] AttachError<Local, JsStorage, WasmUnifiedTransport, Infallible>);
+pub struct WasmOnboardError(
+    #[from] OnboardError<Local, JsStorage, WasmUnifiedTransport, Infallible>,
+);
 
-impl From<WasmAttachError> for JsValue {
-    fn from(err: WasmAttachError) -> Self {
+impl From<WasmOnboardError> for JsValue {
+    fn from(err: WasmOnboardError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("AttachError");
+        js_err.set_name("OnboardError");
         js_err.into()
     }
 }
