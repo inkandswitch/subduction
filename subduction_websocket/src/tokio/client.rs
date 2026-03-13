@@ -15,7 +15,7 @@ use subduction_core::{
     connection::{
         Connection, Reconnect,
         authenticated::Authenticated,
-        handshake::{self, AuthenticateError, challenge::Audience},
+        handshake::{self, AuthenticateError, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
     peer::id::PeerId,

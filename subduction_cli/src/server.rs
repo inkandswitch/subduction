@@ -13,7 +13,7 @@ use subduction_core::{
     connection::{
         handshake::{
             self,
-            challenge::{Audience, DiscoveryId},
+            audience::{Audience, DiscoveryId},
         },
         nonce_cache::NonceCache,
     },

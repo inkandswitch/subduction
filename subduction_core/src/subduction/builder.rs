@@ -113,7 +113,7 @@ pub struct SubductionBuilder<
     spawner: Sp,
     storage: Sto,
 
-    discovery_id: Option<crate::connection::handshake::challenge::DiscoveryId>,
+    discovery_id: Option<crate::connection::handshake::audience::DiscoveryId>,
     depth_metric: M,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
@@ -235,7 +235,7 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
     #[must_use]
     pub const fn discovery_id(
         mut self,
-        id: crate::connection::handshake::challenge::DiscoveryId,
+        id: crate::connection::handshake::audience::DiscoveryId,
     ) -> Self {
         self.discovery_id = Some(id);
         self

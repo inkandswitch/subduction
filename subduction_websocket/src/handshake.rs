@@ -145,7 +145,8 @@ mod tests {
     use subduction_core::{
         connection::handshake::{
             HandshakeMessage,
-            challenge::{Audience, Challenge},
+            audience::Audience,
+            challenge::Challenge,
             rejection::{Rejection, RejectionReason},
         },
         timestamp::TimestampSeconds,

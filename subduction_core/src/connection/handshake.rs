@@ -72,11 +72,13 @@ use sedimentree_core::codec::{
 };
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
+pub mod audience;
 pub mod challenge;
 pub mod rejection;
 pub mod response;
 
-use challenge::{Audience, Challenge, ChallengeValidationError};
+use audience::Audience;
+use challenge::{Challenge, ChallengeValidationError};
 use rejection::{Rejection, RejectionReason};
 use response::{Response, ResponseValidationError};
 
@@ -686,7 +688,8 @@ mod tests {
     use super::*;
 
     use super::{
-        challenge::{CHALLENGE_FIELDS_SIZE, CHALLENGE_MIN_SIZE, DiscoveryId},
+        audience::DiscoveryId,
+        challenge::{CHALLENGE_FIELDS_SIZE, CHALLENGE_MIN_SIZE},
         response::{RESPONSE_FIELDS_SIZE, RESPONSE_MIN_SIZE},
     };
     use sedimentree_core::{

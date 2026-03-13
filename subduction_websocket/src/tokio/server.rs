@@ -18,7 +18,7 @@ use subduction_core::{
         authenticated::Authenticated,
         handshake::{
             self, AuthenticateError,
-            challenge::{Audience, DiscoveryId},
+            audience::{Audience, DiscoveryId},
         },
         nonce_cache::NonceCache,
     },

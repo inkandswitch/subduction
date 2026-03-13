@@ -14,7 +14,7 @@ use std::{
 };
 use subduction_core::{
     connection::{
-        Connection, Reconnect, handshake::challenge::Audience, message::Message,
+        Connection, Reconnect, handshake::audience::Audience, message::Message,
         nonce_cache::NonceCache,
     },
     handler::sync::SyncHandler,

@@ -12,7 +12,7 @@ use iroh::Endpoint;
 use subduction_core::{
     connection::{
         authenticated::Authenticated,
-        handshake::{self, challenge::Audience},
+        handshake::{self, audience::Audience},
         nonce_cache::NonceCache,
         timeout::Timeout,
     },
