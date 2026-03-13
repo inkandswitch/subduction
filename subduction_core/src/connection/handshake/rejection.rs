@@ -17,18 +17,36 @@ use crate::timestamp::TimestampSeconds;
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[repr(u8)]
 pub enum RejectionReason {
     /// Client's timestamp is too far from server's clock.
-    ClockDrift,
+    ClockDrift = 0x00,
 
     /// The audience field doesn't match this server.
-    InvalidAudience,
+    InvalidAudience = 0x01,
 
     /// This nonce was already used (replay attack detected).
-    ReplayedNonce,
+    ReplayedNonce = 0x02,
 
     /// The signature on the challenge is invalid.
-    InvalidSignature,
+    InvalidSignature = 0x03,
+}
+
+impl TryFrom<u8> for RejectionReason {
+    type Error = InvalidEnumTag;
+
+    fn try_from(tag: u8) -> Result<Self, Self::Error> {
+        match tag {
+            0x00 => Ok(Self::ClockDrift),
+            0x01 => Ok(Self::InvalidAudience),
+            0x02 => Ok(Self::ReplayedNonce),
+            0x03 => Ok(Self::InvalidSignature),
+            _ => Err(InvalidEnumTag {
+                tag,
+                type_name: "RejectionReason",
+            }),
+        }
+    }
 }
 
 /// An unsigned rejection message.
@@ -56,13 +74,6 @@ pub struct Rejection {
 /// by [`super::HandshakeMessage`].
 pub const REJECTION_SIZE: usize = 1 + 8;
 
-mod tags {
-    pub(super) const CLOCK_DRIFT: u8 = 0x00;
-    pub(super) const INVALID_AUDIENCE: u8 = 0x01;
-    pub(super) const REPLAYED_NONCE: u8 = 0x02;
-    pub(super) const INVALID_SIGNATURE: u8 = 0x03;
-}
-
 impl Rejection {
     /// Create a new rejection.
     #[must_use]
@@ -80,12 +91,7 @@ impl Rejection {
     #[must_use]
     pub(super) fn encode_payload(&self) -> Vec<u8> {
         let mut buf = Vec::with_capacity(REJECTION_SIZE);
-        buf.push(match self.reason {
-            RejectionReason::ClockDrift => tags::CLOCK_DRIFT,
-            RejectionReason::InvalidAudience => tags::INVALID_AUDIENCE,
-            RejectionReason::ReplayedNonce => tags::REPLAYED_NONCE,
-            RejectionReason::InvalidSignature => tags::INVALID_SIGNATURE,
-        });
+        buf.push(self.reason as u8);
         buf.extend_from_slice(&self.server_timestamp.as_secs().to_be_bytes());
         buf
     }
@@ -99,21 +105,20 @@ impl Rejection {
                 have: payload.len(),
             });
         }
-        let &reason_tag = payload
+
+        let &reason_byte = payload
             .first()
             .ok_or(RejectionDecodeError::TooShort { have: 0 })?;
-        let reason = match reason_tag {
-            tags::CLOCK_DRIFT => RejectionReason::ClockDrift,
-            tags::INVALID_AUDIENCE => RejectionReason::InvalidAudience,
-            tags::REPLAYED_NONCE => RejectionReason::ReplayedNonce,
-            tags::INVALID_SIGNATURE => RejectionReason::InvalidSignature,
-            other => return Err(RejectionDecodeError::InvalidReason(other)),
-        };
+
+        let reason = RejectionReason::try_from(reason_byte)
+            .map_err(|_| RejectionDecodeError::InvalidReason(reason_byte))?;
+
         let timestamp_bytes: [u8; 8] = payload.get(1..9).and_then(|s| s.try_into().ok()).ok_or(
             RejectionDecodeError::TooShort {
                 have: payload.len(),
             },
         )?;
+
         Ok(Self {
             reason,
             server_timestamp: TimestampSeconds::new(u64::from_be_bytes(timestamp_bytes)),

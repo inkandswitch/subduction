@@ -273,17 +273,17 @@ Sorted arrays enable:
 
 Decoding returns structured errors with context:
 
-| Error | Meaning |
-|-------|---------|
-| `BufferTooShort` | Not enough bytes to read a primitive |
-| `InvalidSchema` | Schema header doesn't match expected type |
-| `UnsortedArray` | Array elements not in ascending order |
-| `InvalidEnumTag` | Unknown discriminant value |
-| `SizeMismatch` | Declared size doesn't match actual data |
-| `Bijou64` | `bijou64` decode failed (buffer too short or tier 8 overflow) |
-| `BlobTooLarge` | Blob exceeds maximum allowed size |
-| `ArrayTooLarge` | Too many elements in array |
-| `DuplicateElement` | Array contains duplicates |
+| Error              | Meaning                                                       |
+|--------------------|---------------------------------------------------------------|
+| `BufferTooShort`   | Not enough bytes to read a primitive                          |
+| `InvalidSchema`    | Schema header doesn't match expected type                     |
+| `UnsortedArray`    | Array elements not in ascending order                         |
+| `InvalidEnumTag`   | Unknown discriminant value                                    |
+| `SizeMismatch`     | Declared size doesn't match actual data                       |
+| `Bijou64`          | `bijou64` decode failed (buffer too short or tier 8 overflow) |
+| `BlobTooLarge`     | Blob exceeds maximum allowed size                             |
+| `ArrayTooLarge`    | Too many elements in array                                    |
+| `DuplicateElement` | Array contains duplicates                                     |
 
 All error types implement `#[from]` for ergonomic `?` propagation.
 
@@ -298,11 +298,11 @@ Sync messages use a framing envelope:
 ╚════════╩══════════╩═════╩═════════════════════╝
 ```
 
-| Field | Purpose |
-|-------|---------|
-| Schema | `SM` prefix + version (message envelope identity) |
-| Size | Total message size in bytes (big-endian u32) |
-| Tag | Message type discriminant |
+| Field   | Purpose                                                |
+|---------|--------------------------------------------------------|
+| Schema  | `SM` prefix + version (message envelope identity)      |
+| Size    | Total message size in bytes (big-endian u32)           |
+| Tag     | Message type discriminant                              |
 | Payload | Type-specific fields using the same primitive encoding |
 
 Unlike signed payloads, sync messages are not signed — they're authenticated by the connection layer (handshake establishes peer identity).
@@ -326,16 +326,16 @@ Schema: `STC\x00` (Sedimentree Commit, version 0)
 ╚════════╩══════════╩═══════════════╩════════════╩═══════════╩══════════╩═════════════╩═══════════╝
 ```
 
-| Field | Size | Description |
-|-------|------|-------------|
-| Schema | 4 bytes | `STC\x00` |
-| IssuerVK | 32 bytes | Ed25519 verifying key of the signer |
-| SedimentreeId | 32 bytes | Document identifier (binds commit to document) |
-| BlobDigest | 32 bytes | BLAKE3 hash of the blob content |
-| ParentCnt | 1 byte | Number of parent commits (max 255, sufficient for realistic workloads) |
-| BlobSize | 1–9 bytes | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md)) |
-| Parents | N × 32 bytes | Parent commit digests, **sorted ascending** |
-| Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
+| Field         | Size         | Description                                                            |
+|---------------|--------------|------------------------------------------------------------------------|
+| Schema        | 4 bytes      | `STC\x00`                                                              |
+| IssuerVK      | 32 bytes     | Ed25519 verifying key of the signer                                    |
+| SedimentreeId | 32 bytes     | Document identifier (binds commit to document)                         |
+| BlobDigest    | 32 bytes     | BLAKE3 hash of the blob content                                        |
+| ParentCnt     | 1 byte       | Number of parent commits (max 255, sufficient for realistic workloads) |
+| BlobSize      | 1–9 bytes    | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md))                |
+| Parents       | N × 32 bytes | Parent commit digests, **sorted ascending**                            |
+| Signature     | 64 bytes     | Ed25519 signature over bytes `[0..len-64]`                             |
 
 **Minimum size:** 166 bytes (0 parents)
 
@@ -344,31 +344,53 @@ Schema: `STC\x00` (Sedimentree Commit, version 0)
 Schema: `STF\x00` (Sedimentree Fragment, version 0)
 
 ```
-╔════════╦══════════╦═══════════════╦══════╦════════════╦══════════╦═════════╦══════════╦═══════════╦══════════════╦═══════════╗
-║ Schema ║ IssuerVK ║ SedimentreeId ║ Head ║ BlobDigest ║ BndryCnt ║ CkptCnt ║ BlobSize ║ Boundary  ║ Checkpoints  ║ Signature ║
-║   4B   ║   32B    ║      32B      ║ 32B  ║    32B     ║    1B    ║   2B    ║  1-9B    ║  N × 32B  ║   M × 12B    ║    64B    ║
-╚════════╩══════════╩═══════════════╩══════╩════════════╩══════════╩═════════╩══════════╩═══════════╩══════════════╩═══════════╝
+╔════════╦══════════╦═══════════════╦══════╦════════════╦══════════╦═════════╦══════════╦═══════════╦═════════════╦═══════════╗
+║ Schema ║ IssuerVK ║ SedimentreeId ║ Head ║ BlobDigest ║ BndryCnt ║ CkptCnt ║ BlobSize ║ Boundary  ║ Checkpoints ║ Signature ║
+║   4B   ║   32B    ║      32B      ║ 32B  ║    32B     ║    1B    ║   2B    ║  1-9B    ║  N × 32B  ║   M × 12B   ║    64B    ║
+╚════════╩══════════╩═══════════════╩══════╩════════════╩══════════╩═════════╩══════════╩═══════════╩═════════════╩═══════════╝
 ```
 
-| Field | Size | Description |
-|-------|------|-------------|
-| Schema | 4 bytes | `STF\x00` |
-| IssuerVK | 32 bytes | Ed25519 verifying key of the signer |
-| SedimentreeId | 32 bytes | Document identifier (binds fragment to document) |
-| Head | 32 bytes | Digest of the head commit |
-| BlobDigest | 32 bytes | BLAKE3 hash of the fragment blob |
-| BndryCnt | 1 byte | Number of boundary commits (0-255) |
-| CkptCnt | 2 bytes | Number of checkpoints (big-endian u16, 0-65535) |
-| BlobSize | 1–9 bytes | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md)) |
-| Boundary | N × 32 bytes | Boundary commit digests, **sorted ascending** |
-| Checkpoints | M × 12 bytes | Truncated checkpoint digests (96-bit), **sorted ascending** |
-| Signature | 64 bytes | Ed25519 signature over bytes `[0..len-64]` |
+| Field         | Size         | Description                                                 |
+|---------------|--------------|-------------------------------------------------------------|
+| Schema        | 4 bytes      | `STF\x00`                                                   |
+| IssuerVK      | 32 bytes     | Ed25519 verifying key of the signer                         |
+| SedimentreeId | 32 bytes     | Document identifier (binds fragment to document)            |
+| Head          | 32 bytes     | Digest of the head commit                                   |
+| BlobDigest    | 32 bytes     | BLAKE3 hash of the fragment blob                            |
+| BndryCnt      | 1 byte       | Number of boundary commits (0-255)                          |
+| CkptCnt       | 2 bytes      | Number of checkpoints (big-endian u16, 0-65535)             |
+| BlobSize      | 1–9 bytes    | Size of blob in bytes ([`bijou64`](../bijou64/SPEC.md))     |
+| Boundary      | N × 32 bytes | Boundary commit digests, **sorted ascending**               |
+| Checkpoints   | M × 12 bytes | Truncated checkpoint digests (96-bit), **sorted ascending** |
+| Signature     | 64 bytes     | Ed25519 signature over bytes `[0..len-64]`                  |
 
 **Minimum size:** 200 bytes (0 boundary, 0 checkpoints)
 
-### Challenge (Handshake)
+### Handshake Envelope
 
-Schema: `SUC\x00` (Subduction Challenge, version 0)
+All handshake messages use a shared `SUH\x00` envelope, followed by a
+1-byte variant tag and the variant payload:
+
+```
+╔════════╦═════╦═══════════════╗
+║ Schema ║ Tag ║    Payload    ║
+║  SUH\0 ║ 1B  ║   (variant)   ║
+║  (4B)  ║     ║               ║
+╚════════╩═════╩═══════════════╝
+```
+
+| Tag    | Variant              | Payload               |
+|--------|----------------------|-----------------------|
+| `0x00` | `Signed<Challenge>`  | 157 bytes (see below) |
+| `0x01` | `Signed<Response>`   | 140 bytes (see below) |
+| `0x02` | `Rejection`          | 9 bytes (see below)   |
+
+### Challenge (Tag 0x00)
+
+Inner schema: `SUH\x00` (Subduction Handshake Challenge, version 0)
+
+The inner `Signed<Challenge>` payload is self-contained with its own schema
+header (covered by the Ed25519 signature):
 
 ```
 ╔════════╦══════════╦══════════╦═══════════╦═══════╦═══════════╗
@@ -379,18 +401,18 @@ Schema: `SUC\x00` (Subduction Challenge, version 0)
 
 | Field | Size | Description |
 |-------|------|-------------|
-| Schema | 4 bytes | `SUC\x00` |
+| Schema | 4 bytes | `SUH\x00` |
 | IssuerVK | 32 bytes | Ed25519 verifying key of the initiator |
 | Audience | 33 bytes | `0x00` + PeerId (33B) or `0x01` + DiscoveryId (33B) |
 | Timestamp | 8 bytes | Unix seconds (big-endian u64) |
 | Nonce | 16 bytes | Random 128-bit value |
 | Signature | 64 bytes | Ed25519 signature |
 
-**Fixed size:** 157 bytes
+**Inner payload size:** 157 bytes / **Total on wire:** 162 bytes (5B envelope + 157B payload)
 
-### Response (Handshake)
+### Response (Tag 0x01)
 
-Schema: `SUR\x00` (Subduction Response, version 0)
+Inner schema: `SUR\x00` (Subduction Response, version 0)
 
 ```
 ╔════════╦══════════╦═════════════════╦═════════════════╦═══════════╗
@@ -407,7 +429,26 @@ Schema: `SUR\x00` (Subduction Response, version 0)
 | ServerTimestamp | 8 bytes | Responder's current Unix seconds |
 | Signature | 64 bytes | Ed25519 signature |
 
-**Fixed size:** 140 bytes
+**Inner payload size:** 140 bytes / **Total on wire:** 145 bytes (5B envelope + 140B payload)
+
+### Rejection (Tag 0x02)
+
+Unsigned — no schema or signature. The payload follows directly after the
+envelope tag byte:
+
+```
+╔════════╦═══════════════╗
+║ Reason ║ SrvTimestamp  ║
+║   1B   ║      8B       ║
+╚════════╩═══════════════╝
+```
+
+| Field | Size | Description |
+|-------|------|-------------|
+| Reason | 1 byte | `0x00` ClockDrift, `0x01` InvalidAudience, `0x02` ReplayedNonce, `0x03` InvalidSignature |
+| SrvTimestamp | 8 bytes | Responder's Unix seconds (informational only, unsigned) |
+
+**Payload size:** 9 bytes / **Total on wire:** 14 bytes (5B envelope + 9B payload)
 
 ## Sync Message Formats
 

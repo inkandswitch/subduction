@@ -64,17 +64,11 @@ use core::time::Duration;
 use future_form::FutureForm;
 use thiserror::Error;
 
-use super::{Connection, authenticated::Authenticated};
+use super::{authenticated::Authenticated, Connection};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::codec::{
     error::{DecodeError, InvalidEnumTag, InvalidSchema},
-    schema,
-    schema::Schema,
-};
-#[cfg(test)]
-use sedimentree_core::{
-    codec::{decode::DecodeFields, encode::EncodeFields},
-    crypto::digest::Digest,
+    schema::{self, Schema},
 };
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
@@ -82,14 +76,8 @@ pub mod challenge;
 pub mod rejection;
 pub mod response;
 
-#[cfg(test)]
-use challenge::DiscoveryId;
 use challenge::{Audience, Challenge, ChallengeValidationError};
-#[cfg(test)]
-use challenge::{CHALLENGE_FIELDS_SIZE, CHALLENGE_MIN_SIZE};
 use rejection::{Rejection, RejectionReason};
-#[cfg(test)]
-use response::{RESPONSE_FIELDS_SIZE, RESPONSE_MIN_SIZE};
 use response::{Response, ResponseValidationError};
 
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
@@ -696,6 +684,15 @@ pub enum HandshakeError {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    use super::{
+        challenge::{DiscoveryId, CHALLENGE_FIELDS_SIZE, CHALLENGE_MIN_SIZE},
+        response::{RESPONSE_FIELDS_SIZE, RESPONSE_MIN_SIZE},
+    };
+    use sedimentree_core::{
+        codec::{decode::DecodeFields, encode::EncodeFields, error::InvalidEnumTag},
+        crypto::digest::Digest,
+    };
 
     mod response {
         use super::*;
