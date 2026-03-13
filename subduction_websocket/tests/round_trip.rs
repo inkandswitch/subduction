@@ -14,7 +14,7 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::handshake::Audience,
+    connection::handshake::challenge::Audience,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,

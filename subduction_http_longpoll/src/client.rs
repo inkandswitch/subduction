@@ -33,7 +33,7 @@ use futures::{
 };
 use subduction_core::{
     connection::{
-        handshake::{self, Audience, HandshakeMessage},
+        handshake::{self, HandshakeMessage, challenge::Audience},
         message::Message,
         timeout::Timeout,
     },

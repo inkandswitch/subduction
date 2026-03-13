@@ -66,439 +66,34 @@ use thiserror::Error;
 
 use super::{Connection, authenticated::Authenticated};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
+use sedimentree_core::codec::{
+    error::{DecodeError, InvalidEnumTag, InvalidSchema},
+    schema,
+    schema::Schema,
+};
+#[cfg(test)]
 use sedimentree_core::{
-    codec::{
-        decode,
-        decode::DecodeFields,
-        encode,
-        encode::EncodeFields,
-        error::{DecodeError, InvalidEnumTag},
-        schema,
-        schema::Schema,
-    },
+    codec::{decode::DecodeFields, encode::EncodeFields},
     crypto::digest::Digest,
 };
 use subduction_crypto::{nonce::Nonce, signed::Signed, signer::Signer};
 
+pub mod challenge;
+pub mod rejection;
+pub mod response;
+
+#[cfg(test)]
+use challenge::DiscoveryId;
+use challenge::{Audience, Challenge, ChallengeValidationError};
+#[cfg(test)]
+use challenge::{CHALLENGE_FIELDS_SIZE, CHALLENGE_MIN_SIZE};
+use rejection::{Rejection, RejectionReason};
+#[cfg(test)]
+use response::{RESPONSE_FIELDS_SIZE, RESPONSE_MIN_SIZE};
+use response::{Response, ResponseValidationError};
+
 /// Maximum plausible clock drift for rejecting implausible timestamps (±10 minutes).
 pub const MAX_PLAUSIBLE_DRIFT: Duration = Duration::from_secs(10 * 60);
-
-/// A discovery identifier for locating peers by service endpoint.
-///
-/// This is a BLAKE3 hash of a URL or similar service identifier, used when
-/// a client knows where to connect but not the peer's identity ahead of time.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct DiscoveryId([u8; 32]);
-
-impl DiscoveryId {
-    /// Create a discovery ID from a service identifier.
-    ///
-    /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
-    #[must_use]
-    pub fn new(service_identifier: &[u8]) -> Self {
-        let hash = blake3::hash(service_identifier);
-        Self(*hash.as_bytes())
-    }
-
-    /// Create a discovery ID from a pre-hashed value.
-    #[must_use]
-    pub const fn from_raw(hash: [u8; 32]) -> Self {
-        Self(hash)
-    }
-
-    /// Get the raw bytes of the discovery ID.
-    #[must_use]
-    pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
-    }
-}
-
-/// The intended recipient of a challenge.
-///
-/// Supports two modes:
-/// - `Known`: Client knows the server's [`PeerId`] ahead of time
-/// - `Discover`: Client knows the URL/endpoint but not the peer identity
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum Audience {
-    /// Known peer identity.
-    Known(PeerId),
-
-    /// Discovery mode: hash of URL or similar service identifier.
-    Discover(DiscoveryId),
-}
-
-impl Audience {
-    /// Create an audience from a known peer ID.
-    #[must_use]
-    pub const fn known(id: PeerId) -> Self {
-        Self::Known(id)
-    }
-
-    /// Create a discovery audience from a service identifier.
-    ///
-    /// The identifier is hashed with BLAKE3 to produce a 32-byte value.
-    #[must_use]
-    pub fn discover(service_identifier: &[u8]) -> Self {
-        Self::Discover(DiscoveryId::new(service_identifier))
-    }
-
-    /// Create a discovery audience from a pre-hashed value.
-    #[must_use]
-    pub const fn discover_raw(hash: [u8; 32]) -> Self {
-        Self::Discover(DiscoveryId::from_raw(hash))
-    }
-
-    /// Create a discovery audience from a [`DiscoveryId`].
-    #[must_use]
-    pub const fn discover_id(discovery_id: DiscoveryId) -> Self {
-        Self::Discover(discovery_id)
-    }
-}
-
-/// A handshake challenge sent by the client.
-///
-/// This is signed by the client and sent to the server. The server extracts
-/// the client's identity from the signature's issuer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Challenge {
-    /// Who the client is connecting to.
-    pub audience: Audience,
-
-    /// Client's timestamp (used for replay protection).
-    pub timestamp: TimestampSeconds,
-
-    /// Random nonce for uniqueness.
-    pub nonce: Nonce,
-}
-
-impl Challenge {
-    /// Create a new challenge.
-    #[must_use]
-    pub const fn new(audience: Audience, now: TimestampSeconds, nonce: Nonce) -> Self {
-        Self {
-            audience,
-            timestamp: now,
-            nonce,
-        }
-    }
-
-    /// Check if this challenge is fresh (timestamp within acceptable drift).
-    #[must_use]
-    pub fn is_fresh(&self, now: TimestampSeconds, max_drift: Duration) -> bool {
-        self.timestamp.abs_diff(now) <= max_drift
-    }
-
-    /// Validate the challenge against expected parameters.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if:
-    /// - The audience doesn't match the expected audience
-    /// - The timestamp is outside the acceptable drift window
-    pub fn validate(
-        &self,
-        expected_audience: &Audience,
-        now: TimestampSeconds,
-        max_drift: Duration,
-    ) -> Result<(), ChallengeValidationError> {
-        if &self.audience != expected_audience {
-            return Err(ChallengeValidationError::InvalidAudience);
-        }
-
-        if !self.is_fresh(now, max_drift) {
-            return Err(ChallengeValidationError::ClockDrift {
-                client_timestamp: self.timestamp,
-                server_timestamp: now,
-            });
-        }
-
-        Ok(())
-    }
-}
-
-/// A handshake response from the server.
-///
-/// This is signed by the server. The client extracts the server's identity
-/// from the signature's issuer and uses the server timestamp for drift correction.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Response {
-    /// Hash of the challenge being responded to (binds response to request).
-    pub challenge_digest: Digest<Challenge>,
-
-    /// Server's current timestamp (for client-side drift correction).
-    pub server_timestamp: TimestampSeconds,
-}
-
-impl Response {
-    /// Create a new response for a challenge.
-    #[must_use]
-    pub const fn new(challenge_digest: Digest<Challenge>, now: TimestampSeconds) -> Self {
-        Self {
-            challenge_digest,
-            server_timestamp: now,
-        }
-    }
-
-    /// Create a response directly from a challenge.
-    #[must_use]
-    pub fn for_challenge(challenge: &Challenge, now: TimestampSeconds) -> Self {
-        Self::new(Digest::hash(challenge), now)
-    }
-
-    /// Validate that this response matches the expected challenge.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error if the challenge digest doesn't match.
-    pub fn validate(&self, expected_challenge: &Challenge) -> Result<(), ResponseValidationError> {
-        let expected_digest = Digest::hash(expected_challenge);
-        if self.challenge_digest != expected_digest {
-            return Err(ResponseValidationError::ChallengeMismatch);
-        }
-        Ok(())
-    }
-}
-
-/// Size of Challenge fields (after schema + issuer, before signature).
-const CHALLENGE_FIELDS_SIZE: usize = 1 + 32 + 8 + 16; // 57 bytes
-
-/// Minimum size of a signed Challenge message.
-pub const CHALLENGE_MIN_SIZE: usize = 4 + 32 + CHALLENGE_FIELDS_SIZE + 64; // 157 bytes
-
-impl Schema for Challenge {
-    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
-    const TYPE_BYTE: u8 = b'H'; // Handshake
-    const VERSION: u8 = 0;
-}
-
-impl EncodeFields for Challenge {
-    fn encode_fields(&self, buf: &mut Vec<u8>) {
-        // AudienceTag (1 byte)
-        match &self.audience {
-            Audience::Known(_) => encode::u8(0x00, buf),
-            Audience::Discover(_) => encode::u8(0x01, buf),
-        }
-
-        // AudienceValue (32 bytes)
-        match &self.audience {
-            Audience::Known(peer_id) => encode::array(peer_id.as_bytes(), buf),
-            Audience::Discover(disc_id) => encode::array(disc_id.as_bytes(), buf),
-        }
-
-        // Timestamp (8 bytes, big-endian)
-        encode::u64(self.timestamp.as_secs(), buf);
-
-        // Nonce (16 bytes)
-        encode::array(self.nonce.as_bytes(), buf);
-    }
-
-    fn fields_size(&self) -> usize {
-        CHALLENGE_FIELDS_SIZE
-    }
-}
-
-impl DecodeFields for Challenge {
-    const MIN_SIGNED_SIZE: usize = CHALLENGE_MIN_SIZE;
-
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
-        if buf.len() < CHALLENGE_FIELDS_SIZE {
-            return Err(DecodeError::MessageTooShort {
-                type_name: "Challenge",
-                need: CHALLENGE_FIELDS_SIZE,
-                have: buf.len(),
-            });
-        }
-
-        // AudienceTag (1 byte)
-        let audience_tag = decode::u8(buf, 0)?;
-
-        // AudienceValue (32 bytes)
-        let audience_value: [u8; 32] = decode::array(buf, 1)?;
-
-        let audience = match audience_tag {
-            0x00 => Audience::Known(PeerId::new(audience_value)),
-            0x01 => Audience::Discover(DiscoveryId::from_raw(audience_value)),
-            tag => {
-                return Err(InvalidEnumTag {
-                    tag,
-                    type_name: "Audience",
-                }
-                .into());
-            }
-        };
-
-        // Timestamp (8 bytes)
-        let timestamp_secs = decode::u64(buf, 33)?;
-        let timestamp = TimestampSeconds::new(timestamp_secs);
-
-        // Nonce (16 bytes)
-        let nonce_bytes: [u8; 16] = decode::array(buf, 41)?;
-        let nonce = Nonce::from_bytes(nonce_bytes);
-
-        Ok(Self {
-            audience,
-            timestamp,
-            nonce,
-        })
-    }
-}
-
-/// Size of Response fields (after schema + issuer, before signature).
-const RESPONSE_FIELDS_SIZE: usize = 32 + 8; // 40 bytes
-
-/// Minimum size of a signed Response message.
-pub const RESPONSE_MIN_SIZE: usize = 4 + 32 + RESPONSE_FIELDS_SIZE + 64; // 140 bytes
-
-impl Schema for Response {
-    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
-    const TYPE_BYTE: u8 = b'R'; // Response
-    const VERSION: u8 = 0;
-}
-
-impl EncodeFields for Response {
-    fn encode_fields(&self, buf: &mut Vec<u8>) {
-        // ChallengeDigest (32 bytes)
-        encode::array(self.challenge_digest.as_bytes(), buf);
-
-        // ServerTimestamp (8 bytes, big-endian)
-        encode::u64(self.server_timestamp.as_secs(), buf);
-    }
-
-    fn fields_size(&self) -> usize {
-        RESPONSE_FIELDS_SIZE
-    }
-}
-
-impl DecodeFields for Response {
-    const MIN_SIGNED_SIZE: usize = RESPONSE_MIN_SIZE;
-
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
-        if buf.len() < RESPONSE_FIELDS_SIZE {
-            return Err(DecodeError::MessageTooShort {
-                type_name: "Response",
-                need: RESPONSE_FIELDS_SIZE,
-                have: buf.len(),
-            });
-        }
-
-        // ChallengeDigest (32 bytes)
-        let challenge_digest_bytes: [u8; 32] = decode::array(buf, 0)?;
-        let challenge_digest = Digest::force_from_bytes(challenge_digest_bytes);
-
-        // ServerTimestamp (8 bytes)
-        let server_timestamp_secs = decode::u64(buf, 32)?;
-        let server_timestamp = TimestampSeconds::new(server_timestamp_secs);
-
-        Ok(Self {
-            challenge_digest,
-            server_timestamp,
-        })
-    }
-}
-
-/// Reasons for rejecting a handshake (sent unsigned).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub enum RejectionReason {
-    /// Client's timestamp is too far from server's clock.
-    ClockDrift,
-
-    /// The audience field doesn't match this server.
-    InvalidAudience,
-
-    /// This nonce was already used (replay attack detected).
-    ReplayedNonce,
-
-    /// The signature on the challenge is invalid.
-    InvalidSignature,
-}
-
-/// An unsigned rejection message.
-///
-/// # Security Note
-///
-/// This message is unsigned. Clients should NOT use the `server_timestamp`
-/// for drift correction if the drift is implausible (> [`MAX_PLAUSIBLE_DRIFT`]).
-/// An attacker could send fake rejections with manipulated timestamps.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-pub struct Rejection {
-    /// Why the handshake was rejected.
-    pub reason: RejectionReason,
-
-    /// Server's current timestamp (informational only).
-    pub server_timestamp: TimestampSeconds,
-}
-
-impl Rejection {
-    /// Create a new rejection.
-    #[must_use]
-    pub const fn new(reason: RejectionReason, now: TimestampSeconds) -> Self {
-        Self {
-            reason,
-            server_timestamp: now,
-        }
-    }
-}
-
-/// Errors when validating a [`Challenge`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-#[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-pub enum ChallengeValidationError {
-    /// The audience field doesn't match.
-    #[error("invalid audience")]
-    InvalidAudience,
-
-    /// The timestamp is outside acceptable drift.
-    #[error("clock drift too large: client={client_timestamp:?}, server={server_timestamp:?}")]
-    ClockDrift {
-        /// The timestamp from the client's challenge.
-        client_timestamp: TimestampSeconds,
-
-        /// The server's current timestamp.
-        server_timestamp: TimestampSeconds,
-    },
-
-    /// The nonce has already been used (replay attack detected).
-    #[error("replayed nonce")]
-    ReplayedNonce,
-}
-
-impl ChallengeValidationError {
-    /// Convert to a rejection reason.
-    #[must_use]
-    pub const fn to_rejection_reason(&self) -> RejectionReason {
-        match self {
-            Self::InvalidAudience => RejectionReason::InvalidAudience,
-            Self::ClockDrift { .. } => RejectionReason::ClockDrift,
-            Self::ReplayedNonce => RejectionReason::ReplayedNonce,
-        }
-    }
-}
-
-/// Errors when validating a [`Response`].
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Error)]
-pub enum ResponseValidationError {
-    /// The challenge digest doesn't match.
-    #[error("challenge digest mismatch")]
-    ChallengeMismatch,
-}
 
 /// Client-side drift correction.
 ///
@@ -569,22 +164,22 @@ pub trait Handshake<K: FutureForm> {
 
 /// Wire format for handshake messages.
 ///
-/// This enum wraps the three possible message types exchanged during handshake:
-/// - Initiator sends [`SignedChallenge`]
-/// - Responder sends [`SignedResponse`] on success, or [`Rejection`] on failure
-///
-/// # Wire Layout
+/// All handshake messages share a common `SUH\0` schema envelope, followed
+/// by a 1-byte variant tag:
 ///
 /// ```text
-/// ╔═════╦═════════════════════════════╗
-/// ║ Tag ║         Payload             ║
-/// ║ 1B  ║         variable            ║
-/// ╚═════╩═════════════════════════════╝
+/// ┌──────────┬─────┬───────────────────────────────────┐
+/// │ Schema   │ Tag │ Payload                           │
+/// │ SUH\0    │ 1B  │ (variant-specific)                │
+/// │ (4B)     │     │                                   │
+/// └──────────┴─────┴───────────────────────────────────┘
 /// ```
 ///
-/// - Tag `0x00`: `Signed<Challenge>` (157 bytes)
-/// - Tag `0x01`: `Signed<Response>` (140 bytes)
-/// - Tag `0x02`: `Rejection` (9 bytes)
+/// | Tag  | Variant              | Payload                           |
+/// |------|----------------------|-----------------------------------|
+/// | 0x00 | `Signed<Challenge>`  | Full signed challenge (157 bytes) |
+/// | 0x01 | `Signed<Response>`   | Full signed response (140 bytes)  |
+/// | 0x02 | `Rejection`          | reason (1B) + timestamp (8B)      |
 #[derive(Debug)]
 pub enum HandshakeMessage {
     /// A signed challenge from the initiator.
@@ -597,46 +192,51 @@ pub enum HandshakeMessage {
     Rejection(Rejection),
 }
 
+impl Schema for HandshakeMessage {
+    const PREFIX: [u8; 2] = schema::SUBDUCTION_PREFIX;
+    const TYPE_BYTE: u8 = b'H'; // Handshake
+    const VERSION: u8 = 0;
+}
+
+/// Variant tag bytes within the `SUH\0` handshake envelope.
 mod handshake_tags {
-    pub(super) const SIGNED_CHALLENGE: u8 = 0x00;
-    pub(super) const SIGNED_RESPONSE: u8 = 0x01;
+    pub(super) const CHALLENGE: u8 = 0x00;
+    pub(super) const RESPONSE: u8 = 0x01;
     pub(super) const REJECTION: u8 = 0x02;
 }
 
-mod rejection_tags {
-    pub(super) const CLOCK_DRIFT: u8 = 0x00;
-    pub(super) const INVALID_AUDIENCE: u8 = 0x01;
-    pub(super) const REPLAYED_NONCE: u8 = 0x02;
-    pub(super) const INVALID_SIGNATURE: u8 = 0x03;
-}
-
 impl HandshakeMessage {
+    /// Minimum size: schema (4) + tag (1).
+    const MIN_SIZE: usize = 5;
+
     /// Encode the handshake message to wire bytes.
+    ///
+    /// Emits `SUH\0` + variant tag + payload.
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         match self {
             HandshakeMessage::SignedChallenge(signed) => {
-                let mut buf = Vec::with_capacity(1 + signed.as_bytes().len());
-                buf.push(handshake_tags::SIGNED_CHALLENGE);
-                buf.extend_from_slice(signed.as_bytes());
+                let payload = signed.as_bytes();
+                let mut buf = Vec::with_capacity(4 + 1 + payload.len());
+                buf.extend_from_slice(&Self::SCHEMA);
+                buf.push(handshake_tags::CHALLENGE);
+                buf.extend_from_slice(payload);
                 buf
             }
             HandshakeMessage::SignedResponse(signed) => {
-                let mut buf = Vec::with_capacity(1 + signed.as_bytes().len());
-                buf.push(handshake_tags::SIGNED_RESPONSE);
-                buf.extend_from_slice(signed.as_bytes());
+                let payload = signed.as_bytes();
+                let mut buf = Vec::with_capacity(4 + 1 + payload.len());
+                buf.extend_from_slice(&Self::SCHEMA);
+                buf.push(handshake_tags::RESPONSE);
+                buf.extend_from_slice(payload);
                 buf
             }
             HandshakeMessage::Rejection(rejection) => {
-                let mut buf = Vec::with_capacity(1 + 1 + 8);
+                let payload = rejection.encode_payload();
+                let mut buf = Vec::with_capacity(4 + 1 + payload.len());
+                buf.extend_from_slice(&Self::SCHEMA);
                 buf.push(handshake_tags::REJECTION);
-                buf.push(match rejection.reason {
-                    RejectionReason::ClockDrift => rejection_tags::CLOCK_DRIFT,
-                    RejectionReason::InvalidAudience => rejection_tags::INVALID_AUDIENCE,
-                    RejectionReason::ReplayedNonce => rejection_tags::REPLAYED_NONCE,
-                    RejectionReason::InvalidSignature => rejection_tags::INVALID_SIGNATURE,
-                });
-                buf.extend_from_slice(&rejection.server_timestamp.as_secs().to_be_bytes());
+                buf.extend_from_slice(&payload);
                 buf
             }
         }
@@ -644,72 +244,68 @@ impl HandshakeMessage {
 
     /// Decode a handshake message from wire bytes.
     ///
+    /// Expects `SUH\0` schema prefix followed by a variant tag byte:
+    /// - `0x00` → [`Signed<Challenge>`]
+    /// - `0x01` → [`Signed<Response>`]
+    /// - `0x02` → [`Rejection`]
+    ///
     /// # Errors
     ///
-    /// Returns an error if the message is malformed.
+    /// Returns an error if the schema is unrecognized, the tag is invalid,
+    /// or the payload is malformed.
     pub fn try_decode(bytes: &[u8]) -> Result<Self, DecodeError> {
-        let (&tag, payload) = bytes.split_first().ok_or(DecodeError::MessageTooShort {
+        if bytes.len() < Self::MIN_SIZE {
+            return Err(DecodeError::MessageTooShort {
+                type_name: "HandshakeMessage",
+                need: Self::MIN_SIZE,
+                have: bytes.len(),
+            });
+        }
+
+        let got_schema: [u8; 4] =
+            bytes
+                .get(..4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(DecodeError::MessageTooShort {
+                    type_name: "HandshakeMessage",
+                    need: 4,
+                    have: bytes.len(),
+                })?;
+
+        if got_schema != Self::SCHEMA {
+            return Err(InvalidSchema {
+                expected: Self::SCHEMA,
+                got: got_schema,
+            }
+            .into());
+        }
+
+        let tag = bytes.get(4).copied().ok_or(DecodeError::MessageTooShort {
             type_name: "HandshakeMessage",
-            need: 1,
-            have: 0,
+            need: Self::MIN_SIZE,
+            have: bytes.len(),
+        })?;
+
+        let payload = bytes.get(5..).ok_or(DecodeError::MessageTooShort {
+            type_name: "HandshakeMessage",
+            need: Self::MIN_SIZE + 1,
+            have: bytes.len(),
         })?;
 
         match tag {
-            handshake_tags::SIGNED_CHALLENGE => {
+            handshake_tags::CHALLENGE => {
                 let signed = Signed::<Challenge>::try_decode(payload.to_vec())?;
                 Ok(HandshakeMessage::SignedChallenge(signed))
             }
-            handshake_tags::SIGNED_RESPONSE => {
+            handshake_tags::RESPONSE => {
                 let signed = Signed::<Response>::try_decode(payload.to_vec())?;
                 Ok(HandshakeMessage::SignedResponse(signed))
             }
             handshake_tags::REJECTION => {
-                if payload.len() < 9 {
-                    return Err(DecodeError::MessageTooShort {
-                        type_name: "Rejection",
-                        need: 10,
-                        have: bytes.len(),
-                    });
-                }
-                let (&reason_tag, rest) =
-                    payload.split_first().ok_or(DecodeError::MessageTooShort {
-                        type_name: "RejectionReason",
-                        need: 1,
-                        have: 0,
-                    })?;
-                let reason = match reason_tag {
-                    rejection_tags::CLOCK_DRIFT => RejectionReason::ClockDrift,
-                    rejection_tags::INVALID_AUDIENCE => RejectionReason::InvalidAudience,
-                    rejection_tags::REPLAYED_NONCE => RejectionReason::ReplayedNonce,
-                    rejection_tags::INVALID_SIGNATURE => RejectionReason::InvalidSignature,
-                    other => {
-                        return Err(InvalidEnumTag {
-                            tag: other,
-                            type_name: "RejectionReason",
-                        }
-                        .into());
-                    }
-                };
-                let timestamp_bytes: [u8; 8] = rest
-                    .get(..8)
-                    .ok_or(DecodeError::MessageTooShort {
-                        type_name: "Rejection timestamp",
-                        need: 8,
-                        have: rest.len(),
-                    })?
-                    .try_into()
-                    .map_err(|_| DecodeError::MessageTooShort {
-                        type_name: "Rejection timestamp",
-                        need: 8,
-                        have: rest.len(),
-                    })?;
-                let server_timestamp = TimestampSeconds::new(u64::from_be_bytes(timestamp_bytes));
-                Ok(HandshakeMessage::Rejection(Rejection {
-                    reason,
-                    server_timestamp,
-                }))
+                let rejection = Rejection::try_decode_payload(payload)?;
+                Ok(HandshakeMessage::Rejection(rejection))
             }
-            _ => Err(InvalidEnumTag {
+            tag => Err(InvalidEnumTag {
                 tag,
                 type_name: "HandshakeMessage",
             }
@@ -1608,6 +1204,91 @@ mod tests {
         fn response_signed_size_correct() {
             let response = sample_response();
             assert_eq!(response.signed_size(), RESPONSE_MIN_SIZE);
+        }
+
+        #[test]
+        fn handshake_message_wrong_schema_rejected() {
+            let mut bytes = vec![0u8; 20];
+            bytes[..4].copy_from_slice(b"BAD\x00");
+            let result = HandshakeMessage::try_decode(&bytes);
+            assert!(
+                matches!(result, Err(DecodeError::InvalidSchema(_))),
+                "expected InvalidSchema, got {result:?}"
+            );
+        }
+
+        #[test]
+        fn handshake_message_too_short_rejected() {
+            let bytes = vec![0u8; 3]; // less than 4 bytes (schema)
+            let result = HandshakeMessage::try_decode(&bytes);
+            assert!(
+                matches!(result, Err(DecodeError::MessageTooShort { .. })),
+                "expected MessageTooShort, got {result:?}"
+            );
+        }
+
+        #[test]
+        fn handshake_message_unknown_schema_rejected() {
+            let mut bytes = vec![0u8; 20];
+            bytes[..4].copy_from_slice(b"SUZ\x00"); // valid prefix, wrong type
+            let result = HandshakeMessage::try_decode(&bytes);
+            assert!(
+                matches!(result, Err(DecodeError::InvalidSchema(_))),
+                "expected InvalidSchema, got {result:?}"
+            );
+        }
+
+        #[test]
+        fn rejection_encode_has_envelope_and_tag() {
+            let rejection =
+                Rejection::new(RejectionReason::ClockDrift, TimestampSeconds::new(1000));
+            let msg = HandshakeMessage::Rejection(rejection);
+            let bytes = msg.encode();
+            // SUH\0 envelope
+            assert_eq!(&bytes[..4], &HandshakeMessage::SCHEMA);
+            assert_eq!(&bytes[..4], b"SUH\x00");
+            // Rejection variant tag
+            assert_eq!(bytes[4], 0x02);
+            // Total: 4 (schema) + 1 (tag) + 1 (reason) + 8 (timestamp) = 14
+            assert_eq!(bytes.len(), 14);
+        }
+
+        #[test]
+        fn handshake_message_invalid_tag_rejected() {
+            let mut bytes = vec![0u8; 20];
+            bytes[..4].copy_from_slice(b"SUH\x00");
+            bytes[4] = 0xFF; // invalid variant tag
+            let result = HandshakeMessage::try_decode(&bytes);
+            assert!(
+                matches!(result, Err(DecodeError::InvalidEnumTag(_))),
+                "expected InvalidEnumTag, got {result:?}"
+            );
+        }
+
+        #[test]
+        fn rejection_round_trips_through_envelope() {
+            let rejection =
+                Rejection::new(RejectionReason::InvalidSignature, TimestampSeconds::new(42));
+            let msg = HandshakeMessage::Rejection(rejection);
+            let bytes = msg.encode();
+            let decoded = HandshakeMessage::try_decode(&bytes)
+                .expect("rejection should round-trip through envelope");
+            let HandshakeMessage::Rejection(r) = decoded else {
+                unreachable!("expected Rejection variant");
+            };
+            assert_eq!(r.reason, RejectionReason::InvalidSignature);
+            assert_eq!(r.server_timestamp, TimestampSeconds::new(42));
+        }
+
+        #[test]
+        fn handshake_message_raw_cbor_rejected() {
+            // Simulated raw automerge/CBOR bytes: starts with 0x85 (CBOR array)
+            let raw_cbor = vec![0x85, 0x6F, 0x4A, 0x83, 0x00, 0x01, 0x02, 0x03];
+            let result = HandshakeMessage::try_decode(&raw_cbor);
+            assert!(
+                matches!(result, Err(DecodeError::InvalidSchema(_))),
+                "expected InvalidSchema, got {result:?}"
+            );
         }
     }
 }

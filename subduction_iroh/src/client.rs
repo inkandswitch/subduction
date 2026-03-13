@@ -11,7 +11,7 @@ use iroh::{Endpoint, EndpointAddr, endpoint::Connection as QuicConnection};
 use subduction_core::{
     connection::{
         authenticated::Authenticated,
-        handshake::{self, Audience},
+        handshake::{self, challenge::Audience},
         timeout::Timeout,
     },
     peer::id::PeerId,

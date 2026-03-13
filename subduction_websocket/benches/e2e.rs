@@ -42,7 +42,7 @@ use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{handshake::Audience, nonce_cache::NonceCache},
+    connection::{handshake::challenge::Audience, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,

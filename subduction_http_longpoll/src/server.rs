@@ -24,7 +24,7 @@ use hyper::{
 use subduction_core::{
     connection::{
         authenticated::Authenticated,
-        handshake::{self, Audience},
+        handshake::{self, challenge::Audience},
         nonce_cache::NonceCache,
         timeout::Timeout,
     },

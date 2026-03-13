@@ -23,7 +23,7 @@ use rand::RngCore;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     connection::{
-        handshake::{Audience, DiscoveryId},
+        handshake::challenge::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
     },
