@@ -46,7 +46,7 @@ use super::{
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 use subduction_core::connection::{
     authenticated::Authenticated,
-    handshake::{self, Audience},
+    handshake::{self, audience::Audience},
 };
 
 /// A WebSocket connection with internal wiring for [`Subduction`] message handling.

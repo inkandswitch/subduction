@@ -27,7 +27,7 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{handshake::DiscoveryId, manager::Spawn},
+    connection::{handshake::audience::DiscoveryId, manager::Spawn},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,

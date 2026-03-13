@@ -144,7 +144,10 @@ mod tests {
     use future_form::Sendable;
     use subduction_core::{
         connection::handshake::{
-            Audience, Challenge, HandshakeMessage, Rejection, RejectionReason,
+            HandshakeMessage,
+            audience::Audience,
+            challenge::Challenge,
+            rejection::{Rejection, RejectionReason},
         },
         timestamp::TimestampSeconds,
     };

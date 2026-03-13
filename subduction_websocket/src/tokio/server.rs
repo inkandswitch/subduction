@@ -16,7 +16,10 @@ use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric};
 use subduction_core::{
     connection::{
         authenticated::Authenticated,
-        handshake::{self, Audience, AuthenticateError, DiscoveryId},
+        handshake::{
+            self, AuthenticateError,
+            audience::{Audience, DiscoveryId},
+        },
         nonce_cache::NonceCache,
     },
     peer::id::PeerId,

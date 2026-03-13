@@ -35,7 +35,7 @@
 //! ```ignore
 //! use iroh::{Endpoint, EndpointAddr};
 //! use subduction_iroh::client;
-//! use subduction_core::connection::handshake::Audience;
+//! use subduction_core::connection::handshake::audience::Audience;
 //! use std::time::Duration;
 //!
 //! // Connect to a peer

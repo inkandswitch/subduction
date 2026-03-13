@@ -82,7 +82,7 @@ use crate::{
         Connection,
         authenticated::Authenticated,
         backoff::Backoff,
-        handshake::DiscoveryId,
+        handshake::audience::DiscoveryId,
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
