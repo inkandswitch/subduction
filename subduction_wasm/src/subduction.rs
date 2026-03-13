@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -32,8 +32,8 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -42,10 +42,10 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
-        JsConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
         websocket::{WasmAuthenticatedWebSocket, WasmWebSocket},
+        JsConnection,
     },
     error::{
         WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
@@ -510,7 +510,7 @@ impl WasmSubduction {
             .await?)
     }
 
-    /// Onboard an authenticated WebSocket connection: register it and sync all sedimentrees.
+    /// Onboard an authenticated WebSocket connection: add it and sync all sedimentrees.
     ///
     /// The connection must have been authenticated via [`SubductionWebSocket::setup`],
     /// [`SubductionWebSocket::tryConnect`], or [`SubductionWebSocket::tryDiscover`].
@@ -519,7 +519,7 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns an error if registration or sync fails.
+    /// Returns an error if adding the connection or sync fails.
     #[wasm_bindgen]
     pub async fn onboard(
         &self,

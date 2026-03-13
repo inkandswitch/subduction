@@ -79,16 +79,16 @@ impl From<WasmOnboardError> for JsValue {
     }
 }
 
-/// Error connecting to a peer (handshake + registration).
+/// Error connecting to a peer (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmConnectError {
     /// WebSocket connection or handshake failed.
     #[error("connection failed: {0}")]
     Connection(#[from] WebSocketAuthenticatedConnectionError),
 
-    /// Registration failed after successful handshake.
-    #[error("registration failed: {0}")]
-    Registration(#[from] AddConnectionError<Infallible>),
+    /// Adding the connection failed after successful handshake.
+    #[error("add connection failed: {0}")]
+    AddConnection(#[from] AddConnectionError<Infallible>),
 }
 
 impl From<WasmConnectError> for JsValue {
@@ -227,16 +227,16 @@ impl From<WasmDisconnectionError> for JsValue {
     }
 }
 
-/// Error connecting via HTTP long-poll (handshake + registration).
+/// Error connecting via HTTP long-poll (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmLongPollConnectError {
     /// Long-poll connection or handshake failed.
     #[error("connection failed: {0}")]
     Connection(#[from] LongPollConnectionError),
 
-    /// Registration failed after successful handshake.
-    #[error("registration failed: {0}")]
-    Registration(#[from] AddConnectionError<Infallible>),
+    /// Adding the connection failed after successful handshake.
+    #[error("add connection failed: {0}")]
+    AddConnection(#[from] AddConnectionError<Infallible>),
 }
 
 impl From<WasmLongPollConnectError> for JsValue {

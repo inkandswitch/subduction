@@ -2,7 +2,7 @@
 //!
 //! Accepts incoming QUIC connections, runs the Subduction handshake to
 //! authenticate the remote peer, and creates [`Authenticated`] connections
-//! ready for registration with Subduction.
+//! ready for use with Subduction.
 
 use core::time::Duration;
 

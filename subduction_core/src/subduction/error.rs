@@ -100,7 +100,7 @@ pub enum AddConnectionError<D> {
     SendToClosedChannel,
 }
 
-/// An error that can occur during onboarding (registration + initial sync).
+/// An error that can occur during onboarding (add connection + initial sync).
 #[derive(Debug, Error)]
 pub enum OnboardError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, D> {
     /// An I/O error occurred.

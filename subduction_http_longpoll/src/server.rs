@@ -18,8 +18,8 @@ use core::time::Duration;
 use async_lock::Mutex;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
-    Method, Request, Response, StatusCode,
     body::{Bytes, Incoming},
+    Method, Request, Response, StatusCode,
 };
 use subduction_core::{
     connection::{
@@ -34,13 +34,13 @@ use subduction_core::{
 use subduction_crypto::signer::Signer;
 
 use future_form::{FutureForm, Sendable};
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 
 use crate::{
-    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
     connection::HttpLongPollConnection,
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
+    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
 };
 
 /// Server-side handler state, shared across request handlers.
@@ -327,7 +327,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
             .body(Full::new(Bytes::new()))?)
     }
 
-    /// Take the authenticated connection for a session (for Subduction registration).
+    /// Take the authenticated connection for a session.
     ///
     /// This removes the `Authenticated` wrapper from the session entry.
     /// The caller is responsible for registering it with `Subduction`.

@@ -5062,7 +5062,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "ahash",
  "async-lock",
@@ -5104,7 +5104,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5134,7 +5134,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_crypto"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "arbitrary",
  "bolero",
@@ -5152,7 +5152,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5182,7 +5182,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_iroh"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5205,7 +5205,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5241,7 +5241,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5273,7 +5273,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "arbitrary",
  "async-channel",

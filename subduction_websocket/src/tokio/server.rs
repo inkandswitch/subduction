@@ -1,11 +1,11 @@
 //! # Subduction WebSocket server for Tokio
 
 use crate::{
-    DEFAULT_MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     timeout::{FuturesTimerTimeout, Timeout},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
+    DEFAULT_MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
@@ -17,15 +17,16 @@ use subduction_core::{
     connection::{
         authenticated::Authenticated,
         handshake::{
-            self, AuthenticateError,
+            self,
             audience::{Audience, DiscoveryId},
+            AuthenticateError,
         },
         nonce_cache::NonceCache,
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
-    subduction::{Subduction, builder::SubductionBuilder, error::AddConnectionError},
+    subduction::{builder::SubductionBuilder, error::AddConnectionError, Subduction},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -79,12 +80,12 @@ where
 }
 
 impl<
-    S: 'static + Send + Sync + Storage<Sendable>,
-    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
-    M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable>,
-> TokioWebSocketServer<S, P, Sig, M, O>
+        S: 'static + Send + Sync + Storage<Sendable>,
+        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+        Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
+        M: 'static + Send + Sync + DepthMetric,
+        O: 'static + Send + Sync + Timeout<Sendable>,
+    > TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
@@ -370,7 +371,7 @@ where
     /// # Errors
     ///
     /// Returns an error if the connection could not be established,
-    /// handshake fails, or registration fails.
+    /// handshake fails, or adding the connection fails.
     pub async fn try_connect(
         &self,
         uri: Uri,
@@ -483,7 +484,7 @@ where
     /// # Errors
     ///
     /// Returns an error if the connection could not be established,
-    /// handshake fails, or registration fails.
+    /// handshake fails, or adding the connection fails.
     pub async fn try_connect_discover(
         &self,
         uri: Uri,

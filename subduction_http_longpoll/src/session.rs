@@ -9,7 +9,7 @@ use core::fmt;
 
 use async_lock::Mutex;
 use future_form::Sendable;
-use rand::{RngCore, rngs::OsRng};
+use rand::{rngs::OsRng, RngCore};
 use subduction_core::{
     connection::{authenticated::Authenticated, timeout::Timeout},
     peer::id::PeerId,
@@ -101,7 +101,7 @@ pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync> {
     /// The connection channels for this session.
     pub connection: HttpLongPollConnection<O>,
 
-    /// The authenticated wrapper, present until consumed by Subduction registration.
+    /// The authenticated wrapper, present until consumed by Subduction.
     pub authenticated: Option<Authenticated<HttpLongPollConnection<O>, Sendable>>,
 }
 
