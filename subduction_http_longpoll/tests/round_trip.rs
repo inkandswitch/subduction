@@ -191,7 +191,7 @@ async fn serve_http_connection(
                 }
             };
 
-            // After a successful handshake, register with Subduction
+            // After a successful handshake, add connection to Subduction
             if resp.status() == hyper::StatusCode::OK
                 && let Some(session_hdr) = resp
                     .headers()
@@ -199,9 +199,9 @@ async fn serve_http_connection(
                 && let Ok(sid_str) = session_hdr.to_str()
                 && let Some(sid) = SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
-                && let Err(e) = subduction.register(auth).await
+                && let Err(e) = subduction.add_connection(auth).await
             {
-                tracing::error!("failed to register HTTP long-poll connection: {e}");
+                tracing::error!("failed to add HTTP long-poll connection: {e}");
             }
 
             Ok::<_, hyper::Error>(resp)
@@ -250,9 +250,9 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     tokio::spawn(result.send_task);
 
     client
-        .register(result.authenticated)
+        .add_connection(result.authenticated)
         .await
-        .expect("register");
+        .expect("add_connection");
     client
 }
 
@@ -324,9 +324,9 @@ async fn connected_client_known_peer(
     tokio::spawn(result.send_task);
 
     client
-        .register(result.authenticated)
+        .add_connection(result.authenticated)
         .await
-        .expect("register");
+        .expect("add_connection");
     client
 }
 

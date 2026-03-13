@@ -6,13 +6,14 @@ use future_form::Local;
 use subduction_core::{
     connection::{Connection, ConnectionDisallowed},
     subduction::error::{
-        HydrationError, IoError, ListenError, OnboardError, RegistrationError, WriteError,
+        AddConnectionError, HydrationError, IoError, ListenError, OnboardError, WriteError,
     },
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::connection::{
+    longpoll::LongPollConnectionError,
     transport::WasmUnifiedTransport,
     websocket::{CallError, WebSocketAuthenticatedConnectionError},
 };
@@ -87,7 +88,7 @@ pub enum WasmConnectError {
 
     /// Registration failed after successful handshake.
     #[error("registration failed: {0}")]
-    Registration(#[from] RegistrationError<Infallible>),
+    Registration(#[from] AddConnectionError<Infallible>),
 }
 
 impl From<WasmConnectError> for JsValue {
@@ -190,22 +191,22 @@ impl From<&CallError> for WasmCallErrorInner {
     }
 }
 
-/// An error that occurred during registration.
+/// An error that occurred when adding a connection.
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
 #[error(transparent)]
 #[allow(missing_copy_implementations)]
-pub struct WasmRegistrationError(RegistrationError<Infallible>);
+pub struct WasmAddConnectionError(AddConnectionError<Infallible>);
 
-impl From<RegistrationError<Infallible>> for WasmRegistrationError {
-    fn from(err: RegistrationError<Infallible>) -> Self {
-        WasmRegistrationError(err)
+impl From<AddConnectionError<Infallible>> for WasmAddConnectionError {
+    fn from(err: AddConnectionError<Infallible>) -> Self {
+        WasmAddConnectionError(err)
     }
 }
 
-impl From<WasmRegistrationError> for JsValue {
-    fn from(err: WasmRegistrationError) -> Self {
+impl From<WasmAddConnectionError> for JsValue {
+    fn from(err: WasmAddConnectionError) -> Self {
         let js_err = js_sys::Error::new(&err.0.to_string());
-        js_err.set_name("RegistrationError");
+        js_err.set_name("AddConnectionError");
         js_err.into()
     }
 }
@@ -231,11 +232,11 @@ impl From<WasmDisconnectionError> for JsValue {
 pub enum WasmLongPollConnectError {
     /// Long-poll connection or handshake failed.
     #[error("connection failed: {0}")]
-    Connection(#[from] crate::connection::longpoll::LongPollConnectionError),
+    Connection(#[from] LongPollConnectionError),
 
     /// Registration failed after successful handshake.
     #[error("registration failed: {0}")]
-    Registration(#[from] RegistrationError<Infallible>),
+    Registration(#[from] AddConnectionError<Infallible>),
 }
 
 impl From<WasmLongPollConnectError> for JsValue {

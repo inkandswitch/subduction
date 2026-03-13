@@ -25,7 +25,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
-    subduction::{Subduction, builder::SubductionBuilder, error::RegistrationError},
+    subduction::{Subduction, builder::SubductionBuilder, error::AddConnectionError},
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -102,7 +102,7 @@ where
     /// * `default_time_limit` - Default timeout duration
     /// * `handshake_max_drift` - Maximum acceptable clock drift during handshake
     /// * `max_message_size` - Maximum WebSocket message size in bytes
-    /// * `subduction` - The Subduction instance to register connections with
+    /// * `subduction` - The Subduction instance to add connections to
     ///
     /// # Errors
     ///
@@ -221,9 +221,9 @@ where
                                             }
                                         };
 
-                                        // Step 3: Register with Subduction
-                                        if let Err(e) = task_subduction.register(authenticated).await {
-                                            tracing::error!("Failed to register connection: {e}");
+                                        // Step 3: Add connection to Subduction
+                                        if let Err(e) = task_subduction.add_connection(authenticated).await {
+                                            tracing::error!("Failed to add connection: {e}");
                                         }
                                     }
                                 });
@@ -335,7 +335,7 @@ where
         &self.subduction
     }
 
-    /// Register an authenticated WebSocket connection with the server.
+    /// Add an authenticated WebSocket connection to the server.
     ///
     /// The connection must already have completed handshake verification via
     /// [`handshake::initiate`] or [`handshake::respond`].
@@ -344,18 +344,18 @@ where
     ///
     /// # Errors
     ///
-    /// Returns an error if the registration message send fails over the internal channel.
+    /// Returns an error if the connection is rejected by the policy.
     ///
     /// [`handshake::initiate`]: subduction_core::connection::handshake::initiate
     /// [`handshake::respond`]: subduction_core::connection::handshake::respond
-    pub async fn register(
+    pub async fn add_connection(
         &self,
         authenticated: Authenticated<UnifiedWebSocket<O>, Sendable>,
-    ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
-        self.subduction.register(authenticated).await
+    ) -> Result<bool, AddConnectionError<P::ConnectionDisallowed>> {
+        self.subduction.add_connection(authenticated).await
     }
 
-    /// Connect to a peer and register the connection for bidirectional sync.
+    /// Connect to a peer and add the connection for bidirectional sync.
     ///
     /// Performs the handshake protocol to authenticate both sides. The client
     /// identity is derived from the signer stored in the Subduction instance.
@@ -459,9 +459,9 @@ where
         tracing::info!("Handshake complete: connected to {server_id}");
 
         self.subduction
-            .register(authenticated)
+            .add_connection(authenticated)
             .await
-            .map_err(TryConnectError::Registration)?;
+            .map_err(TryConnectError::AddConnection)?;
 
         tracing::info!("Connected to peer at {uri_str}");
         Ok(server_id)
@@ -558,9 +558,9 @@ where
         tracing::info!("Handshake complete: connected to {server_id}");
 
         self.subduction
-            .register(authenticated)
+            .add_connection(authenticated)
             .await
-            .map_err(TryConnectError::Registration)?;
+            .map_err(TryConnectError::AddConnection)?;
 
         tracing::info!("Connected to peer at {uri_str}");
         Ok(server_id)
@@ -587,7 +587,7 @@ pub enum TryConnectError<E: core::error::Error> {
     #[error("handshake error: {0}")]
     Handshake(#[from] AuthenticateError<WebSocketHandshakeError>),
 
-    /// Registration error.
-    #[error("Registration error: {0}")]
-    Registration(#[from] RegistrationError<E>),
+    /// Adding the connection failed.
+    #[error("add connection error: {0}")]
+    AddConnection(#[from] AddConnectionError<E>),
 }

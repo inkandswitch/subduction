@@ -223,7 +223,10 @@ async fn connected_client(
         }
     });
 
-    client.register(client_ws).await.expect("register");
+    client
+        .add_connection(client_ws)
+        .await
+        .expect("add_connection");
     client
 }
 

@@ -74,7 +74,7 @@ impl<O: Timeout<Sendable> + Send + Sync + core::fmt::Debug> core::fmt::Debug for
 /// ).await?;
 /// tokio::spawn(result.listener_task);
 /// tokio::spawn(result.sender_task);
-/// subduction.register(result.authenticated).await?;
+/// subduction.add_connection(result.authenticated).await?;
 /// ```
 pub async fn connect<O, S>(
     endpoint: &Endpoint,

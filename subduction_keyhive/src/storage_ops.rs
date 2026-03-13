@@ -11,6 +11,7 @@ use keyhive_core::{
 };
 
 use crate::{
+    collections::{Map, Set},
     error::StorageError,
     storage::{KeyhiveStorage, StorageHash},
 };
@@ -307,7 +308,7 @@ where
     }
 
     // Build a map from event hash to storage hash for tracking pending events
-    let event_hash_to_storage: crate::collections::Map<[u8; 32], StorageHash> = raw_events
+    let event_hash_to_storage: Map<[u8; 32], StorageHash> = raw_events
         .iter()
         .map(|(storage_hash, bytes)| {
             let event_hash = hash_event_bytes(bytes);
@@ -324,7 +325,7 @@ where
     let pending = keyhive.ingest_unsorted_static_events(events).await;
 
     // Get hashes of pending events
-    let pending_hashes: crate::collections::Set<[u8; 32]> = pending
+    let pending_hashes: Set<[u8; 32]> = pending
         .iter()
         .filter_map(|e| {
             let bytes = cbor_serialize(e.as_ref()).ok()?;

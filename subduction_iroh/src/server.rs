@@ -73,7 +73,7 @@ impl<O: Timeout<Sendable> + Send + Sync> core::fmt::Debug for AcceptResult<O> {
 ///     ).await?;
 ///     tokio::spawn(result.listener_task);
 ///     tokio::spawn(result.sender_task);
-///     subduction.register(result.authenticated).await?;
+///     subduction.add_connection(result.authenticated).await?;
 /// }
 /// ```
 #[allow(clippy::too_many_arguments)]

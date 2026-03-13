@@ -189,9 +189,9 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
     let sed_id = SedimentreeId::new([1u8; 32]);
     let peer_id = PeerId::new([2u8; 32]);
 
-    // Register a mock connection
+    // Add a mock connection
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -272,9 +272,9 @@ async fn full_sync_sends_all_commits() -> TestResult {
     let sed_id = SedimentreeId::new([1u8; 32]);
     let server_peer_id = PeerId::new([2u8; 32]);
 
-    // Register a mock connection to "server"
+    // Add a mock connection to "server"
     let (conn, handle) = ChannelMockConnection::new_with_handle(server_peer_id);
-    client.register(conn.authenticated()).await?;
+    client.add_connection(conn.authenticated()).await?;
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);

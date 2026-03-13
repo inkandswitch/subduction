@@ -2472,11 +2472,11 @@ mod tests {
                 TestSpawn,
             );
 
-        // Register a failing connection with a different peer ID than the sender
+        // Add a failing connection with a different peer ID than the sender
         let sender_peer_id = PeerId::new([1u8; 32]);
         let other_peer_id = PeerId::new([2u8; 32]);
         let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-        let _fresh = subduction.register(conn.authenticated()).await?;
+        let _fresh = subduction.add_connection(conn.authenticated()).await?;
         assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
         // Subscribe other_peer to the sedimentree so forwarding will be attempted
@@ -2493,18 +2493,18 @@ mod tests {
         };
         let _ = handler.handle(&sender_conn, msg).await;
 
-        // Connection should be unregistered after send failure during propagation
+        // Connection should be removed after send failure during propagation
         assert_eq!(
             subduction.connected_peer_ids().await.len(),
             0,
-            "Connection should be unregistered after send failure"
+            "Connection should be removed after send failure"
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResult {
+    async fn test_recv_fragment_removes_connection_on_send_failure() -> TestResult {
         let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
@@ -2537,11 +2537,11 @@ mod tests {
                 TestSpawn,
             );
 
-        // Register a failing connection with a different peer ID than the sender
+        // Add a failing connection with a different peer ID than the sender
         let sender_peer_id = PeerId::new([1u8; 32]);
         let other_peer_id = PeerId::new([2u8; 32]);
         let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-        let _fresh = subduction.register(conn.authenticated()).await?;
+        let _fresh = subduction.add_connection(conn.authenticated()).await?;
         assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
         // Subscribe other_peer to the sedimentree so forwarding will be attempted
@@ -2558,11 +2558,11 @@ mod tests {
         };
         let _ = handler.handle(&sender_conn, msg).await;
 
-        // Connection should be unregistered after send failure during propagation
+        // Connection should be removed after send failure during propagation
         assert_eq!(
             subduction.connected_peer_ids().await.len(),
             0,
-            "Connection should be unregistered after send failure"
+            "Connection should be removed after send failure"
         );
 
         Ok(())

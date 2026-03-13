@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -32,8 +32,8 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
+        Subduction, builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -42,10 +42,10 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
+        JsConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
-        websocket::WasmWebSocket,
-        JsConnection,
+        websocket::{WasmAuthenticatedWebSocket, WasmWebSocket},
     },
     error::{
         WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
@@ -333,10 +333,10 @@ impl WasmSubduction {
         Ok(())
     }
 
-    /// Connect to a peer via WebSocket and register the connection.
+    /// Connect to a peer via WebSocket and add the connection.
     ///
     /// This performs the cryptographic handshake, verifies the server's identity,
-    /// and registers the authenticated connection for syncing.
+    /// and adds the authenticated connection for syncing.
     ///
     /// Returns the verified peer ID on success.
     ///
@@ -349,7 +349,7 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or add_connection fails.
     #[wasm_bindgen(js_name = connect)]
     pub async fn connect(
         &self,
@@ -368,12 +368,12 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::WebSocket))
+            .add_connection(authenticated.map(WasmUnifiedTransport::WebSocket))
             .await?;
         Ok(peer_id.into())
     }
 
-    /// Connect to a peer via WebSocket using discovery mode and register the connection.
+    /// Connect to a peer via WebSocket using discovery mode and add the connection.
     ///
     /// Returns the discovered and verified peer ID on success.
     ///
@@ -386,7 +386,7 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connectDiscover)]
     pub async fn connect_discover(
         &self,
@@ -405,12 +405,12 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::WebSocket))
+            .add_connection(authenticated.map(WasmUnifiedTransport::WebSocket))
             .await?;
         Ok(peer_id.into())
     }
 
-    /// Connect to a peer via HTTP long-poll and register the connection.
+    /// Connect to a peer via HTTP long-poll and add the connection.
     ///
     /// Returns the verified peer ID on success.
     ///
@@ -423,7 +423,7 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connectLongPoll)]
     pub async fn connect_long_poll(
         &self,
@@ -442,7 +442,7 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::LongPoll))
+            .add_connection(authenticated.map(WasmUnifiedTransport::LongPoll))
             .await?;
         Ok(peer_id.into())
     }
@@ -460,7 +460,7 @@ impl WasmSubduction {
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connectDiscoverLongPoll)]
     pub async fn connect_discover_long_poll(
         &self,
@@ -479,7 +479,7 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::LongPoll))
+            .add_connection(authenticated.map(WasmUnifiedTransport::LongPoll))
             .await?;
         Ok(peer_id.into())
     }
@@ -523,7 +523,7 @@ impl WasmSubduction {
     #[wasm_bindgen]
     pub async fn onboard(
         &self,
-        conn: &crate::connection::websocket::WasmAuthenticatedWebSocket,
+        conn: &WasmAuthenticatedWebSocket,
     ) -> Result<bool, WasmOnboardError> {
         self.core
             .onboard(conn.inner().clone().map(WasmUnifiedTransport::WebSocket))

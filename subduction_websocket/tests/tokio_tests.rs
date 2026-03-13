@@ -383,7 +383,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             Ok::<(), eyre::Report>(())
         });
 
-        client.register(client_ws).await?;
+        client.add_connection(client_ws).await?;
 
         clients.push((client, client_handler));
 
@@ -552,7 +552,7 @@ async fn large_message_handling() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client.register(client_ws).await?;
+    client.add_connection(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -654,7 +654,7 @@ async fn message_ordering() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client.register(client_ws).await?;
+    client.add_connection(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -919,7 +919,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client.register(client_ws).await?;
+    client.add_connection(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();

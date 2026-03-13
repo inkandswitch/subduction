@@ -139,8 +139,9 @@ impl TestServer {
                     Ok(result) => {
                         tokio::spawn(result.listener_task);
                         tokio::spawn(result.sender_task);
-                        if let Err(e) = accept_subduction.register(result.authenticated).await {
-                            tracing::error!("register error: {e}");
+                        if let Err(e) = accept_subduction.add_connection(result.authenticated).await
+                        {
+                            tracing::error!("add_connection error: {e}");
                         }
                     }
                     Err(e) => {
@@ -192,9 +193,9 @@ impl TestClient {
         tokio::spawn(result.listener_task);
         tokio::spawn(result.sender_task);
         subduction
-            .register(result.authenticated)
+            .add_connection(result.authenticated)
             .await
-            .expect("register");
+            .expect("add_connection");
 
         Self {
             subduction,
@@ -247,8 +248,9 @@ impl TestServerDiscover {
                     Ok(result) => {
                         tokio::spawn(result.listener_task);
                         tokio::spawn(result.sender_task);
-                        if let Err(e) = accept_subduction.register(result.authenticated).await {
-                            tracing::error!("register error: {e}");
+                        if let Err(e) = accept_subduction.add_connection(result.authenticated).await
+                        {
+                            tracing::error!("add_connection error: {e}");
                         }
                     }
                     Err(e) => {
@@ -296,9 +298,9 @@ impl TestClient {
         tokio::spawn(result.listener_task);
         tokio::spawn(result.sender_task);
         subduction
-            .register(result.authenticated)
+            .add_connection(result.authenticated)
             .await
-            .expect("register");
+            .expect("add_connection");
 
         Self {
             subduction,
@@ -996,7 +998,10 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
         {
             tokio::spawn(result.listener_task);
             tokio::spawn(result.sender_task);
-            accept_subduction.register(result.authenticated).await.ok();
+            accept_subduction
+                .add_connection(result.authenticated)
+                .await
+                .ok();
         }
     });
 

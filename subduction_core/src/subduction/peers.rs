@@ -114,7 +114,10 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `Some(false)` — connection removed, peer still has other connections
 /// - `Some(true)` — connection removed, was the peer's last connection
 /// - `None` — connection was not found
-pub(crate) async fn unregister<F: FutureForm, C: Connection<F> + PartialEq + Clone + 'static>(
+pub(crate) async fn remove_connection<
+    F: FutureForm,
+    C: Connection<F> + PartialEq + Clone + 'static,
+>(
     connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>,
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
     conn: &Authenticated<C, F>,

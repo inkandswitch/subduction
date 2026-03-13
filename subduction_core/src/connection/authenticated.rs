@@ -50,8 +50,8 @@ use crate::peer::id::PeerId;
 ///     nonce,
 /// ).await?;
 ///
-/// // Now register() accepts the authenticated connection
-/// subduction.register(authenticated).await?;
+/// // Now add_connection() accepts the authenticated connection
+/// subduction.add_connection(authenticated).await?;
 /// ```
 pub struct Authenticated<C: Connection<K>, K: FutureForm> {
     inner: C,

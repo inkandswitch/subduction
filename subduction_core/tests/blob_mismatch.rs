@@ -118,7 +118,7 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -164,7 +164,7 @@ async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -203,7 +203,7 @@ async fn recv_commit_accepts_valid_blob() -> TestResult {
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -250,7 +250,7 @@ async fn recv_fragment_accepts_valid_blob() -> TestResult {
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -289,7 +289,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);

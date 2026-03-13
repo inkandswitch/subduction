@@ -1,7 +1,7 @@
 //! Unified WebSocket connection type for both accepted and dialed connections.
 
 use crate::{
-    error::{CallError, DisconnectionError, RecvError, SendError},
+    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     timeout::Timeout,
     websocket::WebSocket,
 };
@@ -38,7 +38,7 @@ impl<O: Timeout<Sendable> + Send + Sync> UnifiedWebSocket<O> {
     /// # Errors
     ///
     /// Returns an error if the WebSocket connection fails.
-    pub async fn listen(&self) -> Result<(), crate::error::RunError> {
+    pub async fn listen(&self) -> Result<(), RunError> {
         match self {
             UnifiedWebSocket::Accepted(in_ws) => in_ws.listen().await,
             UnifiedWebSocket::Dialed(out_ws) => out_ws.listen().await,

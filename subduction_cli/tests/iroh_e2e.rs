@@ -213,9 +213,9 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
     tokio::spawn(result.poll_task);
     tokio::spawn(result.send_task);
     subduction
-        .register(result.authenticated)
+        .add_connection(result.authenticated)
         .await
-        .expect("register");
+        .expect("add_connection");
 
     subduction
 }

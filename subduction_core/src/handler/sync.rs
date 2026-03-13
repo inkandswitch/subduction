@@ -389,7 +389,7 @@ impl<
                 let peer_id = conn.peer_id();
                 if let Err(e) = conn.send(&msg).await {
                     tracing::info!("peer {peer_id} disconnected: {e}");
-                    self.unregister(&conn).await;
+                    self.remove_connection(&conn).await;
                 }
             }
         }
@@ -466,7 +466,7 @@ impl<
                 let peer_id = conn.peer_id();
                 if let Err(e) = conn.send(&msg).await {
                     tracing::info!("peer {peer_id} disconnected: {e}");
-                    self.unregister(&conn).await;
+                    self.remove_connection(&conn).await;
                 }
             }
         }
@@ -720,7 +720,7 @@ impl<
         .await
     }
 
-    async fn unregister(&self, conn: &Authenticated<C, F>) -> Option<bool> {
-        peers::unregister(&self.connections, &self.subscriptions, conn).await
+    async fn remove_connection(&self, conn: &Authenticated<C, F>) -> Option<bool> {
+        peers::remove_connection(&self.connections, &self.subscriptions, conn).await
     }
 }

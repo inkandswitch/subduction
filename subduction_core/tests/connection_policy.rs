@@ -96,17 +96,20 @@ async fn rejected_connection_is_not_registered() -> TestResult {
     let peer_id = PeerId::new([1u8; 32]);
     let conn = MockConnection::with_peer_id(peer_id).authenticated();
 
-    let result = subduction.register(conn).await;
-    assert!(result.is_err(), "register should fail when policy rejects");
+    let result = subduction.add_connection(conn).await;
+    assert!(
+        result.is_err(),
+        "add_connection should fail when policy rejects"
+    );
 
-    let err = result.expect_err("register should have failed");
+    let err = result.expect_err("add_connection should have failed");
     let err_string = format!("{err}");
     assert!(
         err_string.contains("connection rejected"),
         "error should indicate connection rejection, got: {err_string}"
     );
 
-    // Verify no connections were registered
+    // Verify no connections were added
     let connected_peers = subduction.connected_peer_ids().await;
     assert!(
         connected_peers.is_empty(),
@@ -120,16 +123,16 @@ async fn rejected_connection_is_not_registered() -> TestResult {
 async fn rejected_connection_does_not_affect_existing_connections() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
-    // Register an allowed connection first (OpenPolicy allows everything)
+    // Add an allowed connection first (OpenPolicy allows everything)
     let allowed_peer = PeerId::new([1u8; 32]);
     let allowed_conn = MockConnection::with_peer_id(allowed_peer).authenticated();
-    subduction.register(allowed_conn).await?;
+    subduction.add_connection(allowed_conn).await?;
 
     let connected = subduction.connected_peer_ids().await;
     assert_eq!(connected.len(), 1);
     assert!(connected.contains(&allowed_peer));
 
-    // Now create a subduction with reject policy and try to register
+    // Now create a subduction with reject policy and try to add a connection
     let (reject_subduction, _handler, _listener_fut2, _actor_fut2) =
         SubductionBuilder::<_, _, _, _, 256>::new()
             .signer(test_signer())
@@ -139,7 +142,7 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
 
     let rejected_peer = PeerId::new([2u8; 32]);
     let rejected_conn = MockConnection::with_peer_id(rejected_peer).authenticated();
-    let result = reject_subduction.register(rejected_conn).await;
+    let result = reject_subduction.add_connection(rejected_conn).await;
     assert!(result.is_err());
 
     // The original subduction's connections are unaffected

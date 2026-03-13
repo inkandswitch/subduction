@@ -615,7 +615,7 @@ async fn accept_loop(
     while (conns.join_next().await).is_some() {}
 }
 
-/// Handle a WebSocket connection: upgrade, handshake, register.
+/// Handle a WebSocket connection: upgrade, handshake, add connection.
 #[allow(clippy::too_many_arguments)]
 async fn handle_websocket(
     tcp: tokio::net::TcpStream,
@@ -697,8 +697,8 @@ async fn handle_websocket(
         }
     };
 
-    if let Err(e) = subduction.register(authenticated).await {
-        tracing::error!("Failed to register WebSocket connection: {e}");
+    if let Err(e) = subduction.add_connection(authenticated).await {
+        tracing::error!("Failed to add WebSocket connection: {e}");
     }
 }
 
@@ -756,7 +756,7 @@ async fn handle_http_longpoll(
                 }
             };
 
-            // After a successful handshake, register with Subduction
+            // After a successful handshake, add connection to Subduction
             if resp.status() == hyper::StatusCode::OK
                 && let Some(session_hdr) = resp
                     .headers()
@@ -766,8 +766,8 @@ async fn handle_http_longpoll(
                 && let Some(auth) = handler.take_authenticated(&sid).await
             {
                 let unified_auth = auth.map(UnifiedTransport::HttpLongPoll);
-                if let Err(e) = subduction.register(unified_auth).await {
-                    tracing::error!("Failed to register HTTP long-poll connection: {e}");
+                if let Err(e) = subduction.add_connection(unified_auth).await {
+                    tracing::error!("Failed to add HTTP long-poll connection: {e}");
                 }
             }
 
@@ -882,7 +882,7 @@ async fn try_connect_ws(
     let remote_id = authenticated.peer_id();
     tracing::info!("Handshake complete: connected to {remote_id}");
 
-    subduction.register(authenticated).await?;
+    subduction.add_connection(authenticated).await?;
     tracing::info!("Connected to peer at {uri_str}");
 
     Ok(remote_id)
