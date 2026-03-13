@@ -60,6 +60,7 @@ CkptCnt
 cleartext
 CLI
 cli
+ClockDrift
 codebase
 Codec
 codec
@@ -143,6 +144,8 @@ iroh
 iroh's
 Integrations
 invariant
+InvalidAudience
+InvalidSignature
 Invariants
 invariants
 IssuerVK
@@ -237,6 +240,7 @@ Reconnection
 reconnection
 recurse
 RemoveSubscriptions
+ReplayedNonce
 repo
 representable
 reproducibility

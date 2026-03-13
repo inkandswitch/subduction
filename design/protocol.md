@@ -437,16 +437,16 @@ Unsigned — no schema or signature. The payload follows directly after the
 envelope tag byte:
 
 ```
-╔════════╦═══════════════╗
-║ Reason ║ SrvTimestamp  ║
-║   1B   ║      8B       ║
-╚════════╩═══════════════╝
+╔════════╦═════════════════════╗
+║ Reason ║   ServerTimestamp   ║
+║   1B   ║         8B          ║
+╚════════╩═════════════════════╝
 ```
 
 | Field | Size | Description |
 |-------|------|-------------|
 | Reason | 1 byte | `0x00` ClockDrift, `0x01` InvalidAudience, `0x02` ReplayedNonce, `0x03` InvalidSignature |
-| SrvTimestamp | 8 bytes | Responder's Unix seconds (informational only, unsigned) |
+| ServerTimestamp | 8 bytes | Responder's Unix seconds (informational only, unsigned) |
 
 **Payload size:** 9 bytes / **Total on wire:** 14 bytes (5B envelope + 9B payload)
 
@@ -463,14 +463,14 @@ All sync messages use the envelope format with schema `SUM\x00`:
 
 ### Message Tags
 
-| Tag | Message Type |
-|-----|--------------|
-| `0x00` | LooseCommit |
-| `0x01` | Fragment |
-| `0x02` | BlobsRequest |
-| `0x03` | BlobsResponse |
-| `0x04` | BatchSyncRequest |
-| `0x05` | BatchSyncResponse |
+| Tag    | Message Type        |
+|--------|---------------------|
+| `0x00` | LooseCommit         |
+| `0x01` | Fragment            |
+| `0x02` | BlobsRequest        |
+| `0x03` | BlobsResponse       |
+| `0x04` | BatchSyncRequest    |
+| `0x05` | BatchSyncResponse   |
 | `0x06` | RemoveSubscriptions |
 | `0x07` | DataRequestRejected |
 
@@ -546,11 +546,11 @@ Each blob is encoded as `bijou64(size) || bytes[0..size]`.
 ```
 
 **Result Tags:**
-| Tag | Result |
-|-----|--------|
+| Tag    | Result                   |
+|--------|--------------------------|
 | `0x00` | OK (includes `SyncDiff`) |
-| `0x01` | NotFound |
-| `0x02` | Unauthorized |
+| `0x01` | NotFound                 |
+| `0x02` | Unauthorized             |
 
 **`SyncDiff` (for OK result):**
 
