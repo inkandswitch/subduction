@@ -9,7 +9,7 @@
 //! | Level | Methods | Use Case |
 //! |-------|---------|----------|
 //! | **High-level** | [`onboard`], [`disconnect`] | Most applications — handles sync automatically |
-//! | **Low-level** | [`register`], [`unregister`] | Custom sync logic, testing, or fine-grained control |
+//! | **Low-level** | [`add_connection`], [`remove_connection`] | Custom sync logic, testing, or fine-grained control |
 //!
 //! **Prefer the high-level API** unless you need explicit control over when sync occurs.
 //!
@@ -20,10 +20,10 @@
 //! - [`Subduction::disconnect_all`] — Disconnect all connections
 //! - [`Subduction::disconnect_from_peer`] — Disconnect all connections from a peer
 //!
-//! ### Low-Level: `register` / `unregister`
+//! ### Low-Level: `add_connection` / `remove_connection`
 //!
-//! - [`Subduction::register`] — Add connection to tracking (no automatic sync)
-//! - [`Subduction::unregister`] — Remove connection from tracking
+//! - [`Subduction::add_connection`] — Add connection to tracking (no automatic sync)
+//! - [`Subduction::remove_connection`] — Remove connection from tracking
 //!
 //! ## Naming Conventions
 //!
@@ -55,8 +55,8 @@
 //! [`disconnect`]: Subduction::disconnect
 //! [`disconnect_all`]: Subduction::disconnect_all
 //! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
-//! [`register`]: Subduction::register
-//! [`unregister`]: Subduction::unregister
+//! [`add_connection`]: Subduction::add_connection
+//! [`remove_connection`]: Subduction::remove_connection
 //! [`get_blob`]: Subduction::get_blob
 //! [`get_blobs`]: Subduction::get_blobs
 //! [`get_commits`]: Subduction::get_commits
@@ -109,7 +109,7 @@ use core::{
     time::Duration,
 };
 use error::{
-    IoError, ListenError, OnboardError, RegistrationError, SendRequestedDataError, Unauthorized,
+    AddConnectionError, IoError, ListenError, OnboardError, SendRequestedDataError, Unauthorized,
     WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
@@ -498,9 +498,9 @@ impl<
                             peer = %conn.peer_id(),
                             "error dispatching message: {e}"
                         );
-                        // Connection is broken - unregister from conns map.
-                        self.unregister(&conn).await;
-                        tracing::info!("unregistered failed connection from peer {}", conn.peer_id());
+                        // Connection is broken — remove from conns map.
+                        self.remove_connection(&conn).await;
+                        tracing::info!("removed failed connection from peer {}", conn.peer_id());
                     }
                 }
                 // Second: receive new messages
@@ -540,9 +540,9 @@ impl<
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
                         tracing::info!(
-                            "Connection {conn_id} from peer {peer_id} closed, unregistering"
+                            "Connection {conn_id} from peer {peer_id} closed, removing"
                         );
-                        self.unregister(&conn).await;
+                        self.remove_connection(&conn).await;
                     }
                 }
             }
@@ -554,11 +554,11 @@ impl<
      * CONNECTIONS *
      ***************/
 
-    /// Onboard a new [`Connection`]: register it and immediately sync all known [`Sedimentree`]s.
+    /// Onboard a new [`Connection`]: add it and immediately sync all known [`Sedimentree`]s.
     ///
     /// # Errors
     ///
-    /// * Returns `OnboardError::Registration` if the connection is rejected by the policy.
+    /// * Returns `OnboardError::AddConnection` if the connection is rejected by the policy.
     /// * Returns `OnboardError::Io` if a storage or network error occurs.
     pub async fn onboard(
         &self,
@@ -567,7 +567,7 @@ impl<
         let peer_id = conn.peer_id();
         tracing::info!("Onboarding connection to peer {}", peer_id);
 
-        let fresh = self.register(conn).await?;
+        let fresh = self.add_connection(conn).await?;
 
         let ids = self.sedimentrees.into_keys().await;
 
@@ -688,30 +688,31 @@ impl<
      * LOW LEVEL CONNECTION API *
      ****************************/
 
-    /// Low-level registration of a new connection.
+    /// Add a connection to tracking (low-level).
     ///
-    /// This does not perform any synchronization.
+    /// This does not perform any synchronization. Prefer [`onboard`](Self::onboard)
+    /// unless you need explicit control over when sync occurs.
     ///
     /// # Returns
     ///
     /// * `Ok(true)` if the connection is fresh (first for this peer or new connection).
-    /// * `Ok(false)` if the exact connection was already registered.
+    /// * `Ok(false)` if the exact connection was already added.
     ///
     /// # Errors
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
-    pub async fn register(
+    pub async fn add_connection(
         &self,
         conn: Authenticated<C, F>,
-    ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
+    ) -> Result<bool, AddConnectionError<P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
-        tracing::info!("registering connection from peer {}", peer_id);
+        tracing::info!("adding connection from peer {}", peer_id);
 
         self.storage
             .policy()
             .authorize_connect(peer_id)
             .await
-            .map_err(RegistrationError::ConnectionDisallowed)?;
+            .map_err(AddConnectionError::ConnectionDisallowed)?;
 
         {
             let mut connections = self.connections.lock().await;
@@ -738,7 +739,7 @@ impl<
         self.manager_channel
             .send(Command::Add(conn))
             .await
-            .map_err(|_| RegistrationError::SendToClosedChannel)?;
+            .map_err(|_| AddConnectionError::SendToClosedChannel)?;
 
         #[cfg(feature = "metrics")]
         crate::metrics::connection_opened();
@@ -746,7 +747,10 @@ impl<
         Ok(true)
     }
 
-    /// Unregister a connection.
+    /// Remove a connection from tracking (low-level).
+    ///
+    /// Does _not_ close the transport. Use [`disconnect`](Self::disconnect)
+    /// to gracefully shut down a live connection.
     ///
     /// Uses `NonEmptyExt::remove_item` to handle the three cases:
     /// - Connection not found
@@ -756,8 +760,8 @@ impl<
     /// Returns `Some(true)` if this was the last connection for the peer,
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
-    pub async fn unregister(&self, conn: &Authenticated<C, F>) -> Option<bool> {
-        peers::unregister(&self.connections, &self.subscriptions, conn).await
+    pub async fn remove_connection(&self, conn: &Authenticated<C, F>) -> Option<bool> {
+        peers::remove_connection(&self.connections, &self.subscriptions, conn).await
     }
 
     /// Get all connections as a flat list.
@@ -1125,7 +1129,7 @@ impl<
                         peer_id,
                         IoError::<F, S, C>::ConnSend(e)
                     );
-                    self.unregister(&conn).await;
+                    self.remove_connection(&conn).await;
                 }
             }
         }
@@ -1222,7 +1226,7 @@ impl<
                     peer_id,
                     IoError::<F, S, C>::ConnSend(e)
                 );
-                self.unregister(&conn).await;
+                self.remove_connection(&conn).await;
             }
         }
 
@@ -1263,7 +1267,7 @@ impl<
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
                 tracing::info!("peer {peer_id} disconnected: {e}");
-                self.unregister(&conn).await;
+                self.remove_connection(&conn).await;
             }
         }
     }

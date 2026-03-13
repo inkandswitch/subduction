@@ -86,11 +86,11 @@ pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
     TrySendError,
 }
 
-/// An error that can occur during registration of a new connection.
+/// An error that can occur when adding a new connection.
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[cfg_attr(feature = "bolero", derive(bolero::generator::TypeGenerator))]
-pub enum RegistrationError<D> {
+pub enum AddConnectionError<D> {
     /// The connection was disallowed by the [`ConnectionPolicy`].
     #[error("connection disallowed: {0}")]
     ConnectionDisallowed(D),
@@ -108,8 +108,8 @@ pub enum OnboardError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, D
     Io(#[from] IoError<F, S, C>),
 
     /// The connection was not allowed.
-    #[error("registration error: {0}")]
-    Registration(#[from] RegistrationError<D>),
+    #[error("add connection error: {0}")]
+    AddConnection(#[from] AddConnectionError<D>),
 }
 
 /// An error that can occur during local write operations.
