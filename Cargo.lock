@@ -309,7 +309,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_sedimentree_wasm"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "automerge",
  "base58",
@@ -328,7 +328,7 @@ dependencies = [
 
 [[package]]
 name = "automerge_subduction_wasm"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "automerge",
  "automerge_sedimentree_wasm",
@@ -4563,7 +4563,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_fs_storage"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "async-lock",
  "future_form",
@@ -4578,7 +4578,7 @@ dependencies = [
 
 [[package]]
 name = "sedimentree_wasm"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-lock",
  "base58",
@@ -4959,7 +4959,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_cli"
-version = "0.6.0"
+version = "0.7.0"
 dependencies = [
  "ahash",
  "async-lock",
@@ -5001,7 +5001,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_core"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arbitrary",
  "async-channel",
@@ -5049,7 +5049,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_http_longpoll"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5079,7 +5079,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_iroh"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5123,7 +5123,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive_policy"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "ed25519-dalek 2.2.0",
  "future_form",
@@ -5138,7 +5138,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_wasm"
-version = "0.5.1"
+version = "0.6.0"
 dependencies = [
  "async-channel",
  "async-lock",
@@ -5170,7 +5170,7 @@ dependencies = [
 
 [[package]]
 name = "subduction_websocket"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "arbitrary",
  "async-channel",

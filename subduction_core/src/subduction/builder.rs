@@ -113,7 +113,7 @@ pub struct SubductionBuilder<
     spawner: Sp,
     storage: Sto,
 
-    discovery_id: Option<super::super::connection::handshake::challenge::DiscoveryId>,
+    discovery_id: Option<crate::connection::handshake::challenge::DiscoveryId>,
     depth_metric: M,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
@@ -235,7 +235,7 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
     #[must_use]
     pub const fn discovery_id(
         mut self,
-        id: super::super::connection::handshake::challenge::DiscoveryId,
+        id: crate::connection::handshake::challenge::DiscoveryId,
     ) -> Self {
         self.discovery_id = Some(id);
         self
@@ -344,7 +344,7 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         M: Clone,
         SyncHandler<F, S, C, P, M, N>: Handler<F, C>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message:
-            From<super::super::connection::message::Message>,
+            From<crate::connection::message::Message>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self
@@ -423,7 +423,7 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
-        H::Message: From<super::super::connection::message::Message>,
+        H::Message: From<crate::connection::message::Message>,
         H::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self

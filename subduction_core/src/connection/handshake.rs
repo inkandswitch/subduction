@@ -64,7 +64,7 @@ use core::time::Duration;
 use future_form::FutureForm;
 use thiserror::Error;
 
-use super::{authenticated::Authenticated, Connection};
+use super::{Connection, authenticated::Authenticated};
 use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
 use sedimentree_core::codec::{
     error::{DecodeError, InvalidEnumTag, InvalidSchema},
@@ -686,7 +686,7 @@ mod tests {
     use super::*;
 
     use super::{
-        challenge::{DiscoveryId, CHALLENGE_FIELDS_SIZE, CHALLENGE_MIN_SIZE},
+        challenge::{CHALLENGE_FIELDS_SIZE, CHALLENGE_MIN_SIZE, DiscoveryId},
         response::{RESPONSE_FIELDS_SIZE, RESPONSE_MIN_SIZE},
     };
     use sedimentree_core::{
@@ -1206,7 +1206,10 @@ mod tests {
         #[test]
         fn handshake_message_wrong_schema_rejected() {
             let mut bytes = vec![0u8; 20];
-            bytes[..4].copy_from_slice(b"BAD\x00");
+            bytes
+                .get_mut(..4)
+                .expect("test buffer is 20 bytes")
+                .copy_from_slice(b"BAD\x00");
             let result = HandshakeMessage::try_decode(&bytes);
             assert!(
                 matches!(result, Err(DecodeError::InvalidSchema(_))),
@@ -1216,7 +1219,7 @@ mod tests {
 
         #[test]
         fn handshake_message_too_short_rejected() {
-            let bytes = vec![0u8; 3]; // less than 4 bytes (schema)
+            let bytes = vec![0u8; 3]; // less than 5 bytes (schema + tag)
             let result = HandshakeMessage::try_decode(&bytes);
             assert!(
                 matches!(result, Err(DecodeError::MessageTooShort { .. })),
@@ -1227,7 +1230,10 @@ mod tests {
         #[test]
         fn handshake_message_unknown_schema_rejected() {
             let mut bytes = vec![0u8; 20];
-            bytes[..4].copy_from_slice(b"SUZ\x00"); // valid prefix, wrong type
+            bytes
+                .get_mut(..4)
+                .expect("test buffer is 20 bytes")
+                .copy_from_slice(b"SUZ\x00"); // valid prefix, wrong type
             let result = HandshakeMessage::try_decode(&bytes);
             assert!(
                 matches!(result, Err(DecodeError::InvalidSchema(_))),
@@ -1242,10 +1248,10 @@ mod tests {
             let msg = HandshakeMessage::Rejection(rejection);
             let bytes = msg.encode();
             // SUH\0 envelope
-            assert_eq!(&bytes[..4], &HandshakeMessage::SCHEMA);
-            assert_eq!(&bytes[..4], b"SUH\x00");
+            assert_eq!(bytes.get(..4), Some(HandshakeMessage::SCHEMA.as_slice()));
+            assert_eq!(bytes.get(..4), Some(b"SUH\x00".as_slice()));
             // Rejection variant tag
-            assert_eq!(bytes[4], 0x02);
+            assert_eq!(bytes.get(4).copied(), Some(0x02));
             // Total: 4 (schema) + 1 (tag) + 1 (reason) + 8 (timestamp) = 14
             assert_eq!(bytes.len(), 14);
         }
@@ -1253,8 +1259,11 @@ mod tests {
         #[test]
         fn handshake_message_invalid_tag_rejected() {
             let mut bytes = vec![0u8; 20];
-            bytes[..4].copy_from_slice(b"SUH\x00");
-            bytes[4] = 0xFF; // invalid variant tag
+            bytes
+                .get_mut(..4)
+                .expect("test buffer is 20 bytes")
+                .copy_from_slice(b"SUH\x00");
+            *bytes.get_mut(4).expect("test buffer is 20 bytes") = 0xFF;
             let result = HandshakeMessage::try_decode(&bytes);
             assert!(
                 matches!(result, Err(DecodeError::InvalidEnumTag(_))),
@@ -1263,18 +1272,18 @@ mod tests {
         }
 
         #[test]
-        fn rejection_round_trips_through_envelope() {
+        fn rejection_round_trips_through_envelope() -> TestResult {
             let rejection =
                 Rejection::new(RejectionReason::InvalidSignature, TimestampSeconds::new(42));
             let msg = HandshakeMessage::Rejection(rejection);
             let bytes = msg.encode();
-            let decoded = HandshakeMessage::try_decode(&bytes)
-                .expect("rejection should round-trip through envelope");
+            let decoded = HandshakeMessage::try_decode(&bytes)?;
             let HandshakeMessage::Rejection(r) = decoded else {
                 unreachable!("expected Rejection variant");
             };
             assert_eq!(r.reason, RejectionReason::InvalidSignature);
             assert_eq!(r.server_timestamp, TimestampSeconds::new(42));
+            Ok(())
         }
 
         #[test]
