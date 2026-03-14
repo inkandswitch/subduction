@@ -36,8 +36,8 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection, http_client::ReqwestHttpClient,
-    server::LongPollHandler, session::SessionId,
+    client::HttpLongPollClient, connection::HttpLongPollConnection,
+    http_client::reqwest_client::ReqwestHttpClient, server::LongPollHandler, session::SessionId,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;

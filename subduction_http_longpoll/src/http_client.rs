@@ -11,9 +11,6 @@ use future_form::FutureForm;
 #[cfg(feature = "reqwest")]
 pub mod reqwest_client;
 
-#[cfg(feature = "reqwest")]
-pub use reqwest_client::{ReqwestHttpClient, ReqwestHttpError};
-
 /// A minimal async HTTP client for POST requests.
 ///
 /// Implementations should handle the mechanics of making HTTP requests

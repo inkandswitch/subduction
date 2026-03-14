@@ -342,7 +342,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `address` - The WebSocket URL to connect to
-    /// * `signer` - The client's signer for authentication  
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     /// * `timeout_milliseconds` - Request timeout in milliseconds
     ///
@@ -353,13 +352,12 @@ impl WasmSubduction {
     pub async fn connect(
         &self,
         address: &web_sys::Url,
-        signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
     ) -> Result<WasmPeerId, WasmConnectError> {
         let authenticated = WasmWebSocket::connect_authenticated(
             address,
-            signer,
+            self.core.signer(),
             expected_peer_id,
             timeout_milliseconds,
         )
@@ -381,7 +379,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `address` - The WebSocket URL to connect to
-    /// * `signer` - The client's signer for authentication
     /// * `timeout_milliseconds` - Request timeout in milliseconds (defaults to 30000)
     /// * `service_name` - The service name for discovery (defaults to URL host)
     ///
@@ -392,13 +389,12 @@ impl WasmSubduction {
     pub async fn connect_discover(
         &self,
         address: &web_sys::Url,
-        signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmConnectError> {
         let authenticated = WasmWebSocket::connect_discover_authenticated(
             address,
-            signer,
+            self.core.signer(),
             timeout_milliseconds,
             service_name,
         )
@@ -420,7 +416,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     ///
@@ -431,13 +426,12 @@ impl WasmSubduction {
     pub async fn connect_long_poll(
         &self,
         base_url: &str,
-        signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) = WasmLongPoll::connect_authenticated(
             base_url,
-            signer,
+            self.core.signer(),
             expected_peer_id,
             timeout_milliseconds.unwrap_or(30_000),
         )
@@ -459,7 +453,6 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `signer` - The client's signer for authentication
     /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     /// * `service_name` - The service name for discovery (defaults to `base_url`)
     ///
@@ -470,13 +463,12 @@ impl WasmSubduction {
     pub async fn connect_discover_long_poll(
         &self,
         base_url: &str,
-        signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) = WasmLongPoll::connect_discover_authenticated(
             base_url,
-            signer,
+            self.core.signer(),
             timeout_milliseconds,
             service_name,
         )
