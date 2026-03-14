@@ -6,7 +6,6 @@ pub mod fetch_client;
 pub mod longpoll;
 pub mod message;
 pub mod nonce;
-pub mod transport;
 pub mod websocket;
 
 use alloc::string::ToString;
@@ -34,7 +33,6 @@ use crate::{
     connection::{
         message::{JsMessage, WasmMessage},
         nonce::WasmNonce,
-        transport::IdentifiedConnection,
     },
     error::WasmHandshakeError,
     peer_id::WasmPeerId,
@@ -348,7 +346,7 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 
 /// A transport-erased authenticated connection.
 ///
-/// Wraps an [`Authenticated<IdentifiedConnection>`] and is the common type
+/// Wraps an [`Authenticated<JsConnection>`] and is the common type
 /// accepted by [`onboard`](crate::subduction::WasmSubduction::onboard) and
 /// [`addConnection`](crate::subduction::WasmSubduction::add_connection).
 ///
@@ -379,21 +377,21 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 #[wasm_bindgen(js_name = AuthenticatedConnection)]
 #[derive(Debug)]
 pub struct WasmAuthenticatedConnection {
-    inner: Authenticated<IdentifiedConnection, Local>,
+    inner: Authenticated<JsConnection, Local>,
 }
 
 impl WasmAuthenticatedConnection {
     /// Access the inner `Authenticated` connection.
-    pub(crate) fn inner(&self) -> &Authenticated<IdentifiedConnection, Local> {
+    pub(crate) fn inner(&self) -> &Authenticated<JsConnection, Local> {
         &self.inner
     }
 
-    /// Construct from an `Authenticated<IdentifiedConnection>`.
+    /// Construct from an `Authenticated<JsConnection>`.
     ///
     /// Used by [`WasmAuthenticatedWebSocket::to_connection`] and
     /// [`WasmAuthenticatedLongPoll::to_connection`] to wrap transport-specific
     /// authenticated connections.
-    pub(crate) fn from_identified(inner: Authenticated<IdentifiedConnection, Local>) -> Self {
+    pub(crate) fn from_authenticated(inner: Authenticated<JsConnection, Local>) -> Self {
         Self { inner }
     }
 }
@@ -431,7 +429,7 @@ impl WasmAuthenticatedConnection {
             connection,
             |hs_conn, peer_id| {
                 let transport: JsConnection = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
-                (IdentifiedConnection::new(transport, peer_id), peer_id)
+                (transport, peer_id)
             },
             signer,
             audience,
@@ -482,7 +480,7 @@ impl WasmAuthenticatedConnection {
             connection,
             |hs_conn, peer_id| {
                 let transport: JsConnection = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
-                (IdentifiedConnection::new(transport, peer_id), peer_id)
+                (transport, peer_id)
             },
             signer,
             &nonce_cache,

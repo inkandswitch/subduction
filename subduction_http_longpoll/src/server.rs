@@ -168,9 +168,8 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
         let result = handshake::respond::<Sendable, _, _, _, _>(
             http_handshake,
-            |_handshake, peer_id| {
-                let conn =
-                    HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
+            |_handshake, _peer_id| {
+                let conn = HttpLongPollConnection::new(default_time_limit, timeout.clone());
                 (conn.clone(), conn)
             },
             &self.signer,
@@ -197,7 +196,6 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
                     .insert(
                         session_id,
                         SessionEntry {
-                            peer_id,
                             connection: conn.clone(),
                             authenticated: Some(authenticated),
                         },
@@ -249,8 +247,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
             .map_err(ServerError::MessageDecode)?;
 
         tracing::debug!(
-            "POST /lp/send: peer {} message {:?}",
-            entry.peer_id,
+            "POST /lp/send: session {session_id} message {:?}",
             msg.request_id()
         );
 
@@ -279,7 +276,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
             .await
             .ok_or(ServerError::SessionNotFound)?;
 
-        tracing::debug!("POST /lp/recv: peer {} waiting...", entry.peer_id);
+        tracing::debug!("POST /lp/recv: session {session_id} waiting...");
 
         let pull_fut = Sendable::from_future(async move { entry.connection.pull_outbound().await });
 
@@ -315,10 +312,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         let session_id = extract_session_id(&req)?;
 
         if let Some(entry) = self.sessions.remove(&session_id).await {
-            tracing::info!(
-                "POST /lp/disconnect: peer {} session {session_id}",
-                entry.peer_id
-            );
+            tracing::info!("POST /lp/disconnect: session {session_id}");
             entry.connection.close();
         }
 

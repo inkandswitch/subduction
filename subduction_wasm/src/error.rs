@@ -13,9 +13,8 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::connection::{
-    JsConnectionError,
+    JsConnection, JsConnectionError,
     longpoll::LongPollConnectionError,
-    transport::IdentifiedConnection,
     websocket::{CallError, WebSocketAuthenticatedConnectionError},
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -39,7 +38,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, IdentifiedConnection>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, JsConnection>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -55,7 +54,7 @@ impl From<WasmIoError> for JsValue {
 /// including policy rejections.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, IdentifiedConnection, Infallible>);
+pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, JsConnection, Infallible>);
 
 impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
@@ -68,9 +67,7 @@ impl From<WasmWriteError> for JsValue {
 /// A Wasm wrapper around the [`OnboardError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmOnboardError(
-    #[from] OnboardError<Local, JsStorage, IdentifiedConnection, Infallible>,
-);
+pub struct WasmOnboardError(#[from] OnboardError<Local, JsStorage, JsConnection, Infallible>);
 
 impl From<WasmOnboardError> for JsValue {
     fn from(err: WasmOnboardError) -> Self {
@@ -117,7 +114,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, IdentifiedConnection>);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, JsConnection>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {

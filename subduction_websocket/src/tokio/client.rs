@@ -108,12 +108,11 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
         let timeout_clone = timeout.clone();
         let (authenticated, sender_fut) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
-            |ws_handshake, peer_id| {
+            |ws_handshake, _peer_id| {
                 let (socket, sender_fut) = WebSocket::<_, _, O>::new(
                     ws_handshake.into_inner(),
                     timeout_clone,
                     default_time_limit,
-                    peer_id,
                 );
                 (socket, Sendable::from_future(sender_fut))
             },
@@ -265,6 +264,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
     for TokioWebSocketClient<R, O>
 {
     fn eq(&self, other: &Self) -> bool {
-        self.address == other.address && self.socket.peer_id() == other.socket.peer_id()
+        self.address == other.address && self.socket == other.socket
     }
 }

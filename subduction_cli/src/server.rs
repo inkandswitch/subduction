@@ -354,7 +354,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                         ) => {
                             match result {
                                 Ok(accepted) => {
-                                    let remote = accepted.peer_id;
+                                    let remote = accepted.authenticated.peer_id();
                                     tokio::spawn(accepted.listener_task);
                                     tokio::spawn(accepted.sender_task);
 
@@ -650,13 +650,9 @@ async fn handle_websocket(
     let now = TimestampSeconds::now();
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
-        |ws_handshake, remote_peer_id| {
-            let (ws, sender_fut) = WebSocket::new(
-                ws_handshake.into_inner(),
-                timeout,
-                default_time_limit,
-                remote_peer_id,
-            );
+        |ws_handshake, _peer_id| {
+            let (ws, sender_fut) =
+                WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
 
             let listen_ws = ws.clone();
             tokio::spawn(async move {
@@ -832,13 +828,9 @@ async fn try_connect_ws(
 
     let (authenticated, ()) = handshake::initiate::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
-        move |ws_handshake, remote_peer_id| {
-            let (ws, sender_fut) = WebSocket::new(
-                ws_handshake.into_inner(),
-                timeout,
-                default_time_limit,
-                remote_peer_id,
-            );
+        move |ws_handshake, _peer_id| {
+            let (ws, sender_fut) =
+                WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
 
             let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 

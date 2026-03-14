@@ -23,13 +23,10 @@ use future_form::{FutureForm, Sendable};
 use futures::{FutureExt, channel::oneshot};
 use rand::RngCore;
 use sedimentree_core::collections::Map;
-use subduction_core::{
-    connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        timeout::{TimedOut, Timeout},
-    },
-    peer::id::PeerId,
+use subduction_core::connection::{
+    Connection,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    timeout::{TimedOut, Timeout},
 };
 
 use crate::error::{CallError, DisconnectionError, RecvError, SendError};
@@ -43,7 +40,6 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// Shared interior state for an Iroh connection.
 #[derive(Debug)]
 struct Inner<O> {
-    peer_id: PeerId,
     chan_id: u64,
     req_id_counter: AtomicU64,
     default_time_limit: Duration,
@@ -84,7 +80,6 @@ impl<O> IrohConnection<O> {
     /// [`sender_task`]: crate::tasks::sender_task
     #[must_use]
     pub fn new(
-        peer_id: PeerId,
         quic_conn: iroh::endpoint::Connection,
         default_time_limit: Duration,
         timeout: O,
@@ -96,7 +91,6 @@ impl<O> IrohConnection<O> {
 
         let conn = Self {
             inner: Arc::new(Inner {
-                peer_id,
                 chan_id,
                 req_id_counter: AtomicU64::new(starting_counter),
                 default_time_limit,
@@ -155,12 +149,6 @@ impl<O> IrohConnection<O> {
         self.inner.quic_conn.close(0u32.into(), b"subduction close");
     }
 
-    /// The peer ID of the remote peer.
-    #[must_use]
-    pub fn peer_id(&self) -> PeerId {
-        self.inner.peer_id
-    }
-
     /// Access the underlying iroh QUIC connection.
     #[must_use]
     pub fn quic_connection(&self) -> &iroh::endpoint::Connection {
@@ -179,7 +167,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
             let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("generated request id {counter:?}");
             RequestId {
-                requestor: self.inner.peer_id,
+                requestor: crate::client::iroh_peer_id(&self.inner.quic_conn),
                 nonce: counter,
             }
         }
@@ -187,7 +175,8 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
     }
 
     fn disconnect(&self) -> futures::future::BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.inner.peer_id, "IrohConnection::disconnect");
+        let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
+        tracing::info!(peer_id = %remote_peer, "IrohConnection::disconnect");
         let conn = self.clone();
         async move {
             conn.close();
@@ -200,10 +189,11 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
         &self,
         message: &Message,
     ) -> futures::future::BoxFuture<'_, Result<(), Self::SendError>> {
+        let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
         tracing::debug!(
             "iroh: sending outbound message id {:?} to peer {}",
             message.request_id(),
-            self.inner.peer_id
+            remote_peer
         );
 
         let msg = message.clone();
@@ -217,10 +207,11 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
 
     fn recv(&self) -> futures::future::BoxFuture<'_, Result<Message, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
+        let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
         tracing::debug!(
             chan_id = self.inner.chan_id,
             "waiting on recv {:?}",
-            self.inner.peer_id
+            remote_peer
         );
 
         async move {

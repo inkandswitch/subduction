@@ -93,13 +93,6 @@ impl From<WasmLongPollConnError> for JsValue {
 
 #[wasm_bindgen(js_class = SubductionLongPollConnection)]
 impl WasmLongPollConn {
-    /// Get the peer ID of the remote peer.
-    #[must_use]
-    #[wasm_bindgen(js_name = peerId)]
-    pub fn peer_id(&self) -> WasmPeerId {
-        self.0.peer_id().into()
-    }
-
     /// Disconnect from the peer gracefully.
     ///
     /// # Errors
@@ -206,11 +199,9 @@ impl WasmAuthenticatedLongPoll {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
-        let peer_id = self.inner.peer_id();
-        super::WasmAuthenticatedConnection::from_identified(self.inner.map(|lp| {
-            let transport: super::JsConnection =
-                wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp)).unchecked_into();
-            super::transport::IdentifiedConnection::new(transport, peer_id)
+        super::WasmAuthenticatedConnection::from_authenticated(self.inner.map(|lp| {
+            wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp))
+                .unchecked_into::<super::JsConnection>()
         }))
     }
 }

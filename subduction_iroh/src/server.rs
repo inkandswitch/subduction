@@ -30,11 +30,8 @@ use crate::{
 
 /// Result of accepting a single incoming connection.
 pub struct AcceptResult<O: Timeout<Sendable> + Send + Sync> {
-    /// The authenticated connection.
+    /// The authenticated connection (includes the verified remote peer identity).
     pub authenticated: Authenticated<IrohConnection<O>, Sendable>,
-
-    /// The remote peer's identity.
-    pub peer_id: PeerId,
 
     /// Background listener task -- must be spawned.
     pub listener_task: BoxFuture<'static, Result<(), RunError>>,
@@ -46,7 +43,7 @@ pub struct AcceptResult<O: Timeout<Sendable> + Send + Sync> {
 impl<O: Timeout<Sendable> + Send + Sync> core::fmt::Debug for AcceptResult<O> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AcceptResult")
-            .field("peer_id", &self.peer_id)
+            .field("peer_id", &self.authenticated.peer_id())
             .finish_non_exhaustive()
     }
 }
@@ -109,11 +106,11 @@ where
 
     let (authenticated, (listener_task, sender_task)) = handshake::respond::<Sendable, _, _, _, _>(
         IrohHandshake::new(send_stream, recv_stream),
-        move |iroh_handshake, peer_id| {
+        move |iroh_handshake, _peer_id| {
             let (send_stream, recv_stream) = iroh_handshake.into_parts();
 
             let (conn, outbound_rx) =
-                IrohConnection::new(peer_id, quic_conn_clone, default_time_limit, timeout_clone);
+                IrohConnection::new(quic_conn_clone, default_time_limit, timeout_clone);
 
             let listener_conn = conn.clone();
             let listener_task: BoxFuture<'static, Result<(), RunError>> =
@@ -138,7 +135,6 @@ where
 
     Ok(AcceptResult {
         authenticated,
-        peer_id,
         listener_task,
         sender_task,
     })

@@ -44,7 +44,6 @@ use crate::{
     connection::{
         JsConnection, JsConnectionError, WasmAuthenticatedConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
-        transport::IdentifiedConnection,
         websocket::WasmWebSocket,
     },
     error::{
@@ -96,7 +95,7 @@ pub struct WasmSubduction {
             'static,
             Local,
             JsStorage,
-            IdentifiedConnection,
+            JsConnection,
             OpenPolicy,
             JsSigner,
             WasmHashMetric,
@@ -368,10 +367,9 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(|ws| {
-                let transport: JsConnection = JsValue::from(ws).unchecked_into();
-                IdentifiedConnection::new(transport, peer_id)
-            }))
+            .add_connection(
+                authenticated.map(|ws| JsValue::from(ws).unchecked_into::<JsConnection>()),
+            )
             .await?;
         Ok(peer_id.into())
     }
@@ -408,10 +406,9 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(|ws| {
-                let transport: JsConnection = JsValue::from(ws).unchecked_into();
-                IdentifiedConnection::new(transport, peer_id)
-            }))
+            .add_connection(
+                authenticated.map(|ws| JsValue::from(ws).unchecked_into::<JsConnection>()),
+            )
             .await?;
         Ok(peer_id.into())
     }
@@ -449,9 +446,7 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(authenticated.map(|lp| {
-                let transport: JsConnection =
-                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into();
-                IdentifiedConnection::new(transport, peer_id)
+                JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsConnection>()
             }))
             .await?;
         Ok(peer_id.into())
@@ -490,9 +485,7 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(authenticated.map(|lp| {
-                let transport: JsConnection =
-                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into();
-                IdentifiedConnection::new(transport, peer_id)
+                JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsConnection>()
             }))
             .await?;
         Ok(peer_id.into())
@@ -746,7 +739,7 @@ impl WasmSubduction {
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: to_js_connection(conn.into_inner()),
+                    conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -789,12 +782,7 @@ impl WasmSubduction {
                             stats.into(),
                             conn_errs
                                 .into_iter()
-                                .map(|(conn, err)| {
-                                    (
-                                        to_js_connection(conn.into_inner()),
-                                        WasmCallError::from(err),
-                                    )
-                                })
+                                .map(|(conn, err)| (conn.into_inner(), WasmCallError::from(err)))
                                 .collect::<Vec<_>>(),
                         ),
                     )
@@ -819,7 +807,7 @@ impl WasmSubduction {
             conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: to_js_connection(conn.into_inner()),
+                    conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -908,11 +896,6 @@ impl PeerBatchSyncResult {
     pub fn conn_errors(&self) -> Vec<ConnErrPair> {
         self.conn_errors.clone()
     }
-}
-
-/// Extract the inner [`JsConnection`] from an [`IdentifiedConnection`].
-fn to_js_connection(conn: IdentifiedConnection) -> JsConnection {
-    conn.into_transport()
 }
 
 /// A pair of a connection and an error that occurred during a call.

@@ -43,7 +43,7 @@ test.beforeEach(async ({ page }) => {
         },
         async disconnect() { port.close(); },
         async send(message: any) { port.postMessage(message); },
-        recv() { return nextMessage(); },
+        recv: nextMessage,
         async nextRequestId() { throw new Error("not implemented"); },
         async call() { throw new Error("not implemented"); },
       };
@@ -54,12 +54,12 @@ test.beforeEach(async ({ page }) => {
 test.describe("MessageChannel Connection Tests", () => {
   test("should authenticate two peers via MessageChannel", async ({ page }) => {
     const result = await page.evaluate(async () => {
-      const { AuthenticatedConnection, WebCryptoSigner } = window.subduction;
+      const { AuthenticatedConnection, MemorySigner } = window.subduction;
       const makeConn = (window as any).makeHandshakeConnection;
 
       try {
-        const signerA = await WebCryptoSigner.setup();
-        const signerB = await WebCryptoSigner.setup();
+        const signerA = MemorySigner.generate();
+        const signerB = MemorySigner.generate();
 
         const peerIdA = signerA.peerId();
         const peerIdB = signerB.peerId();
@@ -75,6 +75,7 @@ test.describe("MessageChannel Connection Tests", () => {
 
         return {
           authenticated: true,
+          distinctPeers: peerIdA.toString() !== peerIdB.toString(),
           peerA_seesPeerB: authA.peerId.toString() === peerIdB.toString(),
           peerB_seesPeerA: authB.peerId.toString() === peerIdA.toString(),
           error: null,
@@ -82,6 +83,7 @@ test.describe("MessageChannel Connection Tests", () => {
       } catch (error) {
         return {
           authenticated: false,
+          distinctPeers: false,
           peerA_seesPeerB: false,
           peerB_seesPeerA: false,
           error: error instanceof Error ? error.message : String(error),
@@ -91,6 +93,7 @@ test.describe("MessageChannel Connection Tests", () => {
 
     expect(result.error).toBeNull();
     expect(result.authenticated).toBe(true);
+    expect(result.distinctPeers).toBe(true);
     expect(result.peerA_seesPeerB).toBe(true);
     expect(result.peerB_seesPeerA).toBe(true);
   });
@@ -98,13 +101,13 @@ test.describe("MessageChannel Connection Tests", () => {
   test("should onboard both peers via MessageChannel", async ({ page }) => {
     const result = await page.evaluate(async () => {
       const {
-        AuthenticatedConnection, Subduction, MemoryStorage, WebCryptoSigner,
+        AuthenticatedConnection, Subduction, MemoryStorage, MemorySigner,
       } = window.subduction;
       const makeConn = (window as any).makeHandshakeConnection;
 
       try {
-        const signerA = await WebCryptoSigner.setup();
-        const signerB = await WebCryptoSigner.setup();
+        const signerA = MemorySigner.generate();
+        const signerB = MemorySigner.generate();
 
         const peerIdA = signerA.peerId();
         const peerIdB = signerB.peerId();
@@ -133,6 +136,7 @@ test.describe("MessageChannel Connection Tests", () => {
           onboarded: true,
           isNewA,
           isNewB,
+          distinctPeers: peerIdA.toString() !== peerIdB.toString(),
           peerCountA: peersA.length,
           peerCountB: peersB.length,
           a_sees_b: peersA.length > 0 && peersA[0].toString() === peerIdB.toString(),
@@ -144,6 +148,7 @@ test.describe("MessageChannel Connection Tests", () => {
           onboarded: false,
           isNewA: false,
           isNewB: false,
+          distinctPeers: false,
           peerCountA: 0,
           peerCountB: 0,
           a_sees_b: false,
@@ -155,6 +160,7 @@ test.describe("MessageChannel Connection Tests", () => {
 
     expect(result.error).toBeNull();
     expect(result.onboarded).toBe(true);
+    expect(result.distinctPeers).toBe(true);
     expect(result.isNewA).toBe(true);
     expect(result.isNewB).toBe(true);
     expect(result.peerCountA).toBe(1);
@@ -165,14 +171,14 @@ test.describe("MessageChannel Connection Tests", () => {
 
   test("should reject handshake with wrong expected peer ID", async ({ page }) => {
     const result = await page.evaluate(async () => {
-      const { AuthenticatedConnection, WebCryptoSigner, PeerId } = window.subduction;
+      const { AuthenticatedConnection, MemorySigner, PeerId } = window.subduction;
       const makeConn = (window as any).makeHandshakeConnection;
 
       try {
-        const signerA = await WebCryptoSigner.setup();
-        const signerB = await WebCryptoSigner.setup();
+        const signerA = MemorySigner.generate();
+        const signerB = MemorySigner.generate();
 
-        const wrongPeerId = PeerId.fromBytes(new Uint8Array(32).fill(0xff));
+        const wrongPeerId = new PeerId(new Uint8Array(32).fill(0xff));
 
         const channel = new MessageChannel();
         channel.port1.start();

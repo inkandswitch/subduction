@@ -47,7 +47,6 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// and pending-request map — exactly like the WebSocket transport.
 #[derive(Debug)]
 struct Inner<O> {
-    peer_id: PeerId,
     chan_id: u64,
     req_id_counter: AtomicU64,
     default_time_limit: Duration,
@@ -84,9 +83,9 @@ pub struct HttpLongPollConnection<O> {
 }
 
 impl<O> HttpLongPollConnection<O> {
-    /// Create a new HTTP long-poll connection for the given peer.
+    /// Create a new HTTP long-poll connection.
     #[must_use]
-    pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
+    pub fn new(default_time_limit: Duration, timeout: O) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let starting_counter = OsRng.next_u64();
@@ -94,7 +93,6 @@ impl<O> HttpLongPollConnection<O> {
 
         Self {
             inner: Arc::new(Inner {
-                peer_id,
                 chan_id,
                 req_id_counter: AtomicU64::new(starting_counter),
                 default_time_limit,
@@ -107,12 +105,6 @@ impl<O> HttpLongPollConnection<O> {
             }),
             outbound_rx,
         }
-    }
-
-    /// The peer ID of the remote peer.
-    #[must_use]
-    pub fn peer_id(&self) -> PeerId {
-        self.inner.peer_id
     }
 
     /// Store the cancel-channel sender so that background poll/send tasks stay
@@ -199,14 +191,14 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
             let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("generated request id {counter:?}");
             RequestId {
-                requestor: self.inner.peer_id,
+                requestor: PeerId::new([0u8; 32]),
                 nonce: counter,
             }
         })
     }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
+        tracing::info!("HttpLongPoll::disconnect");
         let conn = self.clone();
         K::from_future(async move {
             conn.close();
@@ -216,9 +208,8 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
 
     fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
         tracing::debug!(
-            "http-lp: sending outbound message id {:?} to peer {}",
+            "http-lp: sending outbound message id {:?}",
             message.request_id(),
-            self.inner.peer_id
         );
 
         let msg = message.clone();
@@ -231,11 +222,7 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
 
     fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
-        tracing::debug!(
-            chan_id = self.inner.chan_id,
-            "waiting on recv {:?}",
-            self.inner.peer_id
-        );
+        tracing::debug!(chan_id = self.inner.chan_id, "waiting on recv");
 
         K::from_future(async move {
             let msg = chan.recv().await.map_err(|_| {
@@ -309,7 +296,6 @@ impl<O> PartialEq for HttpLongPollConnection<O> {
 mod tests {
     use super::*;
     use future_form::Sendable;
-    use subduction_core::peer::id::PeerId;
 
     /// A simple timer-based timeout for tests using `futures_timer::Delay`.
     #[derive(Debug, Clone, Copy)]
@@ -338,14 +324,12 @@ mod tests {
 
     #[tokio::test]
     async fn next_request_id_increments() {
-        let peer_id = PeerId::new([1u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollConnection::new(Duration::from_secs(30), TestTimeout);
 
         let id1 = Connection::<Sendable>::next_request_id(&conn).await;
         let id2 = Connection::<Sendable>::next_request_id(&conn).await;
         let id3 = Connection::<Sendable>::next_request_id(&conn).await;
 
-        assert_eq!(id1.requestor, peer_id);
         assert_eq!(id2.nonce, id1.nonce + 1);
         assert_eq!(id3.nonce, id2.nonce + 1);
     }
@@ -355,8 +339,7 @@ mod tests {
         use sedimentree_core::id::SedimentreeId;
         use subduction_core::connection::message::RemoveSubscriptions;
 
-        let peer_id = PeerId::new([2u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollConnection::new(Duration::from_secs(30), TestTimeout);
 
         let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
@@ -373,8 +356,7 @@ mod tests {
         use sedimentree_core::id::SedimentreeId;
         use subduction_core::connection::message::RemoveSubscriptions;
 
-        let peer_id = PeerId::new([3u8; 32]);
-        let conn = HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollConnection::new(Duration::from_secs(30), TestTimeout);
 
         let msg = Message::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],

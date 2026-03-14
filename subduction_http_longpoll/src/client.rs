@@ -178,13 +178,12 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
             #[allow(clippy::expect_used)]
             let (authenticated, session_id) = handshake::initiate::<K, _, _, _, _>(
                 &mut client_handshake,
-                |handshake, peer_id| {
+                |handshake, _peer_id| {
                     let session_id = handshake
                         .session_id
                         .expect("session_id set during handshake send");
 
-                    let conn =
-                        HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
+                    let conn = HttpLongPollConnection::new(default_time_limit, timeout.clone());
 
                     (conn, session_id)
                 },

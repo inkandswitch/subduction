@@ -871,11 +871,10 @@ impl WasmAuthenticatedWebSocket {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
-        let peer_id = self.inner.peer_id();
-        super::WasmAuthenticatedConnection::from_identified(self.inner.map(|ws| {
-            let transport: super::JsConnection = wasm_bindgen::JsValue::from(ws).unchecked_into();
-            super::transport::IdentifiedConnection::new(transport, peer_id)
-        }))
+        super::WasmAuthenticatedConnection::from_authenticated(
+            self.inner
+                .map(|ws| wasm_bindgen::JsValue::from(ws).unchecked_into::<super::JsConnection>()),
+        )
     }
 }
 

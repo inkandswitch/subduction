@@ -174,13 +174,11 @@ where
                                         let now = TimestampSeconds::now();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
-                                            |ws_handshake, peer_id| {
-                                                // Create WebSocket wrapper with verified PeerId
+                                            |ws_handshake, _peer_id| {
                                                 let (ws, sender_fut) = WebSocket::new(
                                                     ws_handshake.into_inner(),
                                                     tout.clone(),
                                                     default_time_limit,
-                                                    peer_id,
                                                 );
 
                                                 // Start listener and sender tasks
@@ -398,9 +396,9 @@ where
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
-            move |ws_handshake, peer_id| {
+            move |ws_handshake, _peer_id| {
                 let (ws, sender_fut) =
-                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
+                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -511,9 +509,9 @@ where
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
-            move |ws_handshake, peer_id| {
+            move |ws_handshake, _peer_id| {
                 let (ws, sender_fut) =
-                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
+                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
