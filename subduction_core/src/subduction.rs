@@ -15,7 +15,7 @@
 //!
 //! ### High-Level: `onboard` / `disconnect`
 //!
-//! - [`Subduction::onboard`] — Register connection + perform initial batch sync
+//! - [`Subduction::onboard`] — Add connection + perform initial batch sync
 //! - [`Subduction::disconnect`] — Graceful connection shutdown
 //! - [`Subduction::disconnect_all`] — Disconnect all connections
 //! - [`Subduction::disconnect_from_peer`] — Disconnect all connections from a peer

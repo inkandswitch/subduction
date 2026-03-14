@@ -330,7 +330,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     /// Take the authenticated connection for a session.
     ///
     /// This removes the `Authenticated` wrapper from the session entry.
-    /// The caller is responsible for registering it with `Subduction`.
+    /// The caller is responsible for adding it to `Subduction` via `add_connection`.
     pub async fn take_authenticated(
         &self,
         session_id: &SessionId,
