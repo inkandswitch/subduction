@@ -66,6 +66,9 @@ jobs:
       - name: Build Wasm packages
         run: cd ./subduction_wasm && pnpm build
 
+      - name: Build subduction_cli (needed for peer-connection and long-poll tests)
+        run: cargo build --release -p subduction_cli
+
       - name: Test in browsers
         run: cd ./subduction_wasm && npm install --global http-server && pnpm exec playwright test
 

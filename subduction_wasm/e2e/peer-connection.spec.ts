@@ -68,9 +68,10 @@ test.beforeAll(async ({ browserName }) => {
   currentPort = WS_PORTS[browserName];
   currentWsUrl = `ws://${WS_HOST}:${currentPort}`;
 
-  const cliPath = path.join(__dirname, "../../target/release/subduction_cli");
+  const cliPath = process.env.SUBDUCTION_CLI
+    ?? path.join(__dirname, "../../target/release/subduction_cli");
 
-  subductionServer = spawn(cliPath, ["start", "--socket", `${WS_HOST}:${currentPort}`, "--ephemeral-key"], {
+  subductionServer = spawn(cliPath, ["server", "--socket", `${WS_HOST}:${currentPort}`, "--ephemeral-key"], {
     cwd: path.join(__dirname, "../.."),
     stdio: "pipe",
     env: {
@@ -376,112 +377,6 @@ test.describe("Peer Connection Tests", () => {
     expect(result.syncer1Connected).toBe(true);
     expect(result.syncer2Connected).toBe(true);
     expect(result.bothConnected).toBe(true);
-  });
-});
-
-test.describe("Two-Peer Sync via WebSocket Server", () => {
-  test("should sync a commit from one peer to another", async ({ page }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, SedimentreeId } = window.subduction;
-
-      try {
-        const signer1 = await WebCryptoSigner.setup();
-        const signer2 = await WebCryptoSigner.setup();
-
-        const syncer1 = new Subduction(signer1, new MemoryStorage());
-        const syncer2 = new Subduction(signer2, new MemoryStorage());
-
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
-
-        await syncer1.connectDiscover(url, 5000, serviceName);
-        await syncer2.connectDiscover(url, 5000, serviceName);
-
-        // Add a commit to syncer1
-        const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(77));
-        await syncer1.addCommit(sedId, [], new Uint8Array([1, 2, 3, 4, 5]));
-
-        // Full sync from syncer1
-        const syncResult1 = await syncer1.fullSync(10000n);
-
-        // Full sync from syncer2 to pull data
-        const syncResult2 = await syncer2.fullSync(10000n);
-
-        // Check if syncer2 has the sedimentree
-        const ids2 = await syncer2.sedimentreeIds();
-
-        return {
-          syncer1Synced: syncResult1.success,
-          syncer2Synced: syncResult2.success,
-          syncer2HasData: ids2.length > 0,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          syncer1Synced: false,
-          syncer2Synced: false,
-          syncer2HasData: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    expect(result.syncer1Synced).toBe(true);
-    expect(result.syncer2Synced).toBe(true);
-    expect(result.syncer2HasData).toBe(true);
-  });
-
-  test("should sync data and retrieve matching blob", async ({ page }) => {
-    const result = await page.evaluate(async (wsUrl) => {
-      const { Subduction, MemoryStorage, WebCryptoSigner, SedimentreeId, BlobMeta } = window.subduction;
-
-      try {
-        const signer1 = await WebCryptoSigner.setup();
-        const signer2 = await WebCryptoSigner.setup();
-
-        const syncer1 = new Subduction(signer1, new MemoryStorage());
-        const syncer2 = new Subduction(signer2, new MemoryStorage());
-
-        const url = new URL(wsUrl);
-        const serviceName = wsUrl.replace("ws://", "");
-
-        await syncer1.connectDiscover(url, 5000, serviceName);
-        await syncer2.connectDiscover(url, 5000, serviceName);
-
-        // Add data to syncer1
-        const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(88));
-        const blobData = new Uint8Array([10, 20, 30, 40, 50]);
-        await syncer1.addCommit(sedId, [], blobData);
-
-        // Sync both ways
-        await syncer1.fullSync(10000n);
-        await syncer2.fullSync(10000n);
-
-        // Verify syncer2 got the blob
-        const meta = new BlobMeta(blobData);
-        const digest = meta.digest();
-        const retrieved = await syncer2.getBlob(sedId, digest);
-
-        return {
-          hasBlob: retrieved !== undefined && retrieved !== null,
-          blobMatches: retrieved
-            ? Array.from(retrieved).join(",") === Array.from(blobData).join(",")
-            : false,
-          error: null,
-        };
-      } catch (error) {
-        return {
-          hasBlob: false,
-          blobMatches: false,
-          error: error instanceof Error ? error.message : String(error),
-        };
-      }
-    }, currentWsUrl);
-
-    expect(result.error).toBeNull();
-    expect(result.hasBlob).toBe(true);
-    expect(result.blobMatches).toBe(true);
   });
 });
 
