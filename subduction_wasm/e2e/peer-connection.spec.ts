@@ -188,7 +188,7 @@ test.describe("Peer Connection Tests", () => {
           wsUrl.replace("ws://", "")
         );
 
-        const isNew = await syncer.onboard(authenticated.toConnection());
+        const isNew = await syncer.addConnection(authenticated.toConnection());
 
         const peerIds = await syncer.getConnectedPeerIds();
 
@@ -399,7 +399,7 @@ test.describe("Known Peer ID Connection", () => {
         const syncer = new Subduction(signer2, new MemoryStorage());
 
         const knownAuth = await SubductionWebSocket.tryConnect(url, signer2, serverPeerId, 5000);
-        const isNew = await syncer.onboard(knownAuth.toConnection());
+        const isNew = await syncer.addConnection(knownAuth.toConnection());
 
         const peers = await syncer.getConnectedPeerIds();
 

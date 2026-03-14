@@ -2,28 +2,15 @@
 //!
 //! # API Guide
 //!
-//! ## API Levels
+//! ## Connection Management
 //!
-//! Subduction provides two levels of API for connection management:
-//!
-//! | Level | Methods | Use Case |
-//! |-------|---------|----------|
-//! | **High-level** | [`onboard`], [`disconnect`] | Most applications — handles sync automatically |
-//! | **Low-level** | [`add_connection`], [`remove_connection`] | Custom sync logic, testing, or fine-grained control |
-//!
-//! **Prefer the high-level API** unless you need explicit control over when sync occurs.
-//!
-//! ### High-Level: `onboard` / `disconnect`
-//!
-//! - [`Subduction::onboard`] — Add connection + perform initial batch sync
-//! - [`Subduction::disconnect`] — Graceful connection shutdown
-//! - [`Subduction::disconnect_all`] — Disconnect all connections
-//! - [`Subduction::disconnect_from_peer`] — Disconnect all connections from a peer
-//!
-//! ### Low-Level: `add_connection` / `remove_connection`
-//!
-//! - [`Subduction::add_connection`] — Add connection to tracking (no automatic sync)
-//! - [`Subduction::remove_connection`] — Remove connection from tracking
+//! | Method | Description |
+//! |--------|-------------|
+//! | [`add_connection`] | Add a connection (no automatic sync) |
+//! | [`remove_connection`] | Remove a connection from tracking |
+//! | [`disconnect`] | Graceful connection shutdown |
+//! | [`disconnect_all`] | Disconnect all connections |
+//! | [`disconnect_from_peer`] | Disconnect all connections from a peer |
 //!
 //! ## Naming Conventions
 //!
@@ -36,11 +23,10 @@
 //!
 //! ### Sync Methods
 //!
-//! | Method | Scope |
-//! |--------|-------|
-//! | [`sync_with_peer`] | Sync one sedimentree from one peer |
-//! | [`sync_all`] | Sync one sedimentree from all connected peers |
-//! | [`full_sync`] | Sync all sedimentrees from all connected peers |
+//! |                        | 1 sedimentree      | all sedimentrees        |
+//! |------------------------|--------------------|-------------------------|
+//! | **1 peer**             | [`sync_with_peer`] | [`full_sync_with_peer`] |
+//! | **all peers**          | [`sync_all`]       | [`full_sync`]           |
 //!
 //! ### Data Operations
 //!
@@ -51,7 +37,6 @@
 //! | [`add_fragment`] | Add a fragment locally and broadcast to subscribers |
 //! | [`remove_sedimentree`] | Remove a sedimentree and associated data |
 //!
-//! [`onboard`]: Subduction::onboard
 //! [`disconnect`]: Subduction::disconnect
 //! [`disconnect_all`]: Subduction::disconnect_all
 //! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
@@ -63,6 +48,7 @@
 //! [`fetch_blobs`]: Subduction::fetch_blobs
 //! [`sync_with_peer`]: Subduction::sync_with_peer
 //! [`sync_all`]: Subduction::sync_all
+//! [`full_sync_with_peer`]: Subduction::full_sync_with_peer
 //! [`full_sync`]: Subduction::full_sync
 //! [`add_sedimentree`]: Subduction::add_sedimentree
 //! [`add_commit`]: Subduction::add_commit
@@ -109,8 +95,7 @@ use core::{
     time::Duration,
 };
 use error::{
-    AddConnectionError, IoError, ListenError, OnboardError, SendRequestedDataError, Unauthorized,
-    WriteError,
+    AddConnectionError, IoError, ListenError, SendRequestedDataError, Unauthorized, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -554,30 +539,6 @@ impl<
      * CONNECTIONS *
      ***************/
 
-    /// Onboard a new [`Connection`]: add it and immediately sync all known [`Sedimentree`]s.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `OnboardError::AddConnection` if the connection is rejected by the policy.
-    /// * Returns `OnboardError::Io` if a storage or network error occurs.
-    pub async fn onboard(
-        &self,
-        conn: Authenticated<C, F>,
-    ) -> Result<bool, OnboardError<F, S, C, P::ConnectionDisallowed>> {
-        let peer_id = conn.peer_id();
-        tracing::info!("Onboarding connection to peer {}", peer_id);
-
-        let fresh = self.add_connection(conn).await?;
-
-        let ids = self.sedimentrees.into_keys().await;
-
-        for tree_id in ids {
-            self.sync_with_peer(&peer_id, tree_id, true, None).await?;
-        }
-
-        Ok(fresh)
-    }
-
     /// Gracefully shut down a specific connection.
     ///
     /// # Errors
@@ -684,14 +645,10 @@ impl<
         }
     }
 
-    /****************************
-     * LOW LEVEL CONNECTION API *
-     ****************************/
-
-    /// Add a connection to tracking (low-level).
+    /// Add a connection to tracking.
     ///
-    /// This does not perform any synchronization. Prefer [`onboard`](Self::onboard)
-    /// unless you need explicit control over when sync occurs.
+    /// This does not perform any synchronization. To sync after adding,
+    /// call [`full_sync_with_peer`](Self::full_sync_with_peer).
     ///
     /// # Returns
     ///
@@ -1721,22 +1678,61 @@ impl<
         Ok(out)
     }
 
-    /// Perform a full sync of all sedimentrees with all peers.
+    /// Sync all known [`Sedimentree`]s with a single peer.
     ///
-    /// Syncs all sedimentrees concurrently using [`FuturesUnordered`], which
-    /// provides significantly better throughput when there are many sedimentrees
-    /// and network latency is high.
-    ///
-    /// Best-effort: per-sedimentree I/O errors are collected rather than
-    /// aborting the entire sync, so other sedimentrees can still make progress.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of:
-    /// - `bool` — `true` if at least one sync exchanged data successfully
-    /// - [`SyncStats`] — aggregate counts of commits/fragments sent and received
-    /// - `Vec<(Authenticated<C, F>, C::CallError)>` — per-peer call errors encountered during sync
-    /// - `Vec<(SedimentreeId, IoError)>` — per-sedimentree I/O errors
+    /// This is the single-peer counterpart of [`full_sync`](Self::full_sync).
+    /// Errors are collected rather than short-circuiting, so a failure on one
+    /// sedimentree does not prevent the rest from syncing.
+    pub async fn full_sync_with_peer(
+        &self,
+        peer_id: &PeerId,
+        subscribe: bool,
+        timeout: Option<Duration>,
+    ) -> (
+        bool,
+        SyncStats,
+        Vec<(Authenticated<C, F>, <C as Connection<F>>::CallError)>,
+        Vec<(SedimentreeId, IoError<F, S, C>)>,
+    ) {
+        tracing::info!(
+            "Requesting batch sync for all sedimentrees with peer {}",
+            peer_id
+        );
+        let tree_ids = self.sedimentrees.into_keys().await;
+
+        let mut had_success = false;
+        let mut stats = SyncStats::new();
+        let mut call_errs = Vec::new();
+        let mut io_errs = Vec::new();
+
+        for id in tree_ids {
+            match self.sync_with_peer(peer_id, id, subscribe, timeout).await {
+                Ok((success, step_stats, step_errs)) => {
+                    if success {
+                        had_success = true;
+                    }
+                    stats.commits_received += step_stats.commits_received;
+                    stats.fragments_received += step_stats.fragments_received;
+                    stats.commits_sent += step_stats.commits_sent;
+                    stats.fragments_sent += step_stats.fragments_sent;
+                    call_errs.extend(step_errs);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to sync sedimentree {:?} with peer {}: {}",
+                        id,
+                        peer_id,
+                        e
+                    );
+                    io_errs.push((id, e));
+                }
+            }
+        }
+
+        (had_success, stats, call_errs, io_errs)
+    }
+
+    /// Sync all known [`Sedimentree`]s with all connected peers.
     pub async fn full_sync(
         &self,
         timeout: Option<Duration>,

@@ -359,10 +359,14 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     tokio::spawn(accepted.sender_task);
 
                                     let auth = accepted.authenticated.map(UnifiedTransport::Iroh);
-                                    if let Err(e) = iroh_subduction.onboard(auth).await {
-                                        tracing::error!("failed to onboard iroh connection: {e}");
-                                    } else {
-                                        tracing::info!("iroh: onboarded peer {remote}");
+                                    match iroh_subduction.add_connection(auth).await {
+                                        Ok(_) => {
+                                            iroh_subduction.full_sync_with_peer(&remote, true, None).await;
+                                            tracing::info!("iroh: added peer {remote}");
+                                        }
+                                        Err(e) => {
+                                            tracing::error!("failed to add iroh connection: {e}");
+                                        }
                                     }
                                 }
                                 Err(e) => {
@@ -941,8 +945,9 @@ async fn try_connect_iroh(
 
     let remote_id = authenticated.peer_id();
     let auth = authenticated.map(UnifiedTransport::Iroh);
-    subduction.onboard(auth).await?;
+    subduction.add_connection(auth).await?;
+    subduction.full_sync_with_peer(&remote_id, true, None).await;
 
-    tracing::info!("iroh: onboarded peer {node_id} (subduction ID: {remote_id})");
+    tracing::info!("iroh: added peer {node_id} (subduction ID: {remote_id})");
     Ok(remote_id)
 }

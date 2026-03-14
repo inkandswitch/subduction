@@ -100,18 +100,6 @@ pub enum AddConnectionError<D> {
     SendToClosedChannel,
 }
 
-/// An error that can occur during onboarding (add connection + initial sync).
-#[derive(Debug, Error)]
-pub enum OnboardError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, D> {
-    /// An I/O error occurred.
-    #[error("I/O error: {0}")]
-    Io(#[from] IoError<F, S, C>),
-
-    /// The connection was not allowed.
-    #[error("add connection error: {0}")]
-    AddConnection(#[from] AddConnectionError<D>),
-}
-
 /// An error that can occur during local write operations.
 #[derive(Debug, Error)]
 pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, PutErr> {

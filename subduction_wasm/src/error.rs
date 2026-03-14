@@ -5,9 +5,7 @@ use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
     connection::ConnectionDisallowed,
-    subduction::error::{
-        AddConnectionError, HydrationError, IoError, ListenError, OnboardError, WriteError,
-    },
+    subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -60,19 +58,6 @@ impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("WriteError");
-        js_err.into()
-    }
-}
-
-/// A Wasm wrapper around the [`OnboardError`] type.
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct WasmOnboardError(#[from] OnboardError<Local, JsStorage, JsConnection, Infallible>);
-
-impl From<WasmOnboardError> for JsValue {
-    fn from(err: WasmOnboardError) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("OnboardError");
         js_err.into()
     }
 }

@@ -48,7 +48,7 @@ use crate::{
     },
     error::{
         WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHydrationError,
-        WasmIoError, WasmLongPollConnectError, WasmOnboardError, WasmWriteError,
+        WasmIoError, WasmLongPollConnectError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -517,24 +517,10 @@ impl WasmSubduction {
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
     ///
-    /// # Errors
+    /// Add an authenticated connection to tracking.
     ///
-    /// Returns an error if adding the connection or sync fails.
-    #[wasm_bindgen]
-    pub async fn onboard(
-        &self,
-        conn: &WasmAuthenticatedConnection,
-    ) -> Result<bool, WasmOnboardError> {
-        self.core
-            .onboard(conn.inner().clone())
-            .await
-            .map_err(Into::into)
-    }
-
-    /// Add an authenticated connection to tracking (low-level, no sync).
-    ///
-    /// Prefer [`onboard`](Self::onboard) unless you need explicit control
-    /// over when sync occurs.
+    /// This does not perform any synchronization. To sync after adding,
+    /// call [`fullSyncWithPeer`](Self::full_sync_with_peer).
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
     ///
@@ -749,7 +735,7 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = syncAll)]
+    #[wasm_bindgen(js_name = syncWithAllPeers)]
     pub async fn sync_all(
         &self,
         id: &WasmSedimentreeId,
@@ -783,7 +769,49 @@ impl WasmSubduction {
         ))
     }
 
-    /// Request batch sync for all known Sedimentree IDs from all connected peers.
+    /// Sync all known Sedimentree IDs with a single peer.
+    ///
+    /// # Arguments
+    ///
+    /// * `peer_id` - The peer to sync with
+    /// * `subscribe` - Whether to subscribe to future updates (default: `true`)
+    /// * `timeout_milliseconds` - Per-call timeout in milliseconds
+    #[wasm_bindgen(js_name = fullSyncWithPeer)]
+    pub async fn full_sync_with_peer(
+        &self,
+        peer_id: &WasmPeerId,
+        subscribe: Option<bool>,
+        timeout_milliseconds: Option<u64>,
+    ) -> PeerBatchSyncResult {
+        let subscribe = subscribe.unwrap_or(true);
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let (success, stats, conn_errs, io_errs) = self
+            .core
+            .full_sync_with_peer(&peer_id.clone().into(), subscribe, timeout)
+            .await;
+
+        for (id, err) in &io_errs {
+            tracing::error!(
+                "full_sync_with_peer I/O error for sedimentree {:?}: {}",
+                id,
+                err
+            );
+        }
+
+        PeerBatchSyncResult {
+            success,
+            stats: stats.into(),
+            conn_errors: conn_errs
+                .into_iter()
+                .map(|(conn, err)| ConnErrPair {
+                    conn: conn.into_inner(),
+                    err: WasmCallError::from(err),
+                })
+                .collect(),
+        }
+    }
+
+    /// Sync all known Sedimentree IDs with all connected peers.
     #[wasm_bindgen(js_name = fullSync)]
     pub async fn full_sync(&self, timeout_milliseconds: Option<u64>) -> PeerBatchSyncResult {
         let timeout = timeout_milliseconds.map(Duration::from_millis);

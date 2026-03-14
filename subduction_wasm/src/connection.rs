@@ -347,8 +347,7 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 /// A transport-erased authenticated connection.
 ///
 /// Wraps an [`Authenticated<JsConnection>`] and is the common type
-/// accepted by [`onboard`](crate::subduction::WasmSubduction::onboard) and
-/// [`addConnection`](crate::subduction::WasmSubduction::add_connection).
+/// accepted by [`addConnection`](crate::subduction::WasmSubduction::add_connection).
 ///
 /// # Construction
 ///

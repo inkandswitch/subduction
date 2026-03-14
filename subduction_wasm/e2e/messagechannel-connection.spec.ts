@@ -125,8 +125,8 @@ test.describe("MessageChannel Connection Tests", () => {
         const syncerB = new Subduction(signerB, new MemoryStorage());
 
         const [isNewA, isNewB] = await Promise.all([
-          syncerA.onboard(authA),
-          syncerB.onboard(authB),
+          syncerA.addConnection(authA),
+          syncerB.addConnection(authB),
         ]);
 
         const peersA = await syncerA.getConnectedPeerIds();

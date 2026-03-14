@@ -319,7 +319,7 @@ test.describe("Long-Poll Connection Tests", () => {
           serverPeerId,
           10000
         );
-        const isNew = await syncer.onboard(knownAuth.toConnection());
+        const isNew = await syncer.addConnection(knownAuth.toConnection());
 
         const peers = await syncer.getConnectedPeerIds();
 
