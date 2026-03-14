@@ -4,7 +4,7 @@ use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
-    connection::{Connection, ConnectionDisallowed},
+    connection::ConnectionDisallowed,
     subduction::error::{
         AddConnectionError, HydrationError, IoError, ListenError, OnboardError, WriteError,
     },
@@ -13,8 +13,9 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::connection::{
+    JsConnectionError,
     longpoll::LongPollConnectionError,
-    transport::WasmUnifiedTransport,
+    transport::IdentifiedConnection,
     websocket::{CallError, WebSocketAuthenticatedConnectionError},
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -38,7 +39,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmUnifiedTransport>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, IdentifiedConnection>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -54,7 +55,7 @@ impl From<WasmIoError> for JsValue {
 /// including policy rejections.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, WasmUnifiedTransport, Infallible>);
+pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, IdentifiedConnection, Infallible>);
 
 impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
@@ -68,7 +69,7 @@ impl From<WasmWriteError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmOnboardError(
-    #[from] OnboardError<Local, JsStorage, WasmUnifiedTransport, Infallible>,
+    #[from] OnboardError<Local, JsStorage, IdentifiedConnection, Infallible>,
 );
 
 impl From<WasmOnboardError> for JsValue {
@@ -116,7 +117,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, WasmUnifiedTransport>);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, IdentifiedConnection>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
@@ -215,9 +216,7 @@ impl From<WasmAddConnectionError> for JsValue {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmDisconnectionError(
-    #[from] <WasmUnifiedTransport as Connection<Local>>::DisconnectionError,
-);
+pub struct WasmDisconnectionError(#[from] JsConnectionError);
 
 impl From<WasmDisconnectionError> for JsValue {
     fn from(err: WasmDisconnectionError) -> Self {

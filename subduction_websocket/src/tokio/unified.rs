@@ -10,12 +10,9 @@ use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
 use core::time::Duration;
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::{
-    connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    },
-    peer::id::PeerId,
+use subduction_core::connection::{
+    Connection,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use tokio::net::TcpStream;
 
@@ -51,13 +48,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedWebSock
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        match self {
-            UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::peer_id(in_ws),
-            UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::peer_id(out_ws),
-        }
-    }
 
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         match self {

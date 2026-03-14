@@ -269,7 +269,7 @@
               pkgs.http-server
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
-              pkgs.nodejs_22
+              pkgs.nodejs
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
               pkgs.prometheus

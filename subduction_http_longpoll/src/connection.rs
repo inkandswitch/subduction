@@ -109,6 +109,12 @@ impl<O> HttpLongPollConnection<O> {
         }
     }
 
+    /// The peer ID of the remote peer.
+    #[must_use]
+    pub fn peer_id(&self) -> PeerId {
+        self.inner.peer_id
+    }
+
     /// Store the cancel-channel sender so that background poll/send tasks stay
     /// alive for as long as this connection (and its clones) exist.
     ///
@@ -187,10 +193,6 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id
-    }
 
     fn next_request_id(&self) -> K::Future<'_, RequestId> {
         K::from_future(async {

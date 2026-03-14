@@ -408,7 +408,7 @@ impl<
 
         // Send ReAdd command to manager
         self.manager_channel
-            .send(Command::ReAdd(conn_id, conn.clone()))
+            .send(Command::ReAdd(conn_id, conn.clone(), conn.peer_id()))
             .await
             .map_err(|_| ())?;
 
@@ -737,7 +737,7 @@ impl<
         }
 
         self.manager_channel
-            .send(Command::Add(conn))
+            .send(Command::Add(conn, peer_id))
             .await
             .map_err(|_| AddConnectionError::SendToClosedChannel)?;
 

@@ -124,10 +124,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         async {
             let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
@@ -469,10 +465,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
 
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         async {

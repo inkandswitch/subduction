@@ -97,7 +97,7 @@ impl WasmLongPollConn {
     #[must_use]
     #[wasm_bindgen(js_name = peerId)]
     pub fn peer_id(&self) -> WasmPeerId {
-        Connection::<Local>::peer_id(&self.0).into()
+        self.0.peer_id().into()
     }
 
     /// Disconnect from the peer gracefully.
@@ -206,10 +206,12 @@ impl WasmAuthenticatedLongPoll {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
-        super::WasmAuthenticatedConnection::from_transport(
-            self.inner
-                .map(super::transport::WasmUnifiedTransport::LongPoll),
-        )
+        let peer_id = self.inner.peer_id();
+        super::WasmAuthenticatedConnection::from_identified(self.inner.map(|lp| {
+            let transport: super::JsConnection =
+                wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp)).unchecked_into();
+            super::transport::IdentifiedConnection::new(transport, peer_id)
+        }))
     }
 }
 

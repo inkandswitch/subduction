@@ -416,7 +416,7 @@ pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Si
             let verified = verify_response(&signed_response, &challenge)?;
             let peer_id = verified.server_id;
             let (conn, extra) = build_connection(handshake, peer_id);
-            Ok((Authenticated::from_handshake(conn), extra))
+            Ok((Authenticated::from_handshake(conn, peer_id), extra))
         }
         HandshakeMessage::Rejection(rejection) => Err(AuthenticateError::Rejected {
             reason: rejection.reason,
@@ -537,7 +537,7 @@ pub async fn respond<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Sig
 
     let peer_id = verified.client_id;
     let (conn, extra) = build_connection(handshake, peer_id);
-    Ok((Authenticated::from_handshake(conn), extra))
+    Ok((Authenticated::from_handshake(conn, peer_id), extra))
 }
 
 /// Helper to send a rejection message.

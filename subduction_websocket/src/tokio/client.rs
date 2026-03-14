@@ -18,7 +18,6 @@ use subduction_core::{
         handshake::{self, AuthenticateError, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
-    peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -164,10 +163,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        Connection::<Sendable>::peer_id(&self.socket)
-    }
 
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         async { Connection::<Sendable>::next_request_id(&self.socket).await }.boxed()

@@ -1,15 +1,14 @@
-//! Unified transport enum for wasm.
+//! Identified connection for Wasm.
 //!
-//! Wraps both [`WasmWebSocket`] and [`WasmLongPollConnection`] so a single
-//! [`Subduction`] instance can accept connections from either transport.
+//! Pairs a [`JsConnection`] (transport) with a verified [`PeerId`] (from the handshake).
+//! This is the single connection type used by [`Subduction`] in Wasm — all transports
+//! (WebSocket, HTTP long-poll, custom JS) are erased through the [`JsConnection`] interface.
 
 use core::time::Duration;
 
-use super::{
-    JsConnection, JsConnectionError, longpoll::WasmLongPollConnection, websocket::WasmWebSocket,
-};
+use super::{JsConnection, JsConnectionError};
 use future_form::Local;
-use futures::{FutureExt, future::LocalBoxFuture};
+use futures::future::LocalBoxFuture;
 use subduction_core::{
     connection::{
         Connection,
@@ -18,179 +17,67 @@ use subduction_core::{
     peer::id::PeerId,
 };
 
-/// A unified connection covering WebSocket, HTTP long-poll, and custom JS transports.
+/// A [`JsConnection`] paired with the verified remote [`PeerId`].
+///
+/// Constructed by the `build_connection` closure inside [`handshake::initiate`] or
+/// [`handshake::respond`], which provides the verified peer identity after the
+/// handshake succeeds. This mirrors the native pattern where connection constructors
+/// (e.g., `WebSocket::new(stream, ..., peer_id)`) take the peer ID as an argument.
+///
+/// [`handshake::initiate`]: subduction_core::connection::handshake::initiate
+/// [`handshake::respond`]: subduction_core::connection::handshake::respond
 #[derive(Debug, Clone)]
-pub enum WasmUnifiedTransport {
-    /// WebSocket transport.
-    WebSocket(WasmWebSocket),
-
-    /// HTTP long-poll transport.
-    LongPoll(WasmLongPollConnection),
-
-    /// Custom JS `Connection` implementation.
-    Custom(JsConnection),
+pub struct IdentifiedConnection {
+    transport: JsConnection,
+    peer_id: PeerId,
 }
 
-impl From<WasmWebSocket> for WasmUnifiedTransport {
-    fn from(ws: WasmWebSocket) -> Self {
-        Self::WebSocket(ws)
+impl IdentifiedConnection {
+    /// Construct from a [`JsConnection`] and a verified [`PeerId`].
+    #[must_use]
+    pub fn new(transport: JsConnection, peer_id: PeerId) -> Self {
+        Self { transport, peer_id }
+    }
+
+    /// Access the inner [`JsConnection`].
+    #[must_use]
+    pub fn transport(&self) -> &JsConnection {
+        &self.transport
+    }
+
+    /// Consume and return the inner [`JsConnection`].
+    #[must_use]
+    pub fn into_transport(self) -> JsConnection {
+        self.transport
     }
 }
 
-impl From<WasmLongPollConnection> for WasmUnifiedTransport {
-    fn from(lp: WasmLongPollConnection) -> Self {
-        Self::LongPoll(lp)
+impl PartialEq for IdentifiedConnection {
+    fn eq(&self, other: &Self) -> bool {
+        self.peer_id == other.peer_id && self.transport == other.transport
     }
 }
 
-impl From<JsConnection> for WasmUnifiedTransport {
-    fn from(conn: JsConnection) -> Self {
-        Self::Custom(conn)
-    }
-}
-
-/// Error type for send operations across transports.
-#[derive(Debug, thiserror::Error)]
-pub enum TransportSendError {
-    /// WebSocket send error.
-    #[error(transparent)]
-    WebSocket(#[from] super::websocket::SendError),
-
-    /// HTTP long-poll send error.
-    #[error(transparent)]
-    LongPoll(#[from] subduction_http_longpoll::error::SendError),
-
-    /// Custom JS connection send error.
-    #[error(transparent)]
-    Custom(JsConnectionError),
-}
-
-/// Error type for recv operations across transports.
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum TransportRecvError {
-    /// WebSocket recv error.
-    #[error(transparent)]
-    WebSocket(#[from] super::websocket::ReadFromClosedChannel),
-
-    /// HTTP long-poll recv error.
-    #[error(transparent)]
-    LongPoll(#[from] subduction_http_longpoll::error::RecvError),
-
-    /// Custom JS connection recv error.
-    #[error(transparent)]
-    Custom(JsConnectionError),
-}
-
-/// Error type for call operations across transports.
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum TransportCallError {
-    /// WebSocket call error.
-    #[error("websocket call error: {0}")]
-    WebSocket(super::websocket::CallError),
-
-    /// HTTP long-poll call error.
-    #[error(transparent)]
-    LongPoll(#[from] subduction_http_longpoll::error::CallError),
-
-    /// Custom JS connection call error.
-    #[error(transparent)]
-    Custom(JsConnectionError),
-}
-
-impl From<super::websocket::CallError> for TransportCallError {
-    fn from(e: super::websocket::CallError) -> Self {
-        Self::WebSocket(e)
-    }
-}
-
-/// Error type for disconnect operations across transports.
-#[derive(Debug, Clone, thiserror::Error)]
-pub enum TransportDisconnectionError {
-    /// WebSocket disconnection error (infallible).
-    #[error("websocket disconnection: {0}")]
-    WebSocket(core::convert::Infallible),
-
-    /// HTTP long-poll disconnection error.
-    #[error(transparent)]
-    LongPoll(#[from] subduction_http_longpoll::error::DisconnectionError),
-
-    /// Custom JS connection disconnection error.
-    #[error(transparent)]
-    Custom(JsConnectionError),
-}
-
-impl Connection<Local> for WasmUnifiedTransport {
-    type SendError = TransportSendError;
-    type RecvError = TransportRecvError;
-    type CallError = TransportCallError;
-    type DisconnectionError = TransportDisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        match self {
-            Self::WebSocket(ws) => Connection::<Local>::peer_id(ws),
-            Self::LongPoll(lp) => Connection::<Local>::peer_id(lp),
-            Self::Custom(c) => Connection::<Local>::peer_id(c),
-        }
-    }
+impl Connection<Local> for IdentifiedConnection {
+    type SendError = JsConnectionError;
+    type RecvError = JsConnectionError;
+    type CallError = JsConnectionError;
+    type DisconnectionError = JsConnectionError;
 
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        match self {
-            Self::WebSocket(ws) => Connection::<Local>::next_request_id(ws),
-            Self::LongPoll(lp) => Connection::<Local>::next_request_id(lp),
-            Self::Custom(c) => Connection::<Local>::next_request_id(c),
-        }
+        Connection::<Local>::next_request_id(&self.transport)
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        match self {
-            Self::WebSocket(ws) => {
-                let fut = Connection::<Local>::disconnect(ws);
-                async move { fut.await.map_err(TransportDisconnectionError::WebSocket) }
-                    .boxed_local()
-            }
-            Self::LongPoll(lp) => {
-                let fut = Connection::<Local>::disconnect(lp);
-                async move { fut.await.map_err(Into::into) }.boxed_local()
-            }
-            Self::Custom(c) => {
-                let fut = Connection::<Local>::disconnect(c);
-                async move { fut.await.map_err(TransportDisconnectionError::Custom) }.boxed_local()
-            }
-        }
+        Connection::<Local>::disconnect(&self.transport)
     }
 
     fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
-        match self {
-            Self::WebSocket(ws) => {
-                let fut = Connection::<Local>::send(ws, message);
-                async move { fut.await.map_err(Into::into) }.boxed_local()
-            }
-            Self::LongPoll(lp) => {
-                let fut = Connection::<Local>::send(lp, message);
-                async move { fut.await.map_err(Into::into) }.boxed_local()
-            }
-            Self::Custom(c) => {
-                let fut = Connection::<Local>::send(c, message);
-                async move { fut.await.map_err(TransportSendError::Custom) }.boxed_local()
-            }
-        }
+        Connection::<Local>::send(&self.transport, message)
     }
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
-        match self {
-            Self::WebSocket(ws) => {
-                let fut = Connection::<Local>::recv(ws);
-                async move { fut.await.map_err(Into::into) }.boxed_local()
-            }
-            Self::LongPoll(lp) => {
-                let fut = Connection::<Local>::recv(lp);
-                async move { fut.await.map_err(Into::into) }.boxed_local()
-            }
-            Self::Custom(c) => {
-                let fut = Connection::<Local>::recv(c);
-                async move { fut.await.map_err(TransportRecvError::Custom) }.boxed_local()
-            }
-        }
+        Connection::<Local>::recv(&self.transport)
     }
 
     fn call(
@@ -198,36 +85,6 @@ impl Connection<Local> for WasmUnifiedTransport {
         req: BatchSyncRequest,
         timeout: Option<Duration>,
     ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        match self {
-            Self::WebSocket(ws) => async move {
-                Connection::<Local>::call(ws, req, timeout)
-                    .await
-                    .map_err(Into::into)
-            }
-            .boxed_local(),
-            Self::LongPoll(lp) => async move {
-                Connection::<Local>::call(lp, req, timeout)
-                    .await
-                    .map_err(Into::into)
-            }
-            .boxed_local(),
-            Self::Custom(c) => async move {
-                Connection::<Local>::call(c, req, timeout)
-                    .await
-                    .map_err(TransportCallError::Custom)
-            }
-            .boxed_local(),
-        }
-    }
-}
-
-impl PartialEq for WasmUnifiedTransport {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (Self::WebSocket(a), Self::WebSocket(b)) => a == b,
-            (Self::LongPoll(a), Self::LongPoll(b)) => a == b,
-            (Self::Custom(a), Self::Custom(b)) => a == b,
-            _ => false,
-        }
+        Connection::<Local>::call(&self.transport, req, timeout)
     }
 }

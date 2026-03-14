@@ -8,13 +8,10 @@ use core::time::Duration;
 
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::{
-    connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        timeout::Timeout,
-    },
-    peer::id::PeerId,
+use subduction_core::connection::{
+    Connection,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    timeout::Timeout,
 };
 use subduction_http_longpoll::connection::HttpLongPollConnection;
 use subduction_iroh::connection::IrohConnection;
@@ -102,14 +99,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
     type RecvError = TransportRecvError;
     type CallError = TransportCallError;
     type DisconnectionError = TransportDisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        match self {
-            Self::WebSocket(ws) => Connection::<Sendable>::peer_id(ws),
-            Self::HttpLongPoll(lp) => Connection::<Sendable>::peer_id(lp),
-            Self::Iroh(iroh) => Connection::<Sendable>::peer_id(iroh),
-        }
-    }
 
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         match self {

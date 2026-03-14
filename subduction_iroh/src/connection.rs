@@ -155,6 +155,12 @@ impl<O> IrohConnection<O> {
         self.inner.quic_conn.close(0u32.into(), b"subduction close");
     }
 
+    /// The peer ID of the remote peer.
+    #[must_use]
+    pub fn peer_id(&self) -> PeerId {
+        self.inner.peer_id
+    }
+
     /// Access the underlying iroh QUIC connection.
     #[must_use]
     pub fn quic_connection(&self) -> &iroh::endpoint::Connection {
@@ -167,10 +173,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id
-    }
 
     fn next_request_id(&self) -> futures::future::BoxFuture<'_, RequestId> {
         async {

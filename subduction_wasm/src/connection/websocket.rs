@@ -510,10 +510,6 @@ impl Connection<Local> for WasmWebSocket {
     type CallError = CallError;
     type DisconnectionError = Infallible;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         let counter = self.request_id_counter.clone();
         async move {
@@ -875,10 +871,11 @@ impl WasmAuthenticatedWebSocket {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
-        super::WasmAuthenticatedConnection::from_transport(
-            self.inner
-                .map(super::transport::WasmUnifiedTransport::WebSocket),
-        )
+        let peer_id = self.inner.peer_id();
+        super::WasmAuthenticatedConnection::from_identified(self.inner.map(|ws| {
+            let transport: super::JsConnection = wasm_bindgen::JsValue::from(ws).unchecked_into();
+            super::transport::IdentifiedConnection::new(transport, peer_id)
+        }))
     }
 }
 

@@ -42,9 +42,9 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
-        JsConnection, WasmAuthenticatedConnection,
+        JsConnection, JsConnectionError, WasmAuthenticatedConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
-        transport::{TransportCallError, WasmUnifiedTransport},
+        transport::IdentifiedConnection,
         websocket::WasmWebSocket,
     },
     error::{
@@ -96,7 +96,7 @@ pub struct WasmSubduction {
             'static,
             Local,
             JsStorage,
-            WasmUnifiedTransport,
+            IdentifiedConnection,
             OpenPolicy,
             JsSigner,
             WasmHashMetric,
@@ -368,7 +368,10 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(WasmUnifiedTransport::WebSocket))
+            .add_connection(authenticated.map(|ws| {
+                let transport: JsConnection = JsValue::from(ws).unchecked_into();
+                IdentifiedConnection::new(transport, peer_id)
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -405,7 +408,10 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(WasmUnifiedTransport::WebSocket))
+            .add_connection(authenticated.map(|ws| {
+                let transport: JsConnection = JsValue::from(ws).unchecked_into();
+                IdentifiedConnection::new(transport, peer_id)
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -442,7 +448,11 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(WasmUnifiedTransport::LongPoll))
+            .add_connection(authenticated.map(|lp| {
+                let transport: JsConnection =
+                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into();
+                IdentifiedConnection::new(transport, peer_id)
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -479,7 +489,11 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(WasmUnifiedTransport::LongPoll))
+            .add_connection(authenticated.map(|lp| {
+                let transport: JsConnection =
+                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into();
+                IdentifiedConnection::new(transport, peer_id)
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -896,18 +910,9 @@ impl PeerBatchSyncResult {
     }
 }
 
-/// Convert a [`WasmUnifiedTransport`] to a [`JsConnection`] for the JS boundary.
-///
-/// Both `SubductionWebSocket` and `SubductionLongPollConnection` satisfy the
-/// `Connection` TypeScript interface, so the cast is safe by construction.
-fn to_js_connection(transport: WasmUnifiedTransport) -> JsConnection {
-    match transport {
-        WasmUnifiedTransport::WebSocket(ws) => JsValue::from(ws).unchecked_into(),
-        WasmUnifiedTransport::LongPoll(lp) => {
-            JsValue::from(WasmLongPollConn::new(lp)).unchecked_into()
-        }
-        WasmUnifiedTransport::Custom(conn) => conn,
-    }
+/// Extract the inner [`JsConnection`] from an [`IdentifiedConnection`].
+fn to_js_connection(conn: IdentifiedConnection) -> JsConnection {
+    conn.into_transport()
 }
 
 /// A pair of a connection and an error that occurred during a call.
@@ -1023,11 +1028,11 @@ impl DepthMetric for WasmHashMetric {
     }
 }
 
-/// Wasm wrapper for call errors from the unified transport.
+/// Wasm wrapper for call errors.
 #[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone, thiserror::Error)]
 #[error(transparent)]
-pub struct WasmCallError(#[from] TransportCallError);
+pub struct WasmCallError(#[from] JsConnectionError);
 
 impl From<WasmCallError> for js_sys::Error {
     fn from(err: WasmCallError) -> Self {

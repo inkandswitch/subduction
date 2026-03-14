@@ -11,7 +11,6 @@ const __dirname = path.dirname(__filename);
 
 const sleep = promisify(setTimeout);
 
-// Check if a port is listening
 async function waitForPort(host: string, port: number, timeout: number = 10000): Promise<void> {
   const startTime = Date.now();
 
@@ -39,10 +38,8 @@ async function waitForPort(host: string, port: number, timeout: number = 10000):
         socket.connect(port, host);
       });
 
-      // Successfully connected
       return;
     } catch (err) {
-      // Port not ready yet, wait and retry
       await sleep(100);
     }
   }
@@ -50,7 +47,6 @@ async function waitForPort(host: string, port: number, timeout: number = 10000):
   throw new Error(`Port ${host}:${port} did not become available within ${timeout}ms`);
 }
 
-// WebSocket server configuration - different port per browser to avoid conflicts
 const WS_HOST = "127.0.0.1";
 const WS_PORTS: Record<string, number> = {
   chromium: 9892,
