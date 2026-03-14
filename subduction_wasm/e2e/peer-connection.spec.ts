@@ -64,11 +64,6 @@ let currentPort: number;
 let currentWsUrl: string;
 
 test.beforeAll(async ({ browserName }) => {
-  // Skip peer connection tests in CI - they require building subduction_cli
-  // and are more prone to timeouts in CI environments
-  if (process.env.CI) {
-    test.skip();
-  }
   // Assign port based on browser to avoid conflicts when running in parallel
   currentPort = WS_PORTS[browserName];
   currentWsUrl = `ws://${WS_HOST}:${currentPort}`;
@@ -230,7 +225,6 @@ test.describe("Peer Connection Tests", () => {
         const url = new URL(wsUrl);
         const peerId = await syncer.connectDiscover(
           url,
-          signer,
           5000,
           wsUrl.replace("ws://", "")
         );
@@ -271,7 +265,6 @@ test.describe("Peer Connection Tests", () => {
         const url = new URL(wsUrl);
         await syncer.connectDiscover(
           url,
-          signer,
           5000,
           wsUrl.replace("ws://", "")
         );
@@ -314,7 +307,6 @@ test.describe("Peer Connection Tests", () => {
         const url = new URL(wsUrl);
         await syncer.connectDiscover(
           url,
-          signer,
           5000,
           wsUrl.replace("ws://", "")
         );
@@ -356,10 +348,10 @@ test.describe("Peer Connection Tests", () => {
         const serviceName = wsUrl.replace("ws://", "");
 
         // Connect first syncer
-        await syncer1.connectDiscover(url, signer1, 5000, serviceName);
+        await syncer1.connectDiscover(url, 5000, serviceName);
 
         // Connect second syncer
-        await syncer2.connectDiscover(url, signer2, 5000, serviceName);
+        await syncer2.connectDiscover(url, 5000, serviceName);
 
         const peers1 = await syncer1.getConnectedPeerIds();
         const peers2 = await syncer2.getConnectedPeerIds();
@@ -384,6 +376,158 @@ test.describe("Peer Connection Tests", () => {
     expect(result.syncer1Connected).toBe(true);
     expect(result.syncer2Connected).toBe(true);
     expect(result.bothConnected).toBe(true);
+  });
+});
+
+test.describe("Two-Peer Sync via WebSocket Server", () => {
+  test("should sync a commit from one peer to another", async ({ page }) => {
+    const result = await page.evaluate(async (wsUrl) => {
+      const { Subduction, MemoryStorage, WebCryptoSigner, SedimentreeId } = window.subduction;
+
+      try {
+        const signer1 = await WebCryptoSigner.setup();
+        const signer2 = await WebCryptoSigner.setup();
+
+        const syncer1 = new Subduction(signer1, new MemoryStorage());
+        const syncer2 = new Subduction(signer2, new MemoryStorage());
+
+        const url = new URL(wsUrl);
+        const serviceName = wsUrl.replace("ws://", "");
+
+        await syncer1.connectDiscover(url, 5000, serviceName);
+        await syncer2.connectDiscover(url, 5000, serviceName);
+
+        // Add a commit to syncer1
+        const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(77));
+        await syncer1.addCommit(sedId, [], new Uint8Array([1, 2, 3, 4, 5]));
+
+        // Full sync from syncer1
+        const syncResult1 = await syncer1.fullSync(10000n);
+
+        // Full sync from syncer2 to pull data
+        const syncResult2 = await syncer2.fullSync(10000n);
+
+        // Check if syncer2 has the sedimentree
+        const ids2 = await syncer2.sedimentreeIds();
+
+        return {
+          syncer1Synced: syncResult1.success,
+          syncer2Synced: syncResult2.success,
+          syncer2HasData: ids2.length > 0,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          syncer1Synced: false,
+          syncer2Synced: false,
+          syncer2HasData: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }, currentWsUrl);
+
+    expect(result.error).toBeNull();
+    expect(result.syncer1Synced).toBe(true);
+    expect(result.syncer2Synced).toBe(true);
+    expect(result.syncer2HasData).toBe(true);
+  });
+
+  test("should sync data and retrieve matching blob", async ({ page }) => {
+    const result = await page.evaluate(async (wsUrl) => {
+      const { Subduction, MemoryStorage, WebCryptoSigner, SedimentreeId, BlobMeta } = window.subduction;
+
+      try {
+        const signer1 = await WebCryptoSigner.setup();
+        const signer2 = await WebCryptoSigner.setup();
+
+        const syncer1 = new Subduction(signer1, new MemoryStorage());
+        const syncer2 = new Subduction(signer2, new MemoryStorage());
+
+        const url = new URL(wsUrl);
+        const serviceName = wsUrl.replace("ws://", "");
+
+        await syncer1.connectDiscover(url, 5000, serviceName);
+        await syncer2.connectDiscover(url, 5000, serviceName);
+
+        // Add data to syncer1
+        const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(88));
+        const blobData = new Uint8Array([10, 20, 30, 40, 50]);
+        await syncer1.addCommit(sedId, [], blobData);
+
+        // Sync both ways
+        await syncer1.fullSync(10000n);
+        await syncer2.fullSync(10000n);
+
+        // Verify syncer2 got the blob
+        const meta = new BlobMeta(blobData);
+        const digest = meta.digest();
+        const retrieved = await syncer2.getBlob(sedId, digest);
+
+        return {
+          hasBlob: retrieved !== undefined && retrieved !== null,
+          blobMatches: retrieved
+            ? Array.from(retrieved).join(",") === Array.from(blobData).join(",")
+            : false,
+          error: null,
+        };
+      } catch (error) {
+        return {
+          hasBlob: false,
+          blobMatches: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }, currentWsUrl);
+
+    expect(result.error).toBeNull();
+    expect(result.hasBlob).toBe(true);
+    expect(result.blobMatches).toBe(true);
+  });
+});
+
+test.describe("Known Peer ID Connection", () => {
+  test("should connect via known peer ID using tryConnect then onboard", async ({ page }) => {
+    const result = await page.evaluate(async (wsUrl) => {
+      const { Subduction, MemoryStorage, SubductionWebSocket, WebCryptoSigner } = window.subduction;
+
+      try {
+        // First discover the server's peer ID
+        const signer = await WebCryptoSigner.setup();
+        const url = new URL(wsUrl);
+        const serviceName = wsUrl.replace("ws://", "");
+
+        const discoveryAuth = await SubductionWebSocket.tryDiscover(url, signer, 5000, serviceName);
+        const serverPeerId = discoveryAuth.peerId;
+
+        // Now connect with a different signer using the known peer ID
+        const signer2 = await WebCryptoSigner.setup();
+        const syncer = new Subduction(signer2, new MemoryStorage());
+
+        const knownAuth = await SubductionWebSocket.tryConnect(url, signer2, serverPeerId, 5000);
+        const isNew = await syncer.onboard(knownAuth.toConnection());
+
+        const peers = await syncer.getConnectedPeerIds();
+
+        return {
+          isNew,
+          peerCount: peers.length,
+          peerMatchesServer: peers.length > 0 && peers[0].toString() === serverPeerId.toString(),
+          error: null,
+        };
+      } catch (error) {
+        return {
+          isNew: false,
+          peerCount: 0,
+          peerMatchesServer: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }, currentWsUrl);
+
+    expect(result.error).toBeNull();
+    expect(result.isNew).toBe(true);
+    expect(result.peerCount).toBe(1);
+    expect(result.peerMatchesServer).toBe(true);
   });
 });
 
