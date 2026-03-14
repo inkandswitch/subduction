@@ -736,19 +736,19 @@ impl WasmSubduction {
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
     #[wasm_bindgen(js_name = syncWithAllPeers)]
-    pub async fn sync_all(
+    pub async fn sync_with_all_peers(
         &self,
         id: &WasmSedimentreeId,
         subscribe: bool,
         timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
-        tracing::debug!("WasmSubduction::sync_all");
+        tracing::debug!("WasmSubduction::sync_with_all_peers");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let peer_map = self
             .core
-            .sync_all(id.clone().into(), subscribe, timeout)
+            .sync_with_all_peers(id.clone().into(), subscribe, timeout)
             .await?;
-        tracing::debug!("WasmSubduction::sync_all - done");
+        tracing::debug!("WasmSubduction::sync_with_all_peers - done");
         Ok(WasmPeerResultMap(
             peer_map
                 .into_iter()
@@ -812,13 +812,21 @@ impl WasmSubduction {
     }
 
     /// Sync all known Sedimentree IDs with all connected peers.
-    #[wasm_bindgen(js_name = fullSync)]
-    pub async fn full_sync(&self, timeout_milliseconds: Option<u64>) -> PeerBatchSyncResult {
+    #[wasm_bindgen(js_name = fullSyncWithAllPeers)]
+    pub async fn full_sync_with_all_peers(
+        &self,
+        timeout_milliseconds: Option<u64>,
+    ) -> PeerBatchSyncResult {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let (success, stats, conn_errs, io_errs) = self.core.full_sync(timeout).await;
+        let (success, stats, conn_errs, io_errs) =
+            self.core.full_sync_with_all_peers(timeout).await;
 
         for (id, err) in &io_errs {
-            tracing::error!("full_sync I/O error for sedimentree {:?}: {}", id, err);
+            tracing::error!(
+                "full_sync_with_all_peers I/O error for sedimentree {:?}: {}",
+                id,
+                err
+            );
         }
 
         PeerBatchSyncResult {

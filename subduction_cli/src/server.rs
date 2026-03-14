@@ -438,7 +438,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     _ = interval.tick() => {
                         let timeout = Some(Duration::from_secs(10));
                         let (had_success, _stats, call_errs, io_errs) =
-                            sync_subduction.full_sync(timeout).await;
+                            sync_subduction.full_sync_with_all_peers(timeout).await;
                         if had_success {
                             tracing::debug!("iroh: background full_sync completed");
                         }

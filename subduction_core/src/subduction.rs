@@ -25,8 +25,8 @@
 //!
 //! |                        | 1 sedimentree      | all sedimentrees        |
 //! |------------------------|--------------------|-------------------------|
-//! | **1 peer**             | [`sync_with_peer`] | [`full_sync_with_peer`] |
-//! | **all peers**          | [`sync_all`]       | [`full_sync`]           |
+//! | **1 peer**             | [`sync_with_peer`]      | [`full_sync_with_peer`]      |
+//! | **all peers**          | [`sync_with_all_peers`] | [`full_sync_with_all_peers`] |
 //!
 //! ### Data Operations
 //!
@@ -47,9 +47,9 @@
 //! [`get_commits`]: Subduction::get_commits
 //! [`fetch_blobs`]: Subduction::fetch_blobs
 //! [`sync_with_peer`]: Subduction::sync_with_peer
-//! [`sync_all`]: Subduction::sync_all
+//! [`sync_with_all_peers`]: Subduction::sync_with_all_peers
 //! [`full_sync_with_peer`]: Subduction::full_sync_with_peer
-//! [`full_sync`]: Subduction::full_sync
+//! [`full_sync_with_all_peers`]: Subduction::full_sync_with_all_peers
 //! [`add_sedimentree`]: Subduction::add_sedimentree
 //! [`add_commit`]: Subduction::add_commit
 //! [`add_fragment`]: Subduction::add_fragment
@@ -974,7 +974,7 @@ impl<
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sync_all(id, true, None).await?;
+        self.sync_with_all_peers(id, true, None).await?;
         Ok(())
     }
 
@@ -1442,7 +1442,7 @@ impl<
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
     #[allow(clippy::too_many_lines)]
-    pub async fn sync_all(
+    pub async fn sync_with_all_peers(
         &self,
         id: SedimentreeId,
         subscribe: bool,
@@ -1559,7 +1559,7 @@ impl<
                                     fragments_received = fragments_to_receive,
                                     peer_requesting_commits = requesting.commit_fingerprints.len(),
                                     peer_requesting_fragments = requesting.fragment_fingerprints.len(),
-                                    "sync_all: response received"
+                                    "sync_with_all_peers: response received"
                                 );
 
                                 for (signed_commit, blob) in missing_commits {
@@ -1680,7 +1680,7 @@ impl<
 
     /// Sync all known [`Sedimentree`]s with a single peer.
     ///
-    /// This is the single-peer counterpart of [`full_sync`](Self::full_sync).
+    /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
     /// Errors are collected rather than short-circuiting, so a failure on one
     /// sedimentree does not prevent the rest from syncing.
     pub async fn full_sync_with_peer(
@@ -1733,7 +1733,7 @@ impl<
     }
 
     /// Sync all known [`Sedimentree`]s with all connected peers.
-    pub async fn full_sync(
+    pub async fn full_sync_with_all_peers(
         &self,
         timeout: Option<Duration>,
     ) -> (
@@ -1749,7 +1749,7 @@ impl<
             .into_iter()
             .map(|id| async move {
                 tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
-                let result = self.sync_all(id, true, timeout).await;
+                let result = self.sync_with_all_peers(id, true, timeout).await;
                 (id, result)
             })
             .collect();

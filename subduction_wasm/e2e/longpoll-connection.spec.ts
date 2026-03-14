@@ -186,7 +186,7 @@ test.describe("Long-Poll Connection Tests", () => {
     expect(result.afterCount).toBe(0);
   });
 
-  // FIXME: fullSync hangs when the server has no other peers to sync with.
+  // FIXME: fullSyncWithAllPeers hangs when the server has no other peers to sync with.
   // This needs a multi-peer test setup or a server with pre-seeded data.
   test.skip("should sync data via long-poll", async ({ page }) => {
     const result = await page.evaluate(async (baseUrl) => {
@@ -208,7 +208,7 @@ test.describe("Long-Poll Connection Tests", () => {
         await syncer.addCommit(sedId, [], blob);
 
         // Sync to the server (timeout is bigint)
-        const syncResult = await syncer.fullSync(10000n);
+        const syncResult = await syncer.fullSyncWithAllPeers(10000n);
 
         return {
           synced: syncResult.success,
