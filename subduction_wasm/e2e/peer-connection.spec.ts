@@ -196,7 +196,7 @@ test.describe("Peer Connection Tests", () => {
           wsUrl.replace("ws://", "")
         );
 
-        const isNew = await syncer.onboard(authenticated);
+        const isNew = await syncer.onboard(authenticated.toConnection());
 
         const peerIds = await syncer.getConnectedPeerIds();
 

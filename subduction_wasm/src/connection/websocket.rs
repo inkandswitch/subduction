@@ -862,13 +862,6 @@ pub struct WasmAuthenticatedWebSocket {
     inner: Authenticated<WasmWebSocket, Local>,
 }
 
-impl WasmAuthenticatedWebSocket {
-    /// Access the inner `Authenticated` connection.
-    pub(crate) fn inner(&self) -> &Authenticated<WasmWebSocket, Local> {
-        &self.inner
-    }
-}
-
 #[wasm_bindgen(js_class = AuthenticatedWebSocket)]
 impl WasmAuthenticatedWebSocket {
     /// The verified peer identity.
@@ -876,6 +869,16 @@ impl WasmAuthenticatedWebSocket {
     #[wasm_bindgen(getter, js_name = peerId)]
     pub fn peer_id(&self) -> WasmPeerId {
         self.inner.peer_id().into()
+    }
+
+    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedConnection).
+    #[must_use]
+    #[wasm_bindgen(js_name = toConnection)]
+    pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
+        super::WasmAuthenticatedConnection::from_transport(
+            self.inner
+                .map(super::transport::WasmUnifiedTransport::WebSocket),
+        )
     }
 }
 

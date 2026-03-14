@@ -5,7 +5,9 @@
 
 use core::time::Duration;
 
-use super::{longpoll::WasmLongPollConnection, websocket::WasmWebSocket};
+use super::{
+    JsConnection, JsConnectionError, longpoll::WasmLongPollConnection, websocket::WasmWebSocket,
+};
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use subduction_core::{
@@ -16,7 +18,7 @@ use subduction_core::{
     peer::id::PeerId,
 };
 
-/// A unified connection covering both WebSocket and HTTP long-poll transports.
+/// A unified connection covering WebSocket, HTTP long-poll, and custom JS transports.
 #[derive(Debug, Clone)]
 pub enum WasmUnifiedTransport {
     /// WebSocket transport.
@@ -24,6 +26,9 @@ pub enum WasmUnifiedTransport {
 
     /// HTTP long-poll transport.
     LongPoll(WasmLongPollConnection),
+
+    /// Custom JS `Connection` implementation.
+    Custom(JsConnection),
 }
 
 impl From<WasmWebSocket> for WasmUnifiedTransport {
@@ -38,6 +43,12 @@ impl From<WasmLongPollConnection> for WasmUnifiedTransport {
     }
 }
 
+impl From<JsConnection> for WasmUnifiedTransport {
+    fn from(conn: JsConnection) -> Self {
+        Self::Custom(conn)
+    }
+}
+
 /// Error type for send operations across transports.
 #[derive(Debug, thiserror::Error)]
 pub enum TransportSendError {
@@ -48,10 +59,14 @@ pub enum TransportSendError {
     /// HTTP long-poll send error.
     #[error(transparent)]
     LongPoll(#[from] subduction_http_longpoll::error::SendError),
+
+    /// Custom JS connection send error.
+    #[error(transparent)]
+    Custom(JsConnectionError),
 }
 
 /// Error type for recv operations across transports.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum TransportRecvError {
     /// WebSocket recv error.
     #[error(transparent)]
@@ -60,6 +75,10 @@ pub enum TransportRecvError {
     /// HTTP long-poll recv error.
     #[error(transparent)]
     LongPoll(#[from] subduction_http_longpoll::error::RecvError),
+
+    /// Custom JS connection recv error.
+    #[error(transparent)]
+    Custom(JsConnectionError),
 }
 
 /// Error type for call operations across transports.
@@ -72,6 +91,10 @@ pub enum TransportCallError {
     /// HTTP long-poll call error.
     #[error(transparent)]
     LongPoll(#[from] subduction_http_longpoll::error::CallError),
+
+    /// Custom JS connection call error.
+    #[error(transparent)]
+    Custom(JsConnectionError),
 }
 
 impl From<super::websocket::CallError> for TransportCallError {
@@ -81,7 +104,7 @@ impl From<super::websocket::CallError> for TransportCallError {
 }
 
 /// Error type for disconnect operations across transports.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum TransportDisconnectionError {
     /// WebSocket disconnection error (infallible).
     #[error("websocket disconnection: {0}")]
@@ -90,6 +113,10 @@ pub enum TransportDisconnectionError {
     /// HTTP long-poll disconnection error.
     #[error(transparent)]
     LongPoll(#[from] subduction_http_longpoll::error::DisconnectionError),
+
+    /// Custom JS connection disconnection error.
+    #[error(transparent)]
+    Custom(JsConnectionError),
 }
 
 impl Connection<Local> for WasmUnifiedTransport {
@@ -102,6 +129,7 @@ impl Connection<Local> for WasmUnifiedTransport {
         match self {
             Self::WebSocket(ws) => Connection::<Local>::peer_id(ws),
             Self::LongPoll(lp) => Connection::<Local>::peer_id(lp),
+            Self::Custom(c) => Connection::<Local>::peer_id(c),
         }
     }
 
@@ -109,6 +137,7 @@ impl Connection<Local> for WasmUnifiedTransport {
         match self {
             Self::WebSocket(ws) => Connection::<Local>::next_request_id(ws),
             Self::LongPoll(lp) => Connection::<Local>::next_request_id(lp),
+            Self::Custom(c) => Connection::<Local>::next_request_id(c),
         }
     }
 
@@ -123,6 +152,10 @@ impl Connection<Local> for WasmUnifiedTransport {
                 let fut = Connection::<Local>::disconnect(lp);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
+            Self::Custom(c) => {
+                let fut = Connection::<Local>::disconnect(c);
+                async move { fut.await.map_err(TransportDisconnectionError::Custom) }.boxed_local()
+            }
         }
     }
 
@@ -136,6 +169,10 @@ impl Connection<Local> for WasmUnifiedTransport {
                 let fut = Connection::<Local>::send(lp, message);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
             }
+            Self::Custom(c) => {
+                let fut = Connection::<Local>::send(c, message);
+                async move { fut.await.map_err(TransportSendError::Custom) }.boxed_local()
+            }
         }
     }
 
@@ -148,6 +185,10 @@ impl Connection<Local> for WasmUnifiedTransport {
             Self::LongPoll(lp) => {
                 let fut = Connection::<Local>::recv(lp);
                 async move { fut.await.map_err(Into::into) }.boxed_local()
+            }
+            Self::Custom(c) => {
+                let fut = Connection::<Local>::recv(c);
+                async move { fut.await.map_err(TransportRecvError::Custom) }.boxed_local()
             }
         }
     }
@@ -170,6 +211,12 @@ impl Connection<Local> for WasmUnifiedTransport {
                     .map_err(Into::into)
             }
             .boxed_local(),
+            Self::Custom(c) => async move {
+                Connection::<Local>::call(c, req, timeout)
+                    .await
+                    .map_err(TransportCallError::Custom)
+            }
+            .boxed_local(),
         }
     }
 }
@@ -179,6 +226,7 @@ impl PartialEq for WasmUnifiedTransport {
         match (self, other) {
             (Self::WebSocket(a), Self::WebSocket(b)) => a == b,
             (Self::LongPoll(a), Self::LongPoll(b)) => a == b,
+            (Self::Custom(a), Self::Custom(b)) => a == b,
             _ => false,
         }
     }

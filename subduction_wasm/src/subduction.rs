@@ -42,14 +42,14 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
-        JsConnection,
+        JsConnection, WasmAuthenticatedConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         transport::{TransportCallError, WasmUnifiedTransport},
-        websocket::{WasmAuthenticatedWebSocket, WasmWebSocket},
+        websocket::WasmWebSocket,
     },
     error::{
-        WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
-        WasmLongPollConnectError, WasmOnboardError, WasmWriteError,
+        WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHydrationError,
+        WasmIoError, WasmLongPollConnectError, WasmOnboardError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -510,10 +510,11 @@ impl WasmSubduction {
             .await?)
     }
 
-    /// Onboard an authenticated WebSocket connection: add it and sync all sedimentrees.
+    /// Onboard an authenticated connection: add it and sync all sedimentrees.
     ///
-    /// The connection must have been authenticated via [`SubductionWebSocket::setup`],
-    /// [`SubductionWebSocket::tryConnect`], or [`SubductionWebSocket::tryDiscover`].
+    /// Accepts an [`AuthenticatedConnection`](WasmAuthenticatedConnection),
+    /// obtained via [`AuthenticatedConnection.setup`](WasmAuthenticatedConnection::setup),
+    /// [`AuthenticatedWebSocket.toConnection`], or [`AuthenticatedLongPoll.toConnection`].
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
     ///
@@ -523,10 +524,31 @@ impl WasmSubduction {
     #[wasm_bindgen]
     pub async fn onboard(
         &self,
-        conn: &WasmAuthenticatedWebSocket,
+        conn: &WasmAuthenticatedConnection,
     ) -> Result<bool, WasmOnboardError> {
         self.core
-            .onboard(conn.inner().clone().map(WasmUnifiedTransport::WebSocket))
+            .onboard(conn.inner().clone())
+            .await
+            .map_err(Into::into)
+    }
+
+    /// Add an authenticated connection to tracking (low-level, no sync).
+    ///
+    /// Prefer [`onboard`](Self::onboard) unless you need explicit control
+    /// over when sync occurs.
+    ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the connection is rejected by the policy.
+    #[wasm_bindgen(js_name = addConnection)]
+    pub async fn add_connection(
+        &self,
+        conn: &WasmAuthenticatedConnection,
+    ) -> Result<bool, WasmAddConnectionError> {
+        self.core
+            .add_connection(conn.inner().clone())
             .await
             .map_err(Into::into)
     }
@@ -884,6 +906,7 @@ fn to_js_connection(transport: WasmUnifiedTransport) -> JsConnection {
         WasmUnifiedTransport::LongPoll(lp) => {
             JsValue::from(WasmLongPollConn::new(lp)).unchecked_into()
         }
+        WasmUnifiedTransport::Custom(conn) => conn,
     }
 }
 

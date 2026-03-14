@@ -201,6 +201,16 @@ impl WasmAuthenticatedLongPoll {
     pub fn session_id(&self) -> String {
         self.session_id.to_hex()
     }
+
+    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedConnection).
+    #[must_use]
+    #[wasm_bindgen(js_name = toConnection)]
+    pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
+        super::WasmAuthenticatedConnection::from_transport(
+            self.inner
+                .map(super::transport::WasmUnifiedTransport::LongPoll),
+        )
+    }
 }
 
 // ---------------------------------------------------------------------------
