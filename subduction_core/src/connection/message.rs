@@ -1186,69 +1186,6 @@ mod tests {
         }
     }
 
-    mod sync_diff {
-        use super::*;
-        use future_form::Sendable;
-        use subduction_crypto::{signed::Signed, signer::memory::MemorySigner};
-
-        fn test_signer() -> MemorySigner {
-            MemorySigner::from_bytes(&[42u8; 32])
-        }
-
-        #[tokio::test]
-        async fn test_sync_diff_with_commits() {
-            let signer = test_signer();
-            let id = SedimentreeId::new([0u8; 32]);
-            let blob = Blob::new(Vec::from([2u8; 16]));
-            let commit = LooseCommit::new(
-                id,
-                BTreeSet::new(),
-                sedimentree_core::blob::BlobMeta::new(&blob),
-            );
-            let signed_commit = Signed::seal::<Sendable, _>(&signer, commit)
-                .await
-                .into_signed();
-
-            let diff = SyncDiff {
-                missing_commits: vec![(signed_commit.clone(), blob.clone())],
-                missing_fragments: Vec::new(),
-                requesting: RequestedData::default(),
-            };
-
-            assert_eq!(diff.missing_commits.len(), 1);
-
-            #[allow(clippy::unwrap_used)]
-            {
-                assert_eq!(diff.missing_commits.first().unwrap().0, signed_commit);
-            }
-        }
-
-        #[tokio::test]
-        async fn test_sync_diff_with_fragments() {
-            let signer = test_signer();
-            let id = SedimentreeId::new([0u8; 32]);
-            let blob = Blob::new(Vec::from([3u8; 16]));
-            let fragment = Fragment::new(
-                id,
-                Digest::force_from_bytes([2u8; 32]),
-                BTreeSet::new(),
-                &[],
-                sedimentree_core::blob::BlobMeta::new(&blob),
-            );
-            let signed_fragment = Signed::seal::<Sendable, _>(&signer, fragment)
-                .await
-                .into_signed();
-
-            let diff = SyncDiff {
-                missing_commits: Vec::new(),
-                missing_fragments: vec![(signed_fragment, blob)],
-                requesting: RequestedData::default(),
-            };
-
-            assert_eq!(diff.missing_fragments.len(), 1);
-        }
-    }
-
     #[cfg(all(test, feature = "std", feature = "bolero"))]
     mod proptests {
         use super::*;

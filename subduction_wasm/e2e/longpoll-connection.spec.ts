@@ -188,7 +188,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
   // FIXME: fullSyncWithAllPeers hangs when the server has no other peers to sync with.
   // This needs a multi-peer test setup or a server with pre-seeded data.
-  test.skip("should sync data via long-poll", async ({ page }) => {
+  test.fail("should sync data via long-poll", async ({ page }) => {
     const result = await page.evaluate(async (baseUrl) => {
       const { Subduction, WebCryptoSigner, MemoryStorage, SedimentreeId } = window.subduction;
 

@@ -1751,10 +1751,11 @@ dependencies = [
 
 [[package]]
 name = "from_js_ref"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68019223a84a846ec9fab2cee81adcc43357543326d816793e8302e274e40e17"
+checksum = "191d6941d3c5d89eba4d1bbc40888d0da2b618193b333af0e3bb88867d48ae3a"
 dependencies = [
+ "js-sys",
  "wasm-bindgen",
 ]
 
@@ -5507,9 +5508,9 @@ dependencies = [
 
 [[package]]
 name = "tinyvec"
-version = "1.10.0"
+version = "1.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfa5fdc3bce6191a1dbc8c02d5c8bffcf557bafa17c124c5264a458f1b0613fa"
+checksum = "3e61e67053d25a4e82c844e8424039d9745781b3fc4f32b8d55ed50f5f667ef3"
 dependencies = [
  "tinyvec_macros",
 ]
@@ -6272,9 +6273,9 @@ dependencies = [
 
 [[package]]
 name = "wasm_refgen"
-version = "0.1.5"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51f25952dcc65f207ccea34b73f9da08e81bb5e389003fa66d67f05a7fabf685"
+checksum = "21c530371970a8c19fd98e930fa51fe709ff019851233b87749a3f0c0a951bb5"
 dependencies = [
  "from_js_ref",
  "heck",
