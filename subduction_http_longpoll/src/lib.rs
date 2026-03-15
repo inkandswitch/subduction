@@ -60,8 +60,6 @@
 
 extern crate alloc;
 
-pub use future_form::Sendable;
-
 pub mod client;
 pub mod connection;
 pub mod error;

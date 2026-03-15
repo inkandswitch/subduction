@@ -17,14 +17,18 @@ use alloc::sync::Arc;
 use core::time::Duration;
 
 use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
-use crate::peer::id::PeerId;
 use future_form::FutureForm;
 use thiserror::Error;
 
-/// A trait representing a connection to a peer in the network.
+/// A trait representing a transport connection to a peer in the network.
 ///
-/// It is assumed that a [`Connection`] is authenticated to a particular peer.
-/// Encrypting this channel is also strongly recommended.
+/// A `Connection` is a bidirectional message pipe. It does _not_ carry
+/// identity information — the remote peer's identity is established by
+/// the handshake and stored on the [`Authenticated`] wrapper.
+///
+/// Encrypting this channel is strongly recommended.
+///
+/// [`Authenticated`]: authenticated::Authenticated
 pub trait Connection<K: FutureForm + ?Sized>: Clone + PartialEq {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
@@ -37,9 +41,6 @@ pub trait Connection<K: FutureForm + ?Sized>: Clone + PartialEq {
 
     /// A problem with a roundtrip call.
     type CallError: core::error::Error;
-
-    /// The peer ID of the remote peer.
-    fn peer_id(&self) -> PeerId;
 
     /// Disconnect from the peer gracefully.
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
@@ -66,10 +67,6 @@ impl<T: Connection<K>, K: FutureForm> Connection<K> for Arc<T> {
     type SendError = T::SendError;
     type RecvError = T::RecvError;
     type CallError = T::CallError;
-
-    fn peer_id(&self) -> PeerId {
-        T::peer_id(self)
-    }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         T::disconnect(self)

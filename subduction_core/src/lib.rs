@@ -25,8 +25,9 @@
 //! tokio::spawn(manager);
 //!
 //! // Connect to a peer and sync
-//! subduction.attach(connection).await?;
-//! subduction.full_sync().await?;
+//! let peer_id = connection.peer_id();
+//! subduction.add_connection(connection).await?;
+//! subduction.full_sync_with_peer(&peer_id, true, None).await;
 //! ```
 //!
 //! ### Optional configuration

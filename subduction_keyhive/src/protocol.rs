@@ -35,7 +35,7 @@ use crate::{
     message::{EventBytes, EventHash, Message},
     peer_id::KeyhivePeerId,
     signed_message::SignedMessage,
-    storage::KeyhiveStorage,
+    storage::{KeyhiveStorage, StorageHash},
     storage_ops,
 };
 
@@ -655,10 +655,7 @@ where
     ///
     /// Returns [`StorageError`] if any storage operation, serialization, or
     /// deserialization fails.
-    pub async fn compact(
-        &self,
-        storage_id: crate::storage::StorageHash,
-    ) -> Result<(), StorageError> {
+    pub async fn compact(&self, storage_id: StorageHash) -> Result<(), StorageError> {
         let keyhive = self.keyhive.lock().await;
         storage_ops::compact(&keyhive, &self.storage, storage_id).await
     }
@@ -738,10 +735,10 @@ mod tests {
     use crate::{
         storage::MemoryKeyhiveStorage,
         test_utils::{
-            TestProtocol, TwoPeerHarness, create_channel_pair, create_group_with_read_members,
-            exchange_all_contact_cards, exchange_contact_cards_and_setup, keyhive_peer_id,
-            make_keyhive, make_protocol_with_shared_keyhive, run_sync_round,
-            serialize_contact_card,
+            SimpleKeyhive, TestProtocol, TwoPeerHarness, create_channel_pair,
+            create_group_with_read_members, exchange_all_contact_cards,
+            exchange_contact_cards_and_setup, keyhive_peer_id, make_keyhive,
+            make_protocol_with_shared_keyhive, run_sync_round, serialize_contact_card,
         },
     };
     use future_form::Local;
@@ -752,7 +749,7 @@ mod tests {
     use nonempty::nonempty;
 
     /// Helper to create a test protocol instance.
-    async fn make_protocol() -> (TestProtocol, crate::test_utils::SimpleKeyhive) {
+    async fn make_protocol() -> (TestProtocol, SimpleKeyhive) {
         let keyhive = make_keyhive().await;
         let peer_id = keyhive_peer_id(&keyhive);
         let cc = keyhive.contact_card().await.unwrap();

@@ -18,6 +18,7 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::stream::AbortHandle;
 
 use super::{Connection, id::ConnectionId, message::Message};
+use crate::peer::id::PeerId;
 
 /// Internal task identifier for abort handle tracking.
 ///
@@ -31,13 +32,13 @@ pub enum Command<C> {
     ///
     /// The manager assigns a new [`ConnectionId`] and returns it via the closed channel
     /// when the connection drops.
-    Add(C),
+    Add(C, PeerId),
 
     /// Re-add a reconnected connection, preserving its [`ConnectionId`].
     ///
     /// Used after a successful reconnection to restore the connection to the manager
     /// with the same logical identity.
-    ReAdd(ConnectionId, C),
+    ReAdd(ConnectionId, C, PeerId),
 
     /// Remove a connection by its [`ConnectionId`] (aborts its task immediately).
     RemoveById(ConnectionId),
@@ -181,8 +182,7 @@ impl<K: FutureForm, C> RunManager<C> for K {
         K::from_future(async move {
             while let Ok(cmd) = manager.commands.recv().await {
                 match cmd {
-                    Command::Add(conn) => {
-                        let peer_id = conn.peer_id();
+                    Command::Add(conn, peer_id) => {
                         let conn_id = ConnectionId::new(
                             manager.next_connection_id.fetch_add(1, Ordering::Relaxed),
                         );
@@ -197,7 +197,7 @@ impl<K: FutureForm, C> RunManager<C> for K {
                         let conn_clone = conn.clone();
 
                         let fut = K::from_future(async move {
-                            connection_loop(conn_clone.clone(), messages).await;
+                            connection_loop(conn_clone.clone(), peer_id, messages).await;
 
                             // Normal completion cleanup - remove from tasks list
                             let mut tasks_guard = tasks.lock().await;
@@ -222,8 +222,7 @@ impl<K: FutureForm, C> RunManager<C> for K {
                             .await
                             .push((conn_id, task_id, handle, conn));
                     }
-                    Command::ReAdd(conn_id, conn) => {
-                        let peer_id = conn.peer_id();
+                    Command::ReAdd(conn_id, conn, peer_id) => {
                         tracing::debug!(
                             "ConnectionManager: re-adding connection {conn_id} for peer {peer_id}"
                         );
@@ -235,7 +234,7 @@ impl<K: FutureForm, C> RunManager<C> for K {
                         let conn_clone = conn.clone();
 
                         let fut = K::from_future(async move {
-                            connection_loop(conn_clone.clone(), messages).await;
+                            connection_loop(conn_clone.clone(), peer_id, messages).await;
 
                             // Normal completion cleanup - remove from tasks list
                             let mut tasks_guard = tasks.lock().await;
@@ -275,9 +274,9 @@ impl<K: FutureForm, C> RunManager<C> for K {
 
 async fn connection_loop<K: FutureForm, C: Connection<K>>(
     conn: C,
+    peer_id: PeerId,
     messages: async_channel::Sender<(C, Message)>,
 ) {
-    let peer_id = conn.peer_id();
     loop {
         match conn.recv().await {
             Ok(msg) => {

@@ -223,7 +223,10 @@ async fn connected_client(
         }
     });
 
-    client.register(client_ws).await.expect("register");
+    client
+        .add_connection(client_ws)
+        .await
+        .expect("add_connection");
     client
 }
 
@@ -293,7 +296,7 @@ fn bench_single_commit_sync(c: &mut Criterion) {
             |(_server, client, sed_id)| {
                 rt.block_on(async {
                     client
-                        .sync_all(sed_id, false, Some(TIMEOUT))
+                        .sync_with_all_peers(sed_id, false, Some(TIMEOUT))
                         .await
                         .expect("sync");
                 });
@@ -334,7 +337,7 @@ fn bench_batch_sync(c: &mut Criterion) {
                 },
                 |(_server, client)| {
                     rt.block_on(async {
-                        assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
+                        assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
                     });
                 },
                 BatchSize::PerIteration,
@@ -378,7 +381,7 @@ fn bench_large_blob_sync(c: &mut Criterion) {
                 },
                 |(_server, client)| {
                     rt.block_on(async {
-                        assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
+                        assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
                     });
                 },
                 BatchSize::PerIteration,
@@ -426,7 +429,7 @@ fn bench_bidirectional_sync(c: &mut Criterion) {
             },
             |(_server, client)| {
                 rt.block_on(async {
-                    assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
+                    assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
                 });
             },
             BatchSize::PerIteration,
@@ -458,7 +461,7 @@ fn bench_incremental_sync(c: &mut Criterion) {
             }
 
             // Sync to get client up to date
-            assert_full_sync(client.full_sync(Some(TIMEOUT)).await);
+            assert_full_sync(client.full_sync_with_all_peers(Some(TIMEOUT)).await);
             tokio::time::sleep(Duration::from_millis(100)).await;
 
             (server, client, sed_id)
@@ -478,7 +481,7 @@ fn bench_incremental_sync(c: &mut Criterion) {
                     .expect("add commit");
 
                 client
-                    .sync_all(sed_id, false, Some(TIMEOUT))
+                    .sync_with_all_peers(sed_id, false, Some(TIMEOUT))
                     .await
                     .expect("sync");
             });
@@ -531,7 +534,9 @@ fn bench_concurrent_clients(c: &mut Criterion) {
                             for client in &clients {
                                 let c = client.clone();
                                 handles.push(tokio::spawn(async move {
-                                    assert_full_sync(c.full_sync(Some(TIMEOUT)).await);
+                                    assert_full_sync(
+                                        c.full_sync_with_all_peers(Some(TIMEOUT)).await,
+                                    );
                                 }));
                             }
 

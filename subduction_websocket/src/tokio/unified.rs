@@ -1,7 +1,7 @@
 //! Unified WebSocket connection type for both accepted and dialed connections.
 
 use crate::{
-    error::{CallError, DisconnectionError, RecvError, SendError},
+    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     timeout::Timeout,
     websocket::WebSocket,
 };
@@ -10,12 +10,9 @@ use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
 use core::time::Duration;
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::{
-    connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    },
-    peer::id::PeerId,
+use subduction_core::connection::{
+    Connection,
+    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
 };
 use tokio::net::TcpStream;
 
@@ -38,7 +35,7 @@ impl<O: Timeout<Sendable> + Send + Sync> UnifiedWebSocket<O> {
     /// # Errors
     ///
     /// Returns an error if the WebSocket connection fails.
-    pub async fn listen(&self) -> Result<(), crate::error::RunError> {
+    pub async fn listen(&self) -> Result<(), RunError> {
         match self {
             UnifiedWebSocket::Accepted(in_ws) => in_ws.listen().await,
             UnifiedWebSocket::Dialed(out_ws) => out_ws.listen().await,
@@ -51,13 +48,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedWebSock
     type RecvError = RecvError;
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        match self {
-            UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::peer_id(in_ws),
-            UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::peer_id(out_ws),
-        }
-    }
 
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         match self {

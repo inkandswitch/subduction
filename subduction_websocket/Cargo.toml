@@ -1,6 +1,6 @@
 [package]
 name = "subduction_websocket"
-version = "0.6.0"
+version = "0.7.0"
 description = "WebSocket transport layer for the Subduction sync protocol"
 
 categories = ["web-programming"]
@@ -49,6 +49,14 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"]
 name = "e2e"
 harness = false
 
+[[test]]
+name = "round_trip"
+required-features = ["tokio_server", "tokio_client"]
+
+[[test]]
+name = "tokio_tests"
+required-features = ["tokio_server", "tokio_client"]
+
 [features]
 default = ["std"]
 futures-timer = ["std", "dep:futures-timer"]
@@ -62,7 +70,7 @@ std = [
   "rand/std",
   "rand/std_rng",
   "sedimentree_core/std",
-  "subduction_core/std",
+  "subduction_core/system_time",
   "thiserror/std",
   "tracing/std",
 ]

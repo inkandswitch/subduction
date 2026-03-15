@@ -10,10 +10,7 @@ use core::fmt;
 use async_lock::Mutex;
 use future_form::Sendable;
 use rand::{RngCore, rngs::OsRng};
-use subduction_core::{
-    connection::{authenticated::Authenticated, timeout::Timeout},
-    peer::id::PeerId,
-};
+use subduction_core::connection::{authenticated::Authenticated, timeout::Timeout};
 
 use crate::connection::HttpLongPollConnection;
 
@@ -92,16 +89,15 @@ pub struct SessionStore<O: Timeout<Sendable> + Send + Sync> {
     pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<O>>>>,
 }
 
-/// A single session entry containing the connection and peer identity.
+/// A single session entry containing the connection state.
+///
+/// The peer identity is available via [`connection.peer_id()`](HttpLongPollConnection::peer_id).
 #[derive(Debug, Clone)]
 pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync> {
-    /// The peer's identity.
-    pub peer_id: PeerId,
-
     /// The connection channels for this session.
     pub connection: HttpLongPollConnection<O>,
 
-    /// The authenticated wrapper, present until consumed by Subduction registration.
+    /// The authenticated wrapper, present until consumed by Subduction.
     pub authenticated: Option<Authenticated<HttpLongPollConnection<O>, Sendable>>,
 }
 

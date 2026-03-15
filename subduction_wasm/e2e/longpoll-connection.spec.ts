@@ -51,19 +51,16 @@ let currentPort: number;
 let currentBaseUrl: string;
 
 test.beforeAll(async ({ browserName }) => {
-  if (process.env.CI) {
-    test.skip();
-  }
-
   currentPort = LP_PORTS[browserName];
   currentBaseUrl = `http://${LP_HOST}:${currentPort}`;
 
-  const cliPath = path.join(__dirname, "../../target/release/subduction_cli");
+  const cliPath = process.env.SUBDUCTION_CLI
+    ?? path.join(__dirname, "../../target/release/subduction_cli");
 
   // Start server with both transports enabled (default), ephemeral key for test isolation
   subductionServer = spawn(
     cliPath,
-    ["start", "--socket", `${LP_HOST}:${currentPort}`, "--ephemeral-key"],
+    ["server", "--socket", `${LP_HOST}:${currentPort}`, "--ephemeral-key"],
     {
       cwd: path.join(__dirname, "../.."),
       stdio: "pipe",
@@ -124,7 +121,6 @@ test.describe("Long-Poll Connection Tests", () => {
 
         const peerId = await syncer.connectDiscoverLongPoll(
           baseUrl,
-          signer,
           10000,
           baseUrl.replace("http://", "")
         );
@@ -163,7 +159,6 @@ test.describe("Long-Poll Connection Tests", () => {
 
         await syncer.connectDiscoverLongPoll(
           baseUrl,
-          signer,
           10000,
           baseUrl.replace("http://", "")
         );
@@ -191,43 +186,51 @@ test.describe("Long-Poll Connection Tests", () => {
     expect(result.afterCount).toBe(0);
   });
 
-  test("should sync data via long-poll", async ({ page }) => {
+  test("should sync data between two peers via long-poll", async ({ page }) => {
+    test.setTimeout(30_000);
     const result = await page.evaluate(async (baseUrl) => {
-      const { Subduction, WebCryptoSigner, MemoryStorage, SedimentreeId } = window.subduction;
+      const { Subduction, SubductionLongPoll, WebCryptoSigner, MemoryStorage, SedimentreeId } = window.subduction;
 
       try {
-        const signer = await WebCryptoSigner.setup();
-        const syncer = new Subduction(signer, new MemoryStorage());
+        const serviceName = baseUrl.replace("http://", "");
 
-        await syncer.connectDiscoverLongPoll(
-          baseUrl,
-          signer,
-          10000,
-          baseUrl.replace("http://", "")
-        );
+        // Peer A: connect, add data, sync to server
+        const signerA = await WebCryptoSigner.setup();
+        const syncerA = new Subduction(signerA, new MemoryStorage());
 
-        // Add a commit locally
+        const authA = await SubductionLongPoll.tryDiscover(baseUrl, signerA, 10000, serviceName);
+        const serverPeerId = authA.peerId;
+        await syncerA.addConnection(authA.toConnection());
+
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(99));
-        const blob = new Uint8Array([1, 2, 3, 4, 5]);
-        await syncer.addCommit(sedId, [], blob);
+        await syncerA.addCommit(sedId, [], new Uint8Array([1, 2, 3, 4, 5]));
+        await syncerA.syncWithPeer(serverPeerId, sedId, true, 5000n);
 
-        // Sync to the server (timeout is bigint)
-        const syncResult = await syncer.fullSync(10000n);
+        // Peer B: connect, sync from server, verify data arrived
+        const signerB = await WebCryptoSigner.setup();
+        const syncerB = new Subduction(signerB, new MemoryStorage());
+
+        const authB = await SubductionLongPoll.tryDiscover(baseUrl, signerB, 10000, serviceName);
+        const serverPeerIdB = authB.peerId;
+        await syncerB.addConnection(authB.toConnection());
+        await syncerB.syncWithPeer(serverPeerIdB, sedId, true, 5000n);
+
+        const idsB = await syncerB.sedimentreeIds();
 
         return {
-          synced: syncResult.success,
+          peerBHasData: idsB.length > 0,
           error: null,
         };
       } catch (error) {
         return {
-          synced: false,
+          peerBHasData: false,
           error: error instanceof Error ? error.message : String(error),
         };
       }
     }, currentBaseUrl);
 
     expect(result.error).toBeNull();
-    expect(result.synced).toBe(true);
+    expect(result.peerBHasData).toBe(true);
   });
 
   test("should connect via SubductionLongPoll.tryDiscover", async ({ page }) => {
@@ -296,6 +299,59 @@ test.describe("Long-Poll Connection Tests", () => {
     expect(true).toBe(true);
   });
 
+  test("should connect via known peer ID using tryConnect", async ({ page }) => {
+    const result = await page.evaluate(async (baseUrl) => {
+      const { Subduction, SubductionLongPoll, WebCryptoSigner, MemoryStorage } = window.subduction;
+
+      try {
+        // First discover the server's peer ID
+        const signer1 = await WebCryptoSigner.setup();
+        const serviceName = baseUrl.replace("http://", "");
+
+        const discoveryAuth = await SubductionLongPoll.tryDiscover(
+          baseUrl,
+          signer1,
+          10000,
+          serviceName
+        );
+        const serverPeerId = discoveryAuth.peerId;
+
+        // Now connect with a different signer using the known peer ID
+        const signer2 = await WebCryptoSigner.setup();
+        const syncer = new Subduction(signer2, new MemoryStorage());
+
+        const knownAuth = await SubductionLongPoll.tryConnect(
+          baseUrl,
+          signer2,
+          serverPeerId,
+          10000
+        );
+        const isNew = await syncer.addConnection(knownAuth.toConnection());
+
+        const peers = await syncer.getConnectedPeerIds();
+
+        return {
+          isNew,
+          peerCount: peers.length,
+          peerMatchesServer: peers.length > 0 && peers[0].toString() === serverPeerId.toString(),
+          error: null,
+        };
+      } catch (error) {
+        return {
+          isNew: false,
+          peerCount: 0,
+          peerMatchesServer: false,
+          error: error instanceof Error ? error.message : String(error),
+        };
+      }
+    }, currentBaseUrl);
+
+    expect(result.error).toBeNull();
+    expect(result.isNew).toBe(true);
+    expect(result.peerCount).toBe(1);
+    expect(result.peerMatchesServer).toBe(true);
+  });
+
   test("should run two long-poll clients concurrently", async ({ page }) => {
     const result = await page.evaluate(async (baseUrl) => {
       const { Subduction, WebCryptoSigner, MemoryStorage } = window.subduction;
@@ -309,8 +365,8 @@ test.describe("Long-Poll Connection Tests", () => {
 
         const serviceName = baseUrl.replace("http://", "");
 
-        await syncer1.connectDiscoverLongPoll(baseUrl, signer1, 10000, serviceName);
-        await syncer2.connectDiscoverLongPoll(baseUrl, signer2, 10000, serviceName);
+        await syncer1.connectDiscoverLongPoll(baseUrl, 10000, serviceName);
+        await syncer2.connectDiscoverLongPoll(baseUrl, 10000, serviceName);
 
         const peers1 = (await syncer1.getConnectedPeerIds()).length;
         const peers2 = (await syncer2.getConnectedPeerIds()).length;

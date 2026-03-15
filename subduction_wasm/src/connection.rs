@@ -1,45 +1,46 @@
 //! JS [`Connection`] interface for Subduction.
 
-mod handshake;
-
 pub mod fetch_client;
+pub mod handshake;
 pub mod longpoll;
 pub mod message;
+pub mod message_port;
 pub mod nonce;
-pub mod transport;
 pub mod websocket;
 
 use alloc::string::ToString;
 use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
+use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
-use js_sys::Promise;
+use js_sys::{self, Promise};
 use subduction_core::{
     connection::{
         Connection,
+        authenticated::Authenticated,
+        handshake::{self as hs, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
     },
-    peer::id::PeerId,
+    timestamp::TimestampSeconds,
 };
+use subduction_crypto::{nonce::Nonce, signer::Signer};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
-    connection::{
-        message::{JsMessage, WasmMessage},
-        nonce::WasmNonce,
-    },
+    connection::{message::WasmMessage, nonce::WasmNonce},
+    error::WasmHandshakeError,
     peer_id::WasmPeerId,
+    signer::JsSigner,
 };
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
 export interface Connection {
-    peerId(): PeerId;
     disconnect(): Promise<void>;
     send(message: Message): Promise<void>;
     recv(): Promise<Message>;
@@ -53,10 +54,6 @@ extern "C" {
     /// Connection interface.
     #[wasm_bindgen(js_name = Connection, typescript_type = "Connection")]
     pub type JsConnection;
-
-    /// Get the peer ID of the remote peer.
-    #[wasm_bindgen(method, js_name = peerId)]
-    fn js_peer_id(this: &JsConnection) -> WasmPeerId;
 
     /// Disconnect from the peer gracefully.
     #[wasm_bindgen(method, js_name = disconnect)]
@@ -107,10 +104,6 @@ impl Connection<Local> for JsConnection {
     type RecvError = JsConnectionError;
     type CallError = JsConnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        self.js_peer_id().into()
-    }
-
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async move {
             JsFuture::from(self.js_disconnect())
@@ -137,14 +130,12 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_recv())
                 .await
                 .map_err(JsConnectionError::Recv)?;
-            let js_msg: JsMessage =
-                js_value
-                    .dyn_into()
-                    .map_err(|value| JsConnectionError::UnexpectedJsType {
-                        expected: "Message",
-                        value,
-                    })?;
-            let wasm_msg = WasmMessage::from(&js_msg);
+            let wasm_msg = WasmMessage::try_from_js_value(&js_value).ok_or_else(|| {
+                JsConnectionError::UnexpectedJsType {
+                    expected: "Message",
+                    value: js_value,
+                }
+            })?;
             Ok(wasm_msg.into())
         }
         .boxed_local()
@@ -157,10 +148,8 @@ impl Connection<Local> for JsConnection {
                 .await
                 .expect("JsConnection.nextRequestId() promise rejected");
             #[allow(clippy::expect_used)]
-            let js_req_id: JsRequestId = js_value
-                .dyn_into()
+            let wasm_req_id = WasmRequestId::try_from_js_value(&js_value)
                 .expect("JsConnection.nextRequestId() did not return a RequestId");
-            let wasm_req_id = WasmRequestId::from(&js_req_id);
             wasm_req_id.into()
         }
         .boxed_local()
@@ -178,14 +167,13 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_call(wasm_req, timeout_ms))
                 .await
                 .map_err(JsConnectionError::Call)?;
-            let js_resp: JsBatchSyncResponse =
-                js_value
-                    .dyn_into()
-                    .map_err(|value| JsConnectionError::UnexpectedJsType {
+            let wasm_resp =
+                WasmBatchSyncResponse::try_from_js_value(&js_value).ok_or_else(|| {
+                    JsConnectionError::UnexpectedJsType {
                         expected: "BatchSyncResponse",
-                        value,
-                    })?;
-            let wasm_resp = WasmBatchSyncResponse::from(&js_resp);
+                        value: js_value,
+                    }
+                })?;
             Ok(wasm_resp.into())
         }
         .boxed_local()
@@ -346,5 +334,167 @@ impl From<BatchSyncResponse> for WasmBatchSyncResponse {
 impl From<WasmBatchSyncResponse> for BatchSyncResponse {
     fn from(resp: WasmBatchSyncResponse) -> Self {
         resp.0
+    }
+}
+
+/// A transport-erased authenticated connection.
+///
+/// Wraps an [`Authenticated<JsConnection>`] and is the common type
+/// accepted by [`addConnection`](crate::subduction::WasmSubduction::add_connection).
+///
+/// # Construction
+///
+/// There are three ways to obtain an `AuthenticatedConnection`:
+///
+/// 1. **Custom transport** — implement [`HandshakeConnection`](handshake::JsHandshakeConnection)
+///    (extends `Connection` with `sendBytes`/`recvBytes`) and call [`setup`](Self::setup):
+///
+///    ```js
+///    const auth = await AuthenticatedConnection.setup(myConn, signer, peerId);
+///    ```
+///
+/// 2. **From WebSocket** — authenticate via [`SubductionWebSocket`] then convert:
+///
+///    ```js
+///    const wsAuth = await SubductionWebSocket.tryConnect(url, signer, peerId, timeout);
+///    const auth = wsAuth.toConnection();
+///    ```
+///
+/// 3. **From HTTP long-poll** — same pattern via [`SubductionLongPoll`]:
+///
+///    ```js
+///    const lpAuth = await SubductionLongPoll.tryConnect(url, signer, peerId, timeout);
+///    const auth = lpAuth.toConnection();
+///    ```
+#[wasm_bindgen(js_name = AuthenticatedConnection)]
+#[derive(Debug)]
+pub struct WasmAuthenticatedConnection {
+    inner: Authenticated<JsConnection, Local>,
+}
+
+impl WasmAuthenticatedConnection {
+    /// Access the inner `Authenticated` connection.
+    pub(crate) fn inner(&self) -> &Authenticated<JsConnection, Local> {
+        &self.inner
+    }
+
+    /// Construct from an `Authenticated<JsConnection>`.
+    ///
+    /// Used by [`WasmAuthenticatedWebSocket::to_connection`] and
+    /// [`WasmAuthenticatedLongPoll::to_connection`] to wrap transport-specific
+    /// authenticated connections.
+    pub(crate) fn from_authenticated(inner: Authenticated<JsConnection, Local>) -> Self {
+        Self { inner }
+    }
+}
+
+#[wasm_bindgen(js_class = AuthenticatedConnection)]
+impl WasmAuthenticatedConnection {
+    /// Run the Subduction handshake over a custom transport, producing an
+    /// authenticated connection.
+    ///
+    /// The `connection` object must implement both `HandshakeConnection`
+    /// (for the handshake phase) and `Connection` (for post-handshake
+    /// communication). The same object is used for both phases.
+    ///
+    /// # Arguments
+    ///
+    /// * `connection` - A `HandshakeConnection` (extends `Connection`)
+    /// * `signer` - The client's signer for authentication
+    /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
+    #[wasm_bindgen]
+    pub async fn setup(
+        connection: handshake::JsHandshakeConnection,
+        signer: &JsSigner,
+        expected_peer_id: &WasmPeerId,
+    ) -> Result<WasmAuthenticatedConnection, WasmHandshakeError> {
+        let audience = Audience::known(expected_peer_id.clone().into());
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
+        let nonce = Nonce::random();
+
+        let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
+            connection,
+            |hs_conn, peer_id| {
+                let transport: JsConnection = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
+                (transport, peer_id)
+            },
+            signer,
+            audience,
+            now,
+            nonce,
+        )
+        .await
+        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+
+        tracing::info!("Handshake complete: authenticated peer {peer_id}");
+
+        Ok(Self {
+            inner: authenticated,
+        })
+    }
+
+    /// Accept an incoming handshake over a custom transport (responder side).
+    ///
+    /// This is the counterpart to [`setup`](Self::setup). The initiator calls
+    /// `setup`, and the responder calls `accept` over the same underlying channel.
+    ///
+    /// # Arguments
+    ///
+    /// * `connection` - A `HandshakeConnection` (extends `Connection`)
+    /// * `signer` - The responder's signer for authentication
+    /// * `max_drift_seconds` - Maximum acceptable clock drift in seconds (default: 600)
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
+    #[wasm_bindgen]
+    pub async fn accept(
+        connection: handshake::JsHandshakeConnection,
+        signer: &JsSigner,
+        max_drift_seconds: Option<u32>,
+    ) -> Result<WasmAuthenticatedConnection, WasmHandshakeError> {
+        use core::time::Duration;
+        use subduction_core::connection::nonce_cache::NonceCache;
+
+        let our_peer_id = signer.verifying_key().into();
+        let nonce_cache = NonceCache::default();
+        let max_drift = Duration::from_secs(u64::from(max_drift_seconds.unwrap_or(600)));
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
+
+        let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
+            connection,
+            |hs_conn, peer_id| {
+                let transport: JsConnection = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
+                (transport, peer_id)
+            },
+            signer,
+            &nonce_cache,
+            our_peer_id,
+            None,
+            now,
+            max_drift,
+        )
+        .await
+        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+
+        tracing::info!("Handshake complete (responder): authenticated peer {peer_id}");
+
+        Ok(Self {
+            inner: authenticated,
+        })
+    }
+
+    /// The verified peer identity.
+    #[must_use]
+    #[wasm_bindgen(getter, js_name = peerId)]
+    pub fn peer_id(&self) -> WasmPeerId {
+        self.inner.peer_id().into()
     }
 }

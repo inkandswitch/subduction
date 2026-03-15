@@ -57,7 +57,8 @@ impl MockConnection {
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
     pub fn authenticated(self) -> Authenticated<Self, Sendable> {
-        Authenticated::new_for_test(self)
+        let peer_id = self.peer_id;
+        Authenticated::new_for_test(self, peer_id)
     }
 }
 
@@ -72,10 +73,6 @@ impl Connection<Sendable> for MockConnection {
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
     type CallError = core::fmt::Error;
-
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
 
     fn disconnect(
         &self,
@@ -141,7 +138,8 @@ impl FailingSendMockConnection {
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
     pub fn authenticated(self) -> Authenticated<Self, Sendable> {
-        Authenticated::new_for_test(self)
+        let peer_id = self.peer_id;
+        Authenticated::new_for_test(self, peer_id)
     }
 }
 
@@ -156,10 +154,6 @@ impl Connection<Sendable> for FailingSendMockConnection {
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
     type CallError = core::fmt::Error;
-
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
 
     fn disconnect(
         &self,
@@ -276,7 +270,8 @@ impl ChannelMockConnection {
     where
         Self: Connection<K>,
     {
-        Authenticated::new_for_test(self)
+        let peer_id = self.peer_id;
+        Authenticated::new_for_test(self, peer_id)
     }
 }
 
@@ -285,10 +280,6 @@ impl Connection<Sendable> for ChannelMockConnection {
     type SendError = async_channel::SendError<Message>;
     type RecvError = async_channel::RecvError;
     type CallError = core::fmt::Error;
-
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
 
     fn disconnect(
         &self,
@@ -338,10 +329,6 @@ impl Connection<Local> for ChannelMockConnection {
     type SendError = async_channel::SendError<Message>;
     type RecvError = async_channel::RecvError;
     type CallError = core::fmt::Error;
-
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
 
     fn disconnect(
         &self,
@@ -455,10 +442,6 @@ where
     type RecvError = C::RecvError;
     type CallError = C::CallError;
 
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
-    }
-
     fn disconnect(
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
@@ -497,10 +480,6 @@ impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
     type SendError = C::SendError;
     type RecvError = C::RecvError;
     type CallError = C::CallError;
-
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
-    }
 
     fn disconnect(
         &self,
@@ -602,48 +581,4 @@ pub fn new_test_subduction() -> (
         .build::<Sendable, MockConnection>();
 
     (sd, listener, manager)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use sedimentree_core::id::SedimentreeId;
-    use testresult::TestResult;
-
-    #[test]
-    fn test_mock_connection_new() {
-        let conn = MockConnection::new();
-        assert_eq!(conn.peer_id(), PeerId::new([0u8; 32]));
-    }
-
-    #[test]
-    fn test_mock_connection_with_peer_id() {
-        let peer_id = PeerId::new([42u8; 32]);
-        let conn = MockConnection::with_peer_id(peer_id);
-        assert_eq!(conn.peer_id(), peer_id);
-    }
-
-    #[tokio::test]
-    async fn test_channel_mock_connection_send_recv() -> TestResult {
-        let peer_id = PeerId::new([1u8; 32]);
-        let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-
-        let msg = Message::BlobsRequest {
-            id: SedimentreeId::new([0u8; 32]),
-            digests: vec![],
-        };
-        Connection::<Sendable>::send(&conn, &msg).await?;
-        let received = handle.outbound_rx.recv().await?;
-        assert!(matches!(received, Message::BlobsRequest { .. }));
-
-        let inject_msg = Message::BlobsResponse {
-            id: SedimentreeId::new([0u8; 32]),
-            blobs: vec![],
-        };
-        handle.inbound_tx.send(inject_msg).await?;
-        let received = Connection::<Sendable>::recv(&conn).await?;
-        assert!(matches!(received, Message::BlobsResponse { .. }));
-
-        Ok(())
-    }
 }

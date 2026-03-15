@@ -183,7 +183,7 @@ async fn batch_sync() -> TestResult {
     });
 
     assert_eq!(client.connected_peer_ids().await.len(), 0);
-    client.register(client_ws).await?;
+    client.add_connection(client_ws).await?;
     assert_eq!(client.connected_peer_ids().await.len(), 1);
 
     client.add_commit(sed_id, BTreeSet::new(), blob2).await?;
@@ -207,7 +207,9 @@ async fn batch_sync() -> TestResult {
     assert_eq!(client.connected_peer_ids().await.len(), 1);
     assert_eq!(server_subduction.connected_peer_ids().await.len(), 1);
 
-    client.full_sync(Some(Duration::from_millis(100))).await;
+    client
+        .full_sync_with_all_peers(Some(Duration::from_millis(100)))
+        .await;
 
     let server_updated = server_subduction
         .get_commits(sed_id)

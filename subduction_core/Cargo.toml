@@ -1,6 +1,6 @@
 [package]
 name = "subduction_core"
-version = "0.6.0"
+version = "0.7.0"
 description = "Subduction: sync protocol for replicating Sedimentrees between peers"
 
 categories = ["web-programming"]
@@ -63,6 +63,7 @@ std = [
   "subduction_crypto/std",
   "thiserror/std"
 ]
+system_time = ["std"]
 test_utils = ["std", "dep:tokio"]
 
 [lints]

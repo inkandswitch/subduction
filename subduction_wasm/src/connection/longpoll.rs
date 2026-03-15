@@ -7,6 +7,7 @@ use alloc::string::{String, ToString};
 use core::time::Duration;
 
 use future_form::Local;
+use futures::FutureExt;
 use subduction_core::connection::{
     Connection,
     authenticated::Authenticated,
@@ -18,35 +19,43 @@ use subduction_http_longpoll::{
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
+use wasm_bindgen_futures::JsFuture;
 
 use super::{
     WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, fetch_client::FetchHttpClient,
     message::WasmMessage,
 };
-use crate::{peer_id::WasmPeerId, signer::JsSigner};
+use crate::{peer_id::WasmPeerId, signer::JsSigner, timer};
 
 // ---------------------------------------------------------------------------
-// Timeout: use FuturesTimerTimeout which works on both native and wasm
+// Timeout: direct `globalThis.setTimeout` binding
 // ---------------------------------------------------------------------------
 
-/// A [`Timeout<Local>`] implementation using [`futures_timer::Delay`].
+/// A [`Timeout<Local>`] backed by `globalThis.setTimeout`.
 ///
-/// On wasm targets, `futures-timer` uses browser `setTimeout` internally.
+/// Works in browsers, web workers, service workers, Node.js, Deno, and Bun.
 #[derive(Debug, Clone, Copy)]
-pub struct FuturesTimerTimeout;
+pub struct JsTimeout;
 
-impl Timeout<Local> for FuturesTimerTimeout {
+impl Timeout<Local> for JsTimeout {
     fn timeout<'a, T: 'a>(
         &'a self,
         dur: Duration,
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            FutureExt,
             future::{Either, select},
+            pin_mut,
         };
+
         async move {
-            match select(fut, futures_timer::Delay::new(dur)).await {
+            let ms = i32::try_from(dur.as_millis()).unwrap_or(i32::MAX);
+            let delay = js_sys::Promise::new(&mut |resolve, _| {
+                timer::set_timeout(&resolve, ms);
+            });
+            let delay_fut = JsFuture::from(delay);
+            pin_mut!(fut, delay_fut);
+            match select(fut, delay_fut).await {
                 Either::Left((val, _)) => Ok(val),
                 Either::Right(_) => Err(TimedOut),
             }
@@ -56,7 +65,7 @@ impl Timeout<Local> for FuturesTimerTimeout {
 }
 
 /// Type alias for the long-poll connection used in wasm.
-pub type WasmLongPollConnection = HttpLongPollConnection<FuturesTimerTimeout>;
+pub type WasmLongPollConnection = HttpLongPollConnection<JsTimeout>;
 
 /// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
 /// [`Connection`](super::JsConnection) interface so it can be used as a
@@ -93,13 +102,6 @@ impl From<WasmLongPollConnError> for JsValue {
 
 #[wasm_bindgen(js_class = SubductionLongPollConnection)]
 impl WasmLongPollConn {
-    /// Get the peer ID of the remote peer.
-    #[must_use]
-    #[wasm_bindgen(js_name = peerId)]
-    pub fn peer_id(&self) -> WasmPeerId {
-        Connection::<Local>::peer_id(&self.0).into()
-    }
-
     /// Disconnect from the peer gracefully.
     ///
     /// # Errors
@@ -201,6 +203,16 @@ impl WasmAuthenticatedLongPoll {
     pub fn session_id(&self) -> String {
         self.session_id.to_hex()
     }
+
+    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedConnection).
+    #[must_use]
+    #[wasm_bindgen(js_name = toConnection)]
+    pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
+        super::WasmAuthenticatedConnection::from_authenticated(self.inner.map(|lp| {
+            wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp))
+                .unchecked_into::<super::JsConnection>()
+        }))
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -211,11 +223,11 @@ impl WasmAuthenticatedLongPoll {
 fn make_client(
     base_url: &str,
     default_time_limit: Duration,
-) -> HttpLongPollClient<FetchHttpClient, FuturesTimerTimeout> {
+) -> HttpLongPollClient<FetchHttpClient, JsTimeout> {
     HttpLongPollClient::new(
         base_url,
         FetchHttpClient::new(),
-        FuturesTimerTimeout,
+        JsTimeout,
         default_time_limit,
     )
 }

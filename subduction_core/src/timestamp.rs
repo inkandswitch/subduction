@@ -22,8 +22,8 @@ impl TimestampSeconds {
     /// # Panics
     ///
     /// Panics if the system time is before the Unix epoch.
-    #[cfg(feature = "std")]
-    #[cfg_attr(docsrs, doc(cfg(feature = "std")))]
+    #[cfg(feature = "system_time")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "system_time")))]
     #[allow(clippy::expect_used)]
     #[must_use]
     pub fn now() -> Self {

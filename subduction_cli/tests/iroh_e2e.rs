@@ -39,7 +39,8 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection, http_client::ReqwestHttpClient,
+    client::HttpLongPollClient, connection::HttpLongPollConnection,
+    http_client::reqwest_client::ReqwestHttpClient,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 
@@ -213,9 +214,9 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
     tokio::spawn(result.poll_task);
     tokio::spawn(result.send_task);
     subduction
-        .register(result.authenticated)
+        .add_connection(result.authenticated)
         .await
-        .expect("register");
+        .expect("add_connection");
 
     subduction
 }
@@ -228,7 +229,8 @@ async fn push_commit(client: &TestSubduction, sed_id: SedimentreeId, payload: &[
         .await
         .expect("add commit");
 
-    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(SYNC_TIMEOUT)).await;
+    let (had_success, _stats, call_errs, io_errs) =
+        client.full_sync_with_all_peers(Some(SYNC_TIMEOUT)).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "io errors: {io_errs:?}");
     assert!(had_success, "sync should succeed");
@@ -300,7 +302,9 @@ async fn iroh_sync_between_two_cli_servers() {
     loop {
         tokio::time::sleep(Duration::from_secs(2)).await;
 
-        let result_a = verify_a.sync_all(sed_id, true, Some(SYNC_TIMEOUT)).await;
+        let result_a = verify_a
+            .sync_with_all_peers(sed_id, true, Some(SYNC_TIMEOUT))
+            .await;
         if let Err(ref e) = result_a {
             eprintln!("verify_a sync_all error: {e:?}");
         }
@@ -310,7 +314,9 @@ async fn iroh_sync_between_two_cli_servers() {
             .as_ref()
             .map_or(0, Vec::len);
 
-        let result_b = verify_b.sync_all(sed_id, true, Some(SYNC_TIMEOUT)).await;
+        let result_b = verify_b
+            .sync_with_all_peers(sed_id, true, Some(SYNC_TIMEOUT))
+            .await;
         if let Err(ref e) = result_b {
             eprintln!("verify_b sync_all error: {e:?}");
         }

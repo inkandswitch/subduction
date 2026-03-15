@@ -32,7 +32,7 @@ use sedimentree_core::codec::{
 };
 use thiserror::Error;
 
-use crate::verified_signature::VerifiedSignature;
+use crate::{signer::Signer, verified_signature::VerifiedSignature};
 
 /// Size of the schema header.
 pub const SCHEMA_SIZE: usize = 4;
@@ -285,7 +285,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     ///
     /// * `signer` - The signer to use
     /// * `payload` - The payload to sign
-    pub async fn seal<K: future_form::FutureForm, S: crate::signer::Signer<K>>(
+    pub async fn seal<K: future_form::FutureForm, S: Signer<K>>(
         signer: &S,
         payload: T,
     ) -> VerifiedSignature<T> {

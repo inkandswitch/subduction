@@ -510,10 +510,6 @@ impl Connection<Local> for WasmWebSocket {
     type CallError = CallError;
     type DisconnectionError = Infallible;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         let counter = self.request_id_counter.clone();
         async move {
@@ -612,10 +608,11 @@ impl Connection<Local> for WasmWebSocket {
 // requires the signer, which is not stored in the struct. Applications should
 // handle reconnection by calling connect again.
 
+use crate::timer;
+
 #[derive(Debug)]
 struct WasmTimeout {
-    id: JsValue, // Numeric in browsers, special Timeout type in e.g. Deno.
-    // Keep the closure alive so the timer can call it
+    id: JsValue,
     _closure: Option<Closure<dyn FnMut()>>,
 }
 
@@ -625,47 +622,12 @@ impl WasmTimeout {
         let mut out_id: JsValue = JsValue::UNDEFINED;
         let mut out_closure: Option<Closure<dyn FnMut()>> = None;
 
-        let promise = Promise::new(&mut |resolve, reject| {
-            // NOTE this `global` strategy looks ugly,
-            // BUT it abstracts over both `window` and `worker` contexts.
-            let global = js_sys::global();
-
-            let js_value = match js_sys::Reflect::get(&global, &JsValue::from_str("setTimeout")) {
-                Ok(v) => v,
-                Err(e) => {
-                    drop(reject.call1(&JsValue::NULL, &e));
-                    return;
-                }
-            };
-
-            let set_timeout = match js_value.dyn_into::<js_sys::Function>() {
-                Ok(set_timeout) => set_timeout,
-                Err(e) => {
-                    drop(reject.call1(&JsValue::NULL, &e));
-                    return;
-                }
-            };
-
-            let callback_reject = reject.clone();
-            let callback = Closure::wrap(Box::new(move || match resolve.call0(&JsValue::NULL) {
-                Err(e) => {
-                    drop(callback_reject.call1(&JsValue::NULL, &e));
-                }
-                Ok(_val) => (),
+        let promise = Promise::new(&mut |resolve, _reject| {
+            let callback = Closure::wrap(Box::new(move || {
+                drop(resolve.call0(&JsValue::NULL));
             }) as Box<dyn FnMut()>);
 
-            out_id = match set_timeout.call2(
-                &global,
-                callback.as_ref().unchecked_ref(),
-                &JsValue::from(ms),
-            ) {
-                Ok(id) => id,
-                Err(e) => {
-                    drop(reject.call1(&JsValue::NULL, &e));
-                    return;
-                }
-            };
-
+            out_id = timer::set_timeout(callback.as_ref().unchecked_ref(), ms);
             out_closure = Some(callback);
         });
 
@@ -680,13 +642,7 @@ impl WasmTimeout {
 
     /// Cancel the timer (prevents the callback from firing).
     fn cancel(self) {
-        let global = js_sys::global();
-        if let Ok(clear_timeout) = js_sys::Reflect::get(&global, &JsValue::from_str("clearTimeout"))
-            .and_then(JsCast::dyn_into::<js_sys::Function>)
-            && let Err(e) = clear_timeout.call1(&global, &self.id)
-        {
-            tracing::error!("failed to clear timeout: {:?}", e);
-        }
+        timer::clear_timeout(&self.id);
     }
 }
 
@@ -862,13 +818,6 @@ pub struct WasmAuthenticatedWebSocket {
     inner: Authenticated<WasmWebSocket, Local>,
 }
 
-impl WasmAuthenticatedWebSocket {
-    /// Access the inner `Authenticated` connection.
-    pub(crate) fn inner(&self) -> &Authenticated<WasmWebSocket, Local> {
-        &self.inner
-    }
-}
-
 #[wasm_bindgen(js_class = AuthenticatedWebSocket)]
 impl WasmAuthenticatedWebSocket {
     /// The verified peer identity.
@@ -876,6 +825,16 @@ impl WasmAuthenticatedWebSocket {
     #[wasm_bindgen(getter, js_name = peerId)]
     pub fn peer_id(&self) -> WasmPeerId {
         self.inner.peer_id().into()
+    }
+
+    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedConnection).
+    #[must_use]
+    #[wasm_bindgen(js_name = toConnection)]
+    pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
+        super::WasmAuthenticatedConnection::from_authenticated(
+            self.inner
+                .map(|ws| wasm_bindgen::JsValue::from(ws).unchecked_into::<super::JsConnection>()),
+        )
     }
 }
 

@@ -17,7 +17,7 @@ use crate::peer::id::PeerId;
 ///
 /// This is a witness type proving the connection was authenticated.
 /// The inner connection has been verified via cryptographic handshake,
-/// and the `peer_id` matches the signing key used in verification.
+/// and the `peer_id` is the verified remote peer's identity.
 ///
 /// # Type Parameters
 ///
@@ -50,11 +50,12 @@ use crate::peer::id::PeerId;
 ///     nonce,
 /// ).await?;
 ///
-/// // Now register() accepts the authenticated connection
-/// subduction.register(authenticated).await?;
+/// // Now add_connection() accepts the authenticated connection
+/// subduction.add_connection(authenticated).await?;
 /// ```
 pub struct Authenticated<C: Connection<K>, K: FutureForm> {
     inner: C,
+    peer_id: PeerId,
     _marker: PhantomData<fn() -> K>,
 }
 
@@ -62,6 +63,7 @@ impl<C: Connection<K>, K: FutureForm> Clone for Authenticated<C, K> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            peer_id: self.peer_id,
             _marker: PhantomData,
         }
     }
@@ -69,7 +71,7 @@ impl<C: Connection<K>, K: FutureForm> Clone for Authenticated<C, K> {
 
 impl<C: Connection<K>, K: FutureForm> PartialEq for Authenticated<C, K> {
     fn eq(&self, other: &Self) -> bool {
-        self.inner == other.inner
+        self.peer_id == other.peer_id && self.inner == other.inner
     }
 }
 
@@ -77,6 +79,7 @@ impl<C: Connection<K> + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Au
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Authenticated")
             .field("inner", &self.inner)
+            .field("peer_id", &self.peer_id)
             .finish()
     }
 }
@@ -84,15 +87,18 @@ impl<C: Connection<K> + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Au
 impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
     /// Construct from a successful handshake.
     ///
+    /// The `peer_id` is the verified remote peer identity from the handshake.
+    ///
     /// This is only accessible within the `connection` module.
     /// Use [`handshake::initiate`] or [`handshake::respond`] to obtain
     /// an `Authenticated` connection.
     ///
     /// [`handshake::initiate`]: super::handshake::initiate
     /// [`handshake::respond`]: super::handshake::respond
-    pub(super) fn from_handshake(inner: C) -> Self {
+    pub(super) fn from_handshake(inner: C, peer_id: PeerId) -> Self {
         Self {
             inner,
+            peer_id,
             _marker: PhantomData,
         }
     }
@@ -101,18 +107,17 @@ impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
     ///
     /// This bypasses handshake verification and should only be used in tests.
     #[cfg(any(test, feature = "test_utils"))]
-    pub fn new_for_test(inner: C) -> Self {
+    pub fn new_for_test(inner: C, peer_id: PeerId) -> Self {
         Self {
             inner,
+            peer_id,
             _marker: PhantomData,
         }
     }
 
     /// Transform the inner connection while preserving the authentication proof.
     ///
-    /// This is useful when wrapping an authenticated connection in a higher-level
-    /// type (e.g., `WebSocket` → `TokioWebSocketClient`) while preserving the
-    /// proof that the underlying connection completed handshake verification.
+    /// The verified peer identity is carried through to the new `Authenticated`.
     ///
     /// # Type Safety
     ///
@@ -125,13 +130,14 @@ impl<C: Connection<K>, K: FutureForm> Authenticated<C, K> {
     pub fn map<D: Connection<K>>(self, f: impl FnOnce(C) -> D) -> Authenticated<D, K> {
         Authenticated {
             inner: f(self.inner),
+            peer_id: self.peer_id,
             _marker: PhantomData,
         }
     }
 
-    /// The verified peer identity.
-    pub fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
+    /// The verified remote peer identity, established during the handshake.
+    pub const fn peer_id(&self) -> PeerId {
+        self.peer_id
     }
 
     /// Access the inner connection.
@@ -150,10 +156,6 @@ impl<C: Connection<K>, K: FutureForm> Connection<K> for Authenticated<C, K> {
     type SendError = C::SendError;
     type RecvError = C::RecvError;
     type CallError = C::CallError;
-
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
-    }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()

@@ -383,7 +383,7 @@ async fn multiple_concurrent_clients() -> TestResult {
             Ok::<(), eyre::Report>(())
         });
 
-        client.register(client_ws).await?;
+        client.add_connection(client_ws).await?;
 
         clients.push((client, client_handler));
 
@@ -409,7 +409,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 1: Each client syncs to get the server's initial commit and subscribe
     for (client, _) in &clients {
         client
-            .sync_all(sed_id, true, Some(Duration::from_secs(5)))
+            .sync_with_all_peers(sed_id, true, Some(Duration::from_secs(5)))
             .await?;
     }
 
@@ -422,7 +422,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 3: All clients sync again to push their commits to the server
     for (client, _) in &clients {
         client
-            .sync_all(sed_id, true, Some(Duration::from_secs(5)))
+            .sync_with_all_peers(sed_id, true, Some(Duration::from_secs(5)))
             .await?;
     }
 
@@ -443,7 +443,7 @@ async fn multiple_concurrent_clients() -> TestResult {
     // Phase 5: All clients sync again to pull commits from other clients via server
     for (client, _) in &clients {
         client
-            .sync_all(sed_id, true, Some(Duration::from_secs(5)))
+            .sync_with_all_peers(sed_id, true, Some(Duration::from_secs(5)))
             .await?;
     }
 
@@ -552,7 +552,7 @@ async fn large_message_handling() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client.register(client_ws).await?;
+    client.add_connection(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -573,7 +573,9 @@ async fn large_message_handling() -> TestResult {
         .await?;
 
     // Sync with server
-    client.full_sync(Some(Duration::from_secs(5))).await;
+    client
+        .full_sync_with_all_peers(Some(Duration::from_secs(5)))
+        .await;
 
     tokio::time::sleep(Duration::from_millis(500)).await;
 
@@ -654,7 +656,7 @@ async fn message_ordering() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client.register(client_ws).await?;
+    client.add_connection(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -672,7 +674,9 @@ async fn message_ordering() -> TestResult {
     }
 
     // Sync all commits to server
-    client.full_sync(Some(Duration::from_secs(5))).await;
+    client
+        .full_sync_with_all_peers(Some(Duration::from_secs(5)))
+        .await;
 
     // Small delay for server to process
     tokio::time::sleep(Duration::from_millis(50)).await;
@@ -919,7 +923,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
         Ok::<(), eyre::Report>(())
     });
 
-    client.register(client_ws).await?;
+    client.add_connection(client_ws).await?;
 
     tokio::spawn({
         let inner_client = client.clone();
@@ -949,8 +953,9 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
     }
 
     // Client syncs (pushes its commits, pulls server's commits)
-    let (had_success, _stats, call_errs, io_errs) =
-        client.full_sync(Some(Duration::from_secs(5))).await;
+    let (had_success, _stats, call_errs, io_errs) = client
+        .full_sync_with_all_peers(Some(Duration::from_secs(5)))
+        .await;
     assert!(call_errs.is_empty(), "full_sync call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "full_sync IO errors: {io_errs:?}");
     assert!(had_success);

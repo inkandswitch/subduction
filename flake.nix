@@ -123,7 +123,7 @@
           cargo-watch
           # llvmPackages.bintools
           twiggy
-          wasm-bindgen-cli
+          wasm-bindgen-cli_0_2_114
           wasm-tools
         ];
 
@@ -269,7 +269,7 @@
               pkgs.http-server
               pkgs.nodePackages.pnpm
               pkgs.nodePackages_latest.webpack-cli
-              pkgs.nodejs_22
+              pkgs.nodejs
               pkgs.playwright-driver
               pkgs.playwright-driver.browsers
               pkgs.prometheus

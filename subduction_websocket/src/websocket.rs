@@ -93,7 +93,6 @@ impl<'a> IntoFuture for SenderTask<'a> {
 #[derive(Debug)]
 pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
     chan_id: u64,
-    peer_id: PeerId,
     req_id_counter: Arc<AtomicU64>,
 
     timeout_strategy: O,
@@ -124,16 +123,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         async {
             let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("generated message id {:?}", counter);
             RequestId {
-                requestor: self.peer_id,
+                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
                 nonce: counter,
             }
         }
@@ -141,15 +136,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
+        tracing::info!(chan_id = self.chan_id, "WebSocket::disconnect");
         async { Ok(()) }.boxed_local()
     }
 
     fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
-            "ws: sending outbound with message id {:?} to peer_id {}",
+            "ws: sending outbound with message id {:?} on chan {}",
             message.request_id(),
-            self.peer_id
+            self.chan_id
         );
 
         let msg_bytes = message.encode();
@@ -167,7 +162,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
 
     fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
-        tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
+        tracing::debug!(chan_id = self.chan_id, "waiting on recv");
 
         async move {
             let msg = chan.recv().await.map_err(|_| {
@@ -249,12 +244,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         ws: WebSocketStream<T>,
         timeout_strategy: O,
         default_time_limit: Duration,
-        peer_id: PeerId,
     ) -> (
         Self,
         impl Future<Output = Result<(), RunError>> + use<T, K, O>,
     ) {
-        tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
         let pending = Arc::new(Mutex::new(Map::<
             RequestId,
@@ -264,13 +257,14 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
+        tracing::info!(chan_id, "new WebSocket connection");
 
         let ws_sender = Arc::new(Mutex::new(ws_writer));
 
         let sender_task = {
             let ws_sender = ws_sender.clone();
             async move {
-                tracing::info!("starting WebSocket sender task for peer {:?}", peer_id);
+                tracing::info!(chan_id, "starting WebSocket sender task");
 
                 let mut ws_sender = ws_sender.lock().await;
 
@@ -285,7 +279,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         };
 
         let ws = Self {
-            peer_id,
             chan_id,
 
             req_id_counter: Arc::new(starting_counter.into()),
@@ -317,12 +310,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         self.default_time_limit
     }
 
-    /// Get the [`PeerId`] associated with this connection.
-    #[must_use]
-    pub const fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     /// Listen for incoming messages and dispatch them appropriately.
     ///
     /// # Errors
@@ -330,30 +317,25 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     /// If there is an error reading from the WebSocket or processing messages.
     #[allow(clippy::too_many_lines)] // 101/100 allowed lines
     pub async fn listen(&self) -> Result<(), RunError> {
-        tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
+        tracing::info!(chan_id = self.chan_id, "starting WebSocket listener");
         let mut in_chan = self.ws_reader.lock().await;
         while let Some(ws_msg) = in_chan.next().await {
-            tracing::debug!(
-                "received WebSocket message for peer {} on channel {}",
-                self.peer_id,
-                self.chan_id
-            );
+            tracing::debug!(chan_id = self.chan_id, "received WebSocket message");
 
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
                     let msg = Message::try_decode(&bytes).map_err(|e| {
                         tracing::error!(
-                            "failed to deserialize inbound message from peer {:?}: {}",
-                            self.peer_id,
-                            e
+                            chan_id = self.chan_id,
+                            "failed to deserialize inbound message: {e}"
                         );
                         RunError::Deserialize(e)
                     })?;
 
                     tracing::debug!(
-                        "decoded inbound message id {:?} from peer {:?}, message: {:?}",
+                        chan_id = self.chan_id,
+                        "decoded inbound message id {:?}, message: {:?}",
                         msg.request_id(),
-                        self.peer_id,
                         &msg
                     );
 
@@ -470,16 +452,12 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
     type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         async {
             let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("generated message id {:?}", counter);
             RequestId {
-                requestor: self.peer_id,
+                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
                 nonce: counter,
             }
         }
@@ -487,7 +465,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
+        tracing::info!(chan_id = self.chan_id, "WebSocket::disconnect");
         async { Ok(()) }.boxed()
     }
 
@@ -512,7 +490,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
 
     fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
-        tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
+        tracing::debug!(chan_id = self.chan_id, "waiting on recv");
 
         async move {
             let msg = chan.recv().await.map_err(|_| {
@@ -582,7 +560,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for 
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,
-            peer_id: self.peer_id,
             req_id_counter: self.req_id_counter.clone(),
             timeout_strategy: self.timeout_strategy.clone(),
             default_time_limit: self.default_time_limit,
@@ -601,8 +578,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
     for WebSocket<T, K, O>
 {
     fn eq(&self, other: &Self) -> bool {
-        self.peer_id == other.peer_id
-            && Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
+        Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
             && self.outbound_tx.same_channel(&other.outbound_tx)
             && Arc::ptr_eq(&self.pending, &other.pending)
             && self.inbound_writer.same_channel(&other.inbound_writer)
@@ -654,28 +630,13 @@ mod tests {
         use super::*;
 
         #[tokio::test]
-        async fn test_next_request_id_includes_peer_id() {
-            let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([99u8; 32]);
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
-
-            let req_id = websocket.next_request_id().await;
-            assert_eq!(req_id.requestor, peer_id);
-        }
-
-        #[tokio::test]
         async fn test_next_request_id_increments_nonce() {
             let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
             let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
+                WebSocket::new(ws, timeout, duration);
 
             let req_id1 = websocket.next_request_id().await;
             let req_id2 = websocket.next_request_id().await;
@@ -688,12 +649,11 @@ mod tests {
         #[tokio::test]
         async fn test_concurrent_request_ids_are_unique() -> TestResult {
             let ws = create_mock_websocket_stream().await;
-            let peer_id = PeerId::new([1u8; 32]);
             let timeout = MockTimeout;
             let duration = Duration::from_secs(30);
 
             let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
-                WebSocket::new(ws, timeout, duration, peer_id);
+                WebSocket::new(ws, timeout, duration);
 
             let ws1 = websocket.clone();
             let ws2 = websocket.clone();

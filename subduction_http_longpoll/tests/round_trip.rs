@@ -36,8 +36,8 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection, http_client::ReqwestHttpClient,
-    server::LongPollHandler, session::SessionId,
+    client::HttpLongPollClient, connection::HttpLongPollConnection,
+    http_client::reqwest_client::ReqwestHttpClient, server::LongPollHandler, session::SessionId,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
@@ -191,7 +191,7 @@ async fn serve_http_connection(
                 }
             };
 
-            // After a successful handshake, register with Subduction
+            // After a successful handshake, add connection to Subduction
             if resp.status() == hyper::StatusCode::OK
                 && let Some(session_hdr) = resp
                     .headers()
@@ -199,9 +199,9 @@ async fn serve_http_connection(
                 && let Ok(sid_str) = session_hdr.to_str()
                 && let Some(sid) = SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
-                && let Err(e) = subduction.register(auth).await
+                && let Err(e) = subduction.add_connection(auth).await
             {
-                tracing::error!("failed to register HTTP long-poll connection: {e}");
+                tracing::error!("failed to add HTTP long-poll connection: {e}");
             }
 
             Ok::<_, hyper::Error>(resp)
@@ -250,9 +250,9 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     tokio::spawn(result.send_task);
 
     client
-        .register(result.authenticated)
+        .add_connection(result.authenticated)
         .await
-        .expect("register");
+        .expect("add_connection");
     client
 }
 
@@ -324,9 +324,9 @@ async fn connected_client_known_peer(
     tokio::spawn(result.send_task);
 
     client
-        .register(result.authenticated)
+        .add_connection(result.authenticated)
         .await
-        .expect("register");
+        .expect("add_connection");
     client
 }
 
@@ -370,7 +370,8 @@ async fn known_peer_connect() -> TestResult {
         )
         .await?;
 
-    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
+    let (had_success, _stats, call_errs, io_errs) =
+        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
     assert!(had_success);
@@ -416,7 +417,9 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Phase 1: Each client syncs to get the server's initial commit
     for client in &clients {
-        client.sync_all(sed_id, true, Some(REQUEST_TIMEOUT)).await?;
+        client
+            .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+            .await?;
     }
 
     // Phase 2: Each client adds its own commit
@@ -428,7 +431,9 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Phase 3: All clients sync their commits to the server
     for client in &clients {
-        client.sync_all(sed_id, true, Some(REQUEST_TIMEOUT)).await?;
+        client
+            .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+            .await?;
     }
 
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -448,7 +453,9 @@ async fn multiple_concurrent_clients() -> TestResult {
 
     // Phase 5: All clients sync to pull the other clients' commits via server
     for client in &clients {
-        client.sync_all(sed_id, true, Some(REQUEST_TIMEOUT)).await?;
+        client
+            .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
+            .await?;
     }
 
     // Phase 6: Verify all clients converged
@@ -485,7 +492,8 @@ async fn large_message_handling() -> TestResult {
 
     client.add_commit(sed_id, BTreeSet::new(), blob).await?;
 
-    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
+    let (had_success, _stats, call_errs, io_errs) =
+        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
     assert!(had_success);
@@ -533,7 +541,8 @@ async fn message_ordering() -> TestResult {
             .await?;
     }
 
-    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
+    let (had_success, _stats, call_errs, io_errs) =
+        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
     assert!(call_errs.is_empty(), "call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "IO errors: {io_errs:?}");
     assert!(had_success);
@@ -570,7 +579,9 @@ async fn disconnect_and_reconnect() -> TestResult {
         )
         .await?;
 
-    let (had_success, _, call_errs, io_errs) = client1.full_sync(Some(REQUEST_TIMEOUT)).await;
+    let (had_success, _, call_errs, io_errs) = client1
+        .full_sync_with_all_peers(Some(REQUEST_TIMEOUT))
+        .await;
     assert!(call_errs.is_empty());
     assert!(io_errs.is_empty());
     assert!(had_success);
@@ -597,7 +608,7 @@ async fn disconnect_and_reconnect() -> TestResult {
 
     // Sync: client2 should get both the original commit and the server's new commit
     let result = client2
-        .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
+        .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
         .await?;
 
     let had_success = result.values().any(|(success, _, _)| *success);
@@ -638,7 +649,7 @@ async fn server_to_client_sync() -> TestResult {
     // Use sync_all (not full_sync) because the client doesn't know about
     // this sedimentree yet — full_sync only iterates locally known IDs.
     let result = client
-        .sync_all(sed_id, true, Some(REQUEST_TIMEOUT))
+        .sync_with_all_peers(sed_id, true, Some(REQUEST_TIMEOUT))
         .await
         .expect("sync_all");
 
@@ -703,7 +714,8 @@ async fn bidirectional_sync() -> TestResult {
     }
 
     // Client syncs
-    let (had_success, _stats, call_errs, io_errs) = client.full_sync(Some(REQUEST_TIMEOUT)).await;
+    let (had_success, _stats, call_errs, io_errs) =
+        client.full_sync_with_all_peers(Some(REQUEST_TIMEOUT)).await;
 
     assert!(call_errs.is_empty(), "full_sync call errors: {call_errs:?}");
     assert!(io_errs.is_empty(), "full_sync IO errors: {io_errs:?}");

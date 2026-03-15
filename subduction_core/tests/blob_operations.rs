@@ -116,7 +116,7 @@ async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -171,7 +171,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
 
     let peer_id = PeerId::new([2u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -213,7 +213,7 @@ async fn blobs_response_does_not_store_any_blobs() -> TestResult {
 
     let peer_id = PeerId::new([3u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -281,7 +281,7 @@ async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
 
     let peer_id = PeerId::new([4u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);
@@ -338,7 +338,7 @@ async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
 
     let peer_id = PeerId::new([5u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);
-    subduction.register(conn.authenticated()).await?;
+    subduction.add_connection(conn.authenticated()).await?;
 
     let actor_task = tokio::spawn(actor_fut);
     let listener_task = tokio::spawn(listener_fut);

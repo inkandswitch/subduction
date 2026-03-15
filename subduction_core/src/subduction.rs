@@ -2,28 +2,15 @@
 //!
 //! # API Guide
 //!
-//! ## API Levels
+//! ## Connection Management
 //!
-//! Subduction provides two levels of API for connection management:
-//!
-//! | Level | Methods | Use Case |
-//! |-------|---------|----------|
-//! | **High-level** | [`attach`], [`disconnect`] | Most applications — handles sync automatically |
-//! | **Low-level** | [`register`], [`unregister`] | Custom sync logic, testing, or fine-grained control |
-//!
-//! **Prefer the high-level API** unless you need explicit control over when sync occurs.
-//!
-//! ### High-Level: `attach` / `disconnect`
-//!
-//! - [`Subduction::attach`] — Register connection + perform initial batch sync
-//! - [`Subduction::disconnect`] — Graceful connection shutdown
-//! - [`Subduction::disconnect_all`] — Disconnect all connections
-//! - [`Subduction::disconnect_from_peer`] — Disconnect all connections from a peer
-//!
-//! ### Low-Level: `register` / `unregister`
-//!
-//! - [`Subduction::register`] — Add connection to tracking (no automatic sync)
-//! - [`Subduction::unregister`] — Remove connection from tracking
+//! | Method | Description |
+//! |--------|-------------|
+//! | [`add_connection`] | Add a connection (no automatic sync) |
+//! | [`remove_connection`] | Remove a connection from tracking |
+//! | [`disconnect`] | Graceful connection shutdown |
+//! | [`disconnect_all`] | Disconnect all connections |
+//! | [`disconnect_from_peer`] | Disconnect all connections from a peer |
 //!
 //! ## Naming Conventions
 //!
@@ -36,11 +23,10 @@
 //!
 //! ### Sync Methods
 //!
-//! | Method | Scope |
-//! |--------|-------|
-//! | [`sync_with_peer`] | Sync one sedimentree from one peer |
-//! | [`sync_all`] | Sync one sedimentree from all connected peers |
-//! | [`full_sync`] | Sync all sedimentrees from all connected peers |
+//! |                        | 1 sedimentree      | all sedimentrees        |
+//! |------------------------|--------------------|-------------------------|
+//! | **1 peer**             | [`sync_with_peer`]      | [`full_sync_with_peer`]      |
+//! | **all peers**          | [`sync_with_all_peers`] | [`full_sync_with_all_peers`] |
 //!
 //! ### Data Operations
 //!
@@ -51,19 +37,19 @@
 //! | [`add_fragment`] | Add a fragment locally and broadcast to subscribers |
 //! | [`remove_sedimentree`] | Remove a sedimentree and associated data |
 //!
-//! [`attach`]: Subduction::attach
 //! [`disconnect`]: Subduction::disconnect
 //! [`disconnect_all`]: Subduction::disconnect_all
 //! [`disconnect_from_peer`]: Subduction::disconnect_from_peer
-//! [`register`]: Subduction::register
-//! [`unregister`]: Subduction::unregister
+//! [`add_connection`]: Subduction::add_connection
+//! [`remove_connection`]: Subduction::remove_connection
 //! [`get_blob`]: Subduction::get_blob
 //! [`get_blobs`]: Subduction::get_blobs
 //! [`get_commits`]: Subduction::get_commits
 //! [`fetch_blobs`]: Subduction::fetch_blobs
 //! [`sync_with_peer`]: Subduction::sync_with_peer
-//! [`sync_all`]: Subduction::sync_all
-//! [`full_sync`]: Subduction::full_sync
+//! [`sync_with_all_peers`]: Subduction::sync_with_all_peers
+//! [`full_sync_with_peer`]: Subduction::full_sync_with_peer
+//! [`full_sync_with_all_peers`]: Subduction::full_sync_with_all_peers
 //! [`add_sedimentree`]: Subduction::add_sedimentree
 //! [`add_commit`]: Subduction::add_commit
 //! [`add_fragment`]: Subduction::add_fragment
@@ -109,8 +95,7 @@ use core::{
     time::Duration,
 };
 use error::{
-    AttachError, IoError, ListenError, RegistrationError, SendRequestedDataError, Unauthorized,
-    WriteError,
+    AddConnectionError, IoError, ListenError, SendRequestedDataError, Unauthorized, WriteError,
 };
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
@@ -408,7 +393,7 @@ impl<
 
         // Send ReAdd command to manager
         self.manager_channel
-            .send(Command::ReAdd(conn_id, conn.clone()))
+            .send(Command::ReAdd(conn_id, conn.clone(), conn.peer_id()))
             .await
             .map_err(|_| ())?;
 
@@ -498,9 +483,9 @@ impl<
                             peer = %conn.peer_id(),
                             "error dispatching message: {e}"
                         );
-                        // Connection is broken - unregister from conns map.
-                        self.unregister(&conn).await;
-                        tracing::info!("unregistered failed connection from peer {}", conn.peer_id());
+                        // Connection is broken — remove from conns map.
+                        self.remove_connection(&conn).await;
+                        tracing::info!("removed failed connection from peer {}", conn.peer_id());
                     }
                 }
                 // Second: receive new messages
@@ -540,9 +525,9 @@ impl<
                     if let Ok((conn_id, conn)) = closed_result {
                         let peer_id = conn.peer_id();
                         tracing::info!(
-                            "Connection {conn_id} from peer {peer_id} closed, unregistering"
+                            "Connection {conn_id} from peer {peer_id} closed, removing"
                         );
-                        self.unregister(&conn).await;
+                        self.remove_connection(&conn).await;
                     }
                 }
             }
@@ -553,30 +538,6 @@ impl<
     /***************
      * CONNECTIONS *
      ***************/
-
-    /// Attach a new [`Connection`] and immediately syncs all known [`Sedimentree`]s.
-    ///
-    /// # Errors
-    ///
-    /// * Returns `AttachError::Registration` if the connection is rejected by the policy.
-    /// * Returns `AttachError::Io` if a storage or network error occurs.
-    pub async fn attach(
-        &self,
-        conn: Authenticated<C, F>,
-    ) -> Result<bool, AttachError<F, S, C, P::ConnectionDisallowed>> {
-        let peer_id = conn.peer_id();
-        tracing::info!("Attaching connection to peer {}", peer_id);
-
-        let fresh = self.register(conn).await?;
-
-        let ids = self.sedimentrees.into_keys().await;
-
-        for tree_id in ids {
-            self.sync_with_peer(&peer_id, tree_id, true, None).await?;
-        }
-
-        Ok(fresh)
-    }
 
     /// Gracefully shut down a specific connection.
     ///
@@ -684,62 +645,58 @@ impl<
         }
     }
 
-    /****************************
-     * LOW LEVEL CONNECTION API *
-     ****************************/
-
-    /// Low-level registration of a new connection.
+    /// Add a connection to tracking.
     ///
-    /// This does not perform any synchronization.
+    /// This does not perform any synchronization. To sync after adding,
+    /// call [`full_sync_with_peer`](Self::full_sync_with_peer).
     ///
     /// # Returns
     ///
     /// * `Ok(true)` if the connection is fresh (first for this peer or new connection).
-    /// * `Ok(false)` if the exact connection was already registered.
+    /// * `Ok(false)` if the exact connection was already added.
     ///
     /// # Errors
     ///
     /// * Returns `ConnectionDisallowed` if the connection is not allowed by the policy.
-    pub async fn register(
+    pub async fn add_connection(
         &self,
         conn: Authenticated<C, F>,
-    ) -> Result<bool, RegistrationError<P::ConnectionDisallowed>> {
+    ) -> Result<bool, AddConnectionError<P::ConnectionDisallowed>> {
         let peer_id = conn.peer_id();
-        tracing::info!("registering connection from peer {}", peer_id);
+        tracing::info!("adding connection from peer {}", peer_id);
 
         self.storage
             .policy()
             .authorize_connect(peer_id)
             .await
-            .map_err(RegistrationError::ConnectionDisallowed)?;
+            .map_err(AddConnectionError::ConnectionDisallowed)?;
 
-        let mut connections = self.connections.lock().await;
-
-        // Check if this exact connection is already registered
-        if connections
-            .get(&peer_id)
-            .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
         {
-            return Ok(false);
-        }
+            let mut connections = self.connections.lock().await;
 
-        // Add connection to the peer's connection list
-        match connections.get_mut(&peer_id) {
-            Some(peer_conns) => {
-                peer_conns.push(conn.clone());
+            // Check if this exact connection is already registered
+            if connections
+                .get(&peer_id)
+                .is_some_and(|peer_conns| peer_conns.iter().any(|c| c == &conn))
+            {
+                return Ok(false);
             }
-            None => {
-                connections.insert(peer_id, NonEmpty::new(conn.clone()));
+
+            // Add connection to the peer's connection list
+            match connections.get_mut(&peer_id) {
+                Some(peer_conns) => {
+                    peer_conns.push(conn.clone());
+                }
+                None => {
+                    connections.insert(peer_id, NonEmpty::new(conn.clone()));
+                }
             }
         }
-
-        // Release the lock before sending to avoid deadlock
-        drop(connections);
 
         self.manager_channel
-            .send(Command::Add(conn))
+            .send(Command::Add(conn, peer_id))
             .await
-            .map_err(|_| RegistrationError::SendToClosedChannel)?;
+            .map_err(|_| AddConnectionError::SendToClosedChannel)?;
 
         #[cfg(feature = "metrics")]
         crate::metrics::connection_opened();
@@ -747,7 +704,10 @@ impl<
         Ok(true)
     }
 
-    /// Unregister a connection.
+    /// Remove a connection from tracking (low-level).
+    ///
+    /// Does _not_ close the transport. Use [`disconnect`](Self::disconnect)
+    /// to gracefully shut down a live connection.
     ///
     /// Uses `NonEmptyExt::remove_item` to handle the three cases:
     /// - Connection not found
@@ -757,8 +717,8 @@ impl<
     /// Returns `Some(true)` if this was the last connection for the peer,
     /// `Some(false)` if the peer still has connections,
     /// `None` if the connection wasn't found.
-    pub async fn unregister(&self, conn: &Authenticated<C, F>) -> Option<bool> {
-        peers::unregister(&self.connections, &self.subscriptions, conn).await
+    pub async fn remove_connection(&self, conn: &Authenticated<C, F>) -> Option<bool> {
+        peers::remove_connection(&self.connections, &self.subscriptions, conn).await
     }
 
     /// Get all connections as a flat list.
@@ -1014,7 +974,7 @@ impl<
             .await
             .map_err(|e| WriteError::Io(IoError::Storage(e)))?;
 
-        self.sync_all(id, true, None).await?;
+        self.sync_with_all_peers(id, true, None).await?;
         Ok(())
     }
 
@@ -1126,7 +1086,7 @@ impl<
                         peer_id,
                         IoError::<F, S, C>::ConnSend(e)
                     );
-                    self.unregister(&conn).await;
+                    self.remove_connection(&conn).await;
                 }
             }
         }
@@ -1223,7 +1183,7 @@ impl<
                     peer_id,
                     IoError::<F, S, C>::ConnSend(e)
                 );
-                self.unregister(&conn).await;
+                self.remove_connection(&conn).await;
             }
         }
 
@@ -1264,7 +1224,7 @@ impl<
             let peer_id = conn.peer_id();
             if let Err(e) = conn.send(&msg).await {
                 tracing::info!("peer {peer_id} disconnected: {e}");
-                self.unregister(&conn).await;
+                self.remove_connection(&conn).await;
             }
         }
     }
@@ -1482,7 +1442,7 @@ impl<
     ///
     /// * [`IoError`] if a storage or network error occurs during the sync process.
     #[allow(clippy::too_many_lines)]
-    pub async fn sync_all(
+    pub async fn sync_with_all_peers(
         &self,
         id: SedimentreeId,
         subscribe: bool,
@@ -1599,7 +1559,7 @@ impl<
                                     fragments_received = fragments_to_receive,
                                     peer_requesting_commits = requesting.commit_fingerprints.len(),
                                     peer_requesting_fragments = requesting.fragment_fingerprints.len(),
-                                    "sync_all: response received"
+                                    "sync_with_all_peers: response received"
                                 );
 
                                 for (signed_commit, blob) in missing_commits {
@@ -1718,23 +1678,62 @@ impl<
         Ok(out)
     }
 
-    /// Perform a full sync of all sedimentrees with all peers.
+    /// Sync all known [`Sedimentree`]s with a single peer.
     ///
-    /// Syncs all sedimentrees concurrently using [`FuturesUnordered`], which
-    /// provides significantly better throughput when there are many sedimentrees
-    /// and network latency is high.
-    ///
-    /// Best-effort: per-sedimentree I/O errors are collected rather than
-    /// aborting the entire sync, so other sedimentrees can still make progress.
-    ///
-    /// # Returns
-    ///
-    /// A tuple of:
-    /// - `bool` — `true` if at least one sync exchanged data successfully
-    /// - [`SyncStats`] — aggregate counts of commits/fragments sent and received
-    /// - `Vec<(Authenticated<C, F>, C::CallError)>` — per-peer call errors encountered during sync
-    /// - `Vec<(SedimentreeId, IoError)>` — per-sedimentree I/O errors
-    pub async fn full_sync(
+    /// This is the single-peer counterpart of [`full_sync_with_all_peers`](Self::full_sync_with_all_peers).
+    /// Errors are collected rather than short-circuiting, so a failure on one
+    /// sedimentree does not prevent the rest from syncing.
+    pub async fn full_sync_with_peer(
+        &self,
+        peer_id: &PeerId,
+        subscribe: bool,
+        timeout: Option<Duration>,
+    ) -> (
+        bool,
+        SyncStats,
+        Vec<(Authenticated<C, F>, <C as Connection<F>>::CallError)>,
+        Vec<(SedimentreeId, IoError<F, S, C>)>,
+    ) {
+        tracing::info!(
+            "Requesting batch sync for all sedimentrees with peer {}",
+            peer_id
+        );
+        let tree_ids = self.sedimentrees.into_keys().await;
+
+        let mut had_success = false;
+        let mut stats = SyncStats::new();
+        let mut call_errs = Vec::new();
+        let mut io_errs = Vec::new();
+
+        for id in tree_ids {
+            match self.sync_with_peer(peer_id, id, subscribe, timeout).await {
+                Ok((success, step_stats, step_errs)) => {
+                    if success {
+                        had_success = true;
+                    }
+                    stats.commits_received += step_stats.commits_received;
+                    stats.fragments_received += step_stats.fragments_received;
+                    stats.commits_sent += step_stats.commits_sent;
+                    stats.fragments_sent += step_stats.fragments_sent;
+                    call_errs.extend(step_errs);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to sync sedimentree {:?} with peer {}: {}",
+                        id,
+                        peer_id,
+                        e
+                    );
+                    io_errs.push((id, e));
+                }
+            }
+        }
+
+        (had_success, stats, call_errs, io_errs)
+    }
+
+    /// Sync all known [`Sedimentree`]s with all connected peers.
+    pub async fn full_sync_with_all_peers(
         &self,
         timeout: Option<Duration>,
     ) -> (
@@ -1750,7 +1749,7 @@ impl<
             .into_iter()
             .map(|id| async move {
                 tracing::debug!("Requesting batch sync for sedimentree {:?}", id);
-                let result = self.sync_all(id, true, timeout).await;
+                let result = self.sync_with_all_peers(id, true, timeout).await;
                 (id, result)
             })
             .collect();
@@ -2469,11 +2468,11 @@ mod tests {
                 TestSpawn,
             );
 
-        // Register a failing connection with a different peer ID than the sender
+        // Add a failing connection with a different peer ID than the sender
         let sender_peer_id = PeerId::new([1u8; 32]);
         let other_peer_id = PeerId::new([2u8; 32]);
         let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-        let _fresh = subduction.register(conn.authenticated()).await?;
+        let _fresh = subduction.add_connection(conn.authenticated()).await?;
         assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
         // Subscribe other_peer to the sedimentree so forwarding will be attempted
@@ -2490,18 +2489,18 @@ mod tests {
         };
         let _ = handler.handle(&sender_conn, msg).await;
 
-        // Connection should be unregistered after send failure during propagation
+        // Connection should be removed after send failure during propagation
         assert_eq!(
             subduction.connected_peer_ids().await.len(),
             0,
-            "Connection should be unregistered after send failure"
+            "Connection should be removed after send failure"
         );
 
         Ok(())
     }
 
     #[tokio::test]
-    async fn test_recv_fragment_unregisters_connection_on_send_failure() -> TestResult {
+    async fn test_recv_fragment_removes_connection_on_send_failure() -> TestResult {
         let sedimentrees = Arc::new(ShardedMap::with_key(0, 0));
         let connections = Arc::new(Mutex::new(Map::new()));
         let subscriptions = Arc::new(Mutex::new(Map::new()));
@@ -2534,11 +2533,11 @@ mod tests {
                 TestSpawn,
             );
 
-        // Register a failing connection with a different peer ID than the sender
+        // Add a failing connection with a different peer ID than the sender
         let sender_peer_id = PeerId::new([1u8; 32]);
         let other_peer_id = PeerId::new([2u8; 32]);
         let conn = FailingSendMockConnection::with_peer_id(other_peer_id);
-        let _fresh = subduction.register(conn.authenticated()).await?;
+        let _fresh = subduction.add_connection(conn.authenticated()).await?;
         assert_eq!(subduction.connected_peer_ids().await.len(), 1);
 
         // Subscribe other_peer to the sedimentree so forwarding will be attempted
@@ -2555,11 +2554,11 @@ mod tests {
         };
         let _ = handler.handle(&sender_conn, msg).await;
 
-        // Connection should be unregistered after send failure during propagation
+        // Connection should be removed after send failure during propagation
         assert_eq!(
             subduction.connected_peer_ids().await.len(),
             0,
-            "Connection should be unregistered after send failure"
+            "Connection should be removed after send failure"
         );
 
         Ok(())

@@ -1,6 +1,6 @@
 [package]
 name = "subduction_wasm"
-version = "0.6.0"
+version = "0.7.0"
 description = "Wasm/JavaScript bindings for Subduction (browser and Node.js)"
 categories = ["web-programming"]
 keywords = ["subduction", "websocket"]
@@ -34,7 +34,6 @@ sedimentree_core = { workspace = true }
 sedimentree_wasm = { workspace = true }
 subduction_core = { workspace = true }
 subduction_crypto = { workspace = true }
-futures-timer = { workspace = true }
 subduction_http_longpoll = { workspace = true, default-features = false }
 thiserror = { workspace = true }
 tracing = { workspace = true }

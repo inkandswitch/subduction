@@ -46,7 +46,7 @@
 //! ).await?;
 //! tokio::spawn(result.listener_task);
 //! tokio::spawn(result.sender_task);
-//! subduction.register(result.authenticated).await?;
+//! subduction.add_connection(result.authenticated).await?;
 //! ```
 //!
 //! [iroh]: https://iroh.computer/

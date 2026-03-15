@@ -74,7 +74,7 @@ impl<O: Timeout<Sendable> + Send + Sync + core::fmt::Debug> core::fmt::Debug for
 /// ).await?;
 /// tokio::spawn(result.listener_task);
 /// tokio::spawn(result.sender_task);
-/// subduction.register(result.authenticated).await?;
+/// subduction.add_connection(result.authenticated).await?;
 /// ```
 pub async fn connect<O, S>(
     endpoint: &Endpoint,
@@ -105,15 +105,11 @@ where
     let (authenticated, (listener_task, sender_task)) =
         handshake::initiate::<Sendable, _, _, _, _>(
             IrohHandshake::new(send_stream, recv_stream),
-            move |iroh_handshake, peer_id| {
+            move |iroh_handshake, _peer_id| {
                 let (send_stream, recv_stream) = iroh_handshake.into_parts();
 
-                let (conn, outbound_rx) = IrohConnection::new(
-                    peer_id,
-                    quic_conn_clone,
-                    default_time_limit,
-                    timeout_clone,
-                );
+                let (conn, outbound_rx) =
+                    IrohConnection::new(quic_conn_clone, default_time_limit, timeout_clone);
 
                 let listener_conn = conn.clone();
                 let listener_task: BoxFuture<'static, Result<(), RunError>> =

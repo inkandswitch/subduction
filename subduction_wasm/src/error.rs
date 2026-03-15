@@ -4,16 +4,15 @@ use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
-    connection::{Connection, ConnectionDisallowed},
-    subduction::error::{
-        AttachError, HydrationError, IoError, ListenError, RegistrationError, WriteError,
-    },
+    connection::ConnectionDisallowed,
+    subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::connection::{
-    transport::WasmUnifiedTransport,
+    JsConnection, JsConnectionError,
+    longpoll::LongPollConnectionError,
     websocket::{CallError, WebSocketAuthenticatedConnectionError},
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -37,7 +36,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmUnifiedTransport>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, JsConnection>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -53,7 +52,7 @@ impl From<WasmIoError> for JsValue {
 /// including policy rejections.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, WasmUnifiedTransport, Infallible>);
+pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, JsConnection, Infallible>);
 
 impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
@@ -63,29 +62,16 @@ impl From<WasmWriteError> for JsValue {
     }
 }
 
-/// A Wasm wrapper around the [`AttachError`] type.
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct WasmAttachError(#[from] AttachError<Local, JsStorage, WasmUnifiedTransport, Infallible>);
-
-impl From<WasmAttachError> for JsValue {
-    fn from(err: WasmAttachError) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("AttachError");
-        js_err.into()
-    }
-}
-
-/// Error connecting to a peer (handshake + registration).
+/// Error connecting to a peer (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmConnectError {
     /// WebSocket connection or handshake failed.
     #[error("connection failed: {0}")]
     Connection(#[from] WebSocketAuthenticatedConnectionError),
 
-    /// Registration failed after successful handshake.
-    #[error("registration failed: {0}")]
-    Registration(#[from] RegistrationError<Infallible>),
+    /// Adding the connection failed after successful handshake.
+    #[error("add connection failed: {0}")]
+    AddConnection(#[from] AddConnectionError<Infallible>),
 }
 
 impl From<WasmConnectError> for JsValue {
@@ -113,7 +99,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, WasmUnifiedTransport>);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, JsConnection>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
@@ -188,22 +174,22 @@ impl From<&CallError> for WasmCallErrorInner {
     }
 }
 
-/// An error that occurred during registration.
+/// An error that occurred when adding a connection.
 #[derive(Debug, Clone, Error, PartialEq, Eq, Hash)]
 #[error(transparent)]
 #[allow(missing_copy_implementations)]
-pub struct WasmRegistrationError(RegistrationError<Infallible>);
+pub struct WasmAddConnectionError(AddConnectionError<Infallible>);
 
-impl From<RegistrationError<Infallible>> for WasmRegistrationError {
-    fn from(err: RegistrationError<Infallible>) -> Self {
-        WasmRegistrationError(err)
+impl From<AddConnectionError<Infallible>> for WasmAddConnectionError {
+    fn from(err: AddConnectionError<Infallible>) -> Self {
+        WasmAddConnectionError(err)
     }
 }
 
-impl From<WasmRegistrationError> for JsValue {
-    fn from(err: WasmRegistrationError) -> Self {
+impl From<WasmAddConnectionError> for JsValue {
+    fn from(err: WasmAddConnectionError) -> Self {
         let js_err = js_sys::Error::new(&err.0.to_string());
-        js_err.set_name("RegistrationError");
+        js_err.set_name("AddConnectionError");
         js_err.into()
     }
 }
@@ -212,9 +198,7 @@ impl From<WasmRegistrationError> for JsValue {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmDisconnectionError(
-    #[from] <WasmUnifiedTransport as Connection<Local>>::DisconnectionError,
-);
+pub struct WasmDisconnectionError(#[from] JsConnectionError);
 
 impl From<WasmDisconnectionError> for JsValue {
     fn from(err: WasmDisconnectionError) -> Self {
@@ -224,16 +208,16 @@ impl From<WasmDisconnectionError> for JsValue {
     }
 }
 
-/// Error connecting via HTTP long-poll (handshake + registration).
+/// Error connecting via HTTP long-poll (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmLongPollConnectError {
     /// Long-poll connection or handshake failed.
     #[error("connection failed: {0}")]
-    Connection(#[from] crate::connection::longpoll::LongPollConnectionError),
+    Connection(#[from] LongPollConnectionError),
 
-    /// Registration failed after successful handshake.
-    #[error("registration failed: {0}")]
-    Registration(#[from] RegistrationError<Infallible>),
+    /// Adding the connection failed after successful handshake.
+    #[error("add connection failed: {0}")]
+    AddConnection(#[from] AddConnectionError<Infallible>),
 }
 
 impl From<WasmLongPollConnectError> for JsValue {

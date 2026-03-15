@@ -37,12 +37,12 @@ bijou64 = { version = "0.1.0", path = "bijou64", default-features = false }
 sedimentree_core = { version = "0.5.0", path = "sedimentree_core", default-features = false }
 sedimentree_fs_storage = { version = "0.6.0", path = "sedimentree_fs_storage" }
 sedimentree_wasm = { version = "0.6.0", path = "sedimentree_wasm", default-features = false }
-subduction_core = { version = "0.6.0", path = "subduction_core", default-features = false }
-subduction_crypto = { version = "0.2.0", path = "subduction_crypto", default-features = false }
-subduction_http_longpoll = { version = "0.4.0", path = "subduction_http_longpoll", default-features = false }
-subduction_iroh = { version = "0.3.0", path = "subduction_iroh" }
-subduction_wasm = { version = "0.6.0", path = "subduction_wasm", default-features = false }
-subduction_websocket = { version = "0.6.0", path = "subduction_websocket", default-features = false }
+subduction_core = { version = "0.7.0", path = "subduction_core", default-features = false }
+subduction_crypto = { version = "0.2.1", path = "subduction_crypto", default-features = false }
+subduction_http_longpoll = { version = "0.5.0", path = "subduction_http_longpoll", default-features = false }
+subduction_iroh = { version = "0.4.0", path = "subduction_iroh" }
+subduction_wasm = { version = "0.7.0", path = "subduction_wasm", default-features = false }
+subduction_websocket = { version = "0.7.0", path = "subduction_websocket", default-features = false }
 
 # External crates
 ahash = "0.8"
@@ -66,7 +66,7 @@ criterion_pprof = { package = "pprof", version = "0.15", default-features = fals
 dhat = "0.3"
 ed25519-dalek = { version = "2.1", default-features = false }
 eyre = "0.6"
-from_js_ref = "0.1.3" # no_std by default
+from_js_ref = "0.2.0" # no_std by default
 future_form = "0.3.0"
 futures = { version = "0.3.31", default-features = false, features = ["alloc", "async-await"] }
 futures-timer = "3.0" # NOTE depends on `std`
@@ -97,10 +97,10 @@ tracing-loki = "0.2"
 tracing-subscriber = { version = "0.3.2", default-features = false }
 tungstenite = "0.27"
 url = { version = "2.5", default-features = false }
-wasm-bindgen = { version = "0.2.105", default-features = false }
-wasm-bindgen-futures = { version = "0.4.53", default-features = false }
+wasm-bindgen = { version = "0.2.114", default-features = false }
+wasm-bindgen-futures = { version = "0.4.64", default-features = false }
 wasm-tracing = { version = "3.0.0-alpha.0", git = "https://github.com/dsgallups/wasm-tracing.git", rev = "9288999e1fbbd315bfa0602488138d40b2a55299" }
-wasm_refgen = "0.1.5" # no_std by default
+wasm_refgen = "0.2.0" # no_std by default
 windows-sys = "0.61.2"
 
 [workspace.lints.rust]
@@ -190,3 +190,5 @@ debug = true        # Full debug symbols for flamegraphs/profiling
 lto = "thin"        # Faster link than "fat", close enough for profiling
 opt-level = 3       # Speed, not size
 strip = false       # Keep symbols for profiling tools
+
+

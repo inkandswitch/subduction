@@ -42,14 +42,13 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
-        JsConnection,
+        JsConnection, JsConnectionError, WasmAuthenticatedConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
-        transport::{TransportCallError, WasmUnifiedTransport},
         websocket::WasmWebSocket,
     },
     error::{
-        WasmAttachError, WasmConnectError, WasmDisconnectionError, WasmHydrationError, WasmIoError,
-        WasmLongPollConnectError, WasmWriteError,
+        WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHydrationError,
+        WasmIoError, WasmLongPollConnectError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
@@ -96,7 +95,7 @@ pub struct WasmSubduction {
             'static,
             Local,
             JsStorage,
-            WasmUnifiedTransport,
+            JsConnection,
             OpenPolicy,
             JsSigner,
             WasmHashMetric,
@@ -333,34 +332,32 @@ impl WasmSubduction {
         Ok(())
     }
 
-    /// Connect to a peer via WebSocket and register the connection.
+    /// Connect to a peer via WebSocket and add the connection.
     ///
     /// This performs the cryptographic handshake, verifies the server's identity,
-    /// and registers the authenticated connection for syncing.
+    /// and adds the authenticated connection for syncing.
     ///
     /// Returns the verified peer ID on success.
     ///
     /// # Arguments
     ///
     /// * `address` - The WebSocket URL to connect to
-    /// * `signer` - The client's signer for authentication  
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     /// * `timeout_milliseconds` - Request timeout in milliseconds
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connect)]
     pub async fn connect(
         &self,
         address: &web_sys::Url,
-        signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
     ) -> Result<WasmPeerId, WasmConnectError> {
         let authenticated = WasmWebSocket::connect_authenticated(
             address,
-            signer,
+            self.core.signer(),
             expected_peer_id,
             timeout_milliseconds,
         )
@@ -368,36 +365,36 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::WebSocket))
+            .add_connection(
+                authenticated.map(|ws| JsValue::from(ws).unchecked_into::<JsConnection>()),
+            )
             .await?;
         Ok(peer_id.into())
     }
 
-    /// Connect to a peer via WebSocket using discovery mode and register the connection.
+    /// Connect to a peer via WebSocket using discovery mode and add the connection.
     ///
     /// Returns the discovered and verified peer ID on success.
     ///
     /// # Arguments
     ///
     /// * `address` - The WebSocket URL to connect to
-    /// * `signer` - The client's signer for authentication
     /// * `timeout_milliseconds` - Request timeout in milliseconds (defaults to 30000)
     /// * `service_name` - The service name for discovery (defaults to URL host)
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connectDiscover)]
     pub async fn connect_discover(
         &self,
         address: &web_sys::Url,
-        signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmConnectError> {
         let authenticated = WasmWebSocket::connect_discover_authenticated(
             address,
-            signer,
+            self.core.signer(),
             timeout_milliseconds,
             service_name,
         )
@@ -405,36 +402,36 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::WebSocket))
+            .add_connection(
+                authenticated.map(|ws| JsValue::from(ws).unchecked_into::<JsConnection>()),
+            )
             .await?;
         Ok(peer_id.into())
     }
 
-    /// Connect to a peer via HTTP long-poll and register the connection.
+    /// Connect to a peer via HTTP long-poll and add the connection.
     ///
     /// Returns the verified peer ID on success.
     ///
     /// # Arguments
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connectLongPoll)]
     pub async fn connect_long_poll(
         &self,
         base_url: &str,
-        signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) = WasmLongPoll::connect_authenticated(
             base_url,
-            signer,
+            self.core.signer(),
             expected_peer_id,
             timeout_milliseconds.unwrap_or(30_000),
         )
@@ -442,7 +439,9 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::LongPoll))
+            .add_connection(authenticated.map(|lp| {
+                JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsConnection>()
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -454,24 +453,22 @@ impl WasmSubduction {
     /// # Arguments
     ///
     /// * `base_url` - The server's HTTP base URL (e.g., `http://localhost:8080`)
-    /// * `signer` - The client's signer for authentication
     /// * `timeout_milliseconds` - Request timeout in milliseconds (default: 30000)
     /// * `service_name` - The service name for discovery (defaults to `base_url`)
     ///
     /// # Errors
     ///
-    /// Returns an error if connection, handshake, or registration fails.
+    /// Returns an error if connection, handshake, or adding the connection fails.
     #[wasm_bindgen(js_name = connectDiscoverLongPoll)]
     pub async fn connect_discover_long_poll(
         &self,
         base_url: &str,
-        signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) = WasmLongPoll::connect_discover_authenticated(
             base_url,
-            signer,
+            self.core.signer(),
             timeout_milliseconds,
             service_name,
         )
@@ -479,7 +476,9 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .register(authenticated.map(WasmUnifiedTransport::LongPoll))
+            .add_connection(authenticated.map(|lp| {
+                JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsConnection>()
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -510,23 +509,31 @@ impl WasmSubduction {
             .await?)
     }
 
-    /// Attach an authenticated WebSocket connection and sync all sedimentrees.
+    /// Onboard an authenticated connection: add it and sync all sedimentrees.
     ///
-    /// The connection must have been authenticated via [`SubductionWebSocket::setup`],
-    /// [`SubductionWebSocket::tryConnect`], or [`SubductionWebSocket::tryDiscover`].
+    /// Accepts an [`AuthenticatedConnection`](WasmAuthenticatedConnection),
+    /// obtained via [`AuthenticatedConnection.setup`](WasmAuthenticatedConnection::setup),
+    /// [`AuthenticatedWebSocket.toConnection`], or [`AuthenticatedLongPoll.toConnection`].
+    ///
+    /// Returns `true` if this is a new peer, `false` if already connected.
+    ///
+    /// Add an authenticated connection to tracking.
+    ///
+    /// This does not perform any synchronization. To sync after adding,
+    /// call [`fullSyncWithPeer`](Self::full_sync_with_peer).
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
     ///
     /// # Errors
     ///
-    /// Returns an error if registration or sync fails.
-    #[wasm_bindgen]
-    pub async fn attach(
+    /// Returns an error if the connection is rejected by the policy.
+    #[wasm_bindgen(js_name = addConnection)]
+    pub async fn add_connection(
         &self,
-        conn: &crate::connection::websocket::WasmAuthenticatedWebSocket,
-    ) -> Result<bool, WasmAttachError> {
+        conn: &WasmAuthenticatedConnection,
+    ) -> Result<bool, WasmAddConnectionError> {
         self.core
-            .attach(conn.inner().clone().map(WasmUnifiedTransport::WebSocket))
+            .add_connection(conn.inner().clone())
             .await
             .map_err(Into::into)
     }
@@ -710,7 +717,7 @@ impl WasmSubduction {
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: to_js_connection(conn.into_inner()),
+                    conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -728,20 +735,20 @@ impl WasmSubduction {
     /// # Errors
     ///
     /// Returns a [`WasmIoError`] if storage or networking fail.
-    #[wasm_bindgen(js_name = syncAll)]
-    pub async fn sync_all(
+    #[wasm_bindgen(js_name = syncWithAllPeers)]
+    pub async fn sync_with_all_peers(
         &self,
         id: &WasmSedimentreeId,
         subscribe: bool,
         timeout_milliseconds: Option<u64>,
     ) -> Result<WasmPeerResultMap, WasmIoError> {
-        tracing::debug!("WasmSubduction::sync_all");
+        tracing::debug!("WasmSubduction::sync_with_all_peers");
         let timeout = timeout_milliseconds.map(Duration::from_millis);
         let peer_map = self
             .core
-            .sync_all(id.clone().into(), subscribe, timeout)
+            .sync_with_all_peers(id.clone().into(), subscribe, timeout)
             .await?;
-        tracing::debug!("WasmSubduction::sync_all - done");
+        tracing::debug!("WasmSubduction::sync_with_all_peers - done");
         Ok(WasmPeerResultMap(
             peer_map
                 .into_iter()
@@ -753,12 +760,7 @@ impl WasmSubduction {
                             stats.into(),
                             conn_errs
                                 .into_iter()
-                                .map(|(conn, err)| {
-                                    (
-                                        to_js_connection(conn.into_inner()),
-                                        WasmCallError::from(err),
-                                    )
-                                })
+                                .map(|(conn, err)| (conn.into_inner(), WasmCallError::from(err)))
                                 .collect::<Vec<_>>(),
                         ),
                     )
@@ -767,14 +769,33 @@ impl WasmSubduction {
         ))
     }
 
-    /// Request batch sync for all known Sedimentree IDs from all connected peers.
-    #[wasm_bindgen(js_name = fullSync)]
-    pub async fn full_sync(&self, timeout_milliseconds: Option<u64>) -> PeerBatchSyncResult {
+    /// Sync all known Sedimentree IDs with a single peer.
+    ///
+    /// # Arguments
+    ///
+    /// * `peer_id` - The peer to sync with
+    /// * `subscribe` - Whether to subscribe to future updates (default: `true`)
+    /// * `timeout_milliseconds` - Per-call timeout in milliseconds
+    #[wasm_bindgen(js_name = fullSyncWithPeer)]
+    pub async fn full_sync_with_peer(
+        &self,
+        peer_id: &WasmPeerId,
+        subscribe: Option<bool>,
+        timeout_milliseconds: Option<u64>,
+    ) -> PeerBatchSyncResult {
+        let subscribe = subscribe.unwrap_or(true);
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let (success, stats, conn_errs, io_errs) = self.core.full_sync(timeout).await;
+        let (success, stats, conn_errs, io_errs) = self
+            .core
+            .full_sync_with_peer(&peer_id.clone().into(), subscribe, timeout)
+            .await;
 
         for (id, err) in &io_errs {
-            tracing::error!("full_sync I/O error for sedimentree {:?}: {}", id, err);
+            tracing::error!(
+                "full_sync_with_peer I/O error for sedimentree {:?}: {}",
+                id,
+                err
+            );
         }
 
         PeerBatchSyncResult {
@@ -783,7 +804,38 @@ impl WasmSubduction {
             conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: to_js_connection(conn.into_inner()),
+                    conn: conn.into_inner(),
+                    err: WasmCallError::from(err),
+                })
+                .collect(),
+        }
+    }
+
+    /// Sync all known Sedimentree IDs with all connected peers.
+    #[wasm_bindgen(js_name = fullSyncWithAllPeers)]
+    pub async fn full_sync_with_all_peers(
+        &self,
+        timeout_milliseconds: Option<u64>,
+    ) -> PeerBatchSyncResult {
+        let timeout = timeout_milliseconds.map(Duration::from_millis);
+        let (success, stats, conn_errs, io_errs) =
+            self.core.full_sync_with_all_peers(timeout).await;
+
+        for (id, err) in &io_errs {
+            tracing::error!(
+                "full_sync_with_all_peers I/O error for sedimentree {:?}: {}",
+                id,
+                err
+            );
+        }
+
+        PeerBatchSyncResult {
+            success,
+            stats: stats.into(),
+            conn_errors: conn_errs
+                .into_iter()
+                .map(|(conn, err)| ConnErrPair {
+                    conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -871,19 +923,6 @@ impl PeerBatchSyncResult {
     #[wasm_bindgen(getter, js_name = connErrors)]
     pub fn conn_errors(&self) -> Vec<ConnErrPair> {
         self.conn_errors.clone()
-    }
-}
-
-/// Convert a [`WasmUnifiedTransport`] to a [`JsConnection`] for the JS boundary.
-///
-/// Both `SubductionWebSocket` and `SubductionLongPollConnection` satisfy the
-/// `Connection` TypeScript interface, so the cast is safe by construction.
-fn to_js_connection(transport: WasmUnifiedTransport) -> JsConnection {
-    match transport {
-        WasmUnifiedTransport::WebSocket(ws) => JsValue::from(ws).unchecked_into(),
-        WasmUnifiedTransport::LongPoll(lp) => {
-            JsValue::from(WasmLongPollConn::new(lp)).unchecked_into()
-        }
     }
 }
 
@@ -1000,11 +1039,11 @@ impl DepthMetric for WasmHashMetric {
     }
 }
 
-/// Wasm wrapper for call errors from the unified transport.
+/// Wasm wrapper for call errors.
 #[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone, thiserror::Error)]
 #[error(transparent)]
-pub struct WasmCallError(#[from] TransportCallError);
+pub struct WasmCallError(#[from] JsConnectionError);
 
 impl From<WasmCallError> for js_sys::Error {
     fn from(err: WasmCallError) -> Self {
