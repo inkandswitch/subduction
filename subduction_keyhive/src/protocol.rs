@@ -161,7 +161,7 @@ where
                     let found: Vec<EventHash> = hashes.keys().map(digest_to_bytes).collect();
                     let pending = self.get_pending_hashes().await?;
 
-                    let message = Message::SyncRequest {
+                    let message = SyncMessage::SyncRequest {
                         sender_id: self.peer_id.clone(),
                         target_id: target_id.clone(),
                         found,
@@ -183,7 +183,7 @@ where
                         "requesting contact card"
                     );
 
-                    let message = Message::RequestContactCard {
+                    let message = SyncMessage::RequestContactCard {
                         sender_id: self.peer_id.clone(),
                         target_id: target_id.clone(),
                     };
@@ -227,11 +227,15 @@ where
             .map_err(|e| VerificationError::Deserialization(e.to_string()))?;
 
         match &message {
-            Message::SyncRequest { .. } => self.handle_sync_request(message).await,
-            Message::SyncResponse { .. } => self.handle_sync_response(message).await,
-            Message::SyncOps { .. } => self.handle_sync_ops(message).await,
-            Message::RequestContactCard { .. } => self.handle_request_contact_card(message).await,
-            Message::MissingContactCard { .. } => self.handle_missing_contact_card(message).await,
+            SyncMessage::SyncRequest { .. } => self.handle_sync_request(message).await,
+            SyncMessage::SyncResponse { .. } => self.handle_sync_response(message).await,
+            SyncMessage::SyncOps { .. } => self.handle_sync_ops(message).await,
+            SyncMessage::RequestContactCard { .. } => {
+                self.handle_request_contact_card(message).await
+            }
+            SyncMessage::MissingContactCard { .. } => {
+                self.handle_missing_contact_card(message).await
+            }
         }
     }
 
@@ -240,7 +244,7 @@ where
         &self,
         message: Message,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::SyncRequest {
+        let SyncMessage::SyncRequest {
             sender_id,
             found: peer_found,
             pending: peer_pending,
@@ -263,7 +267,7 @@ where
         let Some(local_hashes) = self.get_hashes_for_peer_pair(&sender_id).await? else {
             // We don't know this peer — request their contact card.
             tracing::debug!(from = %sender_id, "no agent found, requesting contact card");
-            let msg = Message::RequestContactCard {
+            let msg = SyncMessage::RequestContactCard {
                 sender_id: self.peer_id.clone(),
                 target_id: sender_id.clone(),
             };
@@ -302,7 +306,7 @@ where
             "sending sync response"
         );
 
-        let response = Message::SyncResponse {
+        let response = SyncMessage::SyncResponse {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
             requested,
@@ -318,7 +322,7 @@ where
         &self,
         message: Message,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::SyncResponse {
+        let SyncMessage::SyncResponse {
             sender_id,
             requested: requested_hashes,
             found: found_events,
@@ -353,7 +357,7 @@ where
                     "sending requested ops"
                 );
 
-                let msg = Message::SyncOps {
+                let msg = SyncMessage::SyncOps {
                     sender_id: self.peer_id.clone(),
                     target_id: sender_id.clone(),
                     ops,
@@ -371,7 +375,7 @@ where
         &self,
         message: Message,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::SyncOps { sender_id, ops, .. } = message else {
+        let SyncMessage::SyncOps { sender_id, ops, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "SyncOps",
                 actual: message.variant_name(),
@@ -397,7 +401,7 @@ where
         &self,
         message: Message,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::RequestContactCard { sender_id, .. } = message else {
+        let SyncMessage::RequestContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "RequestContactCard",
                 actual: message.variant_name(),
@@ -409,7 +413,7 @@ where
             "sending missing contact card"
         );
 
-        let msg = Message::MissingContactCard {
+        let msg = SyncMessage::MissingContactCard {
             sender_id: self.peer_id.clone(),
             target_id: sender_id.clone(),
         };
@@ -423,7 +427,7 @@ where
         &self,
         message: Message,
     ) -> Result<(), ProtocolError<Conn::SendError>> {
-        let Message::MissingContactCard { sender_id, .. } = message else {
+        let SyncMessage::MissingContactCard { sender_id, .. } = message else {
             return Err(ProtocolError::UnexpectedMessageType {
                 expected: "MissingContactCard",
                 actual: message.variant_name(),
@@ -773,7 +777,7 @@ mod tests {
         protocol.add_peer(other_id.clone(), conn_to_other).await;
 
         // Send a message
-        let message = Message::RequestContactCard {
+        let message = SyncMessage::RequestContactCard {
             sender_id: peer_id.clone(),
             target_id: other_id.clone(),
         };
@@ -787,10 +791,13 @@ mod tests {
 
         // Verify and decode
         let verified = signed_msg.verify(&peer_id).unwrap();
-        let decoded_msg: Message = cbor_deserialize(&verified.payload).unwrap();
+        let decoded_msg: SyncMessage = cbor_deserialize(&verified.payload).unwrap();
 
         // The decoded message should match
-        assert!(matches!(decoded_msg, Message::RequestContactCard { .. }));
+        assert!(matches!(
+            decoded_msg,
+            SyncMessage::RequestContactCard { .. }
+        ));
         assert_eq!(decoded_msg.sender_id(), &peer_id);
         assert_eq!(decoded_msg.target_id(), &other_id);
 
@@ -809,7 +816,7 @@ mod tests {
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
         protocol.add_peer(other_id.clone(), conn_to_other).await;
 
-        let message = Message::RequestContactCard {
+        let message = SyncMessage::RequestContactCard {
             sender_id: peer_id.clone(),
             target_id: other_id.clone(),
         };
@@ -843,7 +850,7 @@ mod tests {
         let (conn_to_other, conn_to_us) = create_channel_pair(peer_id.clone(), &other_id);
         protocol.add_peer(other_id.clone(), conn_to_other).await;
 
-        let message = Message::RequestContactCard {
+        let message = SyncMessage::RequestContactCard {
             sender_id: peer_id.clone(),
             target_id: other_id.clone(),
         };
@@ -906,7 +913,7 @@ mod tests {
         let verified = signed_msg.verify(&peer_id).unwrap();
         let decoded: Message = cbor_deserialize(&verified.payload).unwrap();
 
-        assert!(matches!(decoded, Message::RequestContactCard { .. }));
+        assert!(matches!(decoded, SyncMessage::RequestContactCard { .. }));
         // Should include our contact card so the peer can learn about us
         assert!(verified.contact_card.is_some());
     }
@@ -936,7 +943,7 @@ mod tests {
         let verified1 = signed_msg1.clone().verify(&alice_id).unwrap();
         let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
         assert!(
-            matches!(decoded1, Message::RequestContactCard { .. }),
+            matches!(decoded1, SyncMessage::RequestContactCard { .. }),
             "alice should request bob's contact card"
         );
 
@@ -952,7 +959,7 @@ mod tests {
         let verified2 = signed_msg2.clone().verify(&bob_id).unwrap();
         let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
         assert!(
-            matches!(decoded2, Message::MissingContactCard { .. }),
+            matches!(decoded2, SyncMessage::MissingContactCard { .. }),
             "bob should respond with MissingContactCard"
         );
         // Bob's response should include his contact card
@@ -976,7 +983,7 @@ mod tests {
 
         // After ingesting Bob's contact card, Alice should send a SyncRequest
         assert!(
-            matches!(decoded3, Message::SyncRequest { .. }),
+            matches!(decoded3, SyncMessage::SyncRequest { .. }),
             "alice should now be able to send a sync request, got: {decoded3:?}"
         );
     }
@@ -1012,7 +1019,7 @@ mod tests {
         let decoded1: Message = cbor_deserialize(&verified1.payload).unwrap();
 
         assert!(
-            matches!(decoded1, Message::SyncRequest { .. }),
+            matches!(decoded1, SyncMessage::SyncRequest { .. }),
             "alice should send SyncRequest when she knows bob"
         );
 
@@ -1028,7 +1035,7 @@ mod tests {
         let decoded2: Message = cbor_deserialize(&verified2.payload).unwrap();
 
         assert!(
-            matches!(decoded2, Message::SyncResponse { .. }),
+            matches!(decoded2, SyncMessage::SyncResponse { .. }),
             "bob should respond with SyncResponse, got: {decoded2:?}"
         );
 

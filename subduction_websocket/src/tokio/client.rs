@@ -16,7 +16,7 @@ use subduction_core::{
         Connection, Reconnect,
         authenticated::Authenticated,
         handshake::{self, AuthenticateError, audience::Audience},
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     timestamp::TimestampSeconds,
 };
@@ -171,12 +171,12 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
         async { Ok(()) }.boxed()
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!("client sending message: {:?}", message);
         Connection::<Sendable>::send(&self.socket, message)
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         async {
             tracing::debug!("client waiting to receive message");
             Connection::<Sendable>::recv(&self.socket).await

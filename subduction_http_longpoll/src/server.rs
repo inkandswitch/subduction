@@ -229,7 +229,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
     /// Handle `POST /lp/send`.
     ///
-    /// The client sends a binary-encoded `Message` in the body.
+    /// The client sends a binary-encoded `SyncMessage` in the body.
     async fn handle_send(
         &self,
         req: Request<Incoming>,
@@ -243,7 +243,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
 
         let body = read_body(req, self.max_body_size).await?;
 
-        let msg = subduction_core::connection::message::Message::try_decode(&body)
+        let msg = subduction_core::connection::message::SyncMessage::try_decode(&body)
             .map_err(ServerError::MessageDecode)?;
 
         tracing::debug!(

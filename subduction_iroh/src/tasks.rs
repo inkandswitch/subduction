@@ -4,7 +4,7 @@
 //! the QUIC stream halves to the connection's internal async channels.
 
 use iroh::endpoint::{RecvStream, SendStream};
-use subduction_core::connection::message::Message;
+use subduction_core::connection::message::SyncMessage;
 
 use crate::{connection::IrohConnection, error::RunError};
 
@@ -67,7 +67,7 @@ pub async fn listener_task<O: Send + Sync>(
             Err(e) => return Err(e),
         };
 
-        let msg = Message::try_decode(&bytes)?;
+        let msg = SyncMessage::try_decode(&bytes)?;
 
         tracing::debug!(
             "decoded inbound message id {:?} from peer {peer_id}",
@@ -93,7 +93,7 @@ pub async fn listener_task<O: Send + Sync>(
 /// Returns an error if writing to the stream fails.
 pub async fn sender_task(
     mut send: SendStream,
-    outbound_rx: async_channel::Receiver<Message>,
+    outbound_rx: async_channel::Receiver<SyncMessage>,
 ) -> Result<(), RunError> {
     tracing::info!("starting iroh sender task");
 

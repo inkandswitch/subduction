@@ -106,7 +106,7 @@ impl<K: FutureForm, T> Handshake<K> for WebSocketHandshake<T> {
 
     fn send(&mut self, bytes: Vec<u8>) -> K::Future<'_, Result<(), Self::Error>> {
         K::from_future(async move {
-            SinkExt::send(&mut self.0, tungstenite::Message::Binary(bytes.into())).await?;
+            SinkExt::send(&mut self.0, tungstenite::SyncMessage::Binary(bytes.into())).await?;
             Ok(())
         })
     }
@@ -121,16 +121,16 @@ impl<K: FutureForm, T> Handshake<K> for WebSocketHandshake<T> {
                     .ok_or(WebSocketHandshakeError::ConnectionClosed)??;
 
                 match msg {
-                    tungstenite::Message::Binary(bytes) => return Ok(bytes.to_vec()),
-                    tungstenite::Message::Text(_) => {
+                    tungstenite::SyncMessage::Binary(bytes) => return Ok(bytes.to_vec()),
+                    tungstenite::SyncMessage::Text(_) => {
                         return Err(WebSocketHandshakeError::UnexpectedMessageType("text"));
                     }
                     // Skip ping/pong, continue waiting for binary
-                    tungstenite::Message::Ping(_) | tungstenite::Message::Pong(_) => {}
-                    tungstenite::Message::Close(_) => {
+                    tungstenite::SyncMessage::Ping(_) | tungstenite::SyncMessage::Pong(_) => {}
+                    tungstenite::SyncMessage::Close(_) => {
                         return Err(WebSocketHandshakeError::ConnectionClosed);
                     }
-                    tungstenite::Message::Frame(_) => {
+                    tungstenite::SyncMessage::Frame(_) => {
                         return Err(WebSocketHandshakeError::UnexpectedMessageType("frame"));
                     }
                 }

@@ -40,7 +40,7 @@ pub enum HydrationError<F: FutureForm, S: Storage<F>> {
 ///
 /// This covers storage and network connection errors.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
-pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>> {
     /// An error occurred while using storage.
     #[error(transparent)]
     Storage(S::Error),
@@ -64,7 +64,7 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
-pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F>> {
+pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F, SyncMessage>> {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
     IoError(#[from] IoError<F, S, C>),
@@ -76,7 +76,7 @@ pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>> {
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
@@ -102,7 +102,7 @@ pub enum AddConnectionError<D> {
 
 /// An error that can occur during local write operations.
 #[derive(Debug, Error)]
-pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, PutErr> {
+pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>, PutErr> {
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] IoError<F, S, C>),
@@ -118,7 +118,7 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, Put
 
 /// An error that can occur when sending requested data to a peer.
 #[derive(Debug, Error)]
-pub enum SendRequestedDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum SendRequestedDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>> {
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] IoError<F, S, C>),

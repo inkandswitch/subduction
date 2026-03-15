@@ -1,7 +1,7 @@
 //! Default sync protocol handler for Subduction.
 //!
 //! [`SyncHandler`] implements the [`Handler`] trait for the standard
-//! Subduction sync protocol. It processes [`Message`] variants
+//! Subduction sync protocol. It processes [`SyncMessage`] variants
 //! (commits, fragments, batch sync, blobs, subscriptions) using
 //! shared state passed at construction time.
 //!
@@ -12,7 +12,7 @@
 //!
 //! [`Handler`]: super::Handler
 //! [`Subduction`]: crate::subduction::Subduction
-//! [`Message`]: crate::connection::message::Message
+//! [`SyncMessage`]: crate::connection::message::SyncMessage
 //! [`Arc`]: alloc::sync::Arc
 
 use alloc::{sync::Arc, vec::Vec};
@@ -36,7 +36,7 @@ use crate::{
         Connection,
         authenticated::Authenticated,
         message::{
-            BatchSyncRequest, BatchSyncResponse, Message, RequestId, RequestedData, SyncDiff,
+            BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
             SyncResult,
         },
     },
@@ -55,7 +55,7 @@ use super::Handler;
 
 /// The default sync protocol handler for Subduction.
 ///
-/// Processes the standard [`Message`] protocol: commits, fragments,
+/// Processes the standard [`SyncMessage`] protocol: commits, fragments,
 /// batch sync requests/responses, blob requests/responses, and
 /// subscription management.
 ///
@@ -71,7 +71,7 @@ use super::Handler;
 pub struct SyncHandler<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize = 256,
@@ -87,7 +87,7 @@ pub struct SyncHandler<
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
@@ -101,7 +101,7 @@ impl<
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric + Clone,
     const N: usize,
@@ -122,7 +122,7 @@ impl<
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
@@ -179,7 +179,7 @@ impl<
         M: DepthMetric
 )]
 impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K, S, C, P, M, N> {
-    type Message = Message;
+    type Message = SyncMessage;
     type HandlerError = ListenError<K, S, C>;
 
     fn handle<'a>(
@@ -198,7 +198,7 @@ impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K,
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
@@ -208,7 +208,7 @@ impl<
     async fn dispatch(
         &self,
         conn: &Authenticated<C, F>,
-        message: Message,
+        message: SyncMessage,
     ) -> Result<(), ListenError<F, S, C>> {
         let from = conn.peer_id();
         tracing::info!(
@@ -226,13 +226,13 @@ impl<
         let _timer = crate::metrics::DispatchTimer::new();
 
         match message {
-            Message::LooseCommit { id, commit, blob } => {
+            SyncMessage::LooseCommit { id, commit, blob } => {
                 self.recv_commit(&from, id, &commit, blob).await?;
             }
-            Message::Fragment { id, fragment, blob } => {
+            SyncMessage::Fragment { id, fragment, blob } => {
                 self.recv_fragment(&from, id, &fragment, blob).await?;
             }
-            Message::BatchSyncRequest(BatchSyncRequest {
+            SyncMessage::BatchSyncRequest(BatchSyncRequest {
                 id,
                 fingerprint_summary,
                 req_id,
@@ -249,7 +249,7 @@ impl<
                 self.recv_batch_sync_request(id, &fingerprint_summary, req_id, conn)
                     .await?;
             }
-            Message::BatchSyncResponse(BatchSyncResponse { id, result, .. }) => {
+            SyncMessage::BatchSyncResponse(BatchSyncResponse { id, result, .. }) => {
                 #[cfg(feature = "metrics")]
                 crate::metrics::batch_sync_response();
 
@@ -267,7 +267,7 @@ impl<
                     }
                 }
             }
-            Message::BlobsRequest { id, digests } => {
+            SyncMessage::BlobsRequest { id, digests } => {
                 match self.recv_blob_request(conn, id, &digests).await {
                     Ok(()) => {
                         tracing::info!("successfully handled blob request from peer {:?}", from);
@@ -282,7 +282,7 @@ impl<
                     }
                 }
             }
-            Message::BlobsResponse { id, blobs } => {
+            SyncMessage::BlobsResponse { id, blobs } => {
                 let accepted_count = {
                     let mut pending = self.pending_blob_requests.lock().await;
                     let mut count = 0usize;
@@ -300,13 +300,13 @@ impl<
                     blobs.len()
                 );
             }
-            Message::RemoveSubscriptions(crate::connection::message::RemoveSubscriptions {
+            SyncMessage::RemoveSubscriptions(crate::connection::message::RemoveSubscriptions {
                 ids,
             }) => {
                 self.remove_subscriptions(from, &ids).await;
                 tracing::debug!("removed subscriptions for peer {from}: {ids:?}");
             }
-            Message::DataRequestRejected(crate::connection::message::DataRequestRejected {
+            SyncMessage::DataRequestRejected(crate::connection::message::DataRequestRejected {
                 id,
             }) => {
                 tracing::info!("peer {from} rejected our data request for sedimentree {id:?}");
@@ -378,7 +378,7 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
-            let msg = Message::LooseCommit {
+            let msg = SyncMessage::LooseCommit {
                 id,
                 commit: signed_for_wire,
                 blob,
@@ -455,7 +455,7 @@ impl<
         self.minimize_tree(id).await;
 
         if was_new {
-            let msg = Message::Fragment {
+            let msg = SyncMessage::Fragment {
                 id,
                 fragment: signed_for_wire,
                 blob,
@@ -494,7 +494,7 @@ impl<
                     error = %e,
                     "policy rejected fetch request"
                 );
-                let msg: Message = BatchSyncResponse {
+                let msg: SyncMessage = BatchSyncResponse {
                     id,
                     req_id,
                     result: SyncResult::Unauthorized,
@@ -606,7 +606,7 @@ impl<
             },
         };
 
-        let msg: Message = BatchSyncResponse {
+        let msg: SyncMessage = BatchSyncResponse {
             id,
             req_id,
             result: SyncResult::Ok(sync_diff),
@@ -646,7 +646,7 @@ impl<
             }
         }
 
-        conn.send(&Message::BlobsResponse { id, blobs })
+        conn.send(&SyncMessage::BlobsResponse { id, blobs })
             .await
             .map_err(IoError::ConnSend)?;
 

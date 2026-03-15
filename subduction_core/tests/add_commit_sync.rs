@@ -176,7 +176,7 @@ async fn fingerprint_summary_includes_all_commits() -> TestResult {
 async fn sync_request_includes_all_local_commits() -> TestResult {
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{
-        BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult,
+        BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult,
     };
 
     let (subduction, _handler, listener_fut, actor_fut) =
@@ -231,7 +231,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
 
     handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(request))
+        .send(SyncMessage::BatchSyncRequest(request))
         .await?;
 
     // Wait for response
@@ -241,7 +241,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
     };
 
@@ -261,7 +261,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
 /// Test: Full sync flow - add commits then call `full_sync`.
 #[tokio::test]
 async fn full_sync_sends_all_commits() -> TestResult {
-    use subduction_core::connection::message::Message;
+    use subduction_core::connection::message::SyncMessage;
 
     let (client, _handler, listener_fut, actor_fut) = SubductionBuilder::<_, _, _, _, 256>::new()
         .signer(test_signer())
@@ -303,7 +303,7 @@ async fn full_sync_sends_all_commits() -> TestResult {
     // Drain broadcast messages (commits were sent when added)
     let mut broadcast_count = 0;
     while let Ok(msg) = handle.outbound_rx.try_recv() {
-        if matches!(msg, Message::LooseCommit { .. }) {
+        if matches!(msg, SyncMessage::LooseCommit { .. }) {
             broadcast_count += 1;
         }
     }

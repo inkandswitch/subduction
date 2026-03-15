@@ -17,7 +17,7 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::stream::AbortHandle;
 
-use super::{Connection, id::ConnectionId, message::Message};
+use super::{Connection, id::ConnectionId, message::SyncMessage};
 use crate::peer::id::PeerId;
 
 /// Internal task identifier for abort handle tracking.
@@ -83,7 +83,7 @@ pub struct ConnectionManager<K: FutureForm, C, S: Spawn<K>> {
     commands: async_channel::Receiver<Command<C>>,
 
     /// Outbound messages from all connections.
-    messages: async_channel::Sender<(C, Message)>,
+    messages: async_channel::Sender<(C, SyncMessage)>,
 
     /// Notification when a connection closes (either normally or due to error).
     ///
@@ -100,7 +100,7 @@ impl<K: FutureForm, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     pub fn new(
         spawner: S,
         commands: async_channel::Receiver<Command<C>>,
-        messages: async_channel::Sender<(C, Message)>,
+        messages: async_channel::Sender<(C, SyncMessage)>,
         closed: async_channel::Sender<(ConnectionId, C)>,
     ) -> Self {
         Self {
@@ -121,7 +121,7 @@ impl<K: FutureForm, C, S: Spawn<K>> ConnectionManager<K, C, S> {
     }
 }
 
-impl<K: FutureForm, C: Connection<K>, S: Spawn<K>> ConnectionManager<K, C, S> {
+impl<K: FutureForm, C: Connection<K, SyncMessage>, S: Spawn<K>> ConnectionManager<K, C, S> {
     async fn remove_connection_by_ref(&self, conn: &C) {
         let mut tasks = self.tasks.lock().await;
         if let Some(pos) = tasks.iter().position(|(_, _, _, c)| c == conn) {
@@ -164,7 +164,7 @@ impl<K: FutureForm + RunManager<C>, C, S: Spawn<K> + Send + Sync + 'static>
     /// Run the manager, processing commands to add/remove connections.
     pub fn run(self) -> K::Future<'static, ()>
     where
-        C: Connection<K> + Clone + 'static,
+        C: Connection<K, SyncMessage> + Clone + 'static,
     {
         K::run_manager(self)
     }
@@ -272,10 +272,10 @@ impl<K: FutureForm, C> RunManager<C> for K {
     }
 }
 
-async fn connection_loop<K: FutureForm, C: Connection<K>>(
+async fn connection_loop<K: FutureForm, C: Connection<K, SyncMessage>>(
     conn: C,
     peer_id: PeerId,
-    messages: async_channel::Sender<(C, Message)>,
+    messages: async_channel::Sender<(C, SyncMessage)>,
 ) {
     loop {
         match conn.recv().await {

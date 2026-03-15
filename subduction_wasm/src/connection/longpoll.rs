@@ -11,7 +11,7 @@ use futures::FutureExt;
 use subduction_core::connection::{
     Connection,
     authenticated::Authenticated,
-    message::{BatchSyncRequest, Message},
+    message::{BatchSyncRequest, SyncMessage},
     timeout::{TimedOut, Timeout},
 };
 use subduction_http_longpoll::{
@@ -121,7 +121,7 @@ impl WasmLongPollConn {
     /// Returns an error if the outbound channel is closed.
     #[wasm_bindgen(js_name = send)]
     pub async fn send(&self, message: WasmMessage) -> Result<(), WasmLongPollConnError> {
-        let msg: Message = message.into();
+        let msg: SyncMessage = message.into();
         Connection::<Local>::send(&self.0, &msg)
             .await
             .map_err(|e| WasmLongPollConnError(e.to_string()))

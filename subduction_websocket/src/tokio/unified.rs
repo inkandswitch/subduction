@@ -12,7 +12,7 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::connection::{
     Connection,
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
 };
 use tokio::net::TcpStream;
 
@@ -63,14 +63,14 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedWebSock
         }
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
         match self {
             UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::send(in_ws, message),
             UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::send(out_ws, message),
         }
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         match self {
             UnifiedWebSocket::Accepted(in_ws) => Connection::<Sendable>::recv(in_ws),
             UnifiedWebSocket::Dialed(out_ws) => Connection::<Sendable>::recv(out_ws),

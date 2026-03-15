@@ -21,7 +21,7 @@ use subduction_core::{
         Connection,
         authenticated::Authenticated,
         handshake::{self as hs, audience::Audience},
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     timestamp::TimestampSeconds,
 };
@@ -42,8 +42,8 @@ use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 const TS: &str = r#"
 export interface Connection {
     disconnect(): Promise<void>;
-    send(message: Message): Promise<void>;
-    recv(): Promise<Message>;
+    send(message: SyncMessage): Promise<void>;
+    recv(): Promise<SyncMessage>;
     nextRequestId(): Promise<RequestId>;
     call(request: BatchSyncRequest, timeoutMs: number | null): Promise<BatchSyncResponse>;
 }
@@ -114,7 +114,7 @@ impl Connection<Local> for JsConnection {
         .boxed_local()
     }
 
-    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let wasm_msg = WasmMessage::from(message.clone());
         async move {
             JsFuture::from(self.js_send(wasm_msg))
@@ -125,14 +125,14 @@ impl Connection<Local> for JsConnection {
         .boxed_local()
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         async move {
             let js_value = JsFuture::from(self.js_recv())
                 .await
                 .map_err(JsConnectionError::Recv)?;
             let wasm_msg = WasmMessage::try_from_js_value(&js_value).ok_or_else(|| {
                 JsConnectionError::UnexpectedJsType {
-                    expected: "Message",
+                    expected: "SyncMessage",
                     value: js_value,
                 }
             })?;

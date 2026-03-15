@@ -28,7 +28,7 @@ pub use connection::KeyhiveConnection;
 pub use error::StorageError;
 #[cfg(feature = "std")]
 pub use error::{ProtocolError, SigningError, VerificationError};
-pub use message::Message;
+pub use message::SyncMessage;
 pub use peer_id::KeyhivePeerId;
 pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};

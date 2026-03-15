@@ -51,7 +51,7 @@ pub enum RunError {
 
     /// Failed to send on internal channel.
     #[error("channel send error")]
-    ChanSend(Box<async_channel::SendError<subduction_core::connection::message::Message>>),
+    ChanSend(Box<async_channel::SendError<subduction_core::connection::message::SyncMessage>>),
 
     /// The QUIC connection was closed.
     #[error("connection closed: {0}")]

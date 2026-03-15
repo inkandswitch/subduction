@@ -25,7 +25,7 @@ use rand::RngCore;
 use sedimentree_core::collections::Map;
 use subduction_core::connection::{
     Connection,
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     timeout::{TimedOut, Timeout},
 };
 
@@ -48,11 +48,11 @@ struct Inner<O> {
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
 
     /// Messages from `send()` / `call()` -> drained by the sender task.
-    outbound_tx: async_channel::Sender<Message>,
+    outbound_tx: async_channel::Sender<SyncMessage>,
 
     /// Messages from the listener task -> picked up by `recv()`.
-    inbound_writer: async_channel::Sender<Message>,
-    inbound_reader: async_channel::Receiver<Message>,
+    inbound_writer: async_channel::Sender<SyncMessage>,
+    inbound_reader: async_channel::Receiver<SyncMessage>,
 
     /// The underlying iroh QUIC connection (for closing).
     quic_conn: iroh::endpoint::Connection,
@@ -83,7 +83,7 @@ impl<O> IrohConnection<O> {
         quic_conn: iroh::endpoint::Connection,
         default_time_limit: Duration,
         timeout: O,
-    ) -> (Self, async_channel::Receiver<Message>) {
+    ) -> (Self, async_channel::Receiver<SyncMessage>) {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let starting_counter = rand::rngs::OsRng.next_u64();
@@ -112,10 +112,10 @@ impl<O> IrohConnection<O> {
     /// All other messages go to the inbound channel for `recv()`.
     pub(crate) async fn push_inbound(
         &self,
-        msg: Message,
-    ) -> Result<(), async_channel::SendError<Message>> {
+        msg: SyncMessage,
+    ) -> Result<(), async_channel::SendError<SyncMessage>> {
         match msg {
-            Message::BatchSyncResponse(resp) => {
+            SyncMessage::BatchSyncResponse(resp) => {
                 let req_id = resp.req_id;
                 if let Some(waiting) = self.inner.pending.lock().await.remove(&req_id) {
                     if waiting.send(resp).is_err() {
@@ -127,17 +127,17 @@ impl<O> IrohConnection<O> {
                 } else {
                     self.inner
                         .inbound_writer
-                        .send(Message::BatchSyncResponse(resp))
+                        .send(SyncMessage::BatchSyncResponse(resp))
                         .await
                 }
             }
-            other @ (Message::LooseCommit { .. }
-            | Message::Fragment { .. }
-            | Message::BlobsRequest { .. }
-            | Message::BlobsResponse { .. }
-            | Message::BatchSyncRequest(_)
-            | Message::RemoveSubscriptions(_)
-            | Message::DataRequestRejected(_)) => self.inner.inbound_writer.send(other).await,
+            other @ (SyncMessage::LooseCommit { .. }
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::DataRequestRejected(_)) => self.inner.inbound_writer.send(other).await,
         }
     }
 
@@ -187,7 +187,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
 
     fn send(
         &self,
-        message: &Message,
+        message: &SyncMessage,
     ) -> futures::future::BoxFuture<'_, Result<(), Self::SendError>> {
         let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
         tracing::debug!(
@@ -205,7 +205,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
         .boxed()
     }
 
-    fn recv(&self) -> futures::future::BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> futures::future::BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
         let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
         tracing::debug!(
@@ -243,7 +243,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
             let (tx, rx) = oneshot::channel();
             inner.pending.lock().await.insert(req_id, tx);
 
-            let msg = Message::BatchSyncRequest(req);
+            let msg = SyncMessage::BatchSyncRequest(req);
             outbound_tx
                 .send(msg)
                 .await

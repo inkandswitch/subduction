@@ -2,7 +2,7 @@
 
 use futures::channel::oneshot;
 use sedimentree_core::codec::error::DecodeError;
-use subduction_core::connection::message::Message;
+use subduction_core::connection::message::SyncMessage;
 use thiserror::Error;
 
 /// Outbound channel closed — the sender task has stopped.
@@ -42,7 +42,7 @@ pub struct DisconnectionError;
 pub enum RunError {
     /// Internal MPSC channel error.
     #[error("channel send error: {0}")]
-    ChanSend(async_channel::SendError<Message>),
+    ChanSend(async_channel::SendError<SyncMessage>),
 
     /// WebSocket error.
     #[error(transparent)]

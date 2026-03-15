@@ -546,7 +546,7 @@ async fn server_to_client_sync() -> TestResult {
     Ok(())
 }
 
-// ─── Large Message Handling ─────────────────────────────────────────────────
+// ─── Large SyncMessage Handling ─────────────────────────────────────────────────
 
 /// 1 MB blob traverses the QUIC stream and arrives intact.
 #[tokio::test]
@@ -599,7 +599,7 @@ async fn large_message_handling() -> TestResult {
     Ok(())
 }
 
-// ─── Message Ordering ───────────────────────────────────────────────────────
+// ─── SyncMessage Ordering ───────────────────────────────────────────────────────
 
 /// Five sequential commits all arrive at the server.
 #[tokio::test]

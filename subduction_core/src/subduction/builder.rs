@@ -68,7 +68,7 @@ use sedimentree_core::{
 use crate::{
     connection::{
         Connection, authenticated::Authenticated, handshake::audience::DiscoveryId, manager::Spawn,
-        message::Message, nonce_cache::NonceCache,
+        message::SyncMessage, nonce_cache::NonceCache,
     },
     handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
@@ -335,13 +335,13 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
         F: StartListener<'a, S, C, P, Sig, M, SyncHandler<F, S, C, P, M, N>, N>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq + Clone + 'a,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         M: Clone,
         SyncHandler<F, S, C, P, M, N>: Handler<F, C>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message: From<Message>,
+        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message: From<SyncMessage>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self
@@ -415,12 +415,12 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
         F: StartListener<'a, S, C, P, Sig, M, H, N>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq + Clone + 'a,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
-        H::Message: From<Message>,
+        H::Message: From<SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C>>,
     {
         let sedimentrees = self

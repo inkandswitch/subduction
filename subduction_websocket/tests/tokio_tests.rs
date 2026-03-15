@@ -14,7 +14,7 @@ use std::{
 };
 use subduction_core::{
     connection::{
-        Connection, Reconnect, handshake::audience::Audience, message::Message,
+        Connection, Reconnect, handshake::audience::Audience, message::SyncMessage,
         nonce_cache::NonceCache,
     },
     handler::sync::SyncHandler,
@@ -206,7 +206,7 @@ async fn client_reconnect() -> TestResult {
     let initial_peer_id = client_ws.peer_id();
 
     // Send a message to verify connection works
-    let test_msg = Message::BlobsRequest {
+    let test_msg = SyncMessage::BlobsRequest {
         id: sedimentree_core::id::SedimentreeId::new([0u8; 32]),
         digests: vec![],
     };

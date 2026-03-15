@@ -60,7 +60,7 @@ pub(crate) async fn remove_peer_from_subscriptions(
 pub(crate) async fn get_authorized_subscriber_conns<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
     P: StoragePolicy<F>,
 >(
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,
@@ -116,7 +116,7 @@ pub(crate) async fn get_authorized_subscriber_conns<
 /// - `None` — connection was not found
 pub(crate) async fn remove_connection<
     F: FutureForm,
-    C: Connection<F> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
 >(
     connections: &Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>,
     subscriptions: &Mutex<Map<SedimentreeId, Set<PeerId>>>,

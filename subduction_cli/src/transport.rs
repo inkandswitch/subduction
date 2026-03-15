@@ -10,7 +10,7 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::connection::{
     Connection,
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+    message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     timeout::Timeout,
 };
 use subduction_http_longpoll::connection::HttpLongPollConnection;
@@ -128,7 +128,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
         }
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
         match self {
             Self::WebSocket(ws) => {
                 let fut = Connection::<Sendable>::send(ws, message);
@@ -145,7 +145,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
         }
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         match self {
             Self::WebSocket(ws) => {
                 Box::pin(async { Connection::<Sendable>::recv(ws).await.map_err(Into::into) })

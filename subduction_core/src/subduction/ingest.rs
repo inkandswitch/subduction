@@ -33,7 +33,7 @@ use super::error::IoError;
 pub(crate) async fn recv_batch_sync_response<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F>,
+    C: Connection<F, SyncMessage>,
     P: StoragePolicy<F>,
     const N: usize,
 >(

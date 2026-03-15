@@ -27,7 +27,7 @@
 //! impl<K, C> Handler<K, C> for MyHandler
 //! where
 //!     K: FutureForm,
-//!     C: Connection<K>,
+//!     C: Connection<K, SyncMessage>,
 //! {
 //!     type Message = Message;
 //!     type HandlerError = MyError;
@@ -75,11 +75,11 @@ use crate::connection::{Connection, authenticated::Authenticated};
 /// connection is broken and should be dropped. If a handler wants to
 /// be lenient about a particular message, it should return `Ok(())`
 /// and log the issue internally.
-pub trait Handler<K: FutureForm, C: Connection<K>> {
+pub trait Handler<K: FutureForm, C: Connection<K, SyncMessage>> {
     /// The message type this handler processes.
     ///
     /// Must support wire decoding. For the standard Subduction
-    /// protocol, this is [`Message`](crate::connection::message::Message).
+    /// protocol, this is [`Message`](crate::connection::message::SyncMessage).
     type Message: Decode;
 
     /// Error type returned by the handler.

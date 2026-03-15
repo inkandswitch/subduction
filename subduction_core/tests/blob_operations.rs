@@ -17,7 +17,7 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::Message,
+        message::SyncMessage,
         nonce_cache::NonceCache,
         test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
     },
@@ -135,14 +135,14 @@ async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
         .await?
         .expect("should receive BlobsRequest");
     assert!(
-        matches!(outbound, Message::BlobsRequest { id, ref digests, .. } if id == TEST_TREE && digests.contains(&digest)),
+        matches!(outbound, SyncMessage::BlobsRequest { id, ref digests, .. } if id == TEST_TREE && digests.contains(&digest)),
         "expected BlobsRequest containing our digest for the right tree"
     );
 
     // Simulate peer responding with the requested blob
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: TEST_TREE,
             blobs: vec![blob.clone()],
         })
@@ -185,7 +185,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
     // Peer sends an unsolicited BlobsResponse
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: TEST_TREE,
             blobs: vec![blob],
         })
@@ -241,7 +241,7 @@ async fn blobs_response_does_not_store_any_blobs() -> TestResult {
     // Peer responds with both blobs in a single BlobsResponse
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: TEST_TREE,
             blobs: vec![requested_blob.clone(), unsolicited_blob],
         })
@@ -303,7 +303,7 @@ async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
     // Respond with the blob for tree A
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: tree_a,
             blobs: vec![blob.clone()],
         })
@@ -360,7 +360,7 @@ async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
     // Peer responds with the blob but claims it's for tree B
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: tree_b,
             blobs: vec![blob],
         })

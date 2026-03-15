@@ -25,7 +25,7 @@ use futures::{
 use subduction_core::{
     connection::{
         Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
@@ -60,7 +60,7 @@ pub struct WasmWebSocket {
     socket: WebSocket,
 
     pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
-    inbound_reader: async_channel::Receiver<Message>,
+    inbound_reader: async_channel::Receiver<SyncMessage>,
 }
 
 impl WasmWebSocket {
@@ -69,7 +69,7 @@ impl WasmWebSocket {
     /// This sets up message handlers and returns a `WasmWebSocket`.
     /// The WebSocket MUST be in OPEN state.
     fn setup_open_socket(ws: WebSocket, peer_id: PeerId, timeout_ms: u32) -> Self {
-        let (inbound_writer, inbound_reader) = async_channel::bounded::<Message>(64);
+        let (inbound_writer, inbound_reader) = async_channel::bounded::<SyncMessage>(64);
 
         let pending = Arc::new(Mutex::new(Map::<
             RequestId,
@@ -82,7 +82,7 @@ impl WasmWebSocket {
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
                 tracing::debug!("WS received {} bytes", bytes.len());
-                match Message::try_decode(&bytes) {
+                match SyncMessage::try_decode(&bytes) {
                     Ok(msg) => {
                         tracing::trace!("WS message decoded: {} bytes", bytes.len());
                         let inner_pending = closure_pending.clone();
@@ -90,7 +90,7 @@ impl WasmWebSocket {
 
                         wasm_bindgen_futures::spawn_local(async move {
                             match msg {
-                                Message::BatchSyncResponse(resp) => {
+                                SyncMessage::BatchSyncResponse(resp) => {
                                     tracing::debug!(
                                         "BatchSyncResponse received: {:?}",
                                         resp.result
@@ -114,20 +114,20 @@ impl WasmWebSocket {
                                         );
                                         if let Err(e) = inner_inbound_writer
                                             .clone()
-                                            .send(Message::BatchSyncResponse(resp))
+                                            .send(SyncMessage::BatchSyncResponse(resp))
                                             .await
                                         {
                                             tracing::error!("failed to send inbound message: {e}");
                                         }
                                     }
                                 }
-                                other @ (Message::LooseCommit { .. }
-                                | Message::Fragment { .. }
-                                | Message::BlobsRequest { .. }
-                                | Message::BlobsResponse { .. }
-                                | Message::BatchSyncRequest(_)
-                                | Message::RemoveSubscriptions(_)
-                                | Message::DataRequestRejected(_)) => {
+                                other @ (SyncMessage::LooseCommit { .. }
+                                | SyncMessage::Fragment { .. }
+                                | SyncMessage::BlobsRequest { .. }
+                                | SyncMessage::BlobsResponse { .. }
+                                | SyncMessage::BatchSyncRequest(_)
+                                | SyncMessage::RemoveSubscriptions(_)
+                                | SyncMessage::DataRequestRejected(_)) => {
                                     tracing::debug!("other message type received");
                                     if let Err(e) = inner_inbound_writer.clone().send(other).await {
                                         tracing::error!("failed to send inbound message: {e}");
@@ -453,8 +453,8 @@ impl WasmWebSocket {
     ///
     /// Returns [`WasmSendError`] if the message could not be sent over the WebSocket.
     #[wasm_bindgen(js_name = send)]
-    pub async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
-        let msg: Message = wasm_message.into();
+    pub async fn wasm_send(&self, wasm_message: WasmSyncMessage) -> Result<(), WasmSendError> {
+        let msg: SyncMessage = wasm_message.into();
         self.send(&msg).await?;
         Ok(())
     }
@@ -465,7 +465,7 @@ impl WasmWebSocket {
     ///
     /// Returns [`ReadFromClosedChannel`] if the channel has been closed.
     #[wasm_bindgen(js_name = recv)]
-    pub async fn wasm_recv(&self) -> Result<WasmMessage, ReadFromClosedChannel> {
+    pub async fn wasm_recv(&self) -> Result<WasmSyncMessage, ReadFromClosedChannel> {
         let msg = self.recv().await?;
         Ok(msg.into())
     }
@@ -527,7 +527,7 @@ impl Connection<Local> for WasmWebSocket {
         async { Ok(()) }.boxed_local()
     }
 
-    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let request_id = message.request_id();
 
         let msg_bytes = message.encode();
@@ -544,7 +544,7 @@ impl Connection<Local> for WasmWebSocket {
         .boxed_local()
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         async {
             tracing::debug!("waiting for inbound message");
             let msg = self
@@ -573,7 +573,7 @@ impl Connection<Local> for WasmWebSocket {
                 self.pending.lock().await.insert(req_id, tx);
             }
 
-            let msg_bytes = Message::BatchSyncRequest(req).encode();
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             self.socket
                 .send_with_u8_array(msg_bytes.as_slice())

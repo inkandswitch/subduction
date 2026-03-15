@@ -21,7 +21,7 @@ use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
         Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     peer::id::PeerId,
 };
@@ -109,8 +109,8 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
 
     pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
-    inbound_writer: async_channel::Sender<Message>,
-    inbound_reader: async_channel::Receiver<Message>,
+    inbound_writer: async_channel::Sender<SyncMessage>,
+    inbound_reader: async_channel::Receiver<SyncMessage>,
 
     _phantom: PhantomData<K>,
 }
@@ -140,7 +140,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
         async { Ok(()) }.boxed_local()
     }
 
-    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "ws: sending outbound with message id {:?} on chan {}",
             message.request_id(),
@@ -151,7 +151,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
 
         let tx = self.outbound_tx.clone();
         async move {
-            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
+            tx.send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| SendError)?;
 
@@ -160,7 +160,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
         .boxed_local()
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
         tracing::debug!(chan_id = self.chan_id, "waiting on recv");
 
@@ -190,10 +190,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let msg_bytes = Message::BatchSyncRequest(req).encode();
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             outbound_tx
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
+                .send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| CallError::SenderTaskStopped)?;
 
@@ -323,8 +323,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
             tracing::debug!(chan_id = self.chan_id, "received WebSocket message");
 
             match ws_msg {
-                Ok(tungstenite::Message::Binary(bytes)) => {
-                    let msg = Message::try_decode(&bytes).map_err(|e| {
+                Ok(tungstenite::SyncMessage::Binary(bytes)) => {
+                    let msg = SyncMessage::try_decode(&bytes).map_err(|e| {
                         tracing::error!(
                             chan_id = self.chan_id,
                             "failed to deserialize inbound message: {e}"
@@ -340,7 +340,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                     );
 
                     match msg {
-                        Message::BatchSyncResponse(resp) => {
+                        SyncMessage::BatchSyncResponse(resp) => {
                             tracing::info!(
                                 "received BatchSyncResponse for req_id {:?}",
                                 resp.req_id
@@ -357,7 +357,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                                 }
                             } else {
                                 self.inbound_writer
-                                    .send(Message::BatchSyncResponse(resp))
+                                    .send(SyncMessage::BatchSyncResponse(resp))
                                     .await
                                     .map_err(|e| {
                                         tracing::error!(
@@ -369,13 +369,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                                     })?;
                             }
                         }
-                        other @ (Message::LooseCommit { .. }
-                        | Message::Fragment { .. }
-                        | Message::BlobsRequest { .. }
-                        | Message::BlobsResponse { .. }
-                        | Message::BatchSyncRequest(_)
-                        | Message::RemoveSubscriptions(_)
-                        | Message::DataRequestRejected(_)) => {
+                        other @ (SyncMessage::LooseCommit { .. }
+                        | SyncMessage::Fragment { .. }
+                        | SyncMessage::BlobsRequest { .. }
+                        | SyncMessage::BlobsResponse { .. }
+                        | SyncMessage::BatchSyncRequest(_)
+                        | SyncMessage::RemoveSubscriptions(_)
+                        | SyncMessage::DataRequestRejected(_)) => {
                             self.inbound_writer.send(other).await.map_err(|e| {
                                 tracing::error!(
                                     "failed to send inbound message to channel {}: {}",
@@ -392,25 +392,25 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                         }
                     }
                 }
-                Ok(tungstenite::Message::Text(text)) => {
+                Ok(tungstenite::SyncMessage::Text(text)) => {
                     tracing::warn!("unexpected text message: {}", text);
                 }
-                Ok(tungstenite::Message::Ping(p)) => {
+                Ok(tungstenite::SyncMessage::Ping(p)) => {
                     tracing::debug!(size = p.len(), "received ping");
                     self.outbound_tx
-                        .send(tungstenite::Message::Pong(p))
+                        .send(tungstenite::SyncMessage::Pong(p))
                         .await
                         .unwrap_or_else(|_| {
                             tracing::error!("failed to send pong");
                         });
                 }
-                Ok(tungstenite::Message::Pong(p)) => {
+                Ok(tungstenite::SyncMessage::Pong(p)) => {
                     tracing::warn!("unexpected pong message: {:x?}", p);
                 }
-                Ok(tungstenite::Message::Frame(f)) => {
+                Ok(tungstenite::SyncMessage::Frame(f)) => {
                     tracing::warn!("unexpected frame: {:x?}", f);
                 }
-                Ok(tungstenite::Message::Close(_)) => {
+                Ok(tungstenite::SyncMessage::Close(_)) => {
                     tracing::info!("received close message, shutting down listener");
                     break;
                 }
@@ -469,7 +469,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
         async { Ok(()) }.boxed()
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "sending outbound message id {:?} / {message:?}",
             message.request_id()
@@ -479,7 +479,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
 
         let tx = self.outbound_tx.clone();
         async move {
-            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
+            tx.send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| SendError)?;
 
@@ -488,7 +488,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
         .boxed()
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
         tracing::debug!(chan_id = self.chan_id, "waiting on recv");
 
@@ -518,10 +518,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
             let (tx, rx) = oneshot::channel();
             self.pending.lock().await.insert(req_id, tx);
 
-            let msg_bytes = Message::BatchSyncRequest(req).encode();
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             outbound_tx
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
+                .send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| CallError::SenderTaskStopped)?;
 

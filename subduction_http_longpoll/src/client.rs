@@ -34,7 +34,7 @@ use futures::{
 use subduction_core::{
     connection::{
         handshake::{self, HandshakeMessage, audience::Audience},
-        message::Message,
+        message::SyncMessage,
         timeout::Timeout,
     },
     peer::id::PeerId,
@@ -304,7 +304,7 @@ async fn poll_loop<K: future_form::FutureForm, H: HttpClient<K>, O>(
             }
             Either::Left((result, _)) => match result {
                 Ok(resp) => match resp.status {
-                    200 => match Message::try_decode(&resp.body) {
+                    200 => match SyncMessage::try_decode(&resp.body) {
                         Ok(msg) => {
                             if conn.push_inbound(msg).await.is_err() {
                                 tracing::error!("inbound channel closed");
