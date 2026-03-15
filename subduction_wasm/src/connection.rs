@@ -5,6 +5,7 @@ pub(crate) mod handshake;
 pub mod fetch_client;
 pub mod longpoll;
 pub mod message;
+pub mod message_port;
 pub mod nonce;
 pub mod websocket;
 

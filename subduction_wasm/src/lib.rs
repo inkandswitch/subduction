@@ -41,3 +41,4 @@ pub mod peer_id;
 pub mod signer;
 pub mod subduction;
 pub mod sync_stats;
+pub(crate) mod timer;

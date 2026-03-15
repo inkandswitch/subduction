@@ -5,57 +5,12 @@ test.beforeEach(async ({ page }) => {
   await page.goto(URL);
   const wasmTimeout = process.env.CI ? 30000 : 10000;
   await page.waitForFunction(() => window.subductionReady === true, { timeout: wasmTimeout });
-
-  // Inject shared helper into the page context
-  await page.evaluate(() => {
-    /**
-     * Create a HandshakeConnection backed by a MessagePort.
-     *
-     * Implements both raw byte send/recv (for the handshake phase) and the
-     * full Connection interface (for post-handshake communication) over the
-     * same MessagePort.
-     */
-    (window as any).makeHandshakeConnection = (port: MessagePort) => {
-      const incoming: any[] = [];
-      const waiters: Array<(value: any) => void> = [];
-
-      port.onmessage = (event: MessageEvent) => {
-        if (waiters.length > 0) {
-          waiters.shift()!(event.data);
-        } else {
-          incoming.push(event.data);
-        }
-      };
-
-      function nextMessage<T>(): Promise<T> {
-        if (incoming.length > 0) {
-          return Promise.resolve(incoming.shift() as T);
-        }
-        return new Promise((resolve) => waiters.push(resolve));
-      }
-
-      return {
-        async sendBytes(bytes: Uint8Array) {
-          port.postMessage(bytes.buffer);
-        },
-        recvBytes() {
-          return nextMessage<ArrayBuffer>().then((buf) => new Uint8Array(buf));
-        },
-        async disconnect() { port.close(); },
-        async send(message: any) { port.postMessage(message); },
-        recv: nextMessage,
-        async nextRequestId() { throw new Error("not implemented"); },
-        async call() { throw new Error("not implemented"); },
-      };
-    };
-  });
 });
 
 test.describe("MessageChannel Connection Tests", () => {
   test("should authenticate two peers via MessageChannel", async ({ page }) => {
     const result = await page.evaluate(async () => {
-      const { AuthenticatedConnection, MemorySigner } = window.subduction;
-      const makeConn = (window as any).makeHandshakeConnection;
+      const { AuthenticatedConnection, MemorySigner, makeMessagePortConnection } = window.subduction;
 
       try {
         const signerA = MemorySigner.generate();
@@ -69,8 +24,8 @@ test.describe("MessageChannel Connection Tests", () => {
         channel.port2.start();
 
         const [authA, authB] = await Promise.all([
-          AuthenticatedConnection.setup(makeConn(channel.port1), signerA, peerIdB),
-          AuthenticatedConnection.accept(makeConn(channel.port2), signerB),
+          AuthenticatedConnection.setup(makeMessagePortConnection(channel.port1), signerA, peerIdB),
+          AuthenticatedConnection.accept(makeMessagePortConnection(channel.port2), signerB),
         ]);
 
         return {
@@ -102,8 +57,8 @@ test.describe("MessageChannel Connection Tests", () => {
     const result = await page.evaluate(async () => {
       const {
         AuthenticatedConnection, Subduction, MemoryStorage, MemorySigner,
+        makeMessagePortConnection,
       } = window.subduction;
-      const makeConn = (window as any).makeHandshakeConnection;
 
       try {
         const signerA = MemorySigner.generate();
@@ -117,8 +72,8 @@ test.describe("MessageChannel Connection Tests", () => {
         channel.port2.start();
 
         const [authA, authB] = await Promise.all([
-          AuthenticatedConnection.setup(makeConn(channel.port1), signerA, peerIdB),
-          AuthenticatedConnection.accept(makeConn(channel.port2), signerB),
+          AuthenticatedConnection.setup(makeMessagePortConnection(channel.port1), signerA, peerIdB),
+          AuthenticatedConnection.accept(makeMessagePortConnection(channel.port2), signerB),
         ]);
 
         const syncerA = new Subduction(signerA, new MemoryStorage());
@@ -171,8 +126,7 @@ test.describe("MessageChannel Connection Tests", () => {
 
   test("should reject handshake with wrong expected peer ID", async ({ page }) => {
     const result = await page.evaluate(async () => {
-      const { AuthenticatedConnection, MemorySigner, PeerId } = window.subduction;
-      const makeConn = (window as any).makeHandshakeConnection;
+      const { AuthenticatedConnection, MemorySigner, PeerId, makeMessagePortConnection } = window.subduction;
 
       try {
         const signerA = MemorySigner.generate();
@@ -185,8 +139,8 @@ test.describe("MessageChannel Connection Tests", () => {
         channel.port2.start();
 
         await Promise.all([
-          AuthenticatedConnection.setup(makeConn(channel.port1), signerA, wrongPeerId),
-          AuthenticatedConnection.accept(makeConn(channel.port2), signerB),
+          AuthenticatedConnection.setup(makeMessagePortConnection(channel.port1), signerA, wrongPeerId),
+          AuthenticatedConnection.accept(makeMessagePortConnection(channel.port2), signerB),
         ]);
 
         return { rejected: false, error: null };

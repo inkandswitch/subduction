@@ -382,7 +382,6 @@ pub struct RespondResult {
 ///
 /// Panics if encoding of the challenge message fails (should never happen
 /// with well-formed types).
-#[allow(clippy::expect_used)]
 pub async fn initiate<K: FutureForm, H: Handshake<K>, C: Connection<K>, E, S: Signer<K>>(
     mut handshake: H,
     build_connection: impl FnOnce(H, PeerId) -> (C, E),

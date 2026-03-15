@@ -49,6 +49,14 @@ tracing-subscriber = { workspace = true, features = ["fmt", "env-filter", "std"]
 name = "e2e"
 harness = false
 
+[[test]]
+name = "round_trip"
+required-features = ["tokio_server", "tokio_client"]
+
+[[test]]
+name = "tokio_tests"
+required-features = ["tokio_server", "tokio_client"]
+
 [features]
 default = ["std"]
 futures-timer = ["std", "dep:futures-timer"]
