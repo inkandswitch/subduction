@@ -14,14 +14,14 @@ use wasm_refgen::wasm_refgen;
 
 use from_js_ref::FromJsRef;
 use future_form::Local;
-use futures::{future::LocalBoxFuture, FutureExt};
+use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::{self, Promise};
 use subduction_core::{
     connection::{
+        Connection,
         authenticated::Authenticated,
         handshake::{self as hs, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-        Connection,
     },
     timestamp::TimestampSeconds,
 };
