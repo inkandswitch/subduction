@@ -36,7 +36,7 @@ metrics-exporter-prometheus = { workspace = true }
 reqwest = { workspace = true }
 sedimentree_core = { workspace = true, features = ["std"] }
 sedimentree_fs_storage = { workspace = true }
-subduction_core = { workspace = true, features = ["std", "metrics"] }
+subduction_core = { workspace = true, features = ["system_time", "metrics"] }
 subduction_crypto = { workspace = true }
 subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
 subduction_iroh = { workspace = true }

@@ -12,6 +12,7 @@ use alloc::string::ToString;
 use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
+use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::{self, Promise};
@@ -31,7 +32,7 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::{
     connection::{
-        message::{JsMessage, WasmMessage},
+        message::WasmMessage,
         nonce::WasmNonce,
     },
     error::WasmHandshakeError,
@@ -132,14 +133,11 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_recv())
                 .await
                 .map_err(JsConnectionError::Recv)?;
-            let js_msg: JsMessage =
-                js_value
-                    .dyn_into()
-                    .map_err(|value| JsConnectionError::UnexpectedJsType {
-                        expected: "Message",
-                        value,
-                    })?;
-            let wasm_msg = WasmMessage::from(&js_msg);
+            let wasm_msg = WasmMessage::try_from_js_value(&js_value)
+                .ok_or_else(|| JsConnectionError::UnexpectedJsType {
+                    expected: "Message",
+                    value: js_value,
+                })?;
             Ok(wasm_msg.into())
         }
         .boxed_local()
@@ -152,10 +150,8 @@ impl Connection<Local> for JsConnection {
                 .await
                 .expect("JsConnection.nextRequestId() promise rejected");
             #[allow(clippy::expect_used)]
-            let js_req_id: JsRequestId = js_value
-                .dyn_into()
+            let wasm_req_id = WasmRequestId::try_from_js_value(&js_value)
                 .expect("JsConnection.nextRequestId() did not return a RequestId");
-            let wasm_req_id = WasmRequestId::from(&js_req_id);
             wasm_req_id.into()
         }
         .boxed_local()
@@ -173,14 +169,11 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_call(wasm_req, timeout_ms))
                 .await
                 .map_err(JsConnectionError::Call)?;
-            let js_resp: JsBatchSyncResponse =
-                js_value
-                    .dyn_into()
-                    .map_err(|value| JsConnectionError::UnexpectedJsType {
-                        expected: "BatchSyncResponse",
-                        value,
-                    })?;
-            let wasm_resp = WasmBatchSyncResponse::from(&js_resp);
+            let wasm_resp = WasmBatchSyncResponse::try_from_js_value(&js_value)
+                .ok_or_else(|| JsConnectionError::UnexpectedJsType {
+                    expected: "BatchSyncResponse",
+                    value: js_value,
+                })?;
             Ok(wasm_resp.into())
         }
         .boxed_local()

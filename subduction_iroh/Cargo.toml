@@ -21,7 +21,7 @@ future_form = { workspace = true }
 iroh = { workspace = true }
 rand = { workspace = true, features = ["getrandom"] }
 sedimentree_core = { workspace = true }
-subduction_core = { workspace = true, features = ["std"] }
+subduction_core = { workspace = true, features = ["system_time"] }
 subduction_crypto = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

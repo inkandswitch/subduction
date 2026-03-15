@@ -164,13 +164,12 @@ fn parse_digest_array<T: Encode + DecodeFields>(
 
     for i in 0..array.length() {
         let item = array.get(i);
-        let js_digest: JsDigest =
-            item.dyn_into()
-                .map_err(|value| JsStorageError::UnexpectedJsType {
-                    expected: "Digest",
-                    value,
-                })?;
-        let digest: Digest<T> = WasmDigest::from(&js_digest).into();
+        let wasm_digest = WasmDigest::try_from_js_value(&item)
+            .ok_or_else(|| JsStorageError::UnexpectedJsType {
+                expected: "Digest",
+                value: item,
+            })?;
+        let digest: Digest<T> = wasm_digest.into();
         result.insert(digest);
     }
 

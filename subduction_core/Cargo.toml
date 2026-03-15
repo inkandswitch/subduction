@@ -63,6 +63,7 @@ std = [
   "subduction_crypto/std",
   "thiserror/std"
 ]
+system_time = ["std"]
 test_utils = ["std", "dep:tokio"]
 
 [lints]
