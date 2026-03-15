@@ -27,8 +27,8 @@ use from_js_ref::FromJsRef;
 
 use crate::{
     digest::{JsDigest, WasmDigest},
-    fragment::{WasmFragmentWithBlob},
-    loose_commit::{WasmCommitWithBlob},
+    fragment::WasmFragmentWithBlob,
+    loose_commit::WasmCommitWithBlob,
     sedimentree_id::{
         JsSedimentreeId, WasmConvertJsValueToSedimentreeIdArrayError, WasmSedimentreeId,
         WasmSedimentreeIdsArray,
@@ -164,11 +164,12 @@ fn parse_digest_array<T: Encode + DecodeFields>(
 
     for i in 0..array.length() {
         let item = array.get(i);
-        let wasm_digest = WasmDigest::try_from_js_value(&item)
-            .ok_or_else(|| JsStorageError::UnexpectedJsType {
+        let wasm_digest = WasmDigest::try_from_js_value(&item).ok_or_else(|| {
+            JsStorageError::UnexpectedJsType {
                 expected: "Digest",
                 value: item,
-            })?;
+            }
+        })?;
         let digest: Digest<T> = wasm_digest.into();
         result.insert(digest);
     }
@@ -275,10 +276,12 @@ impl Storage<Local> for JsStorage {
                 return Ok(None);
             }
 
-            let wasm_commit = WasmCommitWithBlob::try_from_js_value(&js_value)
-                .ok_or_else(|| JsStorageError::UnexpectedJsType {
-                    expected: "CommitWithBlob",
-                    value: js_value,
+            let wasm_commit =
+                WasmCommitWithBlob::try_from_js_value(&js_value).ok_or_else(|| {
+                    JsStorageError::UnexpectedJsType {
+                        expected: "CommitWithBlob",
+                        value: js_value,
+                    }
                 })?;
             let signed: Signed<LooseCommit> = wasm_commit.signed().into();
             let blob = Blob::new(wasm_commit.blob().to_vec());
@@ -320,10 +323,12 @@ impl Storage<Local> for JsStorage {
 
             for i in 0..array.length() {
                 let item = array.get(i);
-                let wasm_commit = WasmCommitWithBlob::try_from_js_value(&item)
-                    .ok_or_else(|| JsStorageError::UnexpectedJsType {
-                        expected: "CommitWithBlob",
-                        value: item,
+                let wasm_commit =
+                    WasmCommitWithBlob::try_from_js_value(&item).ok_or_else(|| {
+                        JsStorageError::UnexpectedJsType {
+                            expected: "CommitWithBlob",
+                            value: item,
+                        }
                     })?;
                 let signed: Signed<LooseCommit> = wasm_commit.signed().into();
                 let blob = Blob::new(wasm_commit.blob().to_vec());
@@ -413,10 +418,12 @@ impl Storage<Local> for JsStorage {
                 return Ok(None);
             }
 
-            let wasm_fragment = WasmFragmentWithBlob::try_from_js_value(&js_value)
-                .ok_or_else(|| JsStorageError::UnexpectedJsType {
-                    expected: "FragmentWithBlob",
-                    value: js_value,
+            let wasm_fragment =
+                WasmFragmentWithBlob::try_from_js_value(&js_value).ok_or_else(|| {
+                    JsStorageError::UnexpectedJsType {
+                        expected: "FragmentWithBlob",
+                        value: js_value,
+                    }
                 })?;
             let signed: Signed<Fragment> = wasm_fragment.signed().into();
             let blob = Blob::new(wasm_fragment.blob().to_vec());
@@ -458,10 +465,12 @@ impl Storage<Local> for JsStorage {
 
             for i in 0..array.length() {
                 let item = array.get(i);
-                let wasm_fragment = WasmFragmentWithBlob::try_from_js_value(&item)
-                    .ok_or_else(|| JsStorageError::UnexpectedJsType {
-                        expected: "FragmentWithBlob",
-                        value: item,
+                let wasm_fragment =
+                    WasmFragmentWithBlob::try_from_js_value(&item).ok_or_else(|| {
+                        JsStorageError::UnexpectedJsType {
+                            expected: "FragmentWithBlob",
+                            value: item,
+                        }
                     })?;
                 let signed: Signed<Fragment> = wasm_fragment.signed().into();
                 let blob = Blob::new(wasm_fragment.blob().to_vec());

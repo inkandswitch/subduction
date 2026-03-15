@@ -31,10 +31,7 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
-    connection::{
-        message::WasmMessage,
-        nonce::WasmNonce,
-    },
+    connection::{message::WasmMessage, nonce::WasmNonce},
     error::WasmHandshakeError,
     peer_id::WasmPeerId,
     signer::JsSigner,
@@ -133,11 +130,12 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_recv())
                 .await
                 .map_err(JsConnectionError::Recv)?;
-            let wasm_msg = WasmMessage::try_from_js_value(&js_value)
-                .ok_or_else(|| JsConnectionError::UnexpectedJsType {
+            let wasm_msg = WasmMessage::try_from_js_value(&js_value).ok_or_else(|| {
+                JsConnectionError::UnexpectedJsType {
                     expected: "Message",
                     value: js_value,
-                })?;
+                }
+            })?;
             Ok(wasm_msg.into())
         }
         .boxed_local()
@@ -169,10 +167,12 @@ impl Connection<Local> for JsConnection {
             let js_value = JsFuture::from(self.js_call(wasm_req, timeout_ms))
                 .await
                 .map_err(JsConnectionError::Call)?;
-            let wasm_resp = WasmBatchSyncResponse::try_from_js_value(&js_value)
-                .ok_or_else(|| JsConnectionError::UnexpectedJsType {
-                    expected: "BatchSyncResponse",
-                    value: js_value,
+            let wasm_resp =
+                WasmBatchSyncResponse::try_from_js_value(&js_value).ok_or_else(|| {
+                    JsConnectionError::UnexpectedJsType {
+                        expected: "BatchSyncResponse",
+                        value: js_value,
+                    }
                 })?;
             Ok(wasm_resp.into())
         }
