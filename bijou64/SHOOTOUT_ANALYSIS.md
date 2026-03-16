@@ -1,8 +1,48 @@
 # bijou64 Benchmark Shootout
 
 > Criterion benchmarks comparing bijou64 against varu64, vu64, vu128, and leb128 across six value distributions over batches of 4096 values.
->
-> Run: `cargo bench -p bijou64 --bench shootout`
+
+## Running the Shootout
+
+### 1. Run the Benchmarks
+
+```bash
+cargo bench -p bijou64 --bench shootout
+```
+
+This writes Criterion sample data to `target/criterion/`.
+
+### 2. Generate Charts
+
+The `--arch` flag controls the output subdirectory so that each architecture keeps its own charts. If omitted, it auto-detects from `uname -m`.
+
+```bash
+# via nix flake app
+nix run .#bench-charts -- --arch x86    # writes to bijou64/charts/x86/
+nix run .#bench-charts -- --arch arm    # writes to bijou64/charts/arm/
+
+# or via uv (auto-installs Python deps)
+uv run bijou64/charts/analyze.py --arch x86
+uv run bijou64/charts/analyze.py --arch arm
+
+# auto-detect architecture (x86_64 → x86, aarch64 → arm)
+uv run bijou64/charts/analyze.py
+```
+
+Output lands in `bijou64/charts/<arch>/`:
+
+```
+bijou64/charts/<arch>/
+  percentiles.csv       # machine-readable statistics
+  percentiles.md        # markdown tables (p50/p90/p95/p99/p99.9)
+  percentiles.html      # interactive sortable table
+  *_bar.svg             # grouped bar charts (median + min–p95 whiskers)
+  *_box.svg             # box-and-whisker plots
+  *_cdf.svg             # CDF overlay plots
+  *_heatmap.svg         # library × distribution heatmaps
+  *_cdf.html            # interactive Plotly CDFs
+  *_heatmap.html        # interactive Plotly heatmaps
+```
 
 ## Results by Architecture
 
