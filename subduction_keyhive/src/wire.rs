@@ -58,7 +58,7 @@ impl KeyhiveMessage {
     ///
     /// Returns an error if CBOR serialization fails.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn from_signed(msg: &SignedMessage) -> Result<Self, crate::error::CborSerError> {
+    pub fn from_signed(msg: &SignedMessage) -> Result<Self, crate::signed_message::CborError> {
         msg.to_cbor().map(|payload| Self { payload })
     }
 
@@ -68,7 +68,7 @@ impl KeyhiveMessage {
     ///
     /// Returns an error if CBOR deserialization fails.
     #[cfg(all(feature = "serde", feature = "std"))]
-    pub fn into_signed(self) -> Result<SignedMessage, crate::error::CborDeError> {
+    pub fn into_signed(self) -> Result<SignedMessage, crate::signed_message::CborError> {
         SignedMessage::from_cbor(&self.payload)
     }
 

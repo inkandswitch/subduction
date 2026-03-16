@@ -3,9 +3,7 @@
 //! This module provides high-level functions for persisting, loading, and compacting
 //! keyhive state using the [`KeyhiveStorage`] trait.
 
-extern crate alloc;
-
-use alloc::{boxed::Box, sync::Arc, vec::Vec};
+use alloc::{string::ToString, sync::Arc, vec::Vec};
 
 use keyhive_core::{
     archive::Archive, crypto::signer::async_signer::AsyncSigner, event::static_event::StaticEvent,
@@ -13,29 +11,22 @@ use keyhive_core::{
 };
 
 use crate::{
-    error::{CborDeError, CborSerError, StorageError},
+    collections::{Map, Set},
+    error::StorageError,
     storage::{KeyhiveStorage, StorageHash},
 };
-
-/// Box a storage backend error into the default `StorageError` type.
-fn box_err<E: core::error::Error + Send + Sync + 'static>(
-    e: E,
-) -> Box<dyn core::error::Error + Send + Sync> {
-    Box::new(e)
-}
 
 /// Serialize a value to CBOR bytes.
 fn cbor_serialize<T: serde::Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
     let mut buf = Vec::new();
     ciborium::into_writer(value, &mut buf)
-        .map_err(|e| StorageError::Serialization(CborSerError::from_writer(e)))?;
+        .map_err(|e| StorageError::Serialization(e.to_string()))?;
     Ok(buf)
 }
 
 /// Deserialize a value from CBOR bytes.
 fn cbor_deserialize<T: serde::de::DeserializeOwned>(bytes: &[u8]) -> Result<T, StorageError> {
-    ciborium::from_reader(bytes)
-        .map_err(|e| StorageError::Deserialization(CborDeError::from_slice(e)))
+    ciborium::from_reader(bytes).map_err(|e| StorageError::Deserialization(e.to_string()))
 }
 
 /// Hash event bytes using BLAKE3 to produce a storage key.
@@ -61,7 +52,6 @@ pub async fn save_keyhive_archive<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef,
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(archive)?;
@@ -75,7 +65,7 @@ where
     storage
         .save_archive(storage_id, bytes)
         .await
-        .map_err(|e| StorageError::Save(box_err(e)))
+        .map_err(|e| StorageError::Save(e.to_string()))
 }
 
 /// Serialize and save an event to storage.
@@ -92,7 +82,6 @@ pub async fn save_event<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef,
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     let bytes = cbor_serialize(event)?;
@@ -112,7 +101,6 @@ pub async fn save_event_bytes<S, K>(
 ) -> Result<StorageHash, StorageError>
 where
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     let hash = hash_event_bytes(&bytes);
@@ -126,7 +114,7 @@ where
     storage
         .save_event(hash, bytes)
         .await
-        .map_err(|e| StorageError::Save(box_err(e)))?;
+        .map_err(|e| StorageError::Save(e.to_string()))?;
 
     Ok(hash)
 }
@@ -142,13 +130,12 @@ pub async fn load_archives<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     let raw_archives = storage
         .load_archives()
         .await
-        .map_err(|e| StorageError::Load(box_err(e)))?;
+        .map_err(|e| StorageError::Load(e.to_string()))?;
 
     let mut archives = Vec::with_capacity(raw_archives.len());
     for (hash, bytes) in raw_archives {
@@ -171,13 +158,12 @@ pub async fn load_events<T, S, K>(
 where
     T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     let raw_events = storage
         .load_events()
         .await
-        .map_err(|e| StorageError::Load(box_err(e)))?;
+        .map_err(|e| StorageError::Load(e.to_string()))?;
 
     let mut events = Vec::with_capacity(raw_events.len());
     for (hash, bytes) in raw_events {
@@ -201,13 +187,12 @@ pub async fn load_event_bytes<S, K>(
 ) -> Result<Vec<(StorageHash, Vec<u8>)>, StorageError>
 where
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     storage
         .load_events()
         .await
-        .map_err(|e| StorageError::Load(box_err(e)))
+        .map_err(|e| StorageError::Load(e.to_string()))
 }
 
 /// Ingest all stored archives and events into a keyhive instance.
@@ -224,18 +209,13 @@ pub async fn ingest_from_storage<Signer, T, P, C, L, R, S, K>(
     storage: &S,
 ) -> Result<Vec<Arc<StaticEvent<T>>>, StorageError>
 where
-    Signer: AsyncSigner + Clone + Send + 'static,
-    T: keyhive_core::content::reference::ContentRef
-        + serde::de::DeserializeOwned
-        + Send
-        + Sync
-        + 'static,
+    Signer: AsyncSigner + Clone,
+    T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T> + Send + 'static,
+    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     // Load archives
@@ -249,7 +229,7 @@ where
         keyhive
             .ingest_archive(archive)
             .await
-            .map_err(|e| StorageError::ArchiveIngestion(Box::new(e)))?;
+            .map_err(|e| StorageError::Load(alloc::format!("archive ingestion failed: {e:?}")))?;
     }
 
     // Load and ingest events
@@ -287,29 +267,24 @@ pub async fn compact<Signer, T, P, C, L, R, S, K>(
     storage_id: StorageHash,
 ) -> Result<(), StorageError>
 where
-    Signer: AsyncSigner + Clone + Send + 'static,
-    T: keyhive_core::content::reference::ContentRef
-        + serde::de::DeserializeOwned
-        + Send
-        + Sync
-        + 'static,
+    Signer: AsyncSigner + Clone,
+    T: keyhive_core::content::reference::ContentRef + serde::de::DeserializeOwned,
     P: for<'de> serde::Deserialize<'de>,
     C: keyhive_core::store::ciphertext::CiphertextStore<T, P> + Clone,
-    L: keyhive_core::listener::membership::MembershipListener<Signer, T> + Send + 'static,
+    L: keyhive_core::listener::membership::MembershipListener<Signer, T>,
     R: rand::CryptoRng + rand::RngCore,
     S: KeyhiveStorage<K>,
-    S::Error: Send + Sync + 'static,
     K: future_form::FutureForm + ?Sized,
 {
     // Load raw data (we need hashes for cleanup)
     let raw_archives = storage
         .load_archives()
         .await
-        .map_err(|e| StorageError::Load(box_err(e)))?;
+        .map_err(|e| StorageError::Load(e.to_string()))?;
     let raw_events = storage
         .load_events()
         .await
-        .map_err(|e| StorageError::Load(box_err(e)))?;
+        .map_err(|e| StorageError::Load(e.to_string()))?;
 
     if raw_events.is_empty() && raw_archives.len() <= 1 {
         tracing::debug!("nothing to compact");
@@ -329,11 +304,11 @@ where
         keyhive
             .ingest_archive(archive)
             .await
-            .map_err(|e| StorageError::ArchiveIngestion(Box::new(e)))?;
+            .map_err(|e| StorageError::Load(alloc::format!("archive ingestion failed: {e:?}")))?;
     }
 
     // Build a map from event hash to storage hash for tracking pending events
-    let event_hash_to_storage: crate::collections::Map<[u8; 32], StorageHash> = raw_events
+    let event_hash_to_storage: Map<[u8; 32], StorageHash> = raw_events
         .iter()
         .map(|(storage_hash, bytes)| {
             let event_hash = hash_event_bytes(bytes);
@@ -350,7 +325,7 @@ where
     let pending = keyhive.ingest_unsorted_static_events(events).await;
 
     // Get hashes of pending events
-    let pending_hashes: crate::collections::Set<[u8; 32]> = pending
+    let pending_hashes: Set<[u8; 32]> = pending
         .iter()
         .filter_map(|e| {
             let bytes = cbor_serialize(e.as_ref()).ok()?;
@@ -371,7 +346,7 @@ where
             storage
                 .delete_archive(*hash)
                 .await
-                .map_err(|e| StorageError::Delete(box_err(e)))?;
+                .map_err(|e| StorageError::Delete(e.to_string()))?;
             deleted_archive_count += 1;
         }
     }
@@ -382,7 +357,7 @@ where
             storage
                 .delete_event(*storage_hash)
                 .await
-                .map_err(|e| StorageError::Delete(box_err(e)))?;
+                .map_err(|e| StorageError::Delete(e.to_string()))?;
             deleted_event_count += 1;
         }
     }

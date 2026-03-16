@@ -5166,14 +5166,10 @@ dependencies = [
  "bolero",
  "future_form",
  "futures 0.3.32",
- "keyhive_core",
  "nonempty 0.12.0",
- "rand 0.8.5",
  "sedimentree_core",
- "serde",
  "subduction_core",
  "subduction_ephemeral",
- "subduction_keyhive",
  "testresult",
  "thiserror 2.0.18",
  "tokio",
@@ -5250,7 +5246,6 @@ dependencies = [
  "rand 0.8.5",
  "sedimentree_core",
  "serde",
- "subduction_core",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -5258,11 +5253,9 @@ dependencies = [
 
 [[package]]
 name = "subduction_keyhive_policy"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "async-channel",
- "async-lock",
- "ciborium",
  "ed25519-dalek 2.2.0",
  "future_form",
  "futures 0.3.32",
@@ -5271,10 +5264,8 @@ dependencies = [
  "sedimentree_core",
  "serde",
  "subduction_core",
- "subduction_ephemeral",
  "subduction_keyhive",
  "thiserror 2.0.18",
- "tokio",
  "tracing",
 ]
 

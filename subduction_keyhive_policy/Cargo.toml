@@ -1,35 +1,36 @@
 [package]
 name = "subduction_keyhive_policy"
-version = "0.1.0"
-description = "Keyhive-based authorization policy for Subduction"
-
-categories = ["web-programming"]
-keywords = ["sync", "subduction", "keyhive", "policy"]
+version = "0.5.0"
+description = "Keyhive-based authorization policy for Subduction connections"
 readme = "./README.md"
+publish = false
 
-edition.workspace = true
+categories = ["authentication", "cryptography"]
+keywords = ["authorization", "policy", "sync"]
+
+authors.workspace = true
 license.workspace = true
+edition.workspace = true
 repository.workspace = true
+rust-version.workspace = true
 
 [dependencies]
 async-channel = { workspace = true }
-async-lock = { workspace = true }
 ed25519-dalek = { workspace = true }
-future_form = { workspace = true }
 futures = { workspace = true }
+future_form = { workspace = true }
 keyhive_core = { workspace = true }
-rand = "0.8.5"
+rand = { workspace = true }
 sedimentree_core = { workspace = true, default-features = false }
-serde = { workspace = true, features = ["derive"] }
+serde = { workspace = true }
 subduction_core = { workspace = true, default-features = false }
-subduction_ephemeral = { workspace = true, default-features = false }
-subduction_keyhive = { workspace = true, features = ["policy"] }
+subduction_keyhive = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
-[dev-dependencies]
-ciborium = { workspace = true }
-tokio = { workspace = true, features = ["macros", "rt"] }
+[features]
+default = []
+std = ["subduction_core/std"]
 
 [lints]
 workspace = true

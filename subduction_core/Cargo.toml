@@ -22,7 +22,6 @@ ed25519-dalek = { workspace = true, features = ["zeroize"] }
 futures = { workspace = true }
 future_form = { workspace = true }
 getrandom = { workspace = true }
-
 metrics = { workspace = true, optional = true }
 nonempty = { workspace = true }
 sedimentree_core = { workspace = true, features = ["getrandom"] }

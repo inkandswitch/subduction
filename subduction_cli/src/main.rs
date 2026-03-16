@@ -2,8 +2,6 @@
 
 #![cfg_attr(not(windows), allow(clippy::multiple_crate_versions))] // windows-sys
 
-#[allow(dead_code)]
-mod handler;
 mod key;
 pub mod metrics;
 mod purge;
