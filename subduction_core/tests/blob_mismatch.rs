@@ -95,11 +95,11 @@ fn make_subduction() -> (
             'static,
             Sendable,
             MemoryStorage,
-            ChannelMockConnection,
+            ChannelMockConnection<SyncMessage>,
             SyncHandler<
                 Sendable,
                 MemoryStorage,
-                ChannelMockConnection,
+                ChannelMockConnection<SyncMessage>,
                 OpenPolicy,
                 CountLeadingZeroBytes,
             >,
@@ -115,7 +115,7 @@ fn make_subduction() -> (
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     (sd, listener, manager)
 }

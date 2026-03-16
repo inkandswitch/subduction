@@ -349,7 +349,7 @@ async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let peer_id = PeerId::new([1u8; 32]);
     let (conn, handle) = ChannelMockConnection::new_with_handle(peer_id);

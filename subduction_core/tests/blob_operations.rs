@@ -65,11 +65,11 @@ fn new_dispatch_subduction() -> (
             'static,
             Sendable,
             MemoryStorage,
-            ChannelMockConnection,
+            ChannelMockConnection<SyncMessage>,
             SyncHandler<
                 Sendable,
                 MemoryStorage,
-                ChannelMockConnection,
+                ChannelMockConnection<SyncMessage>,
                 OpenPolicy,
                 CountLeadingZeroBytes,
             >,
@@ -98,7 +98,7 @@ fn new_dispatch_subduction() -> (
         CountLeadingZeroBytes,
     ));
 
-    Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+    Subduction::<'_, Sendable, _, ChannelMockConnection<SyncMessage>, _, _, _>::new(
         handler,
         None,
         test_signer(),

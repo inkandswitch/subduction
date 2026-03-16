@@ -195,6 +195,7 @@ impl<
     const N: usize,
 > Subduction<'a, F, S, C, H, P, Sig, M, N>
 where
+    H::Message: From<SyncMessage>,
     H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
 {
     /// Initialize a new `Subduction` instance.
@@ -2292,7 +2293,7 @@ impl<'a, K: FutureForm, C, S, W, H, P, Sig, M, const N: usize>
 where
     H: Handler<K, C, Message = W>,
     H::HandlerError: Into<ListenError<K, S, C, W>>,
-    W: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
+    W: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
     fn start_listener(
         subduction: Arc<Subduction<'a, Self, S, C, H, P, Sig, M, N>>,

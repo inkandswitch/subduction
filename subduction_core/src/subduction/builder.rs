@@ -432,6 +432,7 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
+        H::Message: From<SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
     {
         let sedimentrees = self
