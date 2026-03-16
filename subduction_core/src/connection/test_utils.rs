@@ -73,10 +73,6 @@ impl Connection<Sendable, SyncMessage> for MockConnection {
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn disconnect(
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
@@ -159,10 +155,6 @@ impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
     type DisconnectionError = core::fmt::Error;
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
-
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
 
     fn disconnect(
         &self,
@@ -293,10 +285,6 @@ impl Connection<Sendable, SyncMessage> for ChannelMockConnection {
     type SendError = async_channel::SendError<SyncMessage>;
     type RecvError = async_channel::RecvError;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn disconnect(
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
@@ -347,10 +335,6 @@ impl Connection<Local, SyncMessage> for ChannelMockConnection {
     type DisconnectionError = Infallible;
     type SendError = async_channel::SendError<SyncMessage>;
     type RecvError = async_channel::RecvError;
-
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
 
     fn disconnect(
         &self,
@@ -468,10 +452,6 @@ where
     type SendError = C::SendError;
     type RecvError = C::RecvError;
 
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
-    }
-
     fn disconnect(
         &self,
     ) -> <Sendable as FutureForm>::Future<'_, Result<(), Self::DisconnectionError>> {
@@ -517,10 +497,6 @@ impl<C: Connection<Local, SyncMessage>> Connection<Local, SyncMessage>
     type DisconnectionError = C::DisconnectionError;
     type SendError = C::SendError;
     type RecvError = C::RecvError;
-
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
-    }
 
     fn disconnect(
         &self,

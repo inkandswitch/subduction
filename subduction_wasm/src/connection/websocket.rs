@@ -515,10 +515,6 @@ impl Connection<Local, SyncMessage> for WasmWebSocket {
     type RecvError = ReadFromClosedChannel;
     type DisconnectionError = Infallible;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed_local()
     }

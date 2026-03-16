@@ -23,7 +23,6 @@ use subduction_core::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
         transport::Transport,
     },
-    peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -168,10 +167,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        Transport::<Sendable>::peer_id(&self.socket)
-    }
-
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed()
     }
@@ -202,10 +197,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        Transport::<Sendable>::peer_id(self)
-    }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         Transport::<Sendable>::disconnect(self)

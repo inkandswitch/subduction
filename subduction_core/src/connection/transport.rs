@@ -22,7 +22,6 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 
 use super::Connection;
-use crate::peer::id::PeerId;
 
 /// A bidirectional transport.
 ///
@@ -34,7 +33,6 @@ use crate::peer::id::PeerId;
 ///
 /// - `send_bytes` must deliver the entire byte slice atomically (no partial sends).
 /// - `recv_bytes` must return a complete message frame (no fragmentation).
-/// - `peer_id` returns the identity established during handshake.
 pub trait Transport<K: FutureForm + ?Sized>: Clone + PartialEq {
     /// A problem when sending bytes.
     type SendError: core::error::Error;
@@ -44,9 +42,6 @@ pub trait Transport<K: FutureForm + ?Sized>: Clone + PartialEq {
 
     /// A problem when disconnecting.
     type DisconnectionError: core::error::Error;
-
-    /// The peer ID of the remote peer.
-    fn peer_id(&self) -> PeerId;
 
     /// Send raw bytes over the transport.
     fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>>;
@@ -131,10 +126,6 @@ impl<K: FutureForm, T, M> Connection<K, M> for MessageTransport<T> {
     type SendError = T::SendError;
     type RecvError = RecvDecodeError<T::RecvError>;
 
-    fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
-    }
-
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }
@@ -188,10 +179,6 @@ where
     type SendError = T::SendError;
     type RecvError = T::RecvError;
     type DisconnectionError = T::DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        T::peer_id(self)
-    }
 
     fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>> {
         T::send_bytes(self, bytes)

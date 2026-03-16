@@ -28,7 +28,6 @@ use alloc::sync::Arc;
 use core::time::Duration;
 
 use self::message::RequestId;
-use crate::peer::id::PeerId;
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use thiserror::Error;
@@ -50,9 +49,6 @@ pub trait Connection<K: FutureForm + ?Sized, M: Encode + Decode>: Clone + Partia
 
     /// A problem when receiving a message.
     type RecvError: core::error::Error;
-
-    /// The peer ID of the remote peer.
-    fn peer_id(&self) -> PeerId;
 
     /// Disconnect from the peer gracefully.
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
@@ -95,10 +91,6 @@ where
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = T::RecvError;
-
-    fn peer_id(&self) -> PeerId {
-        T::peer_id(self)
-    }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         T::disconnect(self)

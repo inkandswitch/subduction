@@ -100,14 +100,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for UnifiedTranspor
     type RecvError = TransportRecvError;
     type DisconnectionError = TransportDisconnectionError;
 
-    fn peer_id(&self) -> subduction_core::peer::id::PeerId {
-        match self {
-            Self::WebSocket(ws) => Transport::<Sendable>::peer_id(ws),
-            Self::HttpLongPoll(lp) => Transport::<Sendable>::peer_id(lp),
-            Self::Iroh(iroh) => Transport::<Sendable>::peer_id(iroh),
-        }
-    }
-
     fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
         match self {
             Self::WebSocket(ws) => {

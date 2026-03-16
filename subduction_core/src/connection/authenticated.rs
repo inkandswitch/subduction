@@ -131,10 +131,6 @@ impl<C: Connection<K, M>, K: FutureForm, M: Encode + Decode> Connection<K, M>
     type SendError = C::SendError;
     type RecvError = C::RecvError;
 
-    fn peer_id(&self) -> PeerId {
-        self.peer_id
-    }
-
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         self.inner.disconnect()
     }

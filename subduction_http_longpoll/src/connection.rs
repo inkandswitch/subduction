@@ -161,10 +161,6 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollConnection<O> {
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        self.inner.multiplexer.peer_id()
-    }
-
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.inner.multiplexer.peer_id(), "HttpLongPoll::disconnect");
         let conn = self.clone();

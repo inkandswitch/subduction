@@ -119,10 +119,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Transport<Loca
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        self.multiplexer.peer_id()
-    }
-
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.multiplexer.peer_id(), "WebSocket::disconnect");
         async { Ok(()) }.boxed_local()
@@ -413,10 +409,6 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Send + Syn
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        self.multiplexer.peer_id()
-    }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.multiplexer.peer_id(), "WebSocket::disconnect");

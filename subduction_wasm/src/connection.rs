@@ -23,7 +23,6 @@ use subduction_core::{
         handshake::{self as hs, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
-    peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -103,13 +102,6 @@ impl Connection<Local, SyncMessage> for JsConnection {
     type DisconnectionError = JsConnectionError;
     type SendError = JsConnectionError;
     type RecvError = JsConnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        // JsConnection delegates to the JS side; peer_id is set after handshake
-        // and stored in the Authenticated wrapper. This is a fallback that
-        // returns a zero ID — callers should use Authenticated::peer_id().
-        PeerId::new([0u8; 32])
-    }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async move {

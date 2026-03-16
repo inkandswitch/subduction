@@ -139,10 +139,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohConnection<
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> PeerId {
-        self.inner.multiplexer.peer_id()
-    }
-
     fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!(
             "iroh: sending {} outbound bytes to peer {}",

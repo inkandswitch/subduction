@@ -14,13 +14,10 @@ use core::time::Duration;
 use future_form::Sendable;
 use futures::future::BoxFuture;
 
-use subduction_core::{
-    connection::{
-        Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId},
-        transport::Transport,
-    },
-    peer::id::PeerId,
+use subduction_core::connection::{
+    Roundtrip,
+    message::{BatchSyncRequest, BatchSyncResponse, RequestId},
+    transport::Transport,
 };
 use tokio::net::TcpStream;
 
@@ -55,13 +52,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for UnifiedWebSocke
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
-
-    fn peer_id(&self) -> PeerId {
-        match self {
-            UnifiedWebSocket::Accepted(in_ws) => Transport::<Sendable>::peer_id(in_ws),
-            UnifiedWebSocket::Dialed(out_ws) => Transport::<Sendable>::peer_id(out_ws),
-        }
-    }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         match self {
