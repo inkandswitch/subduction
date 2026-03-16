@@ -135,7 +135,7 @@ impl EncodeFields for LooseCommit {
 impl DecodeFields for LooseCommit {
     const MIN_SIGNED_SIZE: usize = CODEC_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < CODEC_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "LooseCommit",
@@ -188,7 +188,7 @@ impl DecodeFields for LooseCommit {
 
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        Ok(LooseCommit::new(sedimentree_id, parents, blob_meta))
+        Ok((LooseCommit::new(sedimentree_id, parents, blob_meta), offset))
     }
 }
 
@@ -252,7 +252,10 @@ mod proptests {
                 let mut buf = Vec::new();
                 commit.encode_fields(&mut buf);
                 match LooseCommit::try_decode_fields(&buf) {
-                    Ok(decoded) => assert_eq!(&decoded, commit),
+                    Ok((decoded, consumed)) => {
+                        assert_eq!(&decoded, commit);
+                        assert_eq!(consumed, buf.len());
+                    }
                     Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
                 }
             });

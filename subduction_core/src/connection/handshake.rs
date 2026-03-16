@@ -955,9 +955,10 @@ mod tests {
                 .for_each(|challenge| {
                     let mut buf = Vec::new();
                     challenge.encode_fields(&mut buf);
-                    let decoded =
+                    let (decoded, consumed) =
                         Challenge::try_decode_fields(&buf).expect("decode should succeed");
                     assert_eq!(challenge, &decoded);
+                    assert_eq!(consumed, buf.len());
                 });
         }
 
@@ -968,8 +969,10 @@ mod tests {
                 .for_each(|response| {
                     let mut buf = Vec::new();
                     response.encode_fields(&mut buf);
-                    let decoded = Response::try_decode_fields(&buf).expect("decode should succeed");
+                    let (decoded, consumed) =
+                        Response::try_decode_fields(&buf).expect("decode should succeed");
                     assert_eq!(response, &decoded);
+                    assert_eq!(consumed, buf.len());
                 });
         }
 

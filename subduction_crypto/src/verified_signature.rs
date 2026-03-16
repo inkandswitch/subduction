@@ -59,7 +59,7 @@ impl<T: Schema + EncodeFields + DecodeFields> VerifiedSignature<T> {
             .map_err(|_| VerificationError::InvalidSignature)?;
 
         // Decode payload from fields bytes
-        let payload = T::try_decode_fields(signed.fields_bytes())?;
+        let (payload, _) = T::try_decode_fields(signed.fields_bytes())?;
 
         Ok(Self {
             signed: signed.clone(),

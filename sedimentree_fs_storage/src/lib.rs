@@ -58,6 +58,15 @@ pub enum FsStorageError {
     /// Failed to compute digest from signed payload.
     #[error("Failed to compute digest from signed payload")]
     DigestComputationFailed,
+
+    /// Signed data is too short to be valid — refusing to write corrupt data.
+    #[error("signed data too short: have {have} bytes, need at least {need} bytes")]
+    SignedDataTooShort {
+        /// Actual size of the signed data.
+        have: usize,
+        /// Minimum expected size.
+        need: usize,
+    },
 }
 
 /// Filesystem-based storage backend.
@@ -252,8 +261,25 @@ impl Storage<Sendable> for FsStorage {
 
             tokio::fs::create_dir_all(self.commits_dir(sedimentree_id)).await?;
 
-            // Write signed data
+            // Validate signed data before writing
             let signed_data = verified.signed().as_bytes().to_vec();
+            let min_size =
+                <LooseCommit as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
+            if signed_data.len() < min_size {
+                tracing::error!(
+                    ?sedimentree_id,
+                    ?digest,
+                    have = signed_data.len(),
+                    need = min_size,
+                    "refusing to write undersized LooseCommit .signed file"
+                );
+                return Err(FsStorageError::SignedDataTooShort {
+                    have: signed_data.len(),
+                    need: min_size,
+                });
+            }
+
+            // Write signed data
             let signed_temp = signed_path.with_extension("tmp");
             tokio::fs::write(&signed_temp, &signed_data).await?;
             tokio::fs::rename(&signed_temp, &signed_path).await?;
@@ -294,7 +320,20 @@ impl Storage<Sendable> for FsStorage {
                 Err(e) => return Err(e.into()),
             };
 
-            let signed = Signed::try_decode(signed_data).map_err(FsStorageError::from)?;
+            let signed = match Signed::try_decode(signed_data) {
+                Ok(s) => s,
+                Err(e) => {
+                    let raw = tokio::fs::read(&signed_path).await.unwrap_or_default();
+                    let hex_prefix: Vec<u8> = raw.iter().take(36).copied().collect();
+                    tracing::error!(
+                        path = %signed_path.display(),
+                        file_size = raw.len(),
+                        hex_prefix = hex::encode(&hex_prefix),
+                        "corrupt .signed file for LooseCommit: {e}"
+                    );
+                    return Err(FsStorageError::from(e));
+                }
+            };
             let blob = Blob::new(blob_data);
 
             // Reconstruct from trusted storage without re-verification
@@ -350,10 +389,20 @@ impl Storage<Sendable> for FsStorage {
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
                     && let Some(digest) = Self::parse_commit_digest_from_filename(&name)
-                    && let Some(verified) =
-                        Storage::<Sendable>::load_loose_commit(self, sedimentree_id, digest).await?
                 {
-                    results.push(verified);
+                    match Storage::<Sendable>::load_loose_commit(self, sedimentree_id, digest).await
+                    {
+                        Ok(Some(verified)) => results.push(verified),
+                        Ok(None) => {}
+                        Err(FsStorageError::Decode(e)) => {
+                            tracing::warn!(
+                                ?sedimentree_id,
+                                ?digest,
+                                "skipping corrupt loose commit file: {e}"
+                            );
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
             }
 
@@ -431,8 +480,25 @@ impl Storage<Sendable> for FsStorage {
 
             tokio::fs::create_dir_all(self.fragments_dir(sedimentree_id)).await?;
 
-            // Write signed data
+            // Validate signed data before writing
             let signed_data = verified.signed().as_bytes().to_vec();
+            let min_size =
+                <Fragment as sedimentree_core::codec::decode::DecodeFields>::MIN_SIGNED_SIZE;
+            if signed_data.len() < min_size {
+                tracing::error!(
+                    ?sedimentree_id,
+                    ?digest,
+                    have = signed_data.len(),
+                    need = min_size,
+                    "refusing to write undersized Fragment .signed file"
+                );
+                return Err(FsStorageError::SignedDataTooShort {
+                    have: signed_data.len(),
+                    need: min_size,
+                });
+            }
+
+            // Write signed data
             let signed_temp = signed_path.with_extension("tmp");
             tokio::fs::write(&signed_temp, &signed_data).await?;
             tokio::fs::rename(&signed_temp, &signed_path).await?;
@@ -473,7 +539,20 @@ impl Storage<Sendable> for FsStorage {
                 Err(e) => return Err(e.into()),
             };
 
-            let signed = Signed::try_decode(signed_data).map_err(FsStorageError::from)?;
+            let signed = match Signed::try_decode(signed_data) {
+                Ok(s) => s,
+                Err(e) => {
+                    let raw = tokio::fs::read(&signed_path).await.unwrap_or_default();
+                    let hex_prefix: Vec<u8> = raw.iter().take(36).copied().collect();
+                    tracing::error!(
+                        path = %signed_path.display(),
+                        file_size = raw.len(),
+                        hex_prefix = hex::encode(&hex_prefix),
+                        "corrupt .signed file for Fragment: {e}"
+                    );
+                    return Err(FsStorageError::from(e));
+                }
+            };
             let blob = Blob::new(blob_data);
 
             // Reconstruct from trusted storage without re-verification
@@ -529,10 +608,19 @@ impl Storage<Sendable> for FsStorage {
             while let Some(entry) = entries.next_entry().await? {
                 if let Ok(name) = entry.file_name().into_string()
                     && let Some(digest) = Self::parse_fragment_digest_from_filename(&name)
-                    && let Some(verified) =
-                        Storage::<Sendable>::load_fragment(self, sedimentree_id, digest).await?
                 {
-                    results.push(verified);
+                    match Storage::<Sendable>::load_fragment(self, sedimentree_id, digest).await {
+                        Ok(Some(verified)) => results.push(verified),
+                        Ok(None) => {}
+                        Err(FsStorageError::Decode(e)) => {
+                            tracing::warn!(
+                                ?sedimentree_id,
+                                ?digest,
+                                "skipping corrupt fragment file: {e}"
+                            );
+                        }
+                        Err(e) => return Err(e),
+                    }
                 }
             }
 

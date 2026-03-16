@@ -94,7 +94,7 @@ impl EncodeFields for Response {
 impl DecodeFields for Response {
     const MIN_SIGNED_SIZE: usize = RESPONSE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < RESPONSE_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Response",
@@ -111,10 +111,13 @@ impl DecodeFields for Response {
         let server_timestamp_secs = decode::u64(buf, 32)?;
         let server_timestamp = TimestampSeconds::new(server_timestamp_secs);
 
-        Ok(Self {
-            challenge_digest,
-            server_timestamp,
-        })
+        Ok((
+            Self {
+                challenge_digest,
+                server_timestamp,
+            },
+            RESPONSE_FIELDS_SIZE,
+        ))
     }
 }
 

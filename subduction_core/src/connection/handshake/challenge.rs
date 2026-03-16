@@ -127,7 +127,7 @@ impl EncodeFields for Challenge {
 impl DecodeFields for Challenge {
     const MIN_SIGNED_SIZE: usize = CHALLENGE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Challenge",
@@ -162,11 +162,14 @@ impl DecodeFields for Challenge {
         let nonce_bytes: [u8; 16] = decode::array(buf, 41)?;
         let nonce = Nonce::from_bytes(nonce_bytes);
 
-        Ok(Self {
-            audience,
-            timestamp,
-            nonce,
-        })
+        Ok((
+            Self {
+                audience,
+                timestamp,
+                nonce,
+            },
+            CHALLENGE_FIELDS_SIZE,
+        ))
     }
 }
 

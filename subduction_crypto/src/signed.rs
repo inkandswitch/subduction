@@ -164,7 +164,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     ///
     /// Returns an error if the payload cannot be decoded.
     pub fn try_decode_trusted_payload(&self) -> Result<T, DecodeError> {
-        T::try_decode_fields(self.fields_bytes())
+        T::try_decode_fields(self.fields_bytes()).map(|(payload, _)| payload)
     }
 
     /// Decode from wire bytes.
@@ -225,6 +225,9 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
         // Decode the payload to determine the actual message size.
         // The fields start after schema + issuer, and we need to parse them
         // to know where they end (since they have variable-length arrays).
+        // The consumed byte count from try_decode_fields is the authoritative
+        // encoded fields size — derived from the wire bytes, not from the
+        // reconstructed struct (which could disagree, e.g., after BTreeSet dedup).
         let fields_start = SCHEMA_SIZE + VERIFYING_KEY_SIZE;
         let fields_bytes = bytes
             .get(fields_start..)
@@ -233,8 +236,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
                 need: fields_start + 1,
                 have: bytes.len(),
             })?;
-        let payload = T::try_decode_fields(fields_bytes)?;
-        let fields_size = payload.fields_size();
+        let (_payload, fields_size) = T::try_decode_fields(fields_bytes)?;
 
         // Calculate the actual message size and validate we have enough bytes
         let actual_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
@@ -469,9 +471,9 @@ mod tests {
     impl DecodeFields for TestPayload {
         const MIN_SIGNED_SIZE: usize = 4 + 32 + 8 + 64; // schema + issuer + value + signature
 
-        fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+        fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
             let value = decode::u64(buf, 0)?;
-            Ok(Self { value })
+            Ok((Self { value }, 8))
         }
     }
 
