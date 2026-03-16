@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -34,8 +34,8 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
     },
     transport::MessageTransport,
 };
@@ -53,9 +53,9 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        JsConnectionError, JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
-        longpoll::{WasmLongPoll, WasmLongPollConn},
+        longpoll::{WasmHttpLongPoll, WasmLongPoll},
         websocket::WasmWebSocket,
+        JsConnectionError, JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
     },
 };
 use sedimentree_wasm::{
@@ -452,7 +452,7 @@ impl WasmSubduction {
         self.core
             .add_connection(authenticated.map(|lp| {
                 MessageTransport::new(
-                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsTransport>(),
+                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into::<JsTransport>(),
                 )
             }))
             .await?;
@@ -491,7 +491,7 @@ impl WasmSubduction {
         self.core
             .add_connection(authenticated.map(|lp| {
                 MessageTransport::new(
-                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsTransport>(),
+                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into::<JsTransport>(),
                 )
             }))
             .await?;

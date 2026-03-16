@@ -1,21 +1,15 @@
-//! JS [`WebSocket`] connection implementation for Subduction.
+//! JS [`WebSocket`] transport implementation for Subduction.
+//!
+//! [`WasmWebSocket`] exposes the byte-oriented `Transport` interface
+//! (`sendBytes`/`recvBytes`/`disconnect`) over a browser `WebSocket`.
 
 use alloc::{
-    boxed::Box,
     rc::Rc,
     string::{String, ToString},
-    sync::Arc,
     vec::Vec,
 };
-use core::{
-    cell::RefCell,
-    convert::Infallible,
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
-use sedimentree_core::collections::Map;
+use core::cell::RefCell;
 
-use async_lock::Mutex;
 use future_form::Local;
 use futures::{
     FutureExt,
@@ -23,129 +17,58 @@ use futures::{
     future::LocalBoxFuture,
 };
 use subduction_core::{
-    connection::{
-        Connection, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
-    transport::MessageTransport,
+    transport::{MessageTransport, Transport},
 };
 use subduction_crypto::nonce::Nonce;
 use thiserror::Error;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
-use wasm_bindgen_futures::JsFuture;
 use web_sys::{
     BinaryType, Event, MessageEvent, Url, WebSocket,
-    js_sys::{self, Promise},
+    js_sys,
 };
 
-use super::{
-    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, handshake::WasmWebSocketHandshake,
-    message::WasmMessage,
-};
+use super::handshake::WasmWebSocketHandshake;
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 use subduction_core::{
     authenticated::Authenticated,
     handshake::{self, audience::Audience},
 };
 
-/// A WebSocket connection with internal wiring for [`Subduction`] message handling.
+/// A WebSocket transport exposing the byte-oriented `Transport` interface.
+///
+/// Raw bytes from the WebSocket's `onmessage` handler are buffered in an
+/// `async_channel` and returned via `recvBytes`. No message decoding or
+/// request-response routing happens here — that's handled by
+/// [`MessageTransport`] and [`MuxTransport`](subduction_core::transport::MuxTransport).
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
 pub struct WasmWebSocket {
     peer_id: PeerId,
-    timeout_ms: u32,
-
-    request_id_counter: Arc<AtomicU64>,
     socket: WebSocket,
-
-    pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
-    inbound_reader: async_channel::Receiver<SyncMessage>,
+    inbound_reader: async_channel::Receiver<Vec<u8>>,
 }
 
 impl WasmWebSocket {
     /// Synchronous setup for an already-open WebSocket.
     ///
-    /// This sets up message handlers and returns a `WasmWebSocket`.
+    /// Sets up an `onmessage` handler that pushes raw bytes into a channel.
     /// The WebSocket MUST be in OPEN state.
-    fn setup_open_socket(ws: WebSocket, peer_id: PeerId, timeout_ms: u32) -> Self {
-        let (inbound_writer, inbound_reader) = async_channel::bounded::<SyncMessage>(64);
-
-        let pending = Arc::new(Mutex::new(Map::<
-            RequestId,
-            oneshot::Sender<BatchSyncResponse>,
-        >::new()));
-        let closure_pending = pending.clone();
+    fn setup_open_socket(ws: WebSocket, peer_id: PeerId) -> Self {
+        let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(64);
 
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
-            tracing::debug!("WS message event received");
             if let Ok(buf) = event.data().dyn_into::<js_sys::ArrayBuffer>() {
                 let bytes: Vec<u8> = js_sys::Uint8Array::new(&buf).to_vec();
                 tracing::debug!("WS received {} bytes", bytes.len());
-                match SyncMessage::try_decode(&bytes) {
-                    Ok(msg) => {
-                        tracing::trace!("WS message decoded: {} bytes", bytes.len());
-                        let inner_pending = closure_pending.clone();
-                        let inner_inbound_writer = inbound_writer.clone();
 
-                        wasm_bindgen_futures::spawn_local(async move {
-                            match msg {
-                                SyncMessage::BatchSyncResponse(resp) => {
-                                    tracing::debug!(
-                                        "BatchSyncResponse received: {:?}",
-                                        resp.result
-                                    );
-                                    let req_id = resp.req_id;
-                                    let removed = { inner_pending.lock().await.remove(&req_id) };
-                                    if let Some(waiting) = removed {
-                                        tracing::trace!("dispatching to waiter {:?}", req_id);
-                                        let result = waiting.send(resp);
-                                        debug_assert!(result.is_ok());
-                                        if result.is_err() {
-                                            tracing::error!(
-                                                "oneshot channel closed before sending response for req_id {:?}",
-                                                req_id
-                                            );
-                                        }
-                                    } else {
-                                        tracing::trace!(
-                                            "dispatching to inbound channel {:?}",
-                                            resp.req_id
-                                        );
-                                        if let Err(e) = inner_inbound_writer
-                                            .clone()
-                                            .send(SyncMessage::BatchSyncResponse(resp))
-                                            .await
-                                        {
-                                            tracing::error!("failed to send inbound message: {e}");
-                                        }
-                                    }
-                                }
-                                other @ (SyncMessage::LooseCommit { .. }
-                                | SyncMessage::Fragment { .. }
-                                | SyncMessage::BlobsRequest { .. }
-                                | SyncMessage::BlobsResponse { .. }
-                                | SyncMessage::BatchSyncRequest(_)
-                                | SyncMessage::RemoveSubscriptions(_)
-                                | SyncMessage::DataRequestRejected(_)) => {
-                                    tracing::debug!("other message type received");
-                                    if let Err(e) = inner_inbound_writer.clone().send(other).await {
-                                        tracing::error!("failed to send inbound message: {e}");
-                                    }
-                                }
-                            }
-                        });
+                let writer = inbound_writer.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    if let Err(e) = writer.send(bytes).await {
+                        tracing::error!("failed to send inbound bytes: {e}");
                     }
-                    Err(e) => {
-                        tracing::error!(
-                            "decode failed for {} byte message: {:?}. First 64 bytes: {:?}",
-                            bytes.len(),
-                            e,
-                            bytes.get(..64).unwrap_or(&bytes)
-                        );
-                    }
-                }
+                });
             } else {
                 tracing::error!(
                     "unexpected message event (not ArrayBuffer): {:?}",
@@ -167,10 +90,7 @@ impl WasmWebSocket {
 
         Self {
             peer_id,
-            timeout_ms,
-            request_id_counter: Arc::new(AtomicU64::new(random_u64())),
             socket: ws,
-            pending,
             inbound_reader,
         }
     }
@@ -198,7 +118,7 @@ impl WasmWebSocket {
         ws: &WebSocket,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-        timeout_milliseconds: u32,
+        _timeout_milliseconds: u32,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedConnectionError> {
         // Ensure WebSocket is ready
         let ws = Self::wait_for_open(ws.clone()).await?;
@@ -213,7 +133,7 @@ impl WasmWebSocket {
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
                 (
-                    Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds),
+                    Self::setup_open_socket(ws_for_setup, peer_id),
                     (),
                 )
             },
@@ -300,7 +220,7 @@ impl WasmWebSocket {
         address: &Url,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-        timeout_milliseconds: u32,
+        _timeout_milliseconds: u32,
     ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
         let ws = WebSocket::new(&address.href())
             .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
@@ -318,7 +238,7 @@ impl WasmWebSocket {
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
                 (
-                    Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds),
+                    Self::setup_open_socket(ws_for_setup, peer_id),
                     (),
                 )
             },
@@ -348,7 +268,7 @@ impl WasmWebSocket {
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
-        let timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);
+        let _timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);
         let service_name = service_name.unwrap_or_else(|| address.host());
 
         let ws = WebSocket::new(&address.href())
@@ -367,7 +287,7 @@ impl WasmWebSocket {
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
                 (
-                    Self::setup_open_socket(ws_for_setup, peer_id, timeout_milliseconds),
+                    Self::setup_open_socket(ws_for_setup, peer_id),
                     (),
                 )
             },
@@ -439,69 +359,32 @@ impl WasmWebSocket {
         self.peer_id.into()
     }
 
-    /// Disconnect from the peer gracefully.
-    #[wasm_bindgen(js_name = disconnect)]
-    pub async fn wasm_disconnect(&self) {
-        match Connection::<Local, SyncMessage>::disconnect(self).await {
-            Ok(()) => (),
-            Err(_infallible) => {}
-        }
-    }
-
-    /// Send a message.
+    /// Send raw bytes over the WebSocket.
     ///
     /// # Errors
     ///
-    /// Returns [`WasmSendError`] if the message could not be sent over the WebSocket.
-    #[wasm_bindgen(js_name = send)]
-    pub async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
-        let msg: SyncMessage = wasm_message.into();
-        Connection::<Local, SyncMessage>::send(self, &msg).await?;
+    /// Returns [`WasmSendError`] if the bytes could not be sent.
+    #[wasm_bindgen(js_name = sendBytes)]
+    pub async fn send_bytes(&self, bytes: &[u8]) -> Result<(), WasmSendError> {
+        Transport::<Local>::send_bytes(self, bytes).await?;
         Ok(())
     }
 
-    /// Receive a message.
+    /// Receive the next message frame as raw bytes.
     ///
     /// # Errors
     ///
     /// Returns [`ReadFromClosedChannel`] if the channel has been closed.
-    #[wasm_bindgen(js_name = recv)]
-    pub async fn wasm_recv(&self) -> Result<WasmMessage, ReadFromClosedChannel> {
-        let msg = Connection::<Local, SyncMessage>::recv(self).await?;
-        Ok(msg.into())
+    #[wasm_bindgen(js_name = recvBytes)]
+    pub async fn recv_bytes(&self) -> Result<js_sys::Uint8Array, ReadFromClosedChannel> {
+        let bytes = Transport::<Local>::recv_bytes(self).await?;
+        Ok(js_sys::Uint8Array::from(bytes.as_slice()))
     }
 
-    /// Get the next request ID.
-    #[wasm_bindgen(js_name = nextRequestId)]
-    pub async fn wasm_next_request_id(&self) -> WasmRequestId {
-        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::next_request_id(self)
-            .await
-            .into()
-    }
-
-    /// Make a synchronous call to the peer.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WasmCallError`] if the call fails or times out.
-    #[wasm_bindgen(js_name = call)]
-    pub async fn wasm_call(
-        &self,
-        request: WasmBatchSyncRequest,
-        timeout_ms: Option<f64>,
-    ) -> Result<WasmBatchSyncResponse, WasmCallError> {
-        let optional_duration = timeout_ms.map(|f64_ms| {
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            Duration::from_millis(f64_ms as u64)
-        });
-        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::call(
-            self,
-            request.into(),
-            optional_duration,
-        )
-        .await
-        .map(Into::into)
-        .map_err(Into::into)
+    /// Disconnect from the peer gracefully.
+    #[wasm_bindgen(js_name = disconnect)]
+    pub async fn wasm_disconnect(&self) {
+        let _ = Transport::<Local>::disconnect(self).await;
     }
 }
 
@@ -511,106 +394,40 @@ impl PartialEq for WasmWebSocket {
     }
 }
 
-impl Connection<Local, SyncMessage> for WasmWebSocket {
+impl Transport<Local> for WasmWebSocket {
     type SendError = SendError;
     type RecvError = ReadFromClosedChannel;
-    type DisconnectionError = Infallible;
+    type DisconnectionError = DisconnectionError;
 
-    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        async { Ok(()) }.boxed_local()
-    }
-
-    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
-        let request_id = message.request_id();
-
-        let msg_bytes = message.encode();
-
+    fn send_bytes(&self, bytes: &[u8]) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        let data = bytes.to_vec();
         async move {
             self.socket
-                .send_with_u8_array(msg_bytes.as_slice())
+                .send_with_u8_array(data.as_slice())
                 .map_err(SendError::SocketSend)?;
 
-            tracing::debug!("sent outbound message id {:?}", request_id);
-
+            tracing::debug!("sent {} outbound bytes", data.len());
             Ok(())
         }
         .boxed_local()
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
+    fn recv_bytes(&self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
         async {
-            tracing::debug!("waiting for inbound message");
-            let msg = self
+            tracing::debug!("waiting for inbound bytes");
+            let bytes = self
                 .inbound_reader
                 .recv()
                 .await
                 .map_err(|_| ReadFromClosedChannel)?;
-            tracing::info!("received inbound message id {:?}", msg.request_id());
-            Ok(msg)
-        }
-        .boxed_local()
-    }
-}
-
-impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WasmWebSocket {
-    type CallError = CallError;
-
-    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        let counter = self.request_id_counter.clone();
-        async move {
-            let counter = counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: self.peer_id,
-                nonce: counter,
-            }
+            tracing::debug!("received {} inbound bytes", bytes.len());
+            Ok(bytes)
         }
         .boxed_local()
     }
 
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        async move {
-            tracing::debug!("making call with request id {:?}", req.req_id);
-            let req_id = req.req_id;
-
-            // Pre-register channel
-            let (tx, rx) = oneshot::channel();
-            {
-                self.pending.lock().await.insert(req_id, tx);
-            }
-
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
-
-            self.socket
-                .send_with_u8_array(msg_bytes.as_slice())
-                .map_err(CallError::SocketSend)?;
-
-            tracing::info!("sent request {:?}", req_id);
-
-            let req_timeout =
-                override_timeout.unwrap_or(Duration::from_millis(self.timeout_ms.into()));
-
-            // await response with timeout & cleanup
-            match timeout(req_timeout, rx).await {
-                Ok(Ok(resp)) => {
-                    tracing::info!("request {:?} completed", req_id);
-                    Ok(resp)
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ChannelCanceled)
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {:?} timed out", req_id);
-                    Err(CallError::TimedOut)
-                }
-            }
-        }
-        .boxed_local()
+    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        async { Ok(()) }.boxed_local()
     }
 }
 
@@ -618,66 +435,18 @@ impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WasmWebSocket {
 // requires the signer, which is not stored in the struct. Applications should
 // handle reconnection by calling connect again.
 
-use crate::timer;
-
-#[derive(Debug)]
-struct WasmTimeout {
-    id: JsValue,
-    _closure: Option<Closure<dyn FnMut()>>,
-}
-
-impl WasmTimeout {
-    /// Creates a Promise that resolves after `ms` and a handle you can cancel.
-    fn new(ms: i32) -> (JsFuture, Self) {
-        let mut out_id: JsValue = JsValue::UNDEFINED;
-        let mut out_closure: Option<Closure<dyn FnMut()>> = None;
-
-        let promise = Promise::new(&mut |resolve, _reject| {
-            let callback = Closure::wrap(Box::new(move || {
-                drop(resolve.call0(&JsValue::NULL));
-            }) as Box<dyn FnMut()>);
-
-            out_id = timer::set_timeout(callback.as_ref().unchecked_ref(), ms);
-            out_closure = Some(callback);
-        });
-
-        (
-            JsFuture::from(promise),
-            WasmTimeout {
-                id: out_id,
-                _closure: out_closure,
-            },
-        )
-    }
-
-    /// Cancel the timer (prevents the callback from firing).
-    fn cancel(self) {
-        timer::clear_timeout(&self.id);
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TimedOut;
-
-async fn timeout<F: Future<Output = T> + Unpin, T>(dur: Duration, fut: F) -> Result<T, TimedOut> {
-    let ms = dur.as_millis().try_into().unwrap_or(i32::MAX);
-    let (sleep, handle) = WasmTimeout::new(ms);
-    match futures_util::future::select(fut, sleep).await {
-        futures_util::future::Either::Left((val, _sleep_future)) => {
-            handle.cancel();
-            Ok(val)
-        }
-        futures_util::future::Either::Right((_done, _fut)) => Err(TimedOut),
-    }
-}
-
-/// Problem while sending a message.
+/// Problem while sending bytes.
 #[derive(Debug, Error)]
 pub enum SendError {
     /// WebSocket error while sending.
     #[error("WebSocket error while sending: {0:?}")]
     SocketSend(JsValue),
 }
+
+/// Problem while disconnecting (infallible for WebSocket).
+#[derive(Debug, Clone, Copy, Error)]
+#[error("WebSocket disconnection error (should not occur)")]
+pub struct DisconnectionError;
 
 /// Attempted to read from a closed channel.
 #[derive(Debug, Clone, Copy, Error)]
@@ -690,22 +459,6 @@ impl From<ReadFromClosedChannel> for JsValue {
         js_err.set_name("ReadFromClosedChannel");
         js_err.into()
     }
-}
-
-/// Problem while attempting to make a roundtrip call.
-#[derive(Debug, Clone, Error)]
-pub enum CallError {
-    /// WebSocket error while sending.
-    #[error("WebSocket error while sending: {0:?}")]
-    SocketSend(JsValue),
-
-    /// Tried to read from a canceled channel.
-    #[error("Channel canceled")]
-    ChannelCanceled,
-
-    /// Timed out waiting for response.
-    #[error("Timed out waiting for response")]
-    TimedOut,
 }
 
 /// Problem while attempting to connect or reconnect the WebSocket.
@@ -802,19 +555,6 @@ impl From<WasmSendError> for JsValue {
     }
 }
 
-/// An error that occurred during a synchronous call over a WebSocket.
-#[derive(Debug, Error)]
-#[error(transparent)]
-pub struct WasmCallError(#[from] CallError);
-
-impl From<WasmCallError> for JsValue {
-    fn from(err: WasmCallError) -> JsValue {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("CallError");
-        js_err.into()
-    }
-}
-
 /// An authenticated WebSocket connection.
 ///
 /// This wrapper proves that the connection has completed the Subduction handshake
@@ -849,17 +589,4 @@ impl WasmAuthenticatedWebSocket {
     }
 }
 
-/// Generate a random `u64` via `getrandom`.
-///
-/// Used to initialize the request ID counter with a random starting value,
-/// preventing nonce collisions across page refreshes.
-///
-/// # Panics
-///
-/// Panics if the platform CSPRNG is unavailable.
-#[allow(clippy::expect_used)]
-fn random_u64() -> u64 {
-    let mut buf = [0u8; 8];
-    getrandom::getrandom(&mut buf).expect("platform CSPRNG unavailable");
-    u64::from_le_bytes(buf)
-}
+

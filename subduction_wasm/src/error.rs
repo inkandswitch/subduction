@@ -4,16 +4,15 @@ use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
-    connection::{ConnectionDisallowed, message::SyncMessage},
+    connection::{message::SyncMessage, ConnectionDisallowed},
     subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::transport::{
+    longpoll::LongPollConnectionError, websocket::WebSocketAuthenticatedConnectionError,
     JsConnectionError, WasmJsConnection,
-    longpoll::LongPollConnectionError,
-    websocket::{CallError, WebSocketAuthenticatedConnectionError},
 };
 use sedimentree_wasm::storage::JsStorage;
 
@@ -108,71 +107,6 @@ impl From<WasmListenError> for JsValue {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("ListenError");
         js_err.into()
-    }
-}
-
-/// A Wasm wrapper around the [`CallError`] type.
-#[derive(Debug, Clone, Error)]
-#[error(transparent)]
-pub struct WasmCallError(#[from] WasmCallErrorInner);
-
-impl From<WasmCallError> for js_sys::Error {
-    fn from(err: WasmCallError) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("CallError");
-        js_err
-    }
-}
-
-impl From<CallError> for WasmCallError {
-    fn from(err: CallError) -> Self {
-        WasmCallError(err.into())
-    }
-}
-
-impl From<&CallError> for WasmCallError {
-    fn from(err: &CallError) -> Self {
-        WasmCallError((err).into())
-    }
-}
-
-/// Problem while attempting to make a roundtrip call.
-#[derive(Debug, Clone, Error)]
-pub enum WasmCallErrorInner {
-    /// Problem encoding message.
-    #[error("Problem encoding message: {0}")]
-    Encoding(String),
-
-    /// WebSocket error while sending.
-    #[error("WebSocket error while sending: {0:?}")]
-    SocketSend(JsValue),
-
-    /// Tried to read from a canceled channel.
-    #[error("Channel canceled")]
-    ChannelCanceled,
-
-    /// Timed out waiting for response.
-    #[error("Timed out waiting for response")]
-    TimedOut,
-}
-
-impl From<CallError> for WasmCallErrorInner {
-    fn from(err: CallError) -> Self {
-        match err {
-            CallError::SocketSend(e) => Self::SocketSend(e),
-            CallError::ChannelCanceled => Self::ChannelCanceled,
-            CallError::TimedOut => Self::TimedOut,
-        }
-    }
-}
-
-impl From<&CallError> for WasmCallErrorInner {
-    fn from(err: &CallError) -> Self {
-        match err {
-            CallError::SocketSend(e) => Self::SocketSend(e.clone()),
-            CallError::ChannelCanceled => Self::ChannelCanceled,
-            CallError::TimedOut => Self::TimedOut,
-        }
     }
 }
 

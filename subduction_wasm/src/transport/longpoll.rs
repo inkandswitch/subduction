@@ -10,12 +10,8 @@ use future_form::Local;
 use futures::FutureExt;
 use subduction_core::{
     authenticated::Authenticated,
-    connection::{
-        Connection, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
-    },
     timeout::{TimedOut, Timeout},
-    transport::MessageTransport,
+    transport::Transport,
 };
 use subduction_http_longpoll::{
     client::HttpLongPollClient, session::SessionId, transport::HttpLongPollTransport,
@@ -24,10 +20,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use super::{
-    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, fetch_client::FetchHttpClient,
-    message::WasmMessage,
-};
+use super::fetch_client::FetchHttpClient;
 use crate::{peer_id::WasmPeerId, signer::JsSigner, timer};
 
 // ---------------------------------------------------------------------------
@@ -47,7 +40,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{Either, select},
+            future::{select, Either},
             pin_mut,
         };
 
@@ -71,107 +64,76 @@ impl Timeout<Local> for JsTimeout {
 pub type WasmLongPollTransport = HttpLongPollTransport<JsTimeout>;
 
 /// JS-facing wrapper around [`WasmLongPollTransport`] that exposes the
-/// [`Transport`](super::JsTransport) interface so it can be used as a
+/// byte-oriented [`Transport`](super::JsTransport) interface
+/// (`sendBytes`/`recvBytes`/`disconnect`) so it can be used as a
 /// duck-typed `JsTransport` from JavaScript.
-#[wasm_bindgen(js_name = SubductionLongPollConnection)]
+#[wasm_bindgen(js_name = SubductionHttpLongPoll)]
 #[derive(Debug, Clone)]
-pub struct WasmLongPollConn(WasmLongPollTransport);
+pub struct WasmHttpLongPoll(WasmLongPollTransport);
 
-impl WasmLongPollConn {
-    /// Wrap a raw long-poll connection for JS exposure.
-    pub(crate) fn new(conn: WasmLongPollTransport) -> Self {
-        Self(conn)
+impl WasmHttpLongPoll {
+    /// Wrap a raw long-poll transport for JS exposure.
+    pub(crate) fn new(transport: WasmLongPollTransport) -> Self {
+        Self(transport)
     }
 
-    /// Access the inner connection.
+    /// Access the inner transport.
     #[allow(dead_code)]
     pub(crate) fn inner(&self) -> &WasmLongPollTransport {
         &self.0
     }
 }
 
-/// Error from a long-poll connection method exposed to JS.
+/// Error from a long-poll transport method exposed to JS.
 #[derive(Debug, Error)]
 #[error("{0}")]
-pub struct WasmLongPollConnError(String);
+pub struct WasmHttpLongPollError(String);
 
-impl From<WasmLongPollConnError> for JsValue {
-    fn from(err: WasmLongPollConnError) -> Self {
+impl From<WasmHttpLongPollError> for JsValue {
+    fn from(err: WasmHttpLongPollError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("LongPollConnectionError");
+        js_err.set_name("HttpLongPollError");
         js_err.into()
     }
 }
 
-#[wasm_bindgen(js_class = SubductionLongPollConnection)]
-impl WasmLongPollConn {
-    /// Disconnect from the peer gracefully.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`WasmLongPollConnError`] if the disconnect fails.
-    #[wasm_bindgen(js_name = disconnect)]
-    pub async fn disconnect(&self) -> Result<(), WasmLongPollConnError> {
-        let mt = MessageTransport::new(self.0.clone());
-        Connection::<Local, SyncMessage>::disconnect(&mt)
-            .await
-            .map_err(|e| WasmLongPollConnError(e.to_string()))
-    }
-
-    /// Send a message.
+#[wasm_bindgen(js_class = SubductionHttpLongPoll)]
+impl WasmHttpLongPoll {
+    /// Send raw bytes over the transport.
     ///
     /// # Errors
     ///
     /// Returns an error if the outbound channel is closed.
-    #[wasm_bindgen(js_name = send)]
-    pub async fn send(&self, message: WasmMessage) -> Result<(), WasmLongPollConnError> {
-        let msg: SyncMessage = message.into();
-        let mt = MessageTransport::new(self.0.clone());
-        Connection::<Local, SyncMessage>::send(&mt, &msg)
+    #[wasm_bindgen(js_name = sendBytes)]
+    pub async fn send_bytes(&self, bytes: &[u8]) -> Result<(), WasmHttpLongPollError> {
+        Transport::<Local>::send_bytes(&self.0, bytes)
             .await
-            .map_err(|e| WasmLongPollConnError(e.to_string()))
+            .map_err(|e| WasmHttpLongPollError(e.to_string()))
     }
 
-    /// Receive a message.
+    /// Receive the next message frame as raw bytes.
     ///
     /// # Errors
     ///
     /// Returns an error if the inbound channel is closed.
-    #[wasm_bindgen(js_name = recv)]
-    pub async fn recv(&self) -> Result<WasmMessage, WasmLongPollConnError> {
-        let mt = MessageTransport::new(self.0.clone());
-        Connection::<Local, SyncMessage>::recv(&mt)
+    #[wasm_bindgen(js_name = recvBytes)]
+    pub async fn recv_bytes(&self) -> Result<js_sys::Uint8Array, WasmHttpLongPollError> {
+        let bytes = Transport::<Local>::recv_bytes(&self.0)
             .await
-            .map(Into::into)
-            .map_err(|e| WasmLongPollConnError(e.to_string()))
+            .map_err(|e| WasmHttpLongPollError(e.to_string()))?;
+        Ok(js_sys::Uint8Array::from(bytes.as_slice()))
     }
 
-    /// Get the next request ID.
-    #[wasm_bindgen(js_name = nextRequestId)]
-    pub async fn next_request_id(&self) -> WasmRequestId {
-        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::next_request_id(&self.0)
-            .await
-            .into()
-    }
-
-    /// Make a synchronous call to the peer.
+    /// Disconnect from the peer gracefully.
     ///
     /// # Errors
     ///
-    /// Returns an error if the call fails or times out.
-    #[wasm_bindgen(js_name = call)]
-    pub async fn call(
-        &self,
-        request: WasmBatchSyncRequest,
-        timeout_ms: Option<f64>,
-    ) -> Result<WasmBatchSyncResponse, WasmLongPollConnError> {
-        let req: BatchSyncRequest = request.into();
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let timeout = timeout_ms.map(|ms| Duration::from_millis(ms as u64));
-        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::call(&self.0, req, timeout)
+    /// Returns an error if the disconnect fails.
+    #[wasm_bindgen(js_name = disconnect)]
+    pub async fn disconnect(&self) -> Result<(), WasmHttpLongPollError> {
+        Transport::<Local>::disconnect(&self.0)
             .await
-            .map(Into::into)
-            .map_err(|e| WasmLongPollConnError(e.to_string()))
+            .map_err(|e| WasmHttpLongPollError(e.to_string()))
     }
 }
 
@@ -219,7 +181,7 @@ impl WasmAuthenticatedLongPoll {
         use subduction_core::transport::MessageTransport;
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
             MessageTransport::new(
-                wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp))
+                wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp))
                     .unchecked_into::<super::JsTransport>(),
             )
         }))
