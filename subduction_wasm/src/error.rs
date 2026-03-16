@@ -12,8 +12,8 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::transport::{
-    JsTransport, JsTransportError, longpoll::LongPollTransportError,
-    websocket::WebSocketAuthenticatedTransportError,
+    longpoll::LongPollTransportError, websocket::WebSocketAuthenticatedTransportError, JsTransport,
+    JsTransportError,
 };
 use sedimentree_wasm::storage::JsStorage;
 use subduction_core::transport::message::MessageTransport;

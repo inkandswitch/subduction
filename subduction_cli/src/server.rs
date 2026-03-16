@@ -12,8 +12,6 @@ use nonempty::NonEmpty;
 use sedimentree_core::{collections::Map, commit::CountLeadingZeroBytes};
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
-    authenticated::Authenticated,
-    handler::sync::SyncHandler,
     handshake::{
         self,
         audience::{Audience, DiscoveryId},
@@ -50,23 +48,11 @@ use tokio::{net::TcpListener, task::JoinSet};
 use tokio_util::sync::CancellationToken;
 use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketConfig};
 
-use crate::{key, metrics, transport::UnifiedTransport, wire::CliWireMessage};
-
-type CliHandler = ComposedHandler<
-    SyncHandler<
-        future_form::Sendable,
-        MetricsStorage<FsStorage>,
-        MessageTransport<UnifiedTransport>,
-        OpenPolicy,
-        CountLeadingZeroBytes,
-    >,
-    EphemeralHandler<
-        future_form::Sendable,
-        MessageTransport<UnifiedTransport>,
-        OpenEphemeralPolicy,
-    >,
-    CliWireMessage,
->;
+use crate::{
+    handler::{CliComposedHandler, CliConn},
+    key, metrics,
+    transport::UnifiedTransport,
+};
 
 /// Type alias for the unified Subduction instance.
 type CliSubduction = Arc<
@@ -74,8 +60,8 @@ type CliSubduction = Arc<
         'static,
         future_form::Sendable,
         MetricsStorage<FsStorage>,
-        MessageTransport<UnifiedTransport>,
-        CliHandler,
+        CliConn,
+        CliComposedHandler,
         OpenPolicy,
         MemorySigner,
         FuturesTimerTimeout,
@@ -260,29 +246,22 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         CountLeadingZeroBytes,
     );
 
-    let (ephemeral_handler, _ephemeral_rx) = EphemeralHandler::new(
-        connections.clone(),
-        OpenEphemeralPolicy,
-        EphemeralConfig::default(),
-    );
+    // Set up the keyhive handler (actor bridge for !Send keyhive_core).
+    let (keyhive_handle, _keyhive_rx) =
+        subduction_keyhive_policy::handler::KeyhiveProtocolHandle::channel();
 
-    let handler = Arc::new(ComposedHandler::new(sync_handler, ephemeral_handler));
+    // TODO: spawn run_actor on a LocalSet with a KeyhiveProtocol instance.
+    // Until keyhive_core is Send, the actor mediates access to the !Send
+    // keyhive state. After the Send migration, the handle can call
+    // KeyhiveProtocol directly and the actor is removed.
 
-    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) = Subduction::new(
-        handler,
-        discovery_id,
-        signer.clone(),
-        sedimentrees,
-        connections,
-        subscriptions,
-        powerbox,
-        pending_blob_requests,
-        NonceCache::default(),
-        FuturesTimerTimeout,
-        Duration::from_secs(30),
-        CountLeadingZeroBytes,
-        TokioSpawn,
-    );
+    let (subduction, listener_fut, manager_fut): (CliSubduction, _, _) =
+        builder.build_composed(|sync_handler| {
+            Arc::new(CliComposedHandler {
+                sync: sync_handler,
+                keyhive: keyhive_handle,
+            })
+        });
 
     let server_peer_id = subduction.peer_id();
 

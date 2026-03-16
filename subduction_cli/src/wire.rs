@@ -12,9 +12,9 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
-use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
-use subduction_keyhive::wire::{KeyhiveMessage, KEYHIVE_SCHEMA};
+use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
+use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
+use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 /// Composed wire message for the CLI server.
 ///
