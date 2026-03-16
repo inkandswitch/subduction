@@ -11,16 +11,17 @@ use sedimentree_core::commit::CountLeadingZeroBytes;
 use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{
+    Connection, Roundtrip,
     authenticated::Authenticated,
     manager::Spawn,
     message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    Connection, Roundtrip,
 };
 use crate::{
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 
 /// A minimal mock connection for testing.
@@ -612,7 +613,7 @@ pub fn new_test_subduction() -> (
             Sendable,
             MemoryStorage,
             MockConnection,
-            SyncMessage,
+            SyncHandler<Sendable, MemoryStorage, MockConnection, OpenPolicy, CountLeadingZeroBytes>,
             OpenPolicy,
             MemorySigner,
             CountLeadingZeroBytes,

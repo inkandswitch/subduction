@@ -15,7 +15,7 @@ use std::{
 use subduction_core::{
     connection::{
         Connection, Reconnect, handshake::audience::Audience, message::SyncMessage,
-        nonce_cache::NonceCache,
+        nonce_cache::NonceCache, transport::MessageTransport,
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -62,8 +62,14 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
-        SyncMessage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
     >,
@@ -73,7 +79,7 @@ type TestHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
@@ -84,8 +90,14 @@ type ServerSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
-        SyncMessage,
+        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
     >,
@@ -95,10 +107,26 @@ type ServerHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
+        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
+>;
+
+type ClientSyncHandler = SyncHandler<
+    Sendable,
+    MemoryStorage,
+    TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+    OpenPolicy,
+    CountLeadingZeroBytes,
+>;
+
+type ServerSyncHandler = SyncHandler<
+    Sendable,
+    MemoryStorage,
+    MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>,
+    OpenPolicy,
+    CountLeadingZeroBytes,
 >;
 
 #[allow(clippy::type_complexity)]
@@ -111,8 +139,8 @@ fn setup_client_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
-        SyncMessage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        ClientSyncHandler,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -123,7 +151,7 @@ fn setup_client_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>>()
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
 }
 
 #[allow(clippy::type_complexity)]
@@ -136,8 +164,8 @@ fn setup_server_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
-        SyncMessage,
+        MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>,
+        ServerSyncHandler,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -148,7 +176,7 @@ fn setup_server_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>>()
+        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>>()
 }
 
 #[tokio::test]
@@ -188,7 +216,7 @@ async fn client_reconnect() -> TestResult {
     let bound = server.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
 
-    let (mut client_ws, listener_fut, sender_fut) = TokioWebSocketClient::<_, _, SyncMessage>::new(
+    let (mut client_ws, listener_fut, sender_fut) = TokioWebSocketClient::<_, _>::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -266,7 +294,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     // Connect a client
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (_client_ws, listener_fut, sender_fut) = TokioWebSocketClient::<_, _, SyncMessage>::new(
+    let (_client_ws, listener_fut, sender_fut) = TokioWebSocketClient::<_, _>::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -292,7 +320,7 @@ async fn server_graceful_shutdown() -> TestResult {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Attempting to connect should fail
-    let result = TokioWebSocketClient::<_, _, SyncMessage>::new(
+    let result = TokioWebSocketClient::<_, _>::new(
         format!("ws://{}:{}", bound.ip(), bound.port()).parse()?,
         TimeoutTokio,
         Duration::from_secs(1),
@@ -393,9 +421,9 @@ async fn multiple_concurrent_clients() -> TestResult {
 
         tokio::spawn({
             #[allow(clippy::expect_used)]
-            let (inner_client, handler) = clients.get(i).expect("client should exist").clone();
+            let (inner_client, _handler) = clients.get(i).expect("client should exist").clone();
             async move {
-                inner_client.listen(handler).await?;
+                inner_client.listen().await?;
                 Ok::<(), eyre::Report>(())
             }
         });
@@ -477,7 +505,7 @@ async fn connection_to_invalid_address() -> TestResult {
     // Try to connect to an address that's not listening
     let uri = "ws://127.0.0.1:9".parse()?; // Port 9 is discard protocol, unlikely to have WS server
 
-    let result = TokioWebSocketClient::<_, _, SyncMessage>::new(
+    let result = TokioWebSocketClient::<_, _>::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(1),
@@ -560,9 +588,9 @@ async fn large_message_handling() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
-        let handler = client_handler.clone();
+        let _handler = client_handler.clone();
         async move {
-            inner_client.listen(handler).await?;
+            inner_client.listen().await?;
             Ok::<(), eyre::Report>(())
         }
     });
@@ -664,9 +692,9 @@ async fn message_ordering() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
-        let handler = client_handler.clone();
+        let _handler = client_handler.clone();
         async move {
-            inner_client.listen(handler).await?;
+            inner_client.listen().await?;
             Ok::<(), eyre::Report>(())
         }
     });
@@ -931,9 +959,9 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
-        let handler = client_handler.clone();
+        let _handler = client_handler.clone();
         async move {
-            inner_client.listen(handler).await?;
+            inner_client.listen().await?;
             Ok::<(), eyre::Report>(())
         }
     });

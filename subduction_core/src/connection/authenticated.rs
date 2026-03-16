@@ -8,7 +8,7 @@ use core::{marker::PhantomData, time::Duration};
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use super::{message::RequestId, Connection, Reconnect, Roundtrip};
+use super::{Connection, Reconnect, Roundtrip, message::RequestId};
 use crate::peer::id::PeerId;
 
 /// A connection that has completed handshake verification.

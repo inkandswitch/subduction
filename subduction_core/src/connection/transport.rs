@@ -18,7 +18,7 @@
 
 use alloc::vec::Vec;
 
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 
 use super::Connection;
@@ -153,6 +153,28 @@ impl<K: FutureForm, T, M> Connection<K, M> for MessageTransport<T> {
                 .map_err(RecvDecodeError::Recv)?;
             M::try_decode(&bytes).map_err(RecvDecodeError::from)
         })
+    }
+}
+
+// ── Roundtrip delegation ─────────────────────────────────────────────────
+
+impl<T, K, Req, Resp> super::Roundtrip<K, Req, Resp> for MessageTransport<T>
+where
+    T: super::Roundtrip<K, Req, Resp>,
+    K: FutureForm,
+{
+    type CallError = T::CallError;
+
+    fn next_request_id(&self) -> K::Future<'_, super::message::RequestId> {
+        self.inner.next_request_id()
+    }
+
+    fn call(
+        &self,
+        req: Req,
+        timeout: Option<core::time::Duration>,
+    ) -> K::Future<'_, Result<Resp, Self::CallError>> {
+        self.inner.call(req, timeout)
     }
 }
 

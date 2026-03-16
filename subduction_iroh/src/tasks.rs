@@ -3,11 +3,12 @@
 //! Both tasks are spawned externally (by the client or server). They bridge
 //! the QUIC stream halves to the connection's internal async channels.
 
+use alloc::vec::Vec;
+
 use iroh::endpoint::{RecvStream, SendStream};
-use sedimentree_core::codec::encode::Encode;
 
 use crate::{
-    connection::{ChannelMessage, IrohConnection},
+    connection::IrohConnection,
     error::{RunError, StreamError},
 };
 
@@ -40,17 +41,17 @@ pub(crate) async fn write_framed(send: &mut SendStream, data: &[u8]) -> Result<(
 }
 
 /// Background task: reads framed messages from the QUIC recv stream and
-/// dispatches them to the connection's inbound channel.
+/// dispatches them to the connection's inbound channel as raw bytes.
 ///
 /// Exits when the recv stream is closed or an error occurs.
 ///
 /// # Errors
 ///
 /// Returns an error if reading from the stream or dispatching fails.
-pub async fn listener_task<O: Send + Sync, M: ChannelMessage>(
-    conn: IrohConnection<O, M>,
+pub async fn listener_task<O: Send + Sync>(
+    conn: IrohConnection<O>,
     mut recv: RecvStream,
-) -> Result<(), RunError<M>> {
+) -> Result<(), RunError> {
     let peer_id = conn.quic_connection().remote_id();
     tracing::info!("starting iroh listener task for peer {peer_id}");
 
@@ -70,11 +71,9 @@ pub async fn listener_task<O: Send + Sync, M: ChannelMessage>(
             Err(e) => return Err(e.into()),
         };
 
-        let msg = M::try_decode(&bytes)?;
+        tracing::debug!("received {} inbound bytes from peer {peer_id}", bytes.len());
 
-        tracing::debug!("decoded inbound message from peer {peer_id}",);
-
-        conn.push_inbound(msg)
+        conn.push_inbound(bytes)
             .await
             .map_err(|e| RunError::ChanSend(Box::new(e)))?;
     }
@@ -91,14 +90,13 @@ pub async fn listener_task<O: Send + Sync, M: ChannelMessage>(
 /// # Errors
 ///
 /// Returns an error if writing to the stream fails.
-pub async fn sender_task<M: Encode + core::fmt::Debug>(
+pub async fn sender_task(
     mut send: SendStream,
-    outbound_rx: async_channel::Receiver<M>,
-) -> Result<(), RunError<M>> {
+    outbound_rx: async_channel::Receiver<Vec<u8>>,
+) -> Result<(), RunError> {
     tracing::info!("starting iroh sender task");
 
-    while let Ok(msg) = outbound_rx.recv().await {
-        let bytes = msg.encode();
+    while let Ok(bytes) = outbound_rx.recv().await {
         write_framed(&mut send, &bytes).await?;
     }
 

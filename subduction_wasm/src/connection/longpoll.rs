@@ -13,6 +13,7 @@ use subduction_core::connection::{
     authenticated::Authenticated,
     message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
     timeout::{TimedOut, Timeout},
+    transport::MessageTransport,
 };
 use subduction_http_longpoll::{
     client::HttpLongPollClient, connection::HttpLongPollConnection, session::SessionId,
@@ -65,7 +66,7 @@ impl Timeout<Local> for JsTimeout {
 }
 
 /// Type alias for the long-poll connection used in wasm.
-pub type WasmLongPollConnection = HttpLongPollConnection<JsTimeout, SyncMessage>;
+pub type WasmLongPollConnection = HttpLongPollConnection<JsTimeout>;
 
 /// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
 /// [`Connection`](super::JsConnection) interface so it can be used as a
@@ -109,7 +110,8 @@ impl WasmLongPollConn {
     /// Returns [`WasmLongPollConnError`] if the disconnect fails.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn disconnect(&self) -> Result<(), WasmLongPollConnError> {
-        Connection::<Local, SyncMessage>::disconnect(&self.0)
+        let mt = MessageTransport::new(self.0.clone());
+        Connection::<Local, SyncMessage>::disconnect(&mt)
             .await
             .map_err(|e| WasmLongPollConnError(e.to_string()))
     }
@@ -122,7 +124,8 @@ impl WasmLongPollConn {
     #[wasm_bindgen(js_name = send)]
     pub async fn send(&self, message: WasmMessage) -> Result<(), WasmLongPollConnError> {
         let msg: SyncMessage = message.into();
-        Connection::<Local, SyncMessage>::send(&self.0, &msg)
+        let mt = MessageTransport::new(self.0.clone());
+        Connection::<Local, SyncMessage>::send(&mt, &msg)
             .await
             .map_err(|e| WasmLongPollConnError(e.to_string()))
     }
@@ -134,7 +137,8 @@ impl WasmLongPollConn {
     /// Returns an error if the inbound channel is closed.
     #[wasm_bindgen(js_name = recv)]
     pub async fn recv(&self) -> Result<WasmMessage, WasmLongPollConnError> {
-        Connection::<Local, SyncMessage>::recv(&self.0)
+        let mt = MessageTransport::new(self.0.clone());
+        Connection::<Local, SyncMessage>::recv(&mt)
             .await
             .map(Into::into)
             .map_err(|e| WasmLongPollConnError(e.to_string()))

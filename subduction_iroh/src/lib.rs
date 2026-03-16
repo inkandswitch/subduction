@@ -4,7 +4,7 @@
 //!
 //! Iroh provides peer-to-peer QUIC connections with NAT traversal via relay
 //! servers and hole punching. This crate bridges iroh's connection model to
-//! Subduction's [`Connection`](subduction_core::connection::Connection) trait.
+//! Subduction's [`Transport`](subduction_core::connection::transport::Transport) trait.
 //!
 //! # Authentication
 //!

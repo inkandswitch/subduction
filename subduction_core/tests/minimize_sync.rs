@@ -18,10 +18,8 @@ use sedimentree_core::{
 };
 use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
-    connection::{
-        message::SyncMessage,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
-    },
+    connection::test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+    handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
@@ -61,7 +59,13 @@ fn make_subduction() -> Arc<
         Sendable,
         MemoryStorage,
         ChannelMockConnection,
-        SyncMessage,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            ChannelMockConnection,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         subduction_crypto::signer::memory::MemorySigner,
         CountLeadingZeroBytes,

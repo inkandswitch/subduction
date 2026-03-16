@@ -23,31 +23,27 @@ use subduction_crypto::signer::Signer;
 
 use crate::{
     client::iroh_peer_id,
-    connection::{ChannelMessage, IrohConnection},
+    connection::IrohConnection,
     error::{AcceptError, RunError},
     handshake::IrohHandshake,
 };
 
 /// Result of accepting a single incoming connection.
-///
-/// The `M` parameter is the channel message type.
-pub struct AcceptResult<O: Timeout<Sendable> + Send + Sync, M: Clone + core::fmt::Debug> {
+pub struct AcceptResult<O: Timeout<Sendable> + Send + Sync> {
     /// The authenticated connection.
-    pub authenticated: Authenticated<IrohConnection<O, M>, Sendable>,
+    pub authenticated: Authenticated<IrohConnection<O>, Sendable>,
 
     /// The remote peer's identity.
     pub peer_id: PeerId,
 
     /// Background listener task -- must be spawned.
-    pub listener_task: BoxFuture<'static, Result<(), RunError<M>>>,
+    pub listener_task: BoxFuture<'static, Result<(), RunError>>,
 
     /// Background sender task -- must be spawned.
-    pub sender_task: BoxFuture<'static, Result<(), RunError<M>>>,
+    pub sender_task: BoxFuture<'static, Result<(), RunError>>,
 }
 
-impl<O: Timeout<Sendable> + Send + Sync, M: Clone + core::fmt::Debug> core::fmt::Debug
-    for AcceptResult<O, M>
-{
+impl<O: Timeout<Sendable> + Send + Sync> core::fmt::Debug for AcceptResult<O> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("AcceptResult")
             .field("peer_id", &self.peer_id)
@@ -81,7 +77,7 @@ impl<O: Timeout<Sendable> + Send + Sync, M: Clone + core::fmt::Debug> core::fmt:
 /// }
 /// ```
 #[allow(clippy::too_many_arguments)]
-pub async fn accept_one<O, S, M>(
+pub async fn accept_one<O, S>(
     endpoint: &Endpoint,
     default_time_limit: Duration,
     timeout: O,
@@ -90,11 +86,10 @@ pub async fn accept_one<O, S, M>(
     our_peer_id: PeerId,
     discovery_audience: Option<Audience>,
     handshake_max_drift: Duration,
-) -> Result<AcceptResult<O, M>, AcceptError>
+) -> Result<AcceptResult<O>, AcceptError>
 where
     O: Timeout<Sendable> + Clone + Send + Sync + 'static,
     S: Signer<Sendable>,
-    M: ChannelMessage,
 {
     let incoming = endpoint.accept().await.ok_or(AcceptError::NoIncoming)?;
 
@@ -117,7 +112,7 @@ where
         move |iroh_handshake, peer_id| {
             let (send_stream, recv_stream) = iroh_handshake.into_parts();
 
-            let (conn, outbound_rx) = IrohConnection::<O, M>::new(
+            let (conn, outbound_rx) = IrohConnection::<O>::new(
                 peer_id,
                 quic_conn_clone,
                 default_time_limit,
@@ -125,9 +120,9 @@ where
             );
 
             let listener_conn = conn.clone();
-            let listener_task: BoxFuture<'static, Result<(), RunError<M>>> =
+            let listener_task: BoxFuture<'static, Result<(), RunError>> =
                 Box::pin(crate::tasks::listener_task(listener_conn, recv_stream));
-            let sender_task: BoxFuture<'static, Result<(), RunError<M>>> =
+            let sender_task: BoxFuture<'static, Result<(), RunError>> =
                 Box::pin(crate::tasks::sender_task(send_stream, outbound_rx));
 
             (conn, (listener_task, sender_task))

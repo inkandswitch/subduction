@@ -14,7 +14,7 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::{handshake::audience::Audience, message::SyncMessage},
+    connection::{handshake::audience::Audience, transport::MessageTransport},
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -46,8 +46,14 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
-        SyncMessage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
     >,
@@ -57,10 +63,18 @@ type TestHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
+>;
+
+type ClientSyncHandler = SyncHandler<
+    Sendable,
+    MemoryStorage,
+    TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+    OpenPolicy,
+    CountLeadingZeroBytes,
 >;
 
 #[allow(clippy::type_complexity)]
@@ -73,8 +87,8 @@ fn setup_client_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
-        SyncMessage,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        ClientSyncHandler,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -85,7 +99,7 @@ fn setup_client_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>>()
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -121,7 +135,7 @@ async fn batch_sync() -> TestResult {
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>>();
+        .build::<Sendable, MessageTransport<subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())
@@ -158,7 +172,7 @@ async fn batch_sync() -> TestResult {
     // CLIENT SETUP //
     ///////////////////
 
-    let (client, client_handler, listener_fut, client_manager_fut) =
+    let (client, _client_handler, listener_fut, client_manager_fut) =
         setup_client_subduction(client_signer.clone());
 
     tokio::spawn(client_manager_fut);
@@ -195,9 +209,8 @@ async fn batch_sync() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
-        let handler = client_handler.clone();
         async move {
-            inner_client.listen(handler).await?;
+            inner_client.listen().await?;
             Ok::<(), eyre::Report>(())
         }
     });

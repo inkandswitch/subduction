@@ -51,8 +51,12 @@
 pub mod sync;
 
 use future_form::FutureForm;
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use crate::{connection::authenticated::Authenticated, peer::id::PeerId};
+use crate::{
+    connection::{authenticated::Authenticated, message::SyncMessage},
+    peer::id::PeerId,
+};
 
 /// A handler for messages received from authenticated peers.
 ///
@@ -81,7 +85,11 @@ pub trait Handler<K: FutureForm, C: Clone> {
     /// [`SyncMessage`](crate::connection::message::SyncMessage).
     /// Composed handlers typically use a wire envelope type (e.g.,
     /// `WireMessage`) and dispatch to sub-handlers via pattern matching.
-    type Message;
+    ///
+    /// The `From<SyncMessage>` bound ensures that sync-protocol messages
+    /// can always be sent on the wire, even when the handler processes
+    /// a broader envelope type.
+    type Message: From<SyncMessage> + Encode + Decode + Clone + Send + core::fmt::Debug + 'static;
 
     /// Error type returned by the handler.
     type HandlerError: core::error::Error;

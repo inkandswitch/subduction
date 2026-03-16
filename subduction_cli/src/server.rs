@@ -15,9 +15,10 @@ use subduction_core::{
             self,
             audience::{Audience, DiscoveryId},
         },
-        message::SyncMessage,
         nonce_cache::NonceCache,
+        transport::MessageTransport,
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
@@ -45,8 +46,14 @@ type CliSubduction = Arc<
         'static,
         future_form::Sendable,
         MetricsStorage<FsStorage>,
-        UnifiedTransport<FuturesTimerTimeout>,
-        SyncMessage,
+        MessageTransport<UnifiedTransport<FuturesTimerTimeout>>,
+        SyncHandler<
+            future_form::Sendable,
+            MetricsStorage<FsStorage>,
+            MessageTransport<UnifiedTransport<FuturesTimerTimeout>>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -360,7 +367,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     tokio::spawn(accepted.listener_task);
                                     tokio::spawn(accepted.sender_task);
 
-                                    let auth = accepted.authenticated.map(UnifiedTransport::Iroh);
+                                    let auth = accepted.authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
                                     match iroh_subduction.add_connection(auth).await {
                                         Ok(_) => {
                                             iroh_subduction.full_sync_with_peer(&remote, true, None).await;
@@ -534,7 +541,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 async fn accept_loop(
     tcp_listener: TcpListener,
     subduction: CliSubduction,
-    lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
+    lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
     cancel: CancellationToken,
     timeout: FuturesTimerTimeout,
     default_time_limit: Duration,
@@ -678,7 +685,10 @@ async fn handle_websocket(
             });
 
             let unified_ws = UnifiedWebSocket::Accepted(ws);
-            (UnifiedTransport::WebSocket(unified_ws), ())
+            (
+                MessageTransport::new(UnifiedTransport::WebSocket(unified_ws)),
+                (),
+            )
         },
         subduction.signer(),
         subduction.nonce_cache(),
@@ -713,7 +723,7 @@ async fn handle_http_longpoll(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
     subduction: CliSubduction,
-    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
 ) {
     use http_body_util::Full;
     use hyper::{
@@ -771,7 +781,8 @@ async fn handle_http_longpoll(
                 && let Some(sid) = subduction_http_longpoll::session::SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
             {
-                let unified_auth = auth.map(UnifiedTransport::HttpLongPoll);
+                let unified_auth =
+                    auth.map(|lp| MessageTransport::new(UnifiedTransport::HttpLongPoll(lp)));
                 if let Err(e) = subduction.add_connection(unified_auth).await {
                     tracing::error!("Failed to add HTTP long-poll connection: {e}");
                 }
@@ -876,7 +887,10 @@ async fn try_connect_ws(
                 }
             });
 
-            (UnifiedTransport::WebSocket(ws_conn), ())
+            (
+                MessageTransport::new(UnifiedTransport::WebSocket(ws_conn)),
+                (),
+            )
         },
         signer,
         audience,
@@ -954,7 +968,7 @@ async fn try_connect_iroh(
     });
 
     let remote_id = authenticated.peer_id();
-    let auth = authenticated.map(UnifiedTransport::Iroh);
+    let auth = authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
     subduction.add_connection(auth).await?;
     subduction.full_sync_with_peer(&remote_id, true, None).await;
 

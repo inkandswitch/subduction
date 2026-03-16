@@ -1,9 +1,8 @@
 //! Error types.
 
-use core::fmt;
+use alloc::vec::Vec;
 
 use futures::channel::oneshot;
-use sedimentree_core::codec::error::DecodeError;
 use thiserror::Error;
 
 /// Outbound channel closed — the sender task has stopped.
@@ -39,21 +38,14 @@ pub struct DisconnectionError;
 
 /// Errors while running the connection loop.
 ///
-/// Generic over the channel message type `M` so that the [`ChanSend`]
-/// variant preserves the full [`async_channel::SendError<M>`].
-///
 /// [`ChanSend`]: RunError::ChanSend
 #[derive(Debug, Error)]
-pub enum RunError<M: fmt::Debug> {
+pub enum RunError {
     /// Internal channel send failed (receiver dropped).
     #[error("channel send error: {0}")]
-    ChanSend(Box<async_channel::SendError<M>>),
+    ChanSend(Box<async_channel::SendError<Vec<u8>>>),
 
     /// WebSocket error.
     #[error(transparent)]
     WebSocket(#[from] tungstenite::Error),
-
-    /// Message deserialization error.
-    #[error("deserialize error: {0}")]
-    Deserialize(DecodeError),
 }

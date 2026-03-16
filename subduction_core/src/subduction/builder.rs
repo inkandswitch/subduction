@@ -81,7 +81,6 @@ use crate::{
     storage::{powerbox::StoragePowerbox, traits::Storage},
 };
 use nonempty::NonEmpty;
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_crypto::signer::Signer;
 
 use super::{
@@ -331,14 +330,14 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
     pub fn build<'a, F, C>(
         self,
     ) -> (
-        Arc<Subduction<'a, F, S, C, SyncMessage, P, Sig, M, N>>,
+        Arc<Subduction<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, M, N>>,
         Arc<SyncHandler<F, S, C, P, M, N>>,
-        ListenerFuture<'a, F, S, C, SyncMessage, P, Sig, M, N>,
+        ListenerFuture<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
         F: SubductionFutureForm<'a, S, C, SyncMessage, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, SyncMessage, P, Sig, M, SyncHandler<F, S, C, P, M, N>, N>,
+        F: StartListener<'a, S, C, SyncMessage, SyncHandler<F, S, C, P, M, N>, P, Sig, M, N>,
         S: Storage<F>,
         C: Connection<F, SyncMessage>
             + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
@@ -412,29 +411,28 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
     ///     .build_with_handler::<Sendable, MyConnection, _>(handler);
     /// ```
     #[allow(clippy::type_complexity)]
-    pub fn build_with_handler<'a, F, C, W, H>(
+    pub fn build_with_handler<'a, F, C, H>(
         self,
         handler: Arc<H>,
     ) -> (
-        Arc<Subduction<'a, F, S, C, W, P, Sig, M, N>>,
-        ListenerFuture<'a, F, S, C, W, P, Sig, M, N>,
+        Arc<Subduction<'a, F, S, C, H, P, Sig, M, N>>,
+        ListenerFuture<'a, F, S, C, H, P, Sig, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
-        F: SubductionFutureForm<'a, S, C, W, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, W, P, Sig, M, H, N>,
+        F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
+        F: StartListener<'a, S, C, H::Message, H, P, Sig, M, N>,
         S: Storage<F>,
-        C: Connection<F, W>
+        C: Connection<F, H::Message>
             + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
             + PartialEq
             + Clone
             + 'a,
-        W: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
-        H: Handler<F, C, Message = W>,
-        H::HandlerError: Into<ListenError<F, S, C, W>>,
+        H: Handler<F, C>,
+        H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
     {
         let sedimentrees = self
             .sedimentrees

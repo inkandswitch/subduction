@@ -1,6 +1,6 @@
 //! Error types for the Iroh transport.
 
-use core::fmt;
+use alloc::vec::Vec;
 
 use subduction_core::connection::handshake::AuthenticateError;
 use thiserror::Error;
@@ -57,24 +57,15 @@ pub enum StreamError {
 }
 
 /// Errors during listener/sender task execution.
-///
-/// Generic over the channel message type `M` so that the [`ChanSend`]
-/// variant preserves the full [`async_channel::SendError<M>`].
-///
-/// [`ChanSend`]: RunError::ChanSend
 #[derive(Debug, Error)]
-pub enum RunError<M: fmt::Debug> {
+pub enum RunError {
     /// QUIC stream-level error.
     #[error(transparent)]
     Stream(#[from] StreamError),
 
-    /// Failed to decode an inbound message.
-    #[error("message decode error: {0}")]
-    Deserialize(#[from] sedimentree_core::codec::error::DecodeError),
-
     /// Failed to send on internal channel (receiver dropped).
     #[error("channel send error: {0}")]
-    ChanSend(Box<async_channel::SendError<M>>),
+    ChanSend(Box<async_channel::SendError<Vec<u8>>>),
 }
 
 /// Errors when connecting to a peer.

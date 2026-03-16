@@ -31,7 +31,8 @@ use std::{
 use future_form::Sendable;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{message::SyncMessage, test_utils::TokioSpawn},
+    connection::test_utils::TokioSpawn,
+    handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
@@ -53,8 +54,14 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        HttpLongPollConnection<FuturesTimerTimeout, SyncMessage>,
-        SyncMessage,
+        HttpLongPollConnection<FuturesTimerTimeout>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            HttpLongPollConnection<FuturesTimerTimeout>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -194,7 +201,7 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout, SyncMessage>>();
+            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

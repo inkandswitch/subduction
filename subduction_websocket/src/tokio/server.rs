@@ -22,9 +22,10 @@ use subduction_core::{
             self, AuthenticateError,
             audience::{Audience, DiscoveryId},
         },
-        message::SyncMessage,
         nonce_cache::NonceCache,
+        transport::MessageTransport,
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
@@ -44,11 +45,11 @@ use tungstenite::{handshake::server::NoCallback, http::Uri, protocol::WebSocketC
 /// A Tokio-flavoured [`WebSocket`] server implementation.
 #[derive(Debug)]
 pub struct TokioWebSocketServer<
-    S: 'static + Send + Sync + Storage<Sendable>,
+    S: 'static + Send + Sync + Storage<Sendable> + core::fmt::Debug,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     Sig: 'static + Send + Sync + Signer<Sendable>,
-    M: 'static + Send + Sync + DepthMetric = CountLeadingZeroBytes,
-    O: 'static + Send + Sync + Timeout<Sendable> = FuturesTimerTimeout,
+    M: 'static + Send + Sync + DepthMetric,
+    O: 'static + Send + Sync + Timeout<Sendable> + core::fmt::Debug,
 > where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,
@@ -62,13 +63,13 @@ pub struct TokioWebSocketServer<
 
 impl<S, P, Sig, M, O> Clone for TokioWebSocketServer<S, P, Sig, M, O>
 where
-    S: 'static + Send + Sync + Storage<Sendable>,
+    S: 'static + Send + Sync + Storage<Sendable> + core::fmt::Debug,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
     Sig: 'static + Send + Sync + Signer<Sendable>,
     M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable>,
+    O: 'static + Send + Sync + Timeout<Sendable> + core::fmt::Debug,
     S::Error: 'static + Send + Sync,
 {
     fn clone(&self) -> Self {
@@ -82,11 +83,11 @@ where
 }
 
 impl<
-    S: 'static + Send + Sync + Storage<Sendable>,
+    S: 'static + Send + Sync + Storage<Sendable> + core::fmt::Debug,
     P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
     Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
     M: 'static + Send + Sync + DepthMetric,
-    O: 'static + Send + Sync + Timeout<Sendable>,
+    O: 'static + Send + Sync + Timeout<Sendable> + core::fmt::Debug,
 > TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
@@ -225,7 +226,8 @@ where
                                         };
 
                                         // Step 3: Add connection to Subduction
-                                        if let Err(e) = task_subduction.add_connection(authenticated).await {
+                                        let auth_mt = authenticated.map(MessageTransport::new);
+                                        if let Err(e) = task_subduction.add_connection(auth_mt).await {
                                             tracing::error!("Failed to add connection: {e}");
                                         }
                                     }
@@ -273,7 +275,7 @@ where
     where
         M: Clone,
         S: core::fmt::Debug,
-        UnifiedWebSocket<O, SyncMessage>: core::fmt::Debug,
+        UnifiedWebSocket<O>: core::fmt::Debug,
     {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
 
@@ -288,7 +290,8 @@ where
             builder = builder.discovery_id(id);
         }
 
-        let (subduction, _handler, listener_fut, manager_fut) = builder.build();
+        let (subduction, _handler, listener_fut, manager_fut) =
+            builder.build::<Sendable, MessageTransport<UnifiedWebSocket<O>>>();
 
         let server = Self::new(
             address,
@@ -353,9 +356,10 @@ where
     /// [`handshake::respond`]: subduction_core::connection::handshake::respond
     pub async fn add_connection(
         &self,
-        authenticated: Authenticated<UnifiedWebSocket<O, SyncMessage>, Sendable>,
+        authenticated: Authenticated<UnifiedWebSocket<O>, Sendable>,
     ) -> Result<bool, AddConnectionError<P::ConnectionDisallowed>> {
-        self.subduction.add_connection(authenticated).await
+        let auth_mt = authenticated.map(MessageTransport::new);
+        self.subduction.add_connection(auth_mt).await
     }
 
     /// Connect to a peer and add the connection for bidirectional sync.
@@ -461,8 +465,9 @@ where
 
         tracing::info!("Handshake complete: connected to {server_id}");
 
+        let auth_mt = authenticated.map(MessageTransport::new);
         self.subduction
-            .add_connection(authenticated)
+            .add_connection(auth_mt)
             .await
             .map_err(TryConnectError::AddConnection)?;
 
@@ -560,8 +565,9 @@ where
         let server_id = authenticated.peer_id();
         tracing::info!("Handshake complete: connected to {server_id}");
 
+        let auth_mt = authenticated.map(MessageTransport::new);
         self.subduction
-            .add_connection(authenticated)
+            .add_connection(auth_mt)
             .await
             .map_err(TryConnectError::AddConnection)?;
 
@@ -576,8 +582,18 @@ where
     }
 }
 
-type TokioWebSocketSubduction<S, P, Sig, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O, SyncMessage>, SyncMessage, P, Sig, M>>;
+type TokioWebSocketSubduction<S, P, Sig, O, M> = Arc<
+    Subduction<
+        'static,
+        Sendable,
+        S,
+        MessageTransport<UnifiedWebSocket<O>>,
+        SyncHandler<Sendable, S, MessageTransport<UnifiedWebSocket<O>>, P, M>,
+        P,
+        Sig,
+        M,
+    >,
+>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]

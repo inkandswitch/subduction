@@ -50,10 +50,6 @@ pub enum ServerError {
     #[error("request body too large")]
     BodyTooLarge,
 
-    /// Failed to decode the message from the request body.
-    #[error("message decode error: {0}")]
-    MessageDecode(sedimentree_core::codec::error::DecodeError),
-
     /// Internal channel error.
     #[error("channel send error")]
     ChanSend,

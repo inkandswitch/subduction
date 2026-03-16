@@ -38,15 +38,15 @@ use futures::{FutureExt, future::BoxFuture};
 
 use crate::{
     DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
-    connection::{ChannelMessage, HttpLongPollConnection},
+    connection::HttpLongPollConnection,
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
 };
 
 /// Server-side handler state, shared across request handlers.
 #[derive(Debug, Clone)]
-pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> {
-    sessions: SessionStore<O, M>,
+pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync> {
+    sessions: SessionStore<O>,
     signer: Sig,
     nonce_cache: Arc<NonceCache>,
     our_peer_id: PeerId,
@@ -58,11 +58,8 @@ pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync, M: ChannelMe
     poll_timeout: Duration,
 }
 
-impl<
-    Sig: Signer<Sendable> + Clone + Send + Sync,
-    O: Timeout<Sendable> + Clone + Send + Sync,
-    M: ChannelMessage,
-> LongPollHandler<Sig, O, M>
+impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone + Send + Sync>
+    LongPollHandler<Sig, O>
 {
     /// Create a new long-poll handler.
     #[must_use]
@@ -105,7 +102,7 @@ impl<
 
     /// Access the session store.
     #[must_use]
-    pub const fn sessions(&self) -> &SessionStore<O, M> {
+    pub const fn sessions(&self) -> &SessionStore<O> {
         &self.sessions
     }
 
@@ -248,13 +245,15 @@ impl<
 
         let body = read_body(req, self.max_body_size).await?;
 
-        let msg = M::try_decode(&body).map_err(ServerError::MessageDecode)?;
-
-        tracing::debug!("POST /lp/send: peer {} message {:?}", entry.peer_id, msg);
+        tracing::debug!(
+            "POST /lp/send: peer {} ({} bytes)",
+            entry.peer_id,
+            body.len()
+        );
 
         entry
             .connection
-            .push_inbound(msg)
+            .push_inbound(body)
             .await
             .map_err(|_| ServerError::ChanSend)?;
 
@@ -282,13 +281,12 @@ impl<
         let pull_fut = Sendable::from_future(async move { entry.connection.pull_outbound().await });
 
         match self.timeout.timeout(self.poll_timeout, pull_fut).await {
-            Ok(Ok(msg)) => {
-                let encoded = sedimentree_core::codec::encode::Encode::encode(&msg);
-                tracing::debug!("POST /lp/recv: delivering message {:?}", msg);
+            Ok(Ok(bytes)) => {
+                tracing::debug!("POST /lp/recv: delivering {} bytes", bytes.len());
                 Ok(Response::builder()
                     .status(StatusCode::OK)
                     .header("content-type", "application/octet-stream")
-                    .body(Full::new(Bytes::from(encoded)))?)
+                    .body(Full::new(Bytes::from(bytes)))?)
             }
             Ok(Err(_)) => {
                 tracing::debug!("POST /lp/recv: channel closed");
@@ -332,7 +330,7 @@ impl<
     pub async fn take_authenticated(
         &self,
         session_id: &SessionId,
-    ) -> Option<Authenticated<HttpLongPollConnection<O, M>, Sendable>> {
+    ) -> Option<Authenticated<HttpLongPollConnection<O>, Sendable>> {
         let mut sessions = self.sessions.sessions.lock().await;
         sessions
             .get_mut(session_id)
