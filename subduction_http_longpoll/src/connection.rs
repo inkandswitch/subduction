@@ -22,10 +22,10 @@ use subduction_core::{
     connection::{
         Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-        multiplexer::Multiplexer,
-        timeout::{TimedOut, Timeout},
     },
+    multiplexer::Multiplexer,
     peer::id::PeerId,
+    timeout::{TimedOut, Timeout},
     transport::Transport,
 };
 
@@ -293,7 +293,7 @@ mod tests {
             &'a self,
             dur: Duration,
             fut: futures::future::BoxFuture<'a, T>,
-        ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::connection::timeout::TimedOut>>
+        ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::timeout::TimedOut>>
         {
             use futures::{
                 FutureExt,
@@ -302,7 +302,7 @@ mod tests {
             async move {
                 match select(fut, futures_timer::Delay::new(dur)).await {
                     Either::Left((val, _)) => Ok(val),
-                    Either::Right(_) => Err(subduction_core::connection::timeout::TimedOut),
+                    Either::Right(_) => Err(subduction_core::timeout::TimedOut),
                 }
             }
             .boxed()

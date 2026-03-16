@@ -10,14 +10,12 @@ use iroh::EndpointAddr;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
-    connection::{
-        handshake::{
-            self,
-            audience::{Audience, DiscoveryId},
-        },
-        nonce_cache::NonceCache,
-    },
     handler::sync::SyncHandler,
+    handshake::{
+        self,
+        audience::{Audience, DiscoveryId},
+    },
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},

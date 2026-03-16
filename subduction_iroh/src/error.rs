@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use subduction_core::connection::handshake::AuthenticateError;
+use subduction_core::handshake::AuthenticateError;
 use thiserror::Error;
 
 /// Outbound channel closed -- no more messages can be sent.

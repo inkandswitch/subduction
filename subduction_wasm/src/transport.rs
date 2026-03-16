@@ -16,13 +16,13 @@ use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::{self, Promise};
 use subduction_core::{
+    authenticated::Authenticated,
     connection::{
         Roundtrip,
-        authenticated::Authenticated,
-        handshake::{self as hs, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-        multiplexer::Multiplexer,
     },
+    handshake::{self as hs, audience::Audience},
+    multiplexer::Multiplexer,
     timestamp::TimestampSeconds,
     transport::{MessageTransport, Transport},
 };
@@ -469,7 +469,7 @@ impl WasmAuthenticatedTransport {
         max_drift_seconds: Option<u32>,
     ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
         use core::time::Duration;
-        use subduction_core::connection::nonce_cache::NonceCache;
+        use subduction_core::nonce_cache::NonceCache;
 
         let our_peer_id = signer.verifying_key().into();
         let nonce_cache = NonceCache::default();

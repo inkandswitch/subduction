@@ -19,7 +19,7 @@
 //! ```
 //!
 //! With 4 buckets × 3 minutes = 12 minute window, this covers the 10 minute
-//! [`MAX_PLAUSIBLE_DRIFT`](super::handshake::MAX_PLAUSIBLE_DRIFT) with a 2 minute buffer.
+//! [`MAX_PLAUSIBLE_DRIFT`](crate::handshake::MAX_PLAUSIBLE_DRIFT) with a 2 minute buffer.
 
 use core::time::Duration;
 

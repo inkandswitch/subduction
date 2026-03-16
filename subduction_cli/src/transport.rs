@@ -10,10 +10,10 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::{
     connection::{
-        Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId},
-        timeout::Timeout,
+        Roundtrip,
     },
+    timeout::Timeout,
     transport::Transport,
 };
 use subduction_http_longpoll::connection::HttpLongPollConnection;

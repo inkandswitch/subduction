@@ -2,7 +2,7 @@
 //!
 //! This module provides the [`Handshake`] trait implementation for
 //! [`WebSocketStream`], enabling the handshake protocol from
-//! [`subduction_core::connection::handshake`] to operate over WebSocket.
+//! [`subduction_core::handshake`] to operate over WebSocket.
 //!
 //! # Usage
 //!
@@ -10,7 +10,7 @@
 //! with a `WebSocketStream` to perform authentication:
 //!
 //! ```ignore
-//! use subduction_core::connection::handshake;
+//! use subduction_core::handshake;
 //! use subduction_websocket::handshake::WebSocketHandshake;
 //!
 //! // After WebSocket upgrade, perform Subduction handshake
@@ -35,9 +35,9 @@ use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};
 
 use async_tungstenite::WebSocketStream;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures_util::{AsyncRead, AsyncWrite, SinkExt, StreamExt};
-use subduction_core::connection::handshake::Handshake;
+use subduction_core::handshake::Handshake;
 use thiserror::Error;
 
 /// Errors that can occur during WebSocket handshake transport.
@@ -65,8 +65,8 @@ pub enum WebSocketHandshakeError {
 /// it to [`handshake::initiate`] or [`handshake::respond`]. After the
 /// handshake completes, use [`into_inner`] to retrieve the underlying stream.
 ///
-/// [`handshake::initiate`]: subduction_core::connection::handshake::initiate
-/// [`handshake::respond`]: subduction_core::connection::handshake::respond
+/// [`handshake::initiate`]: subduction_core::handshake::initiate
+/// [`handshake::respond`]: subduction_core::handshake::respond
 /// [`into_inner`]: WebSocketHandshake::into_inner
 #[derive(Debug)]
 pub struct WebSocketHandshake<T>(pub WebSocketStream<T>);
@@ -143,11 +143,11 @@ impl<K: FutureForm, T> Handshake<K> for WebSocketHandshake<T> {
 mod tests {
     use future_form::Sendable;
     use subduction_core::{
-        connection::handshake::{
-            HandshakeMessage,
+        handshake::{
             audience::Audience,
             challenge::Challenge,
             rejection::{Rejection, RejectionReason},
+            HandshakeMessage,
         },
         timestamp::TimestampSeconds,
     };

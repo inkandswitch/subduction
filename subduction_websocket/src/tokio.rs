@@ -4,13 +4,13 @@ use core::time::Duration;
 
 use future_form::Sendable;
 use futures::{
-    FutureExt,
     future::BoxFuture,
     stream::{AbortHandle, Abortable},
+    FutureExt,
 };
 use subduction_core::connection::manager::Spawn;
 
-use subduction_core::connection::timeout::{TimedOut, Timeout};
+use subduction_core::timeout::{TimedOut, Timeout};
 
 #[cfg(feature = "tokio_client_any")]
 pub mod client;

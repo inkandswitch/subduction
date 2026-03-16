@@ -23,10 +23,7 @@ use futures::{
     future::LocalBoxFuture,
 };
 use subduction_core::{
-    connection::{
-        Connection, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    },
+    connection::{Connection, Roundtrip, message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage}},
     peer::id::PeerId,
     timestamp::TimestampSeconds,
     transport::MessageTransport,
@@ -45,7 +42,7 @@ use super::{
     message::WasmMessage,
 };
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
-use subduction_core::connection::{
+use subduction_core::{
     authenticated::Authenticated,
     handshake::{self, audience::Audience},
 };

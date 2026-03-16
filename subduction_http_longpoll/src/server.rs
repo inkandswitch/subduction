@@ -18,29 +18,27 @@ use core::time::Duration;
 use async_lock::Mutex;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
-    Method, Request, Response, StatusCode,
     body::{Bytes, Incoming},
+    Method, Request, Response, StatusCode,
 };
 use subduction_core::{
-    connection::{
-        authenticated::Authenticated,
-        handshake::{self, audience::Audience},
-        nonce_cache::NonceCache,
-        timeout::Timeout,
-    },
+    authenticated::Authenticated,
+    handshake::{self, audience::Audience},
+    nonce_cache::NonceCache,
     peer::id::PeerId,
+    timeout::Timeout,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::Signer;
 
 use future_form::{FutureForm, Sendable};
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 
 use crate::{
-    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
     connection::HttpLongPollConnection,
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
+    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
 };
 
 /// Server-side handler state, shared across request handlers.
@@ -351,7 +349,7 @@ struct HttpHandshake {
     response_slot: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
-impl subduction_core::connection::handshake::Handshake<Sendable> for HttpHandshake {
+impl subduction_core::handshake::Handshake<Sendable> for HttpHandshake {
     type Error = ServerError;
 
     fn send(&mut self, bytes: Vec<u8>) -> BoxFuture<'_, Result<(), Self::Error>> {

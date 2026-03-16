@@ -2,7 +2,7 @@
 
 use alloc::vec::Vec;
 
-use subduction_core::connection::timeout::Timeout;
+use subduction_core::timeout::Timeout;
 
 use crate::{
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
@@ -16,8 +16,8 @@ use futures::future::BoxFuture;
 
 use subduction_core::{
     connection::{
-        Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId},
+        Roundtrip,
     },
     transport::Transport,
 };

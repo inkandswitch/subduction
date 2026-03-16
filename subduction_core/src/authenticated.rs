@@ -8,8 +8,10 @@ use core::{marker::PhantomData, time::Duration};
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use super::{Connection, Reconnect, Roundtrip, message::RequestId};
-use crate::peer::id::PeerId;
+use crate::{
+    connection::{message::RequestId, Connection, Reconnect, Roundtrip},
+    peer::id::PeerId,
+};
 
 /// A connection that has completed handshake verification.
 ///
@@ -72,7 +74,7 @@ impl<C: Clone, K: FutureForm> Authenticated<C, K> {
     ///
     /// [`handshake::initiate`]: super::handshake::initiate
     /// [`handshake::respond`]: super::handshake::respond
-    pub(super) fn from_handshake(inner: C, peer_id: PeerId) -> Self {
+    pub(crate) fn from_handshake(inner: C, peer_id: PeerId) -> Self {
         Self {
             inner,
             peer_id,

@@ -22,8 +22,10 @@ use async_lock::Mutex;
 use futures::channel::oneshot;
 use sedimentree_core::collections::Map;
 
-use super::message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage};
-use crate::peer::id::PeerId;
+use crate::{
+    connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+    peer::id::PeerId,
+};
 
 /// Generic request-response multiplexer.
 ///

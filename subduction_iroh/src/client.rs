@@ -7,23 +7,21 @@ use core::time::Duration;
 
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use iroh::{Endpoint, EndpointAddr, endpoint::Connection as QuicConnection};
+use iroh::{endpoint::Connection as QuicConnection, Endpoint, EndpointAddr};
 use subduction_core::{
-    connection::{
-        authenticated::Authenticated,
-        handshake::{self, audience::Audience},
-        timeout::Timeout,
-    },
+    authenticated::Authenticated,
+    handshake::{self, audience::Audience},
     peer::id::PeerId,
+    timeout::Timeout,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 
 use crate::{
-    ALPN,
     connection::IrohConnection,
     error::{ConnectError, RunError},
     handshake::IrohHandshake,
+    ALPN,
 };
 
 /// Result of a successful connection attempt.

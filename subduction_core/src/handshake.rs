@@ -64,8 +64,10 @@ use core::time::Duration;
 use future_form::FutureForm;
 use thiserror::Error;
 
-use super::authenticated::Authenticated;
-use crate::{connection::nonce_cache::NonceCache, peer::id::PeerId, timestamp::TimestampSeconds};
+use crate::{
+    authenticated::Authenticated, nonce_cache::NonceCache, peer::id::PeerId,
+    timestamp::TimestampSeconds,
+};
 use sedimentree_core::codec::{
     error::{DecodeError, InvalidEnumTag, InvalidSchema},
     schema::{self, Schema},

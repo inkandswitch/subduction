@@ -10,13 +10,11 @@ use future_form::Sendable;
 use futures::future::BoxFuture;
 use iroh::Endpoint;
 use subduction_core::{
-    connection::{
-        authenticated::Authenticated,
-        handshake::{self, audience::Audience},
-        nonce_cache::NonceCache,
-        timeout::Timeout,
-    },
+    authenticated::Authenticated,
+    handshake::{self, audience::Audience},
+    nonce_cache::NonceCache,
     peer::id::PeerId,
+    timeout::Timeout,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::signer::Signer;

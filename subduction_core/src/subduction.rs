@@ -64,21 +64,21 @@ pub(crate) mod ingest;
 pub(crate) mod peers;
 
 use crate::{
+    authenticated::Authenticated,
     connection::{
         Connection, Roundtrip,
-        authenticated::Authenticated,
         backoff::Backoff,
-        handshake::audience::DiscoveryId,
         id::ConnectionId,
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
             SyncMessage, SyncResult,
         },
-        nonce_cache::NonceCache,
         stats::{SendCount, SyncStats},
     },
     handler::Handler,
+    handshake::audience::DiscoveryId,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,

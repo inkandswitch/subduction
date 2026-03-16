@@ -92,13 +92,18 @@ extern crate std;
 
 extern crate alloc;
 
+pub mod authenticated;
 pub mod connection;
 pub mod handler;
+pub mod handshake;
+pub mod multiplexer;
+pub mod nonce_cache;
 pub mod peer;
 pub mod policy;
 pub mod sharded_map;
 pub mod storage;
 pub mod subduction;
+pub mod timeout;
 pub mod timestamp;
 pub mod transport;
 

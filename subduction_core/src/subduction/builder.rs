@@ -52,7 +52,7 @@
 //! [`.max_pending_blob_requests()`]: SubductionBuilder::max_pending_blob_requests
 //! [`.sedimentrees()`]: SubductionBuilder::sedimentrees
 //! [`CountLeadingZeroBytes`]: sedimentree_core::commit::CountLeadingZeroBytes
-//! [`NonceCache::default()`]: crate::connection::nonce_cache::NonceCache
+//! [`NonceCache::default()`]: crate::nonce_cache::NonceCache
 //! [`ShardedMap::new()`]: crate::sharded_map::ShardedMap::new
 
 use alloc::sync::Arc;
@@ -66,15 +66,15 @@ use sedimentree_core::{
 };
 
 use crate::{
+    authenticated::Authenticated,
     connection::{
-        Connection, Roundtrip,
-        authenticated::Authenticated,
-        handshake::audience::DiscoveryId,
         manager::Spawn,
         message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
-        nonce_cache::NonceCache,
+        Connection, Roundtrip,
     },
-    handler::{Handler, sync::SyncHandler},
+    handler::{sync::SyncHandler, Handler},
+    handshake::audience::DiscoveryId,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
@@ -84,9 +84,9 @@ use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    ListenerFuture, StartListener, Subduction, SubductionFutureForm,
     error::ListenError,
-    pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    ListenerFuture, StartListener, Subduction, SubductionFutureForm,
 };
 
 /// Marker for a required builder field that hasn't been set yet.

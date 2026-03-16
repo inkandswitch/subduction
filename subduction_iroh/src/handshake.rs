@@ -9,7 +9,7 @@ use alloc::vec::Vec;
 use future_form::Sendable;
 use futures::FutureExt;
 use iroh::endpoint::{RecvStream, SendStream};
-use subduction_core::connection::handshake::Handshake;
+use subduction_core::handshake::Handshake;
 
 use crate::error::StreamError;
 

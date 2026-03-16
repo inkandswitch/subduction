@@ -53,10 +53,7 @@ pub mod sync;
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use crate::{
-    connection::{authenticated::Authenticated, message::SyncMessage},
-    peer::id::PeerId,
-};
+use crate::{authenticated::Authenticated, connection::message::SyncMessage, peer::id::PeerId};
 
 /// A handler for messages received from authenticated peers.
 ///
@@ -77,7 +74,7 @@ use crate::{
 /// requires it. Individual impls specify their own additional bounds
 /// (e.g., `C: Connection<K, SyncMessage>`).
 ///
-/// [`Authenticated<C, K>`]: crate::connection::authenticated::Authenticated
+/// [`Authenticated<C, K>`]: crate::authenticated::Authenticated
 pub trait Handler<K: FutureForm, C: Clone> {
     /// The message type this handler processes.
     ///

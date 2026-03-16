@@ -9,11 +9,8 @@ use core::fmt;
 
 use async_lock::Mutex;
 use future_form::Sendable;
-use rand::{RngCore, rngs::OsRng};
-use subduction_core::{
-    connection::{authenticated::Authenticated, timeout::Timeout},
-    peer::id::PeerId,
-};
+use rand::{rngs::OsRng, RngCore};
+use subduction_core::{authenticated::Authenticated, peer::id::PeerId, timeout::Timeout};
 
 use crate::connection::HttpLongPollConnection;
 

@@ -22,10 +22,10 @@ use subduction_core::{
     connection::{
         Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-        multiplexer::Multiplexer,
-        timeout::{TimedOut, Timeout},
     },
+    multiplexer::Multiplexer,
     peer::id::PeerId,
+    timeout::{TimedOut, Timeout},
     transport::Transport,
 };
 

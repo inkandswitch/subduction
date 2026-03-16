@@ -9,16 +9,11 @@
 //! handlers typically need only [`Connection`], while orchestration
 //! code (sync, full sync) also needs [`Roundtrip`].
 
-pub mod authenticated;
 pub mod backoff;
-pub mod handshake;
 pub mod id;
 pub mod manager;
 pub mod message;
-pub mod multiplexer;
-pub mod nonce_cache;
 pub mod stats;
-pub mod timeout;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;

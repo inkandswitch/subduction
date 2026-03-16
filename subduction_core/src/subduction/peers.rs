@@ -14,14 +14,15 @@ use future_form::FutureForm;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     collections::{
-        Map, Set,
         nonempty_ext::{NonEmptyExt, RemoveResult},
+        Map, Set,
     },
     id::SedimentreeId,
 };
 
 use crate::{
-    connection::{Connection, authenticated::Authenticated},
+    authenticated::Authenticated,
+    connection::Connection,
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     storage::{powerbox::StoragePowerbox, traits::Storage},
