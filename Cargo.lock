@@ -5237,6 +5237,7 @@ dependencies = [
  "async-lock",
  "base64 0.22.1",
  "blake3",
+ "bolero",
  "ciborium",
  "ed25519-dalek 2.2.0",
  "future_form",
@@ -5265,7 +5266,9 @@ dependencies = [
  "serde",
  "subduction_core",
  "subduction_keyhive",
+ "testresult",
  "thiserror 2.0.18",
+ "tokio",
  "tracing",
 ]
 

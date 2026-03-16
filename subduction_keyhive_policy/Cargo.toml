@@ -27,6 +27,11 @@ subduction_core = { workspace = true, default-features = false }
 subduction_keyhive = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 
+[dev-dependencies]
+subduction_core = { workspace = true, features = ["test_utils"] }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt", "time"] }
+
 [features]
 default = []
 std = ["subduction_core/std"]
