@@ -1,5 +1,4 @@
-//! Iroh (QUIC) connection implementing [`Connection<Sendable, SyncMessage>`]
-//! and [`Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>`].
+//! Iroh (QUIC) connection implementing [`Connection<Sendable>`].
 //!
 //! Uses a single QUIC bi-directional stream for framed message exchange.
 //! The connection follows the same internal architecture as the WebSocket
@@ -12,9 +11,15 @@
 //!
 //! The `call()` method uses the pending-map + oneshot pattern for
 //! request-response correlation, identical to other transports.
+//!
+//! The connection is parameterized over a channel message type `M`.
+//! Use `SyncMessage` for plain sync traffic, or `WireMessage` (with the
+//! `ephemeral` feature) to multiplex sync and ephemeral traffic on a single
+//! connection.
 
 use alloc::sync::Arc;
 use core::{
+    fmt::Debug,
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
@@ -23,7 +28,10 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Sendable};
 use futures::{FutureExt, channel::oneshot};
 use rand::RngCore;
-use sedimentree_core::collections::Map;
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    collections::Map,
+};
 use subduction_core::{
     connection::{
         Connection, Roundtrip,
@@ -41,9 +49,53 @@ const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
 /// Channel capacity for inbound messages.
 const INBOUND_CHANNEL_CAPACITY: usize = 128;
 
+/// Trait for message types that can carry [`SyncMessage`] over internal
+/// channels.
+///
+/// Implemented for [`SyncMessage`] (identity). Application code can
+/// implement this for its own wire envelope types.
+pub trait ChannelMessage: Clone + Debug + Send + Sync + Encode + Decode + 'static {
+    /// Wrap a [`SyncMessage`] into this channel type.
+    fn wrap_sync(msg: SyncMessage) -> Self;
+
+    /// Try to extract a [`BatchSyncResponse`] without consuming the message.
+    ///
+    /// Returns `Some` if this message is (or wraps) a [`BatchSyncResponse`].
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse>;
+
+    /// Try to unwrap into a [`SyncMessage`].
+    ///
+    /// Returns `None` if the message is not a sync message (e.g., ephemeral).
+    fn into_sync(self) -> Option<SyncMessage>;
+}
+
+impl ChannelMessage for SyncMessage {
+    fn wrap_sync(msg: SyncMessage) -> Self {
+        msg
+    }
+
+    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
+        match self {
+            SyncMessage::BatchSyncResponse(resp) => Some(resp),
+            SyncMessage::LooseCommit { .. }
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::RemoveSubscriptions(_)
+            | SyncMessage::DataRequestRejected(_) => None,
+        }
+    }
+
+    fn into_sync(self) -> Option<SyncMessage> {
+        Some(self)
+    }
+}
+
 /// Shared interior state for an Iroh connection.
 #[derive(Debug)]
-struct Inner<O> {
+struct Inner<O, M> {
+    peer_id: PeerId,
     chan_id: u64,
     req_id_counter: AtomicU64,
     default_time_limit: Duration,
@@ -52,29 +104,33 @@ struct Inner<O> {
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
 
     /// Messages from `send()` / `call()` -> drained by the sender task.
-    outbound_tx: async_channel::Sender<SyncMessage>,
+    outbound_tx: async_channel::Sender<M>,
 
     /// Messages from the listener task -> picked up by `recv()`.
-    inbound_writer: async_channel::Sender<SyncMessage>,
-    inbound_reader: async_channel::Receiver<SyncMessage>,
+    inbound_writer: async_channel::Sender<M>,
+    inbound_reader: async_channel::Receiver<M>,
 
     /// The underlying iroh QUIC connection (for closing).
     quic_conn: iroh::endpoint::Connection,
 }
 
-/// An Iroh (QUIC) connection that implements [`Connection<Sendable, SyncMessage>`].
+/// An Iroh (QUIC) connection that implements [`Connection<Sendable>`].
 ///
-/// Created by [`IrohClient::connect`](crate::client::IrohClient::connect) or
-/// the server accept loop. Uses a single QUIC bi-directional stream under the
-/// hood for framed message passing.
+/// Created by [`connect`](crate::client::connect) or the server accept loop.
+/// Uses a single QUIC bi-directional stream under the hood for framed message
+/// passing.
 ///
 /// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio`).
+///
+/// The `M` parameter is the channel message type. Use [`SyncMessage`] for
+/// plain sync traffic, or [`WireMessage`](subduction_ephemeral::wire::WireMessage)
+/// (with the `ephemeral` feature) for multiplexed sync + ephemeral traffic.
 #[derive(Debug, Clone)]
-pub struct IrohConnection<O> {
-    inner: Arc<Inner<O>>,
+pub struct IrohConnection<O, M = SyncMessage> {
+    inner: Arc<Inner<O, M>>,
 }
 
-impl<O> IrohConnection<O> {
+impl<O, M: ChannelMessage> IrohConnection<O, M> {
     /// Create a new Iroh connection from a QUIC connection.
     ///
     /// The caller is responsible for spawning the listener and sender tasks
@@ -84,10 +140,11 @@ impl<O> IrohConnection<O> {
     /// [`sender_task`]: crate::tasks::sender_task
     #[must_use]
     pub fn new(
+        peer_id: PeerId,
         quic_conn: iroh::endpoint::Connection,
         default_time_limit: Duration,
         timeout: O,
-    ) -> (Self, async_channel::Receiver<SyncMessage>) {
+    ) -> (Self, async_channel::Receiver<M>) {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let starting_counter = rand::rngs::OsRng.next_u64();
@@ -95,6 +152,7 @@ impl<O> IrohConnection<O> {
 
         let conn = Self {
             inner: Arc::new(Inner {
+                peer_id,
                 chan_id,
                 req_id_counter: AtomicU64::new(starting_counter),
                 default_time_limit,
@@ -114,35 +172,20 @@ impl<O> IrohConnection<O> {
     ///
     /// `BatchSyncResponse` messages are routed to waiting `call()` oneshots.
     /// All other messages go to the inbound channel for `recv()`.
-    pub(crate) async fn push_inbound(
-        &self,
-        msg: SyncMessage,
-    ) -> Result<(), async_channel::SendError<SyncMessage>> {
-        match msg {
-            SyncMessage::BatchSyncResponse(resp) => {
-                let req_id = resp.req_id;
-                if let Some(waiting) = self.inner.pending.lock().await.remove(&req_id) {
-                    if waiting.send(resp).is_err() {
-                        tracing::error!(
-                            "oneshot closed before sending response for req_id {req_id:?}"
-                        );
-                    }
-                    Ok(())
-                } else {
-                    self.inner
-                        .inbound_writer
-                        .send(SyncMessage::BatchSyncResponse(resp))
-                        .await
+    pub(crate) async fn push_inbound(&self, msg: M) -> Result<(), async_channel::SendError<M>> {
+        // Route BatchSyncResponse to pending waiters (for call/roundtrip).
+        if let Some(resp) = msg.as_batch_sync_response() {
+            let req_id = resp.req_id;
+            if let Some(waiting) = self.inner.pending.lock().await.remove(&req_id) {
+                if waiting.send(resp.clone()).is_err() {
+                    tracing::error!("oneshot closed before sending response for req_id {req_id:?}");
                 }
+                return Ok(());
             }
-            other @ (SyncMessage::LooseCommit { .. }
-            | SyncMessage::Fragment { .. }
-            | SyncMessage::BlobsRequest { .. }
-            | SyncMessage::BlobsResponse { .. }
-            | SyncMessage::BatchSyncRequest(_)
-            | SyncMessage::RemoveSubscriptions(_)
-            | SyncMessage::DataRequestRejected(_)) => self.inner.inbound_writer.send(other).await,
         }
+
+        // All other messages go to the inbound channel.
+        self.inner.inbound_writer.send(msg).await
     }
 
     /// Close the connection's channels and the underlying QUIC connection.
@@ -158,20 +201,55 @@ impl<O> IrohConnection<O> {
     pub fn quic_connection(&self) -> &iroh::endpoint::Connection {
         &self.inner.quic_conn
     }
+
+    /// Send a raw wire message (bypasses `Connection<Sendable, SyncMessage>`).
+    ///
+    /// Encodes `msg` via [`Encode`] and pushes to the outbound channel.
+    /// Use this when `M ≠ SyncMessage` and you need to send a non-sync
+    /// message variant directly.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SendError`] if the outbound channel is closed.
+    pub async fn send_wire(&self, msg: &M) -> Result<(), SendError> {
+        self.inner
+            .outbound_tx
+            .send(msg.clone())
+            .await
+            .map_err(|_| SendError)?;
+        Ok(())
+    }
+
+    /// Receive the next unfiltered wire message.
+    ///
+    /// Unlike `Connection<Sendable, SyncMessage>::recv()` (which loops
+    /// until a sync message arrives), this returns the next `M` from the
+    /// inbound channel regardless of variant.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecvError`] if the inbound channel is closed.
+    pub async fn recv_wire(&self) -> Result<M, RecvError> {
+        self.inner.inbound_reader.recv().await.map_err(|_| {
+            tracing::error!("inbound channel closed unexpectedly");
+            RecvError
+        })
+    }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for IrohConnection<O> {
+impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> Connection<Sendable, SyncMessage>
+    for IrohConnection<O, M>
+{
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
     fn peer_id(&self) -> PeerId {
-        crate::client::iroh_peer_id(&self.inner.quic_conn)
+        self.inner.peer_id
     }
 
     fn disconnect(&self) -> futures::future::BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
-        tracing::info!(peer_id = %remote_peer, "IrohConnection::disconnect");
+        tracing::info!(peer_id = %self.inner.peer_id, "IrohConnection::disconnect");
         let conn = self.clone();
         async move {
             conn.close();
@@ -184,14 +262,13 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for I
         &self,
         message: &SyncMessage,
     ) -> futures::future::BoxFuture<'_, Result<(), Self::SendError>> {
-        let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
         tracing::debug!(
             "iroh: sending outbound message id {:?} to peer {}",
             message.request_id(),
-            remote_peer
+            self.inner.peer_id
         );
 
-        let msg = message.clone();
+        let msg = M::wrap_sync(message.clone());
         let tx = self.inner.outbound_tx.clone();
         async move {
             tx.send(msg).await.map_err(|_| SendError)?;
@@ -202,28 +279,34 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for I
 
     fn recv(&self) -> futures::future::BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         let chan = self.inner.inbound_reader.clone();
-        let remote_peer = crate::client::iroh_peer_id(&self.inner.quic_conn);
         tracing::debug!(
             chan_id = self.inner.chan_id,
             "waiting on recv {:?}",
-            remote_peer
+            self.inner.peer_id
         );
 
         async move {
-            let msg = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel closed unexpectedly");
-                RecvError
-            })?;
+            loop {
+                let msg = chan.recv().await.map_err(|_| {
+                    tracing::error!("inbound channel closed unexpectedly");
+                    RecvError
+                })?;
 
-            tracing::debug!("recv: inbound message {msg:?}");
-            Ok(msg)
+                if let Some(sync_msg) = msg.into_sync() {
+                    tracing::debug!("recv: inbound message {sync_msg:?}");
+                    return Ok(sync_msg);
+                }
+
+                // Skip non-sync messages (e.g., ephemeral when M = WireMessage)
+                tracing::trace!("recv<SyncMessage>: skipping non-sync channel message");
+            }
         }
         .boxed()
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
-    for IrohConnection<O>
+impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage>
+    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for IrohConnection<O, M>
 {
     type CallError = CallError;
 
@@ -232,7 +315,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, B
             let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
             tracing::debug!("generated request id {counter:?}");
             RequestId {
-                requestor: crate::client::iroh_peer_id(&self.inner.quic_conn),
+                requestor: self.inner.peer_id,
                 nonce: counter,
             }
         }
@@ -256,7 +339,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, B
             let (tx, rx) = oneshot::channel();
             inner.pending.lock().await.insert(req_id, tx);
 
-            let msg = SyncMessage::BatchSyncRequest(req);
+            let msg = M::wrap_sync(SyncMessage::BatchSyncRequest(req));
             outbound_tx
                 .send(msg)
                 .await
@@ -287,7 +370,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, B
     }
 }
 
-impl<O> PartialEq for IrohConnection<O> {
+impl<O, M> PartialEq for IrohConnection<O, M> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }

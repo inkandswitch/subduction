@@ -654,9 +654,13 @@ async fn handle_websocket(
     let now = TimestampSeconds::now();
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
-        |ws_handshake, _peer_id| {
-            let (ws, sender_fut) =
-                WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
+        |ws_handshake, peer_id| {
+            let (ws, sender_fut) = WebSocket::new(
+                ws_handshake.into_inner(),
+                timeout,
+                default_time_limit,
+                peer_id,
+            );
 
             let listen_ws = ws.clone();
             tokio::spawn(async move {
@@ -832,9 +836,13 @@ async fn try_connect_ws(
 
     let (authenticated, ()) = handshake::initiate::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
-        move |ws_handshake, _peer_id| {
-            let (ws, sender_fut) =
-                WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
+        move |ws_handshake, peer_id| {
+            let (ws, sender_fut) = WebSocket::new(
+                ws_handshake.into_inner(),
+                timeout,
+                default_time_limit,
+                peer_id,
+            );
 
             let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 

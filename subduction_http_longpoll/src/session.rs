@@ -10,13 +10,16 @@ use core::fmt;
 use async_lock::Mutex;
 use future_form::Sendable;
 use rand::{RngCore, rngs::OsRng};
-use subduction_core::connection::{authenticated::Authenticated, timeout::Timeout};
+use subduction_core::{
+    connection::{authenticated::Authenticated, timeout::Timeout},
+    peer::id::PeerId,
+};
 
 use crate::connection::HttpLongPollConnection;
 
 // NOTE: SessionStore and SessionEntry are concrete on `Sendable` (not generic
-// over `K: FutureForm`) because `HttpLongPollConnection<O>` only implements
-// `Connection<Sendable, SyncMessage>`. This mirrors the `subduction_websocket` pattern.
+// over `K: FutureForm`) because `HttpLongPollConnection<O, M>` only implements
+// `Connection<Sendable>`. This mirrors the `subduction_websocket` pattern.
 
 /// An opaque session identifier, assigned after successful handshake.
 ///
@@ -84,24 +87,33 @@ const fn hex_digit(b: u8) -> Option<u8> {
 }
 
 /// Thread-safe session store mapping [`SessionId`] to connection state.
-#[derive(Debug, Clone)]
-pub struct SessionStore<O: Timeout<Sendable> + Send + Sync> {
-    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<O>>>>,
-}
-
-/// A single session entry containing the connection state.
 ///
-/// The peer identity is available via [`connection.peer_id()`](HttpLongPollConnection::peer_id).
+/// The `M` parameter is the channel message type — typically [`SyncMessage`].
 #[derive(Debug, Clone)]
-pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync> {
-    /// The connection channels for this session.
-    pub connection: HttpLongPollConnection<O>,
-
-    /// The authenticated wrapper, present until consumed by Subduction.
-    pub authenticated: Option<Authenticated<HttpLongPollConnection<O>, Sendable>>,
+pub struct SessionStore<
+    O: Timeout<Sendable> + Send + Sync,
+    M: Clone + Send + Sync + 'static = subduction_core::connection::message::SyncMessage,
+> {
+    pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<O, M>>>>,
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> SessionStore<O> {
+/// A single session entry containing the connection and peer identity.
+#[derive(Debug, Clone)]
+pub struct SessionEntry<
+    O: Timeout<Sendable> + Send + Sync,
+    M: Clone + Send + Sync + 'static = subduction_core::connection::message::SyncMessage,
+> {
+    /// The peer's identity.
+    pub peer_id: PeerId,
+
+    /// The connection channels for this session.
+    pub connection: HttpLongPollConnection<O, M>,
+
+    /// The authenticated wrapper, present until consumed by Subduction registration.
+    pub authenticated: Option<Authenticated<HttpLongPollConnection<O, M>, Sendable>>,
+}
+
+impl<O: Timeout<Sendable> + Send + Sync, M: Clone + Send + Sync + 'static> SessionStore<O, M> {
     /// Create a new empty session store.
     #[must_use]
     pub fn new() -> Self {
@@ -111,25 +123,27 @@ impl<O: Timeout<Sendable> + Send + Sync> SessionStore<O> {
     }
 
     /// Insert a new session.
-    pub async fn insert(&self, id: SessionId, entry: SessionEntry<O>) {
+    pub async fn insert(&self, id: SessionId, entry: SessionEntry<O, M>) {
         self.sessions.lock().await.insert(id, entry);
     }
 
     /// Look up a session by ID.
-    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry<O>>
+    pub async fn get(&self, id: &SessionId) -> Option<SessionEntry<O, M>>
     where
-        SessionEntry<O>: Clone,
+        SessionEntry<O, M>: Clone,
     {
         self.sessions.lock().await.get(id).cloned()
     }
 
     /// Remove a session, returning the entry if it existed.
-    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry<O>> {
+    pub async fn remove(&self, id: &SessionId) -> Option<SessionEntry<O, M>> {
         self.sessions.lock().await.remove(id)
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Default for SessionStore<O> {
+impl<O: Timeout<Sendable> + Send + Sync, M: Clone + Send + Sync + 'static> Default
+    for SessionStore<O, M>
+{
     fn default() -> Self {
         Self::new()
     }

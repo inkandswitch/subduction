@@ -1,18 +1,21 @@
 //! Unified WebSocket connection type for both accepted and dialed connections.
 
 use crate::{
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    error::{CallError, DisconnectionError, RecvError, SendError},
     timeout::Timeout,
-    websocket::WebSocket,
+    websocket::{ChannelMessage, WebSocket},
 };
 
 use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
 use core::time::Duration;
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::connection::{
-    Connection, Roundtrip,
-    message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+use subduction_core::{
+    connection::{
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+    },
+    peer::id::PeerId,
 };
 use tokio::net::TcpStream;
 
@@ -20,35 +23,63 @@ use tokio::net::TcpStream;
 ///
 /// This allows the server to use the same `Subduction` instance for both
 /// accepting incoming connections and dialing outgoing connections to peers.
+///
+/// The `M` parameter is the channel message type — typically [`SyncMessage`].
 #[derive(Debug, Clone)]
-pub enum UnifiedWebSocket<O: Timeout<Sendable> + Send + Sync> {
+pub enum UnifiedWebSocket<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage = SyncMessage> {
     /// A connection we accepted (peer connected to us).
-    Accepted(WebSocket<TokioAdapter<TcpStream>, Sendable, O>),
+    Accepted(WebSocket<TokioAdapter<TcpStream>, Sendable, O, M>),
 
     /// A connection we dialed (we connected to peer).
-    Dialed(WebSocket<ConnectStream, Sendable, O>),
+    Dialed(WebSocket<ConnectStream, Sendable, O, M>),
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> UnifiedWebSocket<O> {
+impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> UnifiedWebSocket<O, M> {
     /// Start listening for incoming messages.
     ///
     /// # Errors
     ///
     /// Returns an error if the WebSocket connection fails.
-    pub async fn listen(&self) -> Result<(), RunError> {
+    pub async fn listen(&self) -> Result<(), crate::error::RunError<M>> {
         match self {
             UnifiedWebSocket::Accepted(in_ws) => in_ws.listen().await,
             UnifiedWebSocket::Dialed(out_ws) => out_ws.listen().await,
         }
     }
+
+    /// Send a raw wire message (bypasses `Connection<Sendable, SyncMessage>`).
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SendError`] if the outbound channel is closed.
+    pub async fn send_wire(&self, msg: &M) -> Result<(), crate::error::SendError> {
+        match self {
+            UnifiedWebSocket::Accepted(ws) => ws.send_wire(msg).await,
+            UnifiedWebSocket::Dialed(ws) => ws.send_wire(msg).await,
+        }
+    }
+
+    /// Receive the next unfiltered wire message.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`RecvError`] if the inbound channel is closed.
+    pub async fn recv_wire(&self) -> Result<M, crate::error::RecvError> {
+        match self {
+            UnifiedWebSocket::Accepted(ws) => ws.recv_wire().await,
+            UnifiedWebSocket::Dialed(ws) => ws.recv_wire().await,
+        }
+    }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for UnifiedWebSocket<O> {
+impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> Connection<Sendable, SyncMessage>
+    for UnifiedWebSocket<O, M>
+{
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn peer_id(&self) -> subduction_core::peer::id::PeerId {
+    fn peer_id(&self) -> PeerId {
         match self {
             UnifiedWebSocket::Accepted(in_ws) => {
                 Connection::<Sendable, SyncMessage>::peer_id(in_ws)
@@ -89,8 +120,8 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for U
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
-    for UnifiedWebSocket<O>
+impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage>
+    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for UnifiedWebSocket<O, M>
 {
     type CallError = CallError;
 
@@ -129,7 +160,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, B
 /// means a server could have two separate connections to the same peer (one where
 /// they connected to us, one where we connected to them). If this is undesirable,
 /// deduplication should be handled at a higher level using peer IDs.
-impl<O: Timeout<Sendable> + Send + Sync> PartialEq for UnifiedWebSocket<O> {
+impl<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> PartialEq for UnifiedWebSocket<O, M> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (UnifiedWebSocket::Accepted(a), UnifiedWebSocket::Accepted(b)) => a == b,

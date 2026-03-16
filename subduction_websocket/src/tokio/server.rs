@@ -20,6 +20,7 @@ use subduction_core::{
             self, AuthenticateError,
             audience::{Audience, DiscoveryId},
         },
+        message::SyncMessage,
         nonce_cache::NonceCache,
     },
     peer::id::PeerId,
@@ -90,7 +91,7 @@ where
     P::PutDisallowed: Send + 'static,
     P::FetchDisallowed: Send + 'static,
 {
-    /// Create a new [`WebSocketServer`] to manage connections to a [`Subduction`].
+    /// Create a new [`TokioWebSocketServer`] to manage connections to a [`Subduction`].
     ///
     /// The signer from the Subduction instance is used to authenticate incoming
     /// connections during the handshake phase.
@@ -102,7 +103,7 @@ where
     /// * `default_time_limit` - Default timeout duration
     /// * `handshake_max_drift` - Maximum acceptable clock drift during handshake
     /// * `max_message_size` - Maximum WebSocket message size in bytes
-    /// * `subduction` - The Subduction instance to add connections to
+    /// * `subduction` - The Subduction instance to register connections with
     ///
     /// # Errors
     ///
@@ -174,11 +175,13 @@ where
                                         let now = TimestampSeconds::now();
                                         let result = handshake::respond::<Sendable, _, _, _, _>(
                                             WebSocketHandshake::new(ws_stream),
-                                            |ws_handshake, _peer_id| {
+                                            |ws_handshake, peer_id| {
+                                                // Create WebSocket wrapper with verified PeerId
                                                 let (ws, sender_fut) = WebSocket::new(
                                                     ws_handshake.into_inner(),
                                                     tout.clone(),
                                                     default_time_limit,
+                                                    peer_id,
                                                 );
 
                                                 // Start listener and sender tasks
@@ -243,7 +246,7 @@ where
         })
     }
 
-    /// Create a new [`WebSocketServer`] with storage and policy.
+    /// Create a new [`TokioWebSocketServer`] with storage and policy.
     ///
     /// This is a convenience method that creates the Subduction instance
     /// and spawns the background tasks.
@@ -268,7 +271,7 @@ where
     where
         M: Clone,
         S: core::fmt::Debug,
-        UnifiedWebSocket<O>: core::fmt::Debug,
+        UnifiedWebSocket<O, SyncMessage>: core::fmt::Debug,
     {
         let discovery_id = service_name.map(|name| DiscoveryId::new(name.as_bytes()));
 
@@ -348,7 +351,7 @@ where
     /// [`handshake::respond`]: subduction_core::connection::handshake::respond
     pub async fn add_connection(
         &self,
-        authenticated: Authenticated<UnifiedWebSocket<O>, Sendable>,
+        authenticated: Authenticated<UnifiedWebSocket<O, SyncMessage>, Sendable>,
     ) -> Result<bool, AddConnectionError<P::ConnectionDisallowed>> {
         self.subduction.add_connection(authenticated).await
     }
@@ -396,9 +399,9 @@ where
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
-            move |ws_handshake, _peer_id| {
+            move |ws_handshake, peer_id| {
                 let (ws, sender_fut) =
-                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
+                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -509,9 +512,9 @@ where
 
         let (authenticated, ()) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
-            move |ws_handshake, _peer_id| {
+            move |ws_handshake, peer_id| {
                 let (ws, sender_fut) =
-                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
+                    WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit, peer_id);
                 let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
                 let listen_ws = ws.clone();
@@ -572,7 +575,7 @@ where
 }
 
 type TokioWebSocketSubduction<S, P, Sig, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O>, P, Sig, M>>;
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O, SyncMessage>, P, Sig, M>>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]
