@@ -1,9 +1,11 @@
 acyclic
+AArch
 AHash
 al
 Aljoscha
 ALPN
 APIs
+ARM's
 assignees
 async
 Atomicity
@@ -89,6 +91,7 @@ datasources
 DataRequestRejected
 DCGKA
 DCGKA's
+DDR
 Debuggable
 decrypt
 decrypted
@@ -174,6 +177,7 @@ Keyoxide
 launchd
 leb
 LEB
+len
 lexicographically
 little-endian
 Little-endian
@@ -203,6 +207,7 @@ multibyte
 Namespace
 namespace
 namespaced
+nd
 natively
 NetworkSubsystem
 Newtypes
@@ -274,6 +279,7 @@ Retryable
 revoker
 RLE
 RPC
+Ryzen
 runtimes
 Scalable
 SChaCha
@@ -305,7 +311,9 @@ Stateful
 stateful
 statefulness
 struct
+subdirectory
 Subduction
+Subduction's
 subduction
 subgraph
 submodules

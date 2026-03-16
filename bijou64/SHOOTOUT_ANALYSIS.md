@@ -64,6 +64,6 @@ bijou64's relative strengths shift between architectures:
 | Stream Decode | Wins 2/6 (large, uniform) | Wins 3/6 (tiny, small, medium) |
 | Encoded Size | 2nd-3rd | 2nd-3rd |
 
-The key takeaway: bijou64's canonical decode advantage holds across both architectures (and is even stronger on x86), and its encode path benefits substantially from x86's efficient `lzcnt`. The decode path varies -- ARM favours bijou64 for small values while x86 favours leb128 -- but the differences are small in absolute terms (~0.6 ns per value).
+The key takeaway: bijou64's canonical decode advantage holds across both architectures (and is even stronger on x86), and its encode path benefits substantially from x86's efficient `lzcnt`. The decode path varies -- ARM favors bijou64 for small values while x86 favors leb128 -- but the differences are small in absolute terms (~0.6 ns per value).
 
 For Subduction's use case (canonical encoding required, hot path dominated by small blob sizes), bijou64 provides the best overall profile on both platforms.
