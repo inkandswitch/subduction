@@ -31,7 +31,6 @@ use subduction_core::{
     handler::sync::SyncHandler,
     handshake::audience::DiscoveryId,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
         builder::SubductionBuilder, error::HydrationError,
@@ -55,7 +54,7 @@ use crate::{
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
-        JsTransport, WasmAuthenticatedTransport, WasmJsConnection, DEFAULT_MUX_TIME_LIMIT,
+        JsTransport, WasmAuthenticatedTransport, WasmTransport, DEFAULT_MUX_TIME_LIMIT,
     },
 };
 use sedimentree_wasm::{
@@ -90,8 +89,10 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
+use crate::policy::JsPolicy;
+
 type WasmSyncHandler =
-    SyncHandler<Local, JsStorage, WasmTransport, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
+    SyncHandler<Local, JsStorage, WasmTransport, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
 
 type WasmSubductionCore = Subduction<
     'static,
@@ -99,7 +100,7 @@ type WasmSubductionCore = Subduction<
     JsStorage,
     WasmTransport,
     WasmSyncHandler,
-    OpenPolicy,
+    JsPolicy,
     JsSigner,
     WasmHashMetric,
     WASM_SHARD_COUNT,
@@ -132,6 +133,9 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `policy` - Optional JS object implementing authorization.
+    ///   Must have `authorizeConnect(...)`, `authorizeFetch(...)`, `authorizePut(...)`,
+    ///   `filterAuthorizedFetch(...)`. Defaults to allow-all.
     ///
     /// # Panics
     ///
@@ -145,6 +149,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        policy: Option<JsValue>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -158,9 +163,11 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
+        let policy = policy.map_or_else(JsPolicy::open, JsPolicy::new);
+
         let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
             .signer(signer)
-            .storage(storage, Arc::new(OpenPolicy))
+            .storage(storage, Arc::new(policy))
             .spawner(WasmSpawn)
             .depth_metric(depth_metric)
             .max_pending_blob_requests(max_pending);
@@ -221,6 +228,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        policy: Option<JsValue>,
     ) -> Result<Self, WasmHydrationError> {
         use subduction_core::storage::traits::Storage as _;
 
@@ -268,9 +276,11 @@ impl WasmSubduction {
                 .await;
         }
 
+        let policy = policy.map_or_else(JsPolicy::open, JsPolicy::new);
+
         let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
             .signer(signer)
-            .storage(storage, Arc::new(OpenPolicy))
+            .storage(storage, Arc::new(policy))
             .spawner(WasmSpawn)
             .depth_metric(depth_metric)
             .max_pending_blob_requests(max_pending)

@@ -12,8 +12,11 @@ extern crate alloc;
 use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
-use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use future_form::{Local, Sendable};
+use futures::{
+    FutureExt,
+    future::{BoxFuture, LocalBoxFuture},
+};
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,
@@ -284,6 +287,155 @@ impl<
 {
     fn from(subduction_keyhive: SubductionKeyhive<S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0
+    }
+}
+
+// ── Local policy impls ──────────────────────────────────────────────────
+//
+// These are the natural form for `!Send` keyhive_core. The `Sendable`
+// impls above compile but can't be used in practice until keyhive_core
+// is `Send`. These `Local` impls work today in Wasm and other
+// single-threaded contexts.
+
+impl<
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+{
+    type ConnectionDisallowed = ConnectionDisallowedError;
+
+    fn authorize_connect(
+        &self,
+        peer_id: PeerId,
+    ) -> LocalBoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+        async move {
+            let identifier = try_peer_id_to_identifier(peer_id)
+                .ok_or(ConnectionDisallowedError::InvalidPeerId)?;
+
+            if self.0.get_agent(identifier).await.is_some() {
+                return Ok(());
+            }
+
+            Err(ConnectionDisallowedError::UnknownAgent)
+        }
+        .boxed_local()
+    }
+}
+
+impl<
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+{
+    type FetchDisallowed = FetchDisallowedError;
+    type PutDisallowed = PutDisallowedError;
+
+    fn authorize_fetch(
+        &self,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+        async move {
+            let identifier =
+                try_peer_id_to_identifier(peer).ok_or(FetchDisallowedError::InvalidPeerId)?;
+
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(FetchDisallowedError::InvalidSedimentreeId)?;
+
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(FetchDisallowedError::DocumentNotFound)?;
+
+            let members = doc.lock().await.transitive_members().await;
+
+            if members
+                .get(&identifier)
+                .is_some_and(|(_, access)| *access >= Access::Pull)
+            {
+                Ok(())
+            } else {
+                Err(FetchDisallowedError::InsufficientAccess)
+            }
+        }
+        .boxed_local()
+    }
+
+    fn authorize_put(
+        &self,
+        _requestor: PeerId,
+        author: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<(), Self::PutDisallowed>> {
+        async move {
+            let identifier =
+                try_peer_id_to_identifier(author).ok_or(PutDisallowedError::InvalidAuthorId)?;
+
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(PutDisallowedError::InvalidSedimentreeId)?;
+
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(PutDisallowedError::DocumentNotFound)?;
+
+            let members = doc.lock().await.transitive_members().await;
+
+            if members
+                .get(&identifier)
+                .is_some_and(|(_, access)| *access >= Access::Write)
+            {
+                Ok(())
+            } else {
+                Err(PutDisallowedError::InsufficientAccess)
+            }
+        }
+        .boxed_local()
+    }
+
+    fn filter_authorized_fetch(
+        &self,
+        peer: PeerId,
+        ids: Vec<SedimentreeId>,
+    ) -> LocalBoxFuture<'_, Vec<SedimentreeId>> {
+        async move {
+            let Some(identifier) = try_peer_id_to_identifier(peer) else {
+                return Vec::new();
+            };
+
+            let mut authorized = Vec::new();
+            for sedimentree_id in ids {
+                let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
+                    continue;
+                };
+
+                let Some(doc) = self.0.get_document(doc_id).await else {
+                    continue;
+                };
+
+                let members = doc.lock().await.transitive_members().await;
+
+                if members
+                    .get(&identifier)
+                    .is_some_and(|(_, access)| *access >= Access::Pull)
+                {
+                    authorized.push(sedimentree_id);
+                }
+            }
+
+            authorized
+        }
+        .boxed_local()
     }
 }
 
