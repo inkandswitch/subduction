@@ -22,12 +22,10 @@ use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{
-        handshake::audience::{Audience, DiscoveryId},
-        nonce_cache::NonceCache,
-        test_utils::TokioSpawn,
-    },
+    connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,
+    handshake::audience::{Audience, DiscoveryId},
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -35,7 +33,7 @@ use subduction_core::{
     transport::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_iroh::connection::IrohConnection;
+use subduction_iroh::transport::IrohTransport;
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
 
@@ -47,11 +45,11 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        MessageTransport<IrohConnection<FuturesTimerTimeout>>,
+        MessageTransport<IrohTransport<FuturesTimerTimeout>>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            MessageTransport<IrohConnection<FuturesTimerTimeout>>,
+            MessageTransport<IrohTransport<FuturesTimerTimeout>>,
             OpenPolicy,
             CountLeadingZeroBytes,
         >,
@@ -97,7 +95,7 @@ fn spawn_subduction(sig: &MemorySigner, discovery_id: Option<DiscoveryId>) -> Te
     }
 
     let (subduction, _handler, listener_fut, manager_fut) =
-        builder.build::<Sendable, MessageTransport<IrohConnection<FuturesTimerTimeout>>>();
+        builder.build::<Sendable, MessageTransport<IrohTransport<FuturesTimerTimeout>>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

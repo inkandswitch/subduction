@@ -1,7 +1,7 @@
 //! Unified transport enum for the CLI server.
 //!
-//! Wraps [`UnifiedWebSocket`], [`HttpLongPollConnection`], and
-//! [`IrohConnection`] so the server can use a single [`Subduction`]
+//! Wraps [`UnifiedWebSocket`], [`HttpLongPollTransport`], and
+//! [`IrohTransport`] so the server can use a single [`Subduction`]
 //! instance for all transport types.
 
 use core::time::Duration;
@@ -16,8 +16,8 @@ use subduction_core::{
     timeout::Timeout,
     transport::Transport,
 };
-use subduction_http_longpoll::connection::HttpLongPollConnection;
-use subduction_iroh::connection::IrohConnection;
+use subduction_http_longpoll::transport::HttpLongPollTransport;
+use subduction_iroh::transport::IrohTransport;
 use subduction_websocket::tokio::unified::UnifiedWebSocket;
 
 /// A unified connection covering all transport types the CLI server supports.
@@ -27,10 +27,10 @@ pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Send + Sync> {
     WebSocket(UnifiedWebSocket<O>),
 
     /// HTTP long-poll transport.
-    HttpLongPoll(HttpLongPollConnection<O>),
+    HttpLongPoll(HttpLongPollTransport<O>),
 
     /// Iroh QUIC transport.
-    Iroh(IrohConnection<O>),
+    Iroh(IrohTransport<O>),
 }
 
 /// Error type for send operations across transports.

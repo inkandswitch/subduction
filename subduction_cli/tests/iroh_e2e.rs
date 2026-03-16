@@ -41,8 +41,8 @@ use subduction_core::{
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection,
-    http_client::reqwest_client::ReqwestHttpClient,
+    client::HttpLongPollClient, http_client::reqwest_client::ReqwestHttpClient,
+    transport::HttpLongPollTransport,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 
@@ -55,11 +55,11 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>,
+        MessageTransport<HttpLongPollTransport<FuturesTimerTimeout>>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>,
+            MessageTransport<HttpLongPollTransport<FuturesTimerTimeout>>,
             OpenPolicy,
             CountLeadingZeroBytes,
         >,
@@ -202,7 +202,7 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>>();
+            .build::<Sendable, MessageTransport<HttpLongPollTransport<FuturesTimerTimeout>>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

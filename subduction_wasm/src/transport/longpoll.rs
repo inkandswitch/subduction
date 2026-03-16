@@ -18,7 +18,7 @@ use subduction_core::{
     transport::MessageTransport,
 };
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection, session::SessionId,
+    client::HttpLongPollClient, session::SessionId, transport::HttpLongPollTransport,
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
@@ -67,25 +67,25 @@ impl Timeout<Local> for JsTimeout {
     }
 }
 
-/// Type alias for the long-poll connection used in wasm.
-pub type WasmLongPollConnection = HttpLongPollConnection<JsTimeout>;
+/// Type alias for the long-poll transport used in Wasm.
+pub type WasmLongPollTransport = HttpLongPollTransport<JsTimeout>;
 
-/// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
+/// JS-facing wrapper around [`WasmLongPollTransport`] that exposes the
 /// [`Transport`](super::JsTransport) interface so it can be used as a
 /// duck-typed `JsTransport` from JavaScript.
 #[wasm_bindgen(js_name = SubductionLongPollConnection)]
 #[derive(Debug, Clone)]
-pub struct WasmLongPollConn(WasmLongPollConnection);
+pub struct WasmLongPollConn(WasmLongPollTransport);
 
 impl WasmLongPollConn {
     /// Wrap a raw long-poll connection for JS exposure.
-    pub(crate) fn new(conn: WasmLongPollConnection) -> Self {
+    pub(crate) fn new(conn: WasmLongPollTransport) -> Self {
         Self(conn)
     }
 
     /// Access the inner connection.
     #[allow(dead_code)]
-    pub(crate) fn inner(&self) -> &WasmLongPollConnection {
+    pub(crate) fn inner(&self) -> &WasmLongPollTransport {
         &self.0
     }
 }
@@ -184,14 +184,14 @@ impl WasmLongPollConn {
 #[wasm_bindgen(js_name = AuthenticatedLongPoll)]
 #[derive(Debug)]
 pub struct WasmAuthenticatedLongPoll {
-    inner: Authenticated<WasmLongPollConnection, Local>,
+    inner: Authenticated<WasmLongPollTransport, Local>,
     session_id: SessionId,
 }
 
 impl WasmAuthenticatedLongPoll {
     /// Access the inner `Authenticated` connection.
     #[allow(dead_code)]
-    pub(crate) fn inner(&self) -> &Authenticated<WasmLongPollConnection, Local> {
+    pub(crate) fn inner(&self) -> &Authenticated<WasmLongPollTransport, Local> {
         &self.inner
     }
 }
@@ -341,7 +341,7 @@ impl WasmLongPoll {
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<(Authenticated<WasmLongPollConnection, Local>, SessionId), LongPollConnectionError>
+    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollConnectionError>
     {
         let default_time_limit = Duration::from_millis(timeout_milliseconds.into());
         let client = make_client(base_url, default_time_limit);
@@ -364,7 +364,7 @@ impl WasmLongPoll {
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<(Authenticated<WasmLongPollConnection, Local>, SessionId), LongPollConnectionError>
+    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollConnectionError>
     {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
