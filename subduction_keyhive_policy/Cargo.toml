@@ -15,6 +15,7 @@ repository.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+async-channel = { workspace = true }
 ed25519-dalek = { workspace = true }
 futures = { workspace = true }
 future_form = { workspace = true }
@@ -23,8 +24,7 @@ rand = { workspace = true }
 sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true }
 subduction_core = { workspace = true, default-features = false }
-subduction_ephemeral = { workspace = true, default-features = false }
-subduction_keyhive = { workspace = true, features = ["policy"] }
+subduction_keyhive = { workspace = true, features = ["serde"] }
 thiserror = { workspace = true }
 
 [features]

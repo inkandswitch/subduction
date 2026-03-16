@@ -28,15 +28,10 @@
 //!
 //! [`StoragePolicy`]: subduction_core::policy::storage::StoragePolicy
 
-#[cfg(feature = "keyhive")]
-pub mod keyhive;
-#[cfg(feature = "keyhive")]
-pub mod keyhive_actor;
-
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::id::SedimentreeId;
 use subduction_core::peer::id::PeerId;
 
