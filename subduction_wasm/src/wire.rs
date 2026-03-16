@@ -12,7 +12,7 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{BatchSyncResponse, MESSAGE_SCHEMA, SyncMessage};
+use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
 use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 
 /// Composed wire message carrying sync or ephemeral traffic.
@@ -86,37 +86,6 @@ impl Decode for WireMessage {
                 got: schema,
             }
             .into()),
-        }
-    }
-}
-
-// ── ChannelMessage impl for HTTP long-poll transport ────────────────────
-
-impl subduction_http_longpoll::connection::ChannelMessage for WireMessage {
-    fn wrap_sync(msg: SyncMessage) -> Self {
-        Self::Sync(Box::new(msg))
-    }
-
-    fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
-        match self {
-            Self::Sync(sync_msg) => match sync_msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                SyncMessage::BatchSyncRequest(_)
-                | SyncMessage::BlobsRequest { .. }
-                | SyncMessage::BlobsResponse { .. }
-                | SyncMessage::DataRequestRejected(_)
-                | SyncMessage::Fragment { .. }
-                | SyncMessage::LooseCommit { .. }
-                | SyncMessage::RemoveSubscriptions(_) => None,
-            },
-            Self::Ephemeral(_) => None,
-        }
-    }
-
-    fn into_sync(self) -> Option<SyncMessage> {
-        match self {
-            Self::Sync(msg) => Some(*msg),
-            Self::Ephemeral(_) => None,
         }
     }
 }
