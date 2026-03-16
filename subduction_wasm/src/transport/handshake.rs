@@ -11,9 +11,9 @@ use future_form::{FutureForm, Local};
 use futures::{channel::oneshot, future::LocalBoxFuture};
 use js_sys::{Promise, Uint8Array};
 use subduction_core::connection::handshake::Handshake;
-use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
+use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{js_sys, MessageEvent, WebSocket};
+use web_sys::{MessageEvent, WebSocket, js_sys};
 
 use crate::error::WasmHandshakeError;
 

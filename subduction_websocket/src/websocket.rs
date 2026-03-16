@@ -21,9 +21,9 @@ use subduction_core::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
         multiplexer::Multiplexer,
         timeout::{TimedOut, Timeout},
-        transport::Transport,
     },
     peer::id::PeerId,
+    transport::Transport,
 };
 
 use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
