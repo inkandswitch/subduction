@@ -15,7 +15,7 @@
 //! ## What's NOT Tested Here
 //!
 //! - Actual sync protocol execution (see integration tests)
-//! - SyncMessage serialization/deserialization
+//! - `SyncMessage` serialization/deserialization
 //! - WebSocket round-trip latency
 //! - Storage I/O
 //! - Async runtime overhead
@@ -370,7 +370,7 @@ mod message {
         signed_loose_commit_from_seed,
     };
 
-    /// Benchmark SyncMessage enum construction with various payloads.
+    /// Benchmark `SyncMessage` enum construction with various payloads.
     ///
     /// **Intent**: Measure the cost of building protocol messages. These are constructed
     /// during sync operations before serialization.

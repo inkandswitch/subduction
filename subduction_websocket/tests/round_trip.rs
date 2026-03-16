@@ -14,7 +14,7 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::handshake::audience::Audience,
+    connection::{handshake::audience::Audience, message::SyncMessage},
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -46,7 +46,8 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
     >,
@@ -56,7 +57,7 @@ type TestHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
@@ -72,7 +73,8 @@ fn setup_client_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -83,7 +85,7 @@ fn setup_client_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>>()
 }
 
 #[allow(clippy::too_many_lines)]
@@ -119,7 +121,7 @@ async fn batch_sync() -> TestResult {
         .signer(server_signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>();
+        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>>();
     tokio::spawn(async move {
         listener_fut.await?;
         Ok::<(), eyre::Report>(())

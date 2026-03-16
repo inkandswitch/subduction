@@ -62,7 +62,8 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
     >,
@@ -72,7 +73,7 @@ type TestHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
@@ -83,7 +84,8 @@ type ServerSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>,
+        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
     >,
@@ -93,7 +95,7 @@ type ServerHandler = Arc<
     SyncHandler<
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>,
+        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
         OpenPolicy,
         CountLeadingZeroBytes,
     >,
@@ -109,7 +111,8 @@ fn setup_client_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -120,7 +123,7 @@ fn setup_client_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>()
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>>()
 }
 
 #[allow(clippy::type_complexity)]
@@ -133,7 +136,8 @@ fn setup_server_subduction(
         'static,
         Sendable,
         MemoryStorage,
-        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>,
+        subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -144,7 +148,7 @@ fn setup_server_subduction(
         .signer(signer)
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio>>()
+        .build::<Sendable, subduction_websocket::tokio::unified::UnifiedWebSocket<TimeoutTokio, SyncMessage>>()
 }
 
 #[tokio::test]

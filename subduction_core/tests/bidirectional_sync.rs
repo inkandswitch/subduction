@@ -15,7 +15,6 @@
 
 use core::{future::Future, time::Duration};
 use std::sync::Arc;
-use subduction_core::connection::message::SyncMessage;
 
 use future_form::Sendable;
 use futures::future::Aborted;
