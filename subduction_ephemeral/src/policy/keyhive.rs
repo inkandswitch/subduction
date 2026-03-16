@@ -17,9 +17,9 @@ use keyhive_core::{
     listener::membership::MembershipListener, store::ciphertext::CiphertextStore,
 };
 use sedimentree_core::id::SedimentreeId;
-use subduction_core::{
-    peer::id::PeerId,
-    policy::keyhive::{try_peer_id_to_identifier, try_sedimentree_id_to_document_id},
+use subduction_core::peer::id::PeerId;
+use subduction_keyhive::sync_manager_policy::{
+    try_peer_id_to_identifier, try_sedimentree_id_to_document_id,
 };
 use subduction_keyhive::{KeyhiveStorage, KeyhiveSyncManager};
 

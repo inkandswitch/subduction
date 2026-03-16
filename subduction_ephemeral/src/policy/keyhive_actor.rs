@@ -279,10 +279,10 @@ async fn run_actor<S, T, P, C, L, R, Store>(
                 let result =
                     ConnectionPolicy::<Local>::authorize_connect(&sync_manager, peer).await;
                 let result = result.map_err(|e| match e {
-                    subduction_core::policy::keyhive::ConnectionDisallowedError::InvalidPeerId => {
+                    subduction_keyhive::sync_manager_policy::ConnectionDisallowedError::InvalidPeerId => {
                         ConnectionDisallowedError::InvalidPeerId
                     }
-                    subduction_core::policy::keyhive::ConnectionDisallowedError::UnknownAgent => {
+                    subduction_keyhive::sync_manager_policy::ConnectionDisallowedError::UnknownAgent => {
                         ConnectionDisallowedError::UnknownAgent
                     }
                 });
@@ -298,16 +298,16 @@ async fn run_actor<S, T, P, C, L, R, Store>(
                     StoragePolicy::<Local>::authorize_fetch(&sync_manager, peer, sedimentree_id)
                         .await;
                 let result = result.map_err(|e| match e {
-                    subduction_core::policy::keyhive::FetchDisallowedError::InvalidPeerId => {
+                    subduction_keyhive::sync_manager_policy::FetchDisallowedError::InvalidPeerId => {
                         FetchDisallowedError::InvalidPeerId
                     }
-                    subduction_core::policy::keyhive::FetchDisallowedError::InvalidSedimentreeId => {
+                    subduction_keyhive::sync_manager_policy::FetchDisallowedError::InvalidSedimentreeId => {
                         FetchDisallowedError::InvalidSedimentreeId
                     }
-                    subduction_core::policy::keyhive::FetchDisallowedError::DocumentNotFound => {
+                    subduction_keyhive::sync_manager_policy::FetchDisallowedError::DocumentNotFound => {
                         FetchDisallowedError::DocumentNotFound
                     }
-                    subduction_core::policy::keyhive::FetchDisallowedError::InsufficientAccess => {
+                    subduction_keyhive::sync_manager_policy::FetchDisallowedError::InsufficientAccess => {
                         FetchDisallowedError::InsufficientAccess
                     }
                 });
@@ -328,16 +328,16 @@ async fn run_actor<S, T, P, C, L, R, Store>(
                 )
                 .await;
                 let result = result.map_err(|e| match e {
-                    subduction_core::policy::keyhive::PutDisallowedError::InvalidAuthorId => {
+                    subduction_keyhive::sync_manager_policy::PutDisallowedError::InvalidAuthorId => {
                         PutDisallowedError::InvalidAuthorId
                     }
-                    subduction_core::policy::keyhive::PutDisallowedError::InvalidSedimentreeId => {
+                    subduction_keyhive::sync_manager_policy::PutDisallowedError::InvalidSedimentreeId => {
                         PutDisallowedError::InvalidSedimentreeId
                     }
-                    subduction_core::policy::keyhive::PutDisallowedError::DocumentNotFound => {
+                    subduction_keyhive::sync_manager_policy::PutDisallowedError::DocumentNotFound => {
                         PutDisallowedError::DocumentNotFound
                     }
-                    subduction_core::policy::keyhive::PutDisallowedError::InsufficientAccess => {
+                    subduction_keyhive::sync_manager_policy::PutDisallowedError::InsufficientAccess => {
                         PutDisallowedError::InsufficientAccess
                     }
                 });

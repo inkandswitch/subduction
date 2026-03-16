@@ -9,7 +9,5 @@
 //! see [`crate::storage::fetcher`] and [`crate::storage::putter`].
 
 pub mod connection;
-#[cfg(feature = "keyhive")]
-pub mod keyhive;
 pub mod open;
 pub mod storage;

@@ -23,10 +23,12 @@ use keyhive_core::{
     store::ciphertext::CiphertextStore,
 };
 use sedimentree_core::id::SedimentreeId;
-use subduction_keyhive::{KeyhiveStorage, KeyhiveSyncManager};
+use subduction_core::{
+    peer::id::PeerId,
+    policy::{connection::ConnectionPolicy, storage::StoragePolicy},
+};
 
-use super::{connection::ConnectionPolicy, storage::StoragePolicy};
-use crate::peer::id::PeerId;
+use crate::{storage::KeyhiveStorage, sync_manager::KeyhiveSyncManager};
 
 // ── Conversion helpers ──────────────────────────────────────────────────
 

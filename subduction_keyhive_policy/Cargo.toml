@@ -23,7 +23,7 @@ sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true, features = ["derive"] }
 subduction_core = { workspace = true, default-features = false }
 subduction_ephemeral = { workspace = true, default-features = false }
-subduction_keyhive = { workspace = true, features = ["serde"] }
+subduction_keyhive = { workspace = true, features = ["policy"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
