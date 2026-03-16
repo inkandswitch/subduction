@@ -89,7 +89,7 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
-use crate::policy::JsPolicy;
+use crate::policy::{JsPolicy, make_open_policy};
 
 type WasmSyncHandler =
     SyncHandler<Local, JsStorage, WasmTransport, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
@@ -149,7 +149,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
-        policy: Option<JsValue>,
+        policy: Option<JsPolicy>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -163,7 +163,7 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        let policy = policy.map_or_else(JsPolicy::open, JsPolicy::new);
+        let policy = policy.unwrap_or_else(make_open_policy);
 
         let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
             .signer(signer)
@@ -228,7 +228,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
-        policy: Option<JsValue>,
+        policy: Option<JsPolicy>,
     ) -> Result<Self, WasmHydrationError> {
         use subduction_core::storage::traits::Storage as _;
 
@@ -276,7 +276,7 @@ impl WasmSubduction {
                 .await;
         }
 
-        let policy = policy.map_or_else(JsPolicy::open, JsPolicy::new);
+        let policy = policy.unwrap_or_else(make_open_policy);
 
         let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
             .signer(signer)

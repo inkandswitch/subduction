@@ -44,7 +44,7 @@ impl JsEphemeralDenied {
         let reason = val
             .as_string()
             .or_else(|| {
-                js_sys::Reflect::get(&val, &"message".into())
+                js_sys::Reflect::get(val, &"message".into())
                     .ok()
                     .and_then(|v| v.as_string())
             })
