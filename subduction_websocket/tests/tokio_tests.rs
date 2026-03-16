@@ -421,7 +421,7 @@ async fn multiple_concurrent_clients() -> TestResult {
 
         tokio::spawn({
             #[allow(clippy::expect_used)]
-            let (inner_client, _handler) = clients.get(i).expect("client should exist").clone();
+            let (inner_client, _) = clients.get(i).expect("client should exist").clone();
             async move {
                 inner_client.listen().await?;
                 Ok::<(), eyre::Report>(())
@@ -558,8 +558,7 @@ async fn large_message_handling() -> TestResult {
 
     let bound = server.address();
 
-    let (client, client_handler, listener_fut, actor_fut) =
-        setup_client_subduction(client_signer.clone());
+    let (client, _, listener_fut, actor_fut) = setup_client_subduction(client_signer.clone());
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -588,7 +587,6 @@ async fn large_message_handling() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
-        let _handler = client_handler.clone();
         async move {
             inner_client.listen().await?;
             Ok::<(), eyre::Report>(())
@@ -662,8 +660,7 @@ async fn message_ordering() -> TestResult {
 
     let bound = server.address();
 
-    let (client, client_handler, listener_fut, actor_fut) =
-        setup_client_subduction(client_signer.clone());
+    let (client, _, listener_fut, actor_fut) = setup_client_subduction(client_signer.clone());
 
     tokio::spawn(actor_fut);
     tokio::spawn(listener_fut);
@@ -692,7 +689,6 @@ async fn message_ordering() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
-        let _handler = client_handler.clone();
         async move {
             inner_client.listen().await?;
             Ok::<(), eyre::Report>(())
@@ -929,7 +925,7 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
 
     let bound = server.address();
 
-    let (client, client_handler, client_listener_fut, client_actor_fut) =
+    let (client, _, client_listener_fut, client_actor_fut) =
         setup_client_subduction(client_signer.clone());
 
     tokio::spawn(client_actor_fut);
@@ -959,7 +955,6 @@ async fn bidirectional_sync_multiple_commits() -> TestResult {
 
     tokio::spawn({
         let inner_client = client.clone();
-        let _handler = client_handler.clone();
         async move {
             inner_client.listen().await?;
             Ok::<(), eyre::Report>(())
