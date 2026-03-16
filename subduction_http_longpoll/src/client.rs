@@ -26,16 +26,17 @@
 use alloc::{format, string::String, vec::Vec};
 use core::time::Duration;
 
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::{
-    future::{Either, select},
+    future::{select, Either},
     pin_mut,
 };
 use subduction_core::{
     connection::{
-        handshake::{self, HandshakeMessage, audience::Audience},
+        handshake::{self, audience::Audience, HandshakeMessage},
         message::SyncMessage,
         timeout::Timeout,
+        Connection,
     },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
@@ -43,15 +44,15 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 
 use crate::{
-    SESSION_ID_HEADER, connection::HttpLongPollConnection, error::ClientError,
-    http_client::HttpClient, session::SessionId,
+    connection::HttpLongPollConnection, error::ClientError, http_client::HttpClient,
+    session::SessionId, SESSION_ID_HEADER,
 };
 
 /// Result of a successful connection, containing the authenticated connection
 /// and background task futures that the caller must spawn.
 pub struct ConnectResult<K: future_form::FutureForm, O>
 where
-    HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+    HttpLongPollConnection<O>: Connection<K, SyncMessage>,
 {
     /// The authenticated connection, ready for use with Subduction.
     pub authenticated:
@@ -69,7 +70,7 @@ where
 
 impl<K: future_form::FutureForm, O> core::fmt::Debug for ConnectResult<K, O>
 where
-    HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+    HttpLongPollConnection<O>: Connection<K, SyncMessage>,
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("ConnectResult")
@@ -141,12 +142,16 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
         now: TimestampSeconds,
     ) -> K::Future<'a, Result<ConnectResult<K, Self::Timeout>, ClientError>>
     where
-        HttpLongPollConnection<Self::Timeout>: subduction_core::connection::Connection<K>;
+        HttpLongPollConnection<Self::Timeout>: Connection<K, SyncMessage>;
 }
 
 #[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
-impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
-    Connect<K, Sig> for HttpLongPollClient<H, O>
+impl<
+        K: FutureForm,
+        Sig: Signer<K>,
+        H: HttpClient<K> + 'static,
+        O: Timeout<K> + Clone + 'static,
+    > Connect<K, Sig> for HttpLongPollClient<H, O>
 {
     type Timeout = O;
 
@@ -157,7 +162,7 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
         now: TimestampSeconds,
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+        HttpLongPollConnection<O>: Connection<K, SyncMessage>,
     {
         let http = self.http.clone();
         let base_url = self.base_url.clone();
@@ -178,12 +183,13 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
             #[allow(clippy::expect_used)]
             let (authenticated, session_id) = handshake::initiate::<K, _, _, _, _>(
                 &mut client_handshake,
-                |handshake, _peer_id| {
+                |handshake, peer_id| {
                     let session_id = handshake
                         .session_id
                         .expect("session_id set during handshake send");
 
-                    let conn = HttpLongPollConnection::new(default_time_limit, timeout.clone());
+                    let conn =
+                        HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
 
                     (conn, session_id)
                 },
@@ -246,7 +252,7 @@ impl<H, O> HttpLongPollClient<H, O> {
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
         Self: Connect<K, Sig, Timeout = O>,
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+        HttpLongPollConnection<O>: Connection<K, SyncMessage>,
     {
         self.connect_with_audience(signer, Audience::known(expected_peer_id), now)
     }
@@ -268,7 +274,7 @@ impl<H, O> HttpLongPollClient<H, O> {
     ) -> K::Future<'a, Result<ConnectResult<K, O>, ClientError>>
     where
         Self: Connect<K, Sig, Timeout = O>,
-        HttpLongPollConnection<O>: subduction_core::connection::Connection<K>,
+        HttpLongPollConnection<O>: Connection<K, SyncMessage>,
     {
         self.connect_with_audience(signer, Audience::discover(service_name.as_bytes()), now)
     }

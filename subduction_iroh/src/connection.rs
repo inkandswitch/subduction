@@ -1,4 +1,5 @@
-//! Iroh (QUIC) connection implementing [`Connection<Sendable>`].
+//! Iroh (QUIC) connection implementing [`Connection<Sendable, SyncMessage>`]
+//! and [`Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>`].
 //!
 //! Uses a single QUIC bi-directional stream for framed message exchange.
 //! The connection follows the same internal architecture as the WebSocket
@@ -23,10 +24,13 @@ use future_form::{FutureForm, Sendable};
 use futures::{FutureExt, channel::oneshot};
 use rand::RngCore;
 use sedimentree_core::collections::Map;
-use subduction_core::connection::{
-    Connection,
-    message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    timeout::{TimedOut, Timeout},
+use subduction_core::{
+    connection::{
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+        timeout::{TimedOut, Timeout},
+    },
+    peer::id::PeerId,
 };
 
 use crate::error::{CallError, DisconnectionError, RecvError, SendError};
@@ -58,7 +62,7 @@ struct Inner<O> {
     quic_conn: iroh::endpoint::Connection,
 }
 
-/// An Iroh (QUIC) connection that implements [`Connection<Sendable>`].
+/// An Iroh (QUIC) connection that implements [`Connection<Sendable, SyncMessage>`].
 ///
 /// Created by [`IrohClient::connect`](crate::client::IrohClient::connect) or
 /// the server accept loop. Uses a single QUIC bi-directional stream under the
@@ -156,22 +160,13 @@ impl<O> IrohConnection<O> {
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection<O> {
+impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable, SyncMessage> for IrohConnection<O> {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn next_request_id(&self) -> futures::future::BoxFuture<'_, RequestId> {
-        async {
-            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated request id {counter:?}");
-            RequestId {
-                requestor: crate::client::iroh_peer_id(&self.inner.quic_conn),
-                nonce: counter,
-            }
-        }
-        .boxed()
+    fn peer_id(&self) -> PeerId {
+        crate::client::iroh_peer_id(&self.inner.quic_conn)
     }
 
     fn disconnect(&self) -> futures::future::BoxFuture<'_, Result<(), Self::DisconnectionError>> {
@@ -222,6 +217,24 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for IrohConnection
 
             tracing::debug!("recv: inbound message {msg:?}");
             Ok(msg)
+        }
+        .boxed()
+    }
+}
+
+impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
+    for IrohConnection<O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> futures::future::BoxFuture<'_, RequestId> {
+        async {
+            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated request id {counter:?}");
+            RequestId {
+                requestor: crate::client::iroh_peer_id(&self.inner.quic_conn),
+                nonce: counter,
+            }
         }
         .boxed()
     }

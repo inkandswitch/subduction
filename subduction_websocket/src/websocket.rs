@@ -20,7 +20,7 @@ use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
+        Connection, Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     peer::id::PeerId,
@@ -115,24 +115,15 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
     _phantom: PhantomData<K>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Local>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Local, SyncMessage>
     for WebSocket<T, Local, O>
 {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
-                nonce: counter,
-            }
-        }
-        .boxed_local()
+    fn peer_id(&self) -> PeerId {
+        PeerId::new([0u8; 32]) // FIXME: needs real local peer ID
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
@@ -151,7 +142,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
 
         let tx = self.outbound_tx.clone();
         async move {
-            tx.send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| SendError)?;
 
@@ -175,6 +166,24 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
         }
         .boxed_local()
     }
+}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
+    Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Local, O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
+        async {
+            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated message id {:?}", counter);
+            RequestId {
+                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
+                nonce: counter,
+            }
+        }
+        .boxed_local()
+    }
 
     fn call(
         &self,
@@ -193,7 +202,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Loc
             let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             outbound_tx
-                .send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
+                .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| CallError::SenderTaskStopped)?;
 
@@ -323,7 +332,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
             tracing::debug!(chan_id = self.chan_id, "received WebSocket message");
 
             match ws_msg {
-                Ok(tungstenite::SyncMessage::Binary(bytes)) => {
+                Ok(tungstenite::Message::Binary(bytes)) => {
                     let msg = SyncMessage::try_decode(&bytes).map_err(|e| {
                         tracing::error!(
                             chan_id = self.chan_id,
@@ -392,25 +401,25 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                         }
                     }
                 }
-                Ok(tungstenite::SyncMessage::Text(text)) => {
+                Ok(tungstenite::Message::Text(text)) => {
                     tracing::warn!("unexpected text message: {}", text);
                 }
-                Ok(tungstenite::SyncMessage::Ping(p)) => {
+                Ok(tungstenite::Message::Ping(p)) => {
                     tracing::debug!(size = p.len(), "received ping");
                     self.outbound_tx
-                        .send(tungstenite::SyncMessage::Pong(p))
+                        .send(tungstenite::Message::Pong(p))
                         .await
                         .unwrap_or_else(|_| {
                             tracing::error!("failed to send pong");
                         });
                 }
-                Ok(tungstenite::SyncMessage::Pong(p)) => {
+                Ok(tungstenite::Message::Pong(p)) => {
                     tracing::warn!("unexpected pong message: {:x?}", p);
                 }
-                Ok(tungstenite::SyncMessage::Frame(f)) => {
+                Ok(tungstenite::Message::Frame(f)) => {
                     tracing::warn!("unexpected frame: {:x?}", f);
                 }
-                Ok(tungstenite::SyncMessage::Close(_)) => {
+                Ok(tungstenite::Message::Close(_)) => {
                     tracing::info!("received close message, shutting down listener");
                     break;
                 }
@@ -444,24 +453,15 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Connection<Sendable>
-    for WebSocket<T, Sendable, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
+    Connection<Sendable, SyncMessage> for WebSocket<T, Sendable, O>
 {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
-                nonce: counter,
-            }
-        }
-        .boxed()
+    fn peer_id(&self) -> PeerId {
+        PeerId::new([0u8; 32]) // FIXME: needs real local peer ID
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
@@ -479,7 +479,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
 
         let tx = self.outbound_tx.clone();
         async move {
-            tx.send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
+            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| SendError)?;
 
@@ -503,6 +503,24 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
         }
         .boxed()
     }
+}
+
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
+    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Sendable, O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
+        async {
+            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated message id {:?}", counter);
+            RequestId {
+                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
+                nonce: counter,
+            }
+        }
+        .boxed()
+    }
 
     fn call(
         &self,
@@ -521,7 +539,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Conn
             let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             outbound_tx
-                .send(tungstenite::SyncMessage::Binary(msg_bytes.into()))
+                .send(tungstenite::Message::Binary(msg_bytes.into()))
                 .await
                 .map_err(|_| CallError::SenderTaskStopped)?;
 

@@ -27,7 +27,7 @@
 //! impl<K, C> Handler<K, C> for MyHandler
 //! where
 //!     K: FutureForm,
-//!     C: Connection<K, SyncMessage>,
+//!     C: Clone,
 //! {
 //!     type Message = Message;
 //!     type HandlerError = MyError;
@@ -55,7 +55,7 @@ pub mod sync;
 use future_form::FutureForm;
 use sedimentree_core::codec::decode::Decode;
 
-use crate::connection::{Connection, authenticated::Authenticated};
+use crate::connection::authenticated::Authenticated;
 
 /// A handler for messages received from authenticated peers.
 ///
@@ -75,7 +75,7 @@ use crate::connection::{Connection, authenticated::Authenticated};
 /// connection is broken and should be dropped. If a handler wants to
 /// be lenient about a particular message, it should return `Ok(())`
 /// and log the issue internally.
-pub trait Handler<K: FutureForm, C: Connection<K, SyncMessage>> {
+pub trait Handler<K: FutureForm, C: Clone> {
     /// The message type this handler processes.
     ///
     /// Must support wire decoding. For the standard Subduction

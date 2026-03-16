@@ -11,16 +11,16 @@ use sedimentree_core::commit::CountLeadingZeroBytes;
 use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{
-    Connection,
     authenticated::Authenticated,
     manager::Spawn,
     message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+    Connection, Roundtrip,
 };
 use crate::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 
 /// A minimal mock connection for testing.
@@ -57,8 +57,7 @@ impl MockConnection {
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
     pub fn authenticated(self) -> Authenticated<Self, Sendable> {
-        let peer_id = self.peer_id;
-        Authenticated::new_for_test(self, peer_id)
+        Authenticated::new_for_test(self, self.peer_id)
     }
 }
 
@@ -68,11 +67,14 @@ impl Default for MockConnection {
     }
 }
 
-impl Connection<Sendable> for MockConnection {
+impl Connection<Sendable, SyncMessage> for MockConnection {
     type DisconnectionError = core::fmt::Error;
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
-    type CallError = core::fmt::Error;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
 
     fn disconnect(
         &self,
@@ -90,6 +92,10 @@ impl Connection<Sendable> for MockConnection {
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
         Sendable::from_future(async { Err(core::fmt::Error) })
     }
+}
+
+impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for MockConnection {
+    type CallError = core::fmt::Error;
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
@@ -138,8 +144,7 @@ impl FailingSendMockConnection {
     /// Uses the connection's peer ID as the authenticated identity.
     #[must_use]
     pub fn authenticated(self) -> Authenticated<Self, Sendable> {
-        let peer_id = self.peer_id;
-        Authenticated::new_for_test(self, peer_id)
+        Authenticated::new_for_test(self, self.peer_id)
     }
 }
 
@@ -149,11 +154,14 @@ impl Default for FailingSendMockConnection {
     }
 }
 
-impl Connection<Sendable> for FailingSendMockConnection {
+impl Connection<Sendable, SyncMessage> for FailingSendMockConnection {
     type DisconnectionError = core::fmt::Error;
     type SendError = core::fmt::Error;
     type RecvError = core::fmt::Error;
-    type CallError = core::fmt::Error;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
 
     fn disconnect(
         &self,
@@ -171,6 +179,10 @@ impl Connection<Sendable> for FailingSendMockConnection {
     fn recv(&self) -> <Sendable as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
         Sendable::from_future(async { Err(core::fmt::Error) })
     }
+}
+
+impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for FailingSendMockConnection {
+    type CallError = core::fmt::Error;
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
@@ -275,11 +287,14 @@ impl ChannelMockConnection {
     }
 }
 
-impl Connection<Sendable> for ChannelMockConnection {
+impl Connection<Sendable, SyncMessage> for ChannelMockConnection {
     type DisconnectionError = Infallible;
     type SendError = async_channel::SendError<SyncMessage>;
     type RecvError = async_channel::RecvError;
-    type CallError = core::fmt::Error;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
 
     fn disconnect(
         &self,
@@ -300,6 +315,10 @@ impl Connection<Sendable> for ChannelMockConnection {
         let rx = self.inbound_rx.clone();
         Sendable::from_future(async move { rx.recv().await })
     }
+}
+
+impl Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for ChannelMockConnection {
+    type CallError = core::fmt::Error;
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
@@ -319,16 +338,18 @@ impl Connection<Sendable> for ChannelMockConnection {
         _req: BatchSyncRequest,
         _timeout: Option<Duration>,
     ) -> <Sendable as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        // For now, call always fails. Tests can implement response handling if needed.
         Sendable::from_future(async { Err(core::fmt::Error) })
     }
 }
 
-impl Connection<Local> for ChannelMockConnection {
+impl Connection<Local, SyncMessage> for ChannelMockConnection {
     type DisconnectionError = Infallible;
     type SendError = async_channel::SendError<SyncMessage>;
     type RecvError = async_channel::RecvError;
-    type CallError = core::fmt::Error;
+
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
+    }
 
     fn disconnect(
         &self,
@@ -349,6 +370,10 @@ impl Connection<Local> for ChannelMockConnection {
         let rx = self.inbound_rx.clone();
         Local::from_future(async move { rx.recv().await })
     }
+}
+
+impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for ChannelMockConnection {
+    type CallError = core::fmt::Error;
 
     fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
         let peer_id = self.peer_id;
@@ -433,14 +458,18 @@ impl<C: PartialEq> PartialEq for CallbackOnRecvConnection<C> {
     }
 }
 
-impl<C: Connection<Sendable> + Send> Connection<Sendable> for CallbackOnRecvConnection<C>
+impl<C: Connection<Sendable, SyncMessage> + Send> Connection<Sendable, SyncMessage>
+    for CallbackOnRecvConnection<C>
 where
     C::RecvError: Send,
 {
     type DisconnectionError = C::DisconnectionError;
     type SendError = C::SendError;
     type RecvError = C::RecvError;
-    type CallError = C::CallError;
+
+    fn peer_id(&self) -> PeerId {
+        self.inner.peer_id()
+    }
 
     fn disconnect(
         &self,
@@ -461,6 +490,12 @@ where
         // The test will inject a callback-like check separately.
         self.inner.recv()
     }
+}
+
+impl<C: Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> + Send>
+    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for CallbackOnRecvConnection<C>
+{
+    type CallError = C::CallError;
 
     fn next_request_id(&self) -> <Sendable as FutureForm>::Future<'_, RequestId> {
         self.inner.next_request_id()
@@ -475,11 +510,16 @@ where
     }
 }
 
-impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
+impl<C: Connection<Local, SyncMessage>> Connection<Local, SyncMessage>
+    for CallbackOnRecvConnection<C>
+{
     type DisconnectionError = C::DisconnectionError;
     type SendError = C::SendError;
     type RecvError = C::RecvError;
-    type CallError = C::CallError;
+
+    fn peer_id(&self) -> PeerId {
+        self.inner.peer_id()
+    }
 
     fn disconnect(
         &self,
@@ -497,6 +537,12 @@ impl<C: Connection<Local>> Connection<Local> for CallbackOnRecvConnection<C> {
     fn recv(&self) -> <Local as FutureForm>::Future<'_, Result<SyncMessage, Self::RecvError>> {
         self.inner.recv()
     }
+}
+
+impl<C: Roundtrip<Local, BatchSyncRequest, BatchSyncResponse>>
+    Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for CallbackOnRecvConnection<C>
+{
+    type CallError = C::CallError;
 
     fn next_request_id(&self) -> <Local as FutureForm>::Future<'_, RequestId> {
         self.inner.next_request_id()

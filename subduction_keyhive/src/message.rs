@@ -105,11 +105,11 @@ impl Message {
     #[must_use]
     pub const fn sender_id(&self) -> &KeyhivePeerId {
         match self {
-            SyncMessage::SyncRequest { sender_id, .. }
-            | SyncMessage::SyncResponse { sender_id, .. }
-            | SyncMessage::SyncOps { sender_id, .. }
-            | SyncMessage::RequestContactCard { sender_id, .. }
-            | SyncMessage::MissingContactCard { sender_id, .. } => sender_id,
+            Message::SyncRequest { sender_id, .. }
+            | Message::SyncResponse { sender_id, .. }
+            | Message::SyncOps { sender_id, .. }
+            | Message::RequestContactCard { sender_id, .. }
+            | Message::MissingContactCard { sender_id, .. } => sender_id,
         }
     }
 
@@ -117,11 +117,11 @@ impl Message {
     #[must_use]
     pub const fn target_id(&self) -> &KeyhivePeerId {
         match self {
-            SyncMessage::SyncRequest { target_id, .. }
-            | SyncMessage::SyncResponse { target_id, .. }
-            | SyncMessage::SyncOps { target_id, .. }
-            | SyncMessage::RequestContactCard { target_id, .. }
-            | SyncMessage::MissingContactCard { target_id, .. } => target_id,
+            Message::SyncRequest { target_id, .. }
+            | Message::SyncResponse { target_id, .. }
+            | Message::SyncOps { target_id, .. }
+            | Message::RequestContactCard { target_id, .. }
+            | Message::MissingContactCard { target_id, .. } => target_id,
         }
     }
 
@@ -129,11 +129,11 @@ impl Message {
     #[must_use]
     pub const fn variant_name(&self) -> &'static str {
         match self {
-            SyncMessage::SyncRequest { .. } => "SyncRequest",
-            SyncMessage::SyncResponse { .. } => "SyncResponse",
-            SyncMessage::SyncOps { .. } => "SyncOps",
-            SyncMessage::RequestContactCard { .. } => "RequestContactCard",
-            SyncMessage::MissingContactCard { .. } => "MissingContactCard",
+            Message::SyncRequest { .. } => "SyncRequest",
+            Message::SyncResponse { .. } => "SyncResponse",
+            Message::SyncOps { .. } => "SyncOps",
+            Message::RequestContactCard { .. } => "RequestContactCard",
+            Message::MissingContactCard { .. } => "MissingContactCard",
         }
     }
 }

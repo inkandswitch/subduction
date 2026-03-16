@@ -18,11 +18,12 @@ use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::{self, Promise};
 use subduction_core::{
     connection::{
-        Connection,
+        Connection, Roundtrip,
         authenticated::Authenticated,
         handshake::{self as hs, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
+    peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -98,11 +99,17 @@ impl PartialEq for JsConnection {
     }
 }
 
-impl Connection<Local> for JsConnection {
+impl Connection<Local, SyncMessage> for JsConnection {
     type DisconnectionError = JsConnectionError;
     type SendError = JsConnectionError;
     type RecvError = JsConnectionError;
-    type CallError = JsConnectionError;
+
+    fn peer_id(&self) -> PeerId {
+        // JsConnection delegates to the JS side; peer_id is set after handshake
+        // and stored in the Authenticated wrapper. This is a fallback that
+        // returns a zero ID — callers should use Authenticated::peer_id().
+        PeerId::new([0u8; 32])
+    }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async move {
@@ -140,6 +147,10 @@ impl Connection<Local> for JsConnection {
         }
         .boxed_local()
     }
+}
+
+impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for JsConnection {
+    type CallError = JsConnectionError;
 
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         async move {

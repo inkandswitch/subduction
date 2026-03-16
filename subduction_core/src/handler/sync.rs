@@ -33,7 +33,7 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 
 use crate::{
     connection::{
-        Connection,
+        Connection, Roundtrip,
         authenticated::Authenticated,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
@@ -71,7 +71,11 @@ use super::Handler;
 pub struct SyncHandler<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize = 256,
@@ -87,7 +91,11 @@ pub struct SyncHandler<
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
@@ -101,7 +109,11 @@ impl<
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric + Clone,
     const N: usize,
@@ -122,7 +134,11 @@ impl<
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,
@@ -162,7 +178,7 @@ impl<
 #[future_form(
     Sendable where
         S: Storage<Sendable> + Send + Sync + core::fmt::Debug,
-        C: Connection<Sendable> + PartialEq + Clone + Send + Sync + core::fmt::Debug + 'static,
+        C: Connection<Sendable, SyncMessage> + Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> + PartialEq + Clone + Send + Sync + core::fmt::Debug + 'static,
         P: StoragePolicy<Sendable> + Send + Sync,
         P::FetchDisallowed: Send + 'static,
         P::PutDisallowed: Send + 'static,
@@ -170,11 +186,11 @@ impl<
         S::Error: Send + 'static,
         C::SendError: Send + 'static,
         C::RecvError: Send + 'static,
-        C::CallError: Send + 'static,
+        <C as Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>>::CallError: Send + 'static,
         C::DisconnectionError: Send + 'static,
     Local where
         S: Storage<Local> + core::fmt::Debug,
-        C: Connection<Local> + PartialEq + Clone + core::fmt::Debug + 'static,
+        C: Connection<Local, SyncMessage> + Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> + PartialEq + Clone + core::fmt::Debug + 'static,
         P: StoragePolicy<Local>,
         M: DepthMetric
 )]
@@ -198,7 +214,11 @@ impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K,
 impl<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
     P: StoragePolicy<F>,
     M: DepthMetric,
     const N: usize,

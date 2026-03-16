@@ -9,10 +9,10 @@ use core::time::Duration;
 use future_form::Local;
 use futures::FutureExt;
 use subduction_core::connection::{
-    Connection,
     authenticated::Authenticated,
-    message::{BatchSyncRequest, SyncMessage},
+    message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
     timeout::{TimedOut, Timeout},
+    Connection, Roundtrip,
 };
 use subduction_http_longpoll::{
     client::HttpLongPollClient, connection::HttpLongPollConnection, session::SessionId,
@@ -22,8 +22,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use super::{
-    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, fetch_client::FetchHttpClient,
-    message::WasmMessage,
+    fetch_client::FetchHttpClient, message::WasmMessage, WasmBatchSyncRequest,
+    WasmBatchSyncResponse, WasmRequestId,
 };
 use crate::{peer_id::WasmPeerId, signer::JsSigner, timer};
 
@@ -44,7 +44,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{Either, select},
+            future::{select, Either},
             pin_mut,
         };
 
@@ -109,7 +109,7 @@ impl WasmLongPollConn {
     /// Returns [`WasmLongPollConnError`] if the disconnect fails.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn disconnect(&self) -> Result<(), WasmLongPollConnError> {
-        Connection::<Local>::disconnect(&self.0)
+        Connection::<Local, SyncMessage>::disconnect(&self.0)
             .await
             .map_err(|e| WasmLongPollConnError(e.to_string()))
     }
@@ -122,7 +122,7 @@ impl WasmLongPollConn {
     #[wasm_bindgen(js_name = send)]
     pub async fn send(&self, message: WasmMessage) -> Result<(), WasmLongPollConnError> {
         let msg: SyncMessage = message.into();
-        Connection::<Local>::send(&self.0, &msg)
+        Connection::<Local, SyncMessage>::send(&self.0, &msg)
             .await
             .map_err(|e| WasmLongPollConnError(e.to_string()))
     }
@@ -134,7 +134,7 @@ impl WasmLongPollConn {
     /// Returns an error if the inbound channel is closed.
     #[wasm_bindgen(js_name = recv)]
     pub async fn recv(&self) -> Result<WasmMessage, WasmLongPollConnError> {
-        Connection::<Local>::recv(&self.0)
+        Connection::<Local, SyncMessage>::recv(&self.0)
             .await
             .map(Into::into)
             .map_err(|e| WasmLongPollConnError(e.to_string()))
@@ -143,7 +143,9 @@ impl WasmLongPollConn {
     /// Get the next request ID.
     #[wasm_bindgen(js_name = nextRequestId)]
     pub async fn next_request_id(&self) -> WasmRequestId {
-        Connection::<Local>::next_request_id(&self.0).await.into()
+        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::next_request_id(&self.0)
+            .await
+            .into()
     }
 
     /// Make a synchronous call to the peer.
@@ -160,7 +162,7 @@ impl WasmLongPollConn {
         let req: BatchSyncRequest = request.into();
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let timeout = timeout_ms.map(|ms| Duration::from_millis(ms as u64));
-        Connection::<Local>::call(&self.0, req, timeout)
+        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::call(&self.0, req, timeout)
             .await
             .map(Into::into)
             .map_err(|e| WasmLongPollConnError(e.to_string()))

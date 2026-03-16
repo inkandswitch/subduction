@@ -24,7 +24,7 @@ use futures::{
 };
 use subduction_core::{
     connection::{
-        Connection,
+        Connection, Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
     peer::id::PeerId,
@@ -441,7 +441,7 @@ impl WasmWebSocket {
     /// Disconnect from the peer gracefully.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn wasm_disconnect(&self) {
-        match self.disconnect().await {
+        match Connection::<Local, SyncMessage>::disconnect(self).await {
             Ok(()) => (),
             Err(_infallible) => {}
         }
@@ -453,9 +453,9 @@ impl WasmWebSocket {
     ///
     /// Returns [`WasmSendError`] if the message could not be sent over the WebSocket.
     #[wasm_bindgen(js_name = send)]
-    pub async fn wasm_send(&self, wasm_message: WasmSyncMessage) -> Result<(), WasmSendError> {
+    pub async fn wasm_send(&self, wasm_message: WasmMessage) -> Result<(), WasmSendError> {
         let msg: SyncMessage = wasm_message.into();
-        self.send(&msg).await?;
+        Connection::<Local, SyncMessage>::send(self, &msg).await?;
         Ok(())
     }
 
@@ -465,15 +465,17 @@ impl WasmWebSocket {
     ///
     /// Returns [`ReadFromClosedChannel`] if the channel has been closed.
     #[wasm_bindgen(js_name = recv)]
-    pub async fn wasm_recv(&self) -> Result<WasmSyncMessage, ReadFromClosedChannel> {
-        let msg = self.recv().await?;
+    pub async fn wasm_recv(&self) -> Result<WasmMessage, ReadFromClosedChannel> {
+        let msg = Connection::<Local, SyncMessage>::recv(self).await?;
         Ok(msg.into())
     }
 
     /// Get the next request ID.
     #[wasm_bindgen(js_name = nextRequestId)]
     pub async fn wasm_next_request_id(&self) -> WasmRequestId {
-        self.next_request_id().await.into()
+        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::next_request_id(self)
+            .await
+            .into()
     }
 
     /// Make a synchronous call to the peer.
@@ -491,10 +493,14 @@ impl WasmWebSocket {
             #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
             Duration::from_millis(f64_ms as u64)
         });
-        self.call(request.into(), optional_duration)
-            .await
-            .map(Into::into)
-            .map_err(Into::into)
+        Roundtrip::<Local, BatchSyncRequest, BatchSyncResponse>::call(
+            self,
+            request.into(),
+            optional_duration,
+        )
+        .await
+        .map(Into::into)
+        .map_err(Into::into)
     }
 }
 
@@ -504,23 +510,13 @@ impl PartialEq for WasmWebSocket {
     }
 }
 
-impl Connection<Local> for WasmWebSocket {
+impl Connection<Local, SyncMessage> for WasmWebSocket {
     type SendError = SendError;
     type RecvError = ReadFromClosedChannel;
-    type CallError = CallError;
     type DisconnectionError = Infallible;
 
-    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        let counter = self.request_id_counter.clone();
-        async move {
-            let counter = counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: self.peer_id,
-                nonce: counter,
-            }
-        }
-        .boxed_local()
+    fn peer_id(&self) -> PeerId {
+        self.peer_id
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
@@ -554,6 +550,23 @@ impl Connection<Local> for WasmWebSocket {
                 .map_err(|_| ReadFromClosedChannel)?;
             tracing::info!("received inbound message id {:?}", msg.request_id());
             Ok(msg)
+        }
+        .boxed_local()
+    }
+}
+
+impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WasmWebSocket {
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
+        let counter = self.request_id_counter.clone();
+        async move {
+            let counter = counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated message id {:?}", counter);
+            RequestId {
+                requestor: self.peer_id,
+                nonce: counter,
+            }
         }
         .boxed_local()
     }

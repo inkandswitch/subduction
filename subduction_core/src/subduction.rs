@@ -65,7 +65,7 @@ pub(crate) mod peers;
 
 use crate::{
     connection::{
-        Connection,
+        Connection, Roundtrip,
         authenticated::Authenticated,
         backoff::Backoff,
         handshake::audience::DiscoveryId,
@@ -133,7 +133,11 @@ pub struct Subduction<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + Clone + 'static,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric = CountLeadingZeroBytes,
@@ -180,7 +184,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -258,7 +262,7 @@ impl<
         let (manager_sender, manager_receiver) = bounded(256);
         let (queue_sender, queue_receiver) = async_channel::bounded(256);
         let (closed_sender, closed_receiver) = async_channel::bounded(32);
-        let manager = ConnectionManager::<F, Authenticated<C, F>, Sp>::new(
+        let manager = ConnectionManager::<F, Authenticated<C, F>, SyncMessage, Sp>::new(
             spawner,
             manager_receiver,
             queue_sender,
@@ -1246,7 +1250,17 @@ impl<
         id: SedimentreeId,
         subscribe: bool,
         timeout: Option<Duration>,
-    ) -> Result<(bool, SyncStats, Vec<(Authenticated<C, F>, C::CallError)>), IoError<F, S, C>> {
+    ) -> Result<
+        (
+            bool,
+            SyncStats,
+            Vec<(
+                Authenticated<C, F>,
+                <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+            )>,
+        ),
+        IoError<F, S, C>,
+    > {
         tracing::info!(
             "Requesting batch sync for sedimentree {:?} from peer {:?}",
             id,
@@ -1453,7 +1467,10 @@ impl<
             (
                 bool,
                 SyncStats,
-                Vec<(Authenticated<C, F>, <C as Connection<F, SyncMessage>>::CallError)>,
+                Vec<(
+                    Authenticated<C, F>,
+                    <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+                )>,
             ),
         >,
         IoError<F, S, C>,
@@ -1691,7 +1708,10 @@ impl<
     ) -> (
         bool,
         SyncStats,
-        Vec<(Authenticated<C, F>, <C as Connection<F, SyncMessage>>::CallError)>,
+        Vec<(
+            Authenticated<C, F>,
+            <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+        )>,
         Vec<(SedimentreeId, IoError<F, S, C>)>,
     ) {
         tracing::info!(
@@ -1739,7 +1759,10 @@ impl<
     ) -> (
         bool,
         SyncStats,
-        Vec<(Authenticated<C, F>, <C as Connection<F, SyncMessage>>::CallError)>,
+        Vec<(
+            Authenticated<C, F>,
+            <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+        )>,
         Vec<(SedimentreeId, IoError<F, S, C>)>,
     ) {
         tracing::info!("Requesting batch sync for all sedimentrees from all peers");
@@ -2081,7 +2104,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -2098,7 +2121,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -2119,7 +2142,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -2171,24 +2194,30 @@ impl<
 pub trait SubductionFutureForm<
     'a,
     S: Storage<Self>,
-    C: Connection<Self> + PartialEq + 'a,
+    C: Connection<Self, SyncMessage>
+        + Roundtrip<Self, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
->: FutureForm + RunManager<Authenticated<C, Self>> + Sized
+>: FutureForm + RunManager<Authenticated<C, Self>, SyncMessage> + Sized
 {
 }
 
 impl<
     'a,
     S: Storage<Self>,
-    C: Connection<Self> + PartialEq + 'a,
+    C: Connection<Self, SyncMessage>
+        + Roundtrip<Self, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sig: Signer<Self>,
     M: DepthMetric,
     const N: usize,
-    U: FutureForm + RunManager<Authenticated<C, U>> + Sized,
+    U: FutureForm + RunManager<Authenticated<C, U>, SyncMessage> + Sized,
 > SubductionFutureForm<'a, S, C, P, Sig, M, N> for U
 {
 }
@@ -2204,13 +2233,16 @@ impl<
 pub trait StartListener<
     'a,
     S: Storage<Self>,
-    C: Connection<Self> + PartialEq + 'a,
+    C: Connection<Self, SyncMessage>
+        + Roundtrip<Self, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + 'a,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sig: Signer<Self>,
     M: DepthMetric,
     H: Handler<Self, C>,
     const N: usize,
->: FutureForm + RunManager<Authenticated<C, Self>> + Sized where
+>: FutureForm + RunManager<Authenticated<C, Self>, SyncMessage> + Sized where
     H::Message: From<SyncMessage>,
     H::HandlerError: Into<ListenError<Self, S, C>>,
 {
@@ -2226,7 +2258,7 @@ pub trait StartListener<
 
 #[future_form(
     Sendable where
-        C: Connection<Sendable> + PartialEq + Clone + Send + Sync + 'static,
+        C: Connection<Sendable, SyncMessage> + Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> + PartialEq + Clone + Send + Sync + 'static,
         S: Storage<Sendable> + Send + Sync + 'a,
         P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
         P::PutDisallowed: Send + 'static,
@@ -2237,11 +2269,11 @@ pub trait StartListener<
         H::HandlerError: Into<ListenError<Sendable, S, C>> + Send + 'static,
         S::Error: Send + 'static,
         C::DisconnectionError: Send + 'static,
-        C::CallError: Send + 'static,
+        <C as Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>>::CallError: Send + 'static,
         C::RecvError: Send + 'static,
         C::SendError: Send + 'static,
     Local where
-        C: Connection<Local> + PartialEq + Clone + 'static,
+        C: Connection<Local, SyncMessage> + Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> + PartialEq + Clone + 'static,
         S: Storage<Local> + 'a,
         P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
         Sig: Signer<Local> + 'a,
@@ -2281,7 +2313,7 @@ pub struct ListenerFuture<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -2295,7 +2327,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -2321,7 +2353,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -2339,7 +2371,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,
@@ -2357,7 +2389,7 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + PartialEq + 'a,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
     M: DepthMetric,

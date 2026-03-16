@@ -9,14 +9,14 @@ use core::fmt;
 
 use async_lock::Mutex;
 use future_form::Sendable;
-use rand::{RngCore, rngs::OsRng};
+use rand::{rngs::OsRng, RngCore};
 use subduction_core::connection::{authenticated::Authenticated, timeout::Timeout};
 
 use crate::connection::HttpLongPollConnection;
 
 // NOTE: SessionStore and SessionEntry are concrete on `Sendable` (not generic
 // over `K: FutureForm`) because `HttpLongPollConnection<O>` only implements
-// `Connection<Sendable>`. This mirrors the `subduction_websocket` pattern.
+// `Connection<Sendable, SyncMessage>`. This mirrors the `subduction_websocket` pattern.
 
 /// An opaque session identifier, assigned after successful handshake.
 ///

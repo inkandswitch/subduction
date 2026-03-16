@@ -67,8 +67,12 @@ use sedimentree_core::{
 
 use crate::{
     connection::{
-        Connection, authenticated::Authenticated, handshake::audience::DiscoveryId, manager::Spawn,
-        message::SyncMessage, nonce_cache::NonceCache,
+        Connection, Roundtrip,
+        authenticated::Authenticated,
+        handshake::audience::DiscoveryId,
+        manager::Spawn,
+        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
+        nonce_cache::NonceCache,
     },
     handler::{Handler, sync::SyncHandler},
     peer::id::PeerId,
@@ -335,7 +339,11 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
         F: StartListener<'a, S, C, P, Sig, M, SyncHandler<F, S, C, P, M, N>, N>,
         S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
+        C: Connection<F, SyncMessage>
+            + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+            + PartialEq
+            + Clone
+            + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
@@ -415,7 +423,11 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
         F: StartListener<'a, S, C, P, Sig, M, H, N>,
         S: Storage<F>,
-        C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
+        C: Connection<F, SyncMessage>
+            + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+            + PartialEq
+            + Clone
+            + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,

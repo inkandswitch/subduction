@@ -8,17 +8,14 @@ use core::{marker::PhantomData, time::Duration};
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use super::{
-    Connection, Reconnect, Roundtrip,
-    message::{RequestId, SyncMessage},
-};
+use super::{message::RequestId, Connection, Reconnect, Roundtrip};
 use crate::peer::id::PeerId;
 
 /// A connection that has completed handshake verification.
 ///
 /// This is a witness type proving the connection was authenticated.
 /// The inner connection has been verified via cryptographic handshake,
-/// and the `peer_id` matches the signing key used in verification.
+/// and the `peer_id` is the verified identity from the handshake.
 ///
 /// # Type Parameters
 ///
@@ -35,27 +32,9 @@ use crate::peer::id::PeerId;
 ///
 /// [`handshake::initiate`]: super::handshake::initiate
 /// [`handshake::respond`]: super::handshake::respond
-///
-/// # Example
-///
-/// ```ignore
-/// use subduction_core::connection::handshake;
-///
-/// // Initiator side - transport is consumed, returned to build_connection
-/// let (authenticated, ()) = handshake::initiate(
-///     transport,  // consumed
-///     |transport, peer_id| (MyConnection::new(transport, peer_id), ()),
-///     &signer,
-///     audience,
-///     now,
-///     nonce,
-/// ).await?;
-///
-/// // Now register() accepts the authenticated connection
-/// subduction.add_connection(authenticated).await?;
-/// ```
 pub struct Authenticated<C: Clone, K: FutureForm> {
     inner: C,
+    peer_id: PeerId,
     _marker: PhantomData<fn() -> K>,
 }
 
@@ -63,6 +42,7 @@ impl<C: Clone, K: FutureForm> Clone for Authenticated<C, K> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
+            peer_id: self.peer_id,
             _marker: PhantomData,
         }
     }
@@ -77,12 +57,13 @@ impl<C: Clone + PartialEq, K: FutureForm> PartialEq for Authenticated<C, K> {
 impl<C: Clone + core::fmt::Debug, K: FutureForm> core::fmt::Debug for Authenticated<C, K> {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("Authenticated")
+            .field("peer_id", &self.peer_id)
             .field("inner", &self.inner)
             .finish()
     }
 }
 
-impl<C: Connection<K, SyncMessage>, K: FutureForm> Authenticated<C, K> {
+impl<C: Clone, K: FutureForm> Authenticated<C, K> {
     /// Construct from a successful handshake.
     ///
     /// This is only accessible within the `connection` module.
@@ -91,48 +72,41 @@ impl<C: Connection<K, SyncMessage>, K: FutureForm> Authenticated<C, K> {
     ///
     /// [`handshake::initiate`]: super::handshake::initiate
     /// [`handshake::respond`]: super::handshake::respond
-    pub(super) fn from_handshake(inner: C) -> Self {
+    pub(super) fn from_handshake(inner: C, peer_id: PeerId) -> Self {
         Self {
             inner,
+            peer_id,
             _marker: PhantomData,
         }
     }
 
-    /// The verified peer identity.
-    pub fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
+    /// The verified peer identity, established during the handshake.
+    pub const fn peer_id(&self) -> PeerId {
+        self.peer_id
     }
 
     /// Transform the inner connection while preserving the authentication proof.
     ///
     /// This is useful when wrapping an authenticated connection in a higher-level
-    /// type (e.g., `WebSocket` → `TokioWebSocketClient`) while preserving the
+    /// type (e.g., `WebSocket` → `UnifiedWebSocket`) while preserving the
     /// proof that the underlying connection completed handshake verification.
-    ///
-    /// # Type Safety
-    ///
-    /// The new connection type `D` must wrap or delegate to the original
-    /// authenticated connection `C`. The caller is responsible for ensuring
-    /// this invariant holds. Typical use is when `D` is a newtype or wrapper
-    /// around `C` that adds functionality (reconnection, logging, etc.)
-    /// without changing the underlying authenticated channel.
     #[must_use]
-    pub fn map<D: Connection<K, SyncMessage>>(self, f: impl FnOnce(C) -> D) -> Authenticated<D, K> {
+    pub fn map<D: Clone>(self, f: impl FnOnce(C) -> D) -> Authenticated<D, K> {
         Authenticated {
             inner: f(self.inner),
+            peer_id: self.peer_id,
             _marker: PhantomData,
         }
     }
-}
 
-impl<C: Clone, K: FutureForm> Authenticated<C, K> {
     /// Construct for testing purposes only.
     ///
     /// This bypasses handshake verification and should only be used in tests.
     #[cfg(any(test, feature = "test_utils"))]
-    pub fn new_for_test(inner: C) -> Self {
+    pub fn new_for_test(inner: C, peer_id: PeerId) -> Self {
         Self {
             inner,
+            peer_id,
             _marker: PhantomData,
         }
     }
@@ -158,7 +132,7 @@ impl<C: Connection<K, M>, K: FutureForm, M: Encode + Decode> Connection<K, M>
     type RecvError = C::RecvError;
 
     fn peer_id(&self) -> PeerId {
-        self.inner.peer_id()
+        self.peer_id
     }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {

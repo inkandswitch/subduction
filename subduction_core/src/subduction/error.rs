@@ -6,7 +6,14 @@ use future_form::FutureForm;
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
-use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
+use crate::{
+    connection::{
+        Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
+    },
+    peer::id::PeerId,
+    storage::traits::Storage,
+};
 use subduction_crypto::verified_meta::BlobMismatch;
 
 /// The peer is not authorized to perform the requested operation.
@@ -39,8 +46,12 @@ pub enum HydrationError<F: FutureForm, S: Storage<F>> {
 /// An error that can occur during I/O operations.
 ///
 /// This covers storage and network connection errors.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
-pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>> {
+#[derive(Debug, Error)]
+pub enum IoError<
+    F: FutureForm + ?Sized,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+> {
     /// An error occurred while using storage.
     #[error(transparent)]
     Storage(S::Error),
@@ -55,7 +66,7 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMes
 
     /// An error occurred during a roundtrip call on the connection.
     #[error(transparent)]
-    ConnCall(C::CallError),
+    ConnCall(<C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError),
 
     /// The blob content doesn't match the claimed metadata.
     #[error(transparent)]
@@ -64,7 +75,11 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMes
 
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
-pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F, SyncMessage>> {
+pub enum BlobRequestErr<
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+> {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
     IoError(#[from] IoError<F, S, C>),
@@ -76,7 +91,11 @@ pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F, SyncMessa
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>> {
+pub enum ListenError<
+    F: FutureForm + ?Sized,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+> {
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C>),
@@ -102,7 +121,12 @@ pub enum AddConnectionError<D> {
 
 /// An error that can occur during local write operations.
 #[derive(Debug, Error)]
-pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>, PutErr> {
+pub enum WriteError<
+    F: FutureForm + ?Sized,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    PutErr,
+> {
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] IoError<F, S, C>),
@@ -118,7 +142,11 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, Sync
 
 /// An error that can occur when sending requested data to a peer.
 #[derive(Debug, Error)]
-pub enum SendRequestedDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, SyncMessage>> {
+pub enum SendRequestedDataError<
+    F: FutureForm + ?Sized,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+> {
     /// An I/O error occurred.
     #[error(transparent)]
     Io(#[from] IoError<F, S, C>),

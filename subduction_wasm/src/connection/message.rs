@@ -1,4 +1,4 @@
-//! Wasm wrapper for [`Message`].
+//! Wasm wrapper for [`SyncMessage`].
 
 use alloc::{
     string::{String, ToString},
@@ -18,13 +18,13 @@ use sedimentree_wasm::{
 
 use super::{WasmBatchSyncRequest, WasmBatchSyncResponse};
 
-/// Wasm wrapper for [`Message`].
+/// Wasm wrapper for [`SyncMessage`].
 #[derive(Debug, Clone)]
-#[wasm_bindgen(js_name = Message)]
-pub struct WasmMessage(pub(crate) Message);
+#[wasm_bindgen(js_name = SyncMessage)]
+pub struct WasmMessage(pub(crate) SyncMessage);
 
 #[wasm_refgen(js_ref = JsMessage)]
-#[wasm_bindgen(js_class = Message)]
+#[wasm_bindgen(js_class = SyncMessage)]
 impl WasmMessage {
     /// Serialize the message to bytes.
     #[must_use]
@@ -227,21 +227,21 @@ impl WasmMessage {
     }
 }
 
-impl From<Message> for WasmMessage {
+impl From<SyncMessage> for WasmMessage {
     fn from(msg: SyncMessage) -> Self {
         Self(msg)
     }
 }
 
-impl From<WasmMessage> for Message {
-    fn from(msg: WasmSyncMessage) -> Self {
+impl From<WasmMessage> for SyncMessage {
+    fn from(msg: WasmMessage) -> Self {
         msg.0
     }
 }
 
-/// An error indicating a failure to deserialize a [`Message`].
+/// An error indicating a failure to deserialize a [`SyncMessage`].
 #[derive(Debug, Clone, Copy, Error)]
-#[error("failed to deserialize Message: {0}")]
+#[error("failed to deserialize SyncMessage: {0}")]
 pub struct JsMessageDeserializationError(DecodeError);
 
 impl From<JsMessageDeserializationError> for JsValue {

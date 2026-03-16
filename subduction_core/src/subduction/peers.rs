@@ -21,7 +21,7 @@ use sedimentree_core::{
 };
 
 use crate::{
-    connection::{Connection, authenticated::Authenticated},
+    connection::{Connection, authenticated::Authenticated, message::SyncMessage},
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     storage::{powerbox::StoragePowerbox, traits::Storage},

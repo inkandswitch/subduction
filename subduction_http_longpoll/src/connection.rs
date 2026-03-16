@@ -1,4 +1,5 @@
-//! HTTP long-poll connection implementing [`Connection<K>`].
+//! HTTP long-poll connection implementing [`Connection<K, SyncMessage>`]
+//! and [`Roundtrip<K, BatchSyncRequest, BatchSyncResponse>`].
 //!
 //! Unlike the WebSocket transport, there are no background listener/sender
 //! tasks. Instead, the HTTP server's request handlers directly push to and
@@ -26,7 +27,7 @@ use rand::{RngCore, rngs::OsRng};
 use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
-        Connection,
+        Connection, Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
         timeout::{TimedOut, Timeout},
     },
@@ -47,6 +48,7 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// and pending-request map — exactly like the WebSocket transport.
 #[derive(Debug)]
 struct Inner<O> {
+    peer_id: PeerId,
     chan_id: u64,
     req_id_counter: AtomicU64,
     default_time_limit: Duration,
@@ -67,7 +69,7 @@ struct Inner<O> {
     cancel_guard: Mutex<Option<async_channel::Sender<()>>>,
 }
 
-/// An HTTP long-poll connection that implements [`Connection<K>`].
+/// An HTTP long-poll connection that implements [`Connection<K, SyncMessage>`].
 ///
 /// Created during handshake and stored in the [`SessionStore`](crate::session::SessionStore).
 /// The server's HTTP handlers interact with this connection's channels to
@@ -85,7 +87,7 @@ pub struct HttpLongPollConnection<O> {
 impl<O> HttpLongPollConnection<O> {
     /// Create a new HTTP long-poll connection.
     #[must_use]
-    pub fn new(default_time_limit: Duration, timeout: O) -> Self {
+    pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
         let starting_counter = OsRng.next_u64();
@@ -93,6 +95,7 @@ impl<O> HttpLongPollConnection<O> {
 
         Self {
             inner: Arc::new(Inner {
+                peer_id,
                 chan_id,
                 req_id_counter: AtomicU64::new(starting_counter),
                 default_time_limit,
@@ -180,21 +183,13 @@ impl<O> HttpLongPollConnection<O> {
 }
 
 #[future_form(Sendable where O: Send + Sync, Local)]
-impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
+impl<K: FutureForm, O: Timeout<K>> Connection<K, SyncMessage> for HttpLongPollConnection<O> {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        K::from_future(async {
-            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated request id {counter:?}");
-            RequestId {
-                requestor: PeerId::new([0u8; 32]),
-                nonce: counter,
-            }
-        })
+    fn peer_id(&self) -> PeerId {
+        self.inner.peer_id
     }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
@@ -232,6 +227,24 @@ impl<K: FutureForm, O: Timeout<K>> Connection<K> for HttpLongPollConnection<O> {
 
             tracing::debug!("recv: inbound message {msg:?}");
             Ok(msg)
+        })
+    }
+}
+
+#[future_form(Sendable where O: Send + Sync, Local)]
+impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
+    for HttpLongPollConnection<O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
+        K::from_future(async {
+            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
+            tracing::debug!("generated request id {counter:?}");
+            RequestId {
+                requestor: self.inner.peer_id,
+                nonce: counter,
+            }
         })
     }
 
@@ -324,11 +337,23 @@ mod tests {
 
     #[tokio::test]
     async fn next_request_id_increments() {
-        let conn = HttpLongPollConnection::new(Duration::from_secs(30), TestTimeout);
+        use subduction_core::connection::Roundtrip;
 
-        let id1 = Connection::<Sendable>::next_request_id(&conn).await;
-        let id2 = Connection::<Sendable>::next_request_id(&conn).await;
-        let id3 = Connection::<Sendable>::next_request_id(&conn).await;
+        let conn = HttpLongPollConnection::new(
+            PeerId::new([0u8; 32]),
+            Duration::from_secs(30),
+            TestTimeout,
+        );
+
+        let id1 =
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
+                .await;
+        let id2 =
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
+                .await;
+        let id3 =
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
+                .await;
 
         assert_eq!(id2.nonce, id1.nonce + 1);
         assert_eq!(id3.nonce, id2.nonce + 1);
@@ -339,14 +364,20 @@ mod tests {
         use sedimentree_core::id::SedimentreeId;
         use subduction_core::connection::message::RemoveSubscriptions;
 
-        let conn = HttpLongPollConnection::new(Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollConnection::new(
+            PeerId::new([0u8; 32]),
+            Duration::from_secs(30),
+            TestTimeout,
+        );
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
         });
 
         conn.push_inbound(msg.clone()).await.expect("push ok");
-        let received = Connection::<Sendable>::recv(&conn).await.expect("recv ok");
+        let received = Connection::<Sendable, SyncMessage>::recv(&conn)
+            .await
+            .expect("recv ok");
 
         assert!(matches!(received, SyncMessage::RemoveSubscriptions(_)));
     }
@@ -356,13 +387,17 @@ mod tests {
         use sedimentree_core::id::SedimentreeId;
         use subduction_core::connection::message::RemoveSubscriptions;
 
-        let conn = HttpLongPollConnection::new(Duration::from_secs(30), TestTimeout);
+        let conn = HttpLongPollConnection::new(
+            PeerId::new([0u8; 32]),
+            Duration::from_secs(30),
+            TestTimeout,
+        );
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
         });
 
-        Connection::<Sendable>::send(&conn, &msg)
+        Connection::<Sendable, SyncMessage>::send(&conn, &msg)
             .await
             .expect("send ok");
         let pulled = conn.pull_outbound().await.expect("pull ok");

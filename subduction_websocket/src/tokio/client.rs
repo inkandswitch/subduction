@@ -13,11 +13,12 @@ use future_form::{FutureForm, Sendable};
 use futures::{FutureExt, future::BoxFuture};
 use subduction_core::{
     connection::{
-        Connection, Reconnect,
+        Connection, Reconnect, Roundtrip,
         authenticated::Authenticated,
         handshake::{self, AuthenticateError, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     },
+    peer::id::PeerId,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -156,15 +157,14 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
 }
 
 impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
-    Connection<Sendable> for TokioWebSocketClient<R, O>
+    Connection<Sendable, SyncMessage> for TokioWebSocketClient<R, O>
 {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async { Connection::<Sendable>::next_request_id(&self.socket).await }.boxed()
+    fn peer_id(&self) -> PeerId {
+        Connection::<Sendable, SyncMessage>::peer_id(&self.socket)
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
@@ -173,13 +173,29 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
 
     fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
         tracing::debug!("client sending message: {:?}", message);
-        Connection::<Sendable>::send(&self.socket, message)
+        Connection::<Sendable, SyncMessage>::send(&self.socket, message)
     }
 
     fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
         async {
             tracing::debug!("client waiting to receive message");
-            Connection::<Sendable>::recv(&self.socket).await
+            Connection::<Sendable, SyncMessage>::recv(&self.socket).await
+        }
+        .boxed()
+    }
+}
+
+impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
+    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for TokioWebSocketClient<R, O>
+{
+    type CallError = CallError;
+
+    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
+        async {
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(
+                &self.socket,
+            )
+            .await
         }
         .boxed()
     }
@@ -191,7 +207,12 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
     ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         async move {
             tracing::debug!("client making call with request: {:?}", req);
-            Connection::<Sendable>::call(&self.socket, req, override_timeout).await
+            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(
+                &self.socket,
+                req,
+                override_timeout,
+            )
+            .await
         }
         .boxed()
     }
@@ -200,7 +221,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
 impl<
     R: 'static + Signer<Sendable> + Clone + Send + Sync,
     O: 'static + Timeout<Sendable> + Send + Sync,
-> Reconnect<Sendable> for TokioWebSocketClient<R, O>
+> Reconnect<Sendable, SyncMessage> for TokioWebSocketClient<R, O>
 {
     type ReconnectionError = ClientConnectError;
 
