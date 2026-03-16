@@ -14,23 +14,26 @@
 Reads target/criterion/**/new/{sample,estimates}.json, computes percentile
 statistics, and generates:
 
-  - bijou64/charts/percentiles.csv   (machine-readable summary)
-  - bijou64/charts/percentiles.md    (markdown table)
-  - bijou64/charts/*.svg             (static charts)
-  - bijou64/charts/*.html            (interactive Plotly charts)
+  - bijou64/charts/<arch>/percentiles.csv   (machine-readable summary)
+  - bijou64/charts/<arch>/percentiles.md    (markdown table)
+  - bijou64/charts/<arch>/*.svg             (static charts)
+  - bijou64/charts/<arch>/*.html            (interactive Plotly charts)
 
 Usage:
-  nix run .#bench-charts                         # via flake app
-  uv run bijou64/charts/analyze.py               # via uv (auto-installs deps)
-  python bijou64/charts/analyze.py               # with deps already installed
+  nix run .#bench-charts                         # via flake app (defaults to auto-detect)
+  uv run bijou64/charts/analyze.py --arch x86    # explicit architecture
+  uv run bijou64/charts/analyze.py --arch arm    # explicit architecture
+  python bijou64/charts/analyze.py               # auto-detects from `uname -m`
 
 The script auto-detects the workspace root by looking for Cargo.toml.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import json
+import platform
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -1000,12 +1003,35 @@ def _group_title(group: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _detect_arch() -> str:
+    """Auto-detect architecture label from the current machine."""
+    machine = platform.machine().lower()
+    if machine in ("x86_64", "amd64"):
+        return "x86"
+    if machine in ("aarch64", "arm64"):
+        return "arm"
+    return machine
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Analyze Criterion benchmark results for the bijou64 shootout.",
+    )
+    parser.add_argument(
+        "--arch",
+        default=None,
+        help="Architecture label for output subdirectory (e.g. x86, arm). "
+             "Auto-detected from `uname -m` if omitted.",
+    )
+    args = parser.parse_args()
+
+    arch: str = args.arch or _detect_arch()
+
     workspace = find_workspace_root()
-    out_dir = workspace / "bijou64" / "charts"
+    out_dir = workspace / "bijou64" / "charts" / arch
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    print("Loading Criterion data...")
+    print(f"Loading Criterion data (arch={arch})...")
     results = load_criterion_data(workspace)
     print(f"  found {len(results)} benchmark results")
 

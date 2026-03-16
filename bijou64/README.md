@@ -48,19 +48,6 @@ payload bytes encoding `value - OFFSET[tier]`.
 See [SPEC.md](SPEC.md) for the full specification, offset table,
 worked examples, and test vectors.
 
-## Why not VARU64?
-
-VARU64 uses the same tag-byte framing, but the payload is the raw
-value. This means overlong encodings are _representable_ — the
-decoder must reject them with a runtime check. If that check is
-omitted, round-trip tests still pass; only adversarial inputs expose
-the bug.
-
-`bijou64` makes the offset subtraction load-bearing: decoding
-`[0xF8, 0x00]` produces 248 (not 0), because the decoder adds
-`OFFSET[1] = 248` to the payload. There is no overlong encoding to
-reject, and no check to forget.
-
 ## Features
 
 - `no_std` (requires `alloc` for `encode()`; `encode_array()` and
