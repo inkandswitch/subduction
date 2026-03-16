@@ -121,10 +121,10 @@ impl<O> HttpLongPollConnection<O> {
         bytes: Vec<u8>,
     ) -> Result<(), async_channel::SendError<Vec<u8>>> {
         // Try to decode as SyncMessage to route BatchSyncResponse to pending waiters.
-        if let Ok(SyncMessage::BatchSyncResponse(ref resp)) = SyncMessage::try_decode(&bytes) {
-            if self.inner.multiplexer.resolve_pending(resp).await {
-                return Ok(());
-            }
+        if let Ok(SyncMessage::BatchSyncResponse(ref resp)) = SyncMessage::try_decode(&bytes)
+            && self.inner.multiplexer.resolve_pending(resp).await
+        {
+            return Ok(());
         }
 
         // All other bytes go to the inbound channel.

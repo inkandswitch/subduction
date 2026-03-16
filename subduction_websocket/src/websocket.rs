@@ -340,10 +340,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                     // This is needed for the Roundtrip pending-map routing.
                     if let Ok(SyncMessage::BatchSyncResponse(ref resp)) =
                         SyncMessage::try_decode(&bytes_vec)
+                        && self.multiplexer.resolve_pending(resp).await
                     {
-                        if self.multiplexer.resolve_pending(resp).await {
-                            continue;
-                        }
+                        continue;
                     }
 
                     self.inbound_writer.send(bytes_vec).await.map_err(|e| {
