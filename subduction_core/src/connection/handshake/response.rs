@@ -103,12 +103,16 @@ impl DecodeFields for Response {
             });
         }
 
+        let mut offset = 0;
+
         // ChallengeDigest (32 bytes)
-        let challenge_digest_bytes: [u8; 32] = decode::array(buf, 0)?;
+        let challenge_digest_bytes: [u8; 32] = decode::array(buf, offset)?;
+        offset += 32;
         let challenge_digest = Digest::force_from_bytes(challenge_digest_bytes);
 
         // ServerTimestamp (8 bytes)
-        let server_timestamp_secs = decode::u64(buf, 32)?;
+        let server_timestamp_secs = decode::u64(buf, offset)?;
+        offset += 8;
         let server_timestamp = TimestampSeconds::new(server_timestamp_secs);
 
         Ok((
@@ -116,7 +120,7 @@ impl DecodeFields for Response {
                 challenge_digest,
                 server_timestamp,
             },
-            RESPONSE_FIELDS_SIZE,
+            offset,
         ))
     }
 }
