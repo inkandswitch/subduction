@@ -3,7 +3,7 @@
 use alloc::vec::Vec;
 use core::convert::Infallible;
 
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use sedimentree_core::id::SedimentreeId;
 
 use super::{connection::ConnectionPolicy, storage::StoragePolicy};
