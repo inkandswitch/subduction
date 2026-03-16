@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -34,8 +34,8 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -52,10 +52,10 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        DEFAULT_MUX_TIME_LIMIT, JsTransport, WasmAuthenticatedTransport, WasmTransport,
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
+        JsTransport, WasmAuthenticatedTransport, WasmTransport, DEFAULT_MUX_TIME_LIMIT,
     },
 };
 use sedimentree_wasm::{

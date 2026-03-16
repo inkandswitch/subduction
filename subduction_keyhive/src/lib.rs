@@ -33,7 +33,7 @@ pub use message::Message;
 pub use peer_id::KeyhivePeerId;
 pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
-pub use wire::{KeyhiveMessage, KEYHIVE_SCHEMA};
+pub use wire::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 #[cfg(feature = "serde")]
 pub use protocol::KeyhiveProtocol;

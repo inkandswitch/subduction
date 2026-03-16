@@ -12,15 +12,14 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
-use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
-use subduction_keyhive::wire::{KeyhiveMessage, KEYHIVE_SCHEMA};
+use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
+use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
+use subduction_keyhive::{KEYHIVE_SCHEMA, KeyhiveMessage};
 
 /// Composed wire message for the CLI server.
 ///
 /// Carries sync, ephemeral, or keyhive traffic. Decode reads the 4-byte
 /// schema header and dispatches to the appropriate decoder.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CliWireMessage {
     /// A sync-protocol message (`SUM\x00`).
