@@ -69,8 +69,14 @@ impl Decode for WireMessage {
             });
         }
 
-        #[allow(clippy::indexing_slicing)]
-        let schema: [u8; 4] = buf[0..4].try_into().expect("checked length above");
+        let schema: [u8; 4] =
+            buf.get(0..4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(DecodeError::MessageTooShort {
+                    type_name: "WireMessage schema",
+                    need: 4,
+                    have: buf.len(),
+                })?;
 
         match schema {
             MESSAGE_SCHEMA => SyncMessage::try_decode(buf).map(|m| WireMessage::Sync(Box::new(m))),
@@ -95,7 +101,13 @@ impl subduction_http_longpoll::connection::ChannelMessage for WireMessage {
         match self {
             Self::Sync(sync_msg) => match sync_msg.as_ref() {
                 SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                _ => None,
+                SyncMessage::BatchSyncRequest(_)
+                | SyncMessage::BlobsRequest { .. }
+                | SyncMessage::BlobsResponse { .. }
+                | SyncMessage::DataRequestRejected(_)
+                | SyncMessage::Fragment { .. }
+                | SyncMessage::LooseCommit { .. }
+                | SyncMessage::RemoveSubscriptions(_) => None,
             },
             Self::Ephemeral(_) => None,
         }

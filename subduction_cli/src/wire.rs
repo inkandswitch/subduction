@@ -19,6 +19,7 @@ use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
 ///
 /// Carries sync or ephemeral traffic. Decode reads the 4-byte schema
 /// header and dispatches to the appropriate decoder.
+#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CliWireMessage {
     /// A sync-protocol message.
@@ -68,8 +69,14 @@ impl Decode for CliWireMessage {
             });
         }
 
-        #[allow(clippy::indexing_slicing)]
-        let schema: [u8; 4] = buf[0..4].try_into().expect("checked length above");
+        let schema: [u8; 4] =
+            buf.get(0..4)
+                .and_then(|s| s.try_into().ok())
+                .ok_or(DecodeError::MessageTooShort {
+                    type_name: "CliWireMessage schema",
+                    need: 4,
+                    have: buf.len(),
+                })?;
 
         match schema {
             MESSAGE_SCHEMA => {
@@ -85,7 +92,23 @@ impl Decode for CliWireMessage {
     }
 }
 
-// ── ChannelMessage impls ────────────────────────────────────────────────
+// ── ChannelMessage helpers ──────────────────────────────────────────────
+
+#[allow(dead_code)]
+const fn as_batch_sync_response_inner(msg: &SyncMessage) -> Option<&BatchSyncResponse> {
+    match msg {
+        SyncMessage::BatchSyncResponse(resp) => Some(resp),
+        SyncMessage::BatchSyncRequest(_)
+        | SyncMessage::BlobsRequest { .. }
+        | SyncMessage::BlobsResponse { .. }
+        | SyncMessage::DataRequestRejected(_)
+        | SyncMessage::Fragment { .. }
+        | SyncMessage::LooseCommit { .. }
+        | SyncMessage::RemoveSubscriptions(_) => None,
+    }
+}
+
+// ── WebSocket ChannelMessage ────────────────────────────────────────────
 
 impl subduction_websocket::websocket::ChannelMessage for CliWireMessage {
     fn wrap_sync(msg: SyncMessage) -> Self {
@@ -94,10 +117,7 @@ impl subduction_websocket::websocket::ChannelMessage for CliWireMessage {
 
     fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
         match self {
-            Self::Sync(sync_msg) => match sync_msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                _ => None,
-            },
+            Self::Sync(msg) => as_batch_sync_response_inner(msg),
             Self::Ephemeral(_) => None,
         }
     }
@@ -109,6 +129,8 @@ impl subduction_websocket::websocket::ChannelMessage for CliWireMessage {
         }
     }
 }
+
+// ── HTTP Long-Poll ChannelMessage ───────────────────────────────────────
 
 impl subduction_http_longpoll::connection::ChannelMessage for CliWireMessage {
     fn wrap_sync(msg: SyncMessage) -> Self {
@@ -117,10 +139,7 @@ impl subduction_http_longpoll::connection::ChannelMessage for CliWireMessage {
 
     fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
         match self {
-            Self::Sync(sync_msg) => match sync_msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                _ => None,
-            },
+            Self::Sync(msg) => as_batch_sync_response_inner(msg),
             Self::Ephemeral(_) => None,
         }
     }
@@ -133,6 +152,8 @@ impl subduction_http_longpoll::connection::ChannelMessage for CliWireMessage {
     }
 }
 
+// ── Iroh ChannelMessage ─────────────────────────────────────────────────
+
 impl subduction_iroh::connection::ChannelMessage for CliWireMessage {
     fn wrap_sync(msg: SyncMessage) -> Self {
         Self::Sync(Box::new(msg))
@@ -140,10 +161,7 @@ impl subduction_iroh::connection::ChannelMessage for CliWireMessage {
 
     fn as_batch_sync_response(&self) -> Option<&BatchSyncResponse> {
         match self {
-            Self::Sync(sync_msg) => match sync_msg.as_ref() {
-                SyncMessage::BatchSyncResponse(resp) => Some(resp),
-                _ => None,
-            },
+            Self::Sync(msg) => as_batch_sync_response_inner(msg),
             Self::Ephemeral(_) => None,
         }
     }
