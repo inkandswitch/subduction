@@ -55,7 +55,7 @@ use crate::{
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
-        JsTransport, WasmAuthenticatedTransport, WasmTransport, DEFAULT_MUX_TIME_LIMIT,
+        JsTransport, WasmAuthenticatedTransport, WasmJsConnection, DEFAULT_MUX_TIME_LIMIT,
     },
 };
 use sedimentree_wasm::{
