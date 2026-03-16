@@ -35,7 +35,6 @@ use subduction_core::{
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
-    policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::powerbox::StoragePowerbox,
     subduction::{
@@ -67,7 +66,7 @@ use crate::{
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
-        JsTransport, WasmAuthenticatedTransport, DEFAULT_LOCAL_SERVICE_NAME,
+        JsTransport, WasmAuthenticatedTransport, WasmTransport, DEFAULT_LOCAL_SERVICE_NAME,
         DEFAULT_MUX_TIME_LIMIT,
     },
 };
@@ -103,26 +102,18 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
-type WasmHandler = ComposedHandler<
-    SyncHandler<
-        Local,
-        JsStorage,
-        MessageTransport<JsTransport>,
-        OpenPolicy,
-        WasmHashMetric,
-        WASM_SHARD_COUNT,
-    >,
-    EphemeralHandler<Local, MessageTransport<JsTransport>, OpenEphemeralPolicy>,
-    crate::wire::WireMessage,
->;
+use crate::policy::JsPolicy;
+
+type WasmSyncHandler =
+    SyncHandler<Local, JsStorage, WasmTransport, JsPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
 
 type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
-    MessageTransport<JsTransport>,
-    WasmHandler,
-    OpenPolicy,
+    WasmTransport,
+    WasmSyncHandler,
+    JsPolicy,
     JsSigner,
     JsTimeout,
     WasmHashMetric,
@@ -156,6 +147,9 @@ impl WasmSubduction {
     ///   When set, clients can connect without knowing the server's peer ID.
     /// * `hash_metric_override` - Optional custom depth metric function
     /// * `max_pending_blob_requests` - Optional maximum number of pending blob requests (default: 10,000)
+    /// * `policy` - Optional JS object implementing authorization.
+    ///   Must have `authorizeConnect(...)`, `authorizeFetch(...)`, `authorizePut(...)`,
+    ///   `filterAuthorizedFetch(...)`. Defaults to allow-all.
     ///
     /// # Panics
     ///
@@ -169,6 +163,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        policy: Option<JsValue>,
     ) -> Self {
         tracing::debug!("new Subduction node");
         let js_storage = <JsStorage as AsRef<JsValue>>::as_ref(&storage).clone();
@@ -182,14 +177,14 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        #[allow(clippy::type_complexity)]
-        let connections: Arc<
-            Mutex<Map<PeerId, NonEmpty<Authenticated<MessageTransport<JsTransport>, Local>>>>,
-        > = Arc::new(Mutex::new(Map::new()));
-        let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let sedimentrees = Arc::new(ShardedMap::new());
-        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
-        let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
+        let policy = policy.map_or_else(JsPolicy::open, JsPolicy::new);
+
+        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+            .signer(signer)
+            .storage(storage, Arc::new(policy))
+            .spawner(WasmSpawn)
+            .depth_metric(depth_metric)
+            .max_pending_blob_requests(max_pending);
 
         let sync_handler = SyncHandler::new(
             sedimentrees.clone(),
@@ -274,6 +269,7 @@ impl WasmSubduction {
         service_name: Option<String>,
         hash_metric_override: Option<JsToDepth>,
         max_pending_blob_requests: Option<usize>,
+        policy: Option<JsValue>,
     ) -> Result<Self, WasmHydrationError> {
         use subduction_core::storage::traits::Storage as _;
 
@@ -321,13 +317,15 @@ impl WasmSubduction {
                 .await;
         }
 
-        #[allow(clippy::type_complexity)]
-        let connections: Arc<
-            Mutex<Map<PeerId, NonEmpty<Authenticated<MessageTransport<JsTransport>, Local>>>>,
-        > = Arc::new(Mutex::new(Map::new()));
-        let subscriptions = Arc::new(Mutex::new(Map::new()));
-        let pending_blob_requests = Arc::new(Mutex::new(PendingBlobRequests::new(max_pending)));
-        let powerbox = StoragePowerbox::new(storage, Arc::new(OpenPolicy));
+        let policy = policy.map_or_else(JsPolicy::open, JsPolicy::new);
+
+        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+            .signer(signer)
+            .storage(storage, Arc::new(policy))
+            .spawner(WasmSpawn)
+            .depth_metric(depth_metric)
+            .max_pending_blob_requests(max_pending)
+            .sedimentrees(sedimentrees);
 
         let sync_handler = SyncHandler::new(
             sedimentrees.clone(),

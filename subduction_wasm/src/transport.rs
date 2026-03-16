@@ -41,8 +41,11 @@ use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 /// no explicit service name is provided.
 pub const DEFAULT_LOCAL_SERVICE_NAME: &str = "subduction:local";
 
+/// Type alias for the Wasm transport layer.
+pub(crate) type WasmTransport = MessageTransport<JsTransport>;
+
 /// Wrap a [`JsTransport`] with typed encode/decode.
-pub(crate) fn make_transport(transport: JsTransport) -> MessageTransport<JsTransport> {
+pub(crate) fn make_transport(transport: JsTransport) -> WasmTransport {
     MessageTransport::new(transport)
 }
 

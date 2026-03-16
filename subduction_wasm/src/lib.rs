@@ -36,6 +36,7 @@ pub mod error;
 pub mod fragment;
 pub mod memory_signer;
 pub mod peer_id;
+pub mod policy;
 pub mod signer;
 pub mod subduction;
 pub mod sync_stats;
