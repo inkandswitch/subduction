@@ -44,7 +44,7 @@ pub enum ClientConnectError {
 pub struct TokioWebSocketClient<
     R: Signer<Sendable> + Clone,
     O: Timeout<Sendable> + Send + Sync,
-    M: ChannelMessage = SyncMessage,
+    M: ChannelMessage,
 > {
     address: Uri,
     signer: R,

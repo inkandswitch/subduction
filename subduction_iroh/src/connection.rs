@@ -126,7 +126,7 @@ struct Inner<O, M> {
 /// plain sync traffic, or [`WireMessage`](subduction_ephemeral::wire::WireMessage)
 /// (with the `ephemeral` feature) for multiplexed sync + ephemeral traffic.
 #[derive(Debug, Clone)]
-pub struct IrohConnection<O, M = SyncMessage> {
+pub struct IrohConnection<O, M> {
     inner: Arc<Inner<O, M>>,
 }
 

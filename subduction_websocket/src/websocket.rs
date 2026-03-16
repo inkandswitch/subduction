@@ -148,7 +148,7 @@ pub struct WebSocket<
     T: AsyncRead + AsyncWrite + Unpin,
     K: FutureForm,
     O: Timeout<K>,
-    M: ChannelMessage = SyncMessage,
+    M: ChannelMessage,
 > {
     chan_id: u64,
     peer_id: PeerId,

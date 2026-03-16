@@ -26,7 +26,7 @@ use tokio::net::TcpStream;
 ///
 /// The `M` parameter is the channel message type — typically [`SyncMessage`].
 #[derive(Debug, Clone)]
-pub enum UnifiedWebSocket<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage = SyncMessage> {
+pub enum UnifiedWebSocket<O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> {
     /// A connection we accepted (peer connected to us).
     Accepted(WebSocket<TokioAdapter<TcpStream>, Sendable, O, M>),
 

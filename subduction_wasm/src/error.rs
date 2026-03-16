@@ -4,7 +4,7 @@ use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
-    connection::ConnectionDisallowed,
+    connection::{ConnectionDisallowed, message::SyncMessage},
     subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
 };
 use thiserror::Error;
@@ -36,7 +36,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, JsConnection>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, JsConnection, SyncMessage>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -52,7 +52,9 @@ impl From<WasmIoError> for JsValue {
 /// including policy rejections.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, JsConnection, Infallible>);
+pub struct WasmWriteError(
+    #[from] WriteError<Local, JsStorage, JsConnection, SyncMessage, Infallible>,
+);
 
 impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
@@ -99,7 +101,7 @@ impl From<WasmConnectionDisallowed> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, JsConnection>);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, JsConnection, SyncMessage>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {

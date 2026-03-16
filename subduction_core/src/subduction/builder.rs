@@ -81,6 +81,7 @@ use crate::{
     storage::{powerbox::StoragePowerbox, traits::Storage},
 };
 use nonempty::NonEmpty;
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_crypto::signer::Signer;
 
 use super::{
@@ -330,14 +331,14 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
     pub fn build<'a, F, C>(
         self,
     ) -> (
-        Arc<Subduction<'a, F, S, C, P, Sig, M, N>>,
+        Arc<Subduction<'a, F, S, C, SyncMessage, P, Sig, M, N>>,
         Arc<SyncHandler<F, S, C, P, M, N>>,
-        ListenerFuture<'a, F, S, C, P, Sig, M, N>,
+        ListenerFuture<'a, F, S, C, SyncMessage, P, Sig, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
-        F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, P, Sig, M, SyncHandler<F, S, C, P, M, N>, N>,
+        F: SubductionFutureForm<'a, S, C, SyncMessage, P, Sig, M, N> + 'static,
+        F: StartListener<'a, S, C, SyncMessage, P, Sig, M, SyncHandler<F, S, C, P, M, N>, N>,
         S: Storage<F>,
         C: Connection<F, SyncMessage>
             + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
@@ -348,9 +349,9 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
         M: Clone,
-        SyncHandler<F, S, C, P, M, N>: Handler<F, C>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message: From<SyncMessage>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError: Into<ListenError<F, S, C>>,
+        SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
+        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
+            Into<ListenError<F, S, C, SyncMessage>>,
     {
         let sedimentrees = self
             .sedimentrees
@@ -411,29 +412,29 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
     ///     .build_with_handler::<Sendable, MyConnection, _>(handler);
     /// ```
     #[allow(clippy::type_complexity)]
-    pub fn build_with_handler<'a, F, C, H>(
+    pub fn build_with_handler<'a, F, C, W, H>(
         self,
         handler: Arc<H>,
     ) -> (
-        Arc<Subduction<'a, F, S, C, P, Sig, M, N>>,
-        ListenerFuture<'a, F, S, C, P, Sig, M, N>,
+        Arc<Subduction<'a, F, S, C, W, P, Sig, M, N>>,
+        ListenerFuture<'a, F, S, C, W, P, Sig, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
-        F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, P, Sig, M, H, N>,
+        F: SubductionFutureForm<'a, S, C, W, P, Sig, M, N> + 'static,
+        F: StartListener<'a, S, C, W, P, Sig, M, H, N>,
         S: Storage<F>,
-        C: Connection<F, SyncMessage>
+        C: Connection<F, W>
             + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
             + PartialEq
             + Clone
             + 'a,
+        W: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
         Sp: Spawn<F> + Send + Sync + 'static,
-        H: Handler<F, C>,
-        H::Message: From<SyncMessage>,
-        H::HandlerError: Into<ListenError<F, S, C>>,
+        H: Handler<F, C, Message = W>,
+        H::HandlerError: Into<ListenError<F, S, C, W>>,
     {
         let sedimentrees = self
             .sedimentrees

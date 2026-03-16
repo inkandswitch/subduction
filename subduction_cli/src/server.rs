@@ -15,6 +15,7 @@ use subduction_core::{
             self,
             audience::{Audience, DiscoveryId},
         },
+        message::SyncMessage,
         nonce_cache::NonceCache,
     },
     peer::id::PeerId,
@@ -45,6 +46,7 @@ type CliSubduction = Arc<
         future_form::Sendable,
         MetricsStorage<FsStorage>,
         UnifiedTransport<FuturesTimerTimeout>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -532,7 +534,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 async fn accept_loop(
     tcp_listener: TcpListener,
     subduction: CliSubduction,
-    lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
     cancel: CancellationToken,
     timeout: FuturesTimerTimeout,
     default_time_limit: Duration,
@@ -711,7 +713,7 @@ async fn handle_http_longpoll(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
     subduction: CliSubduction,
-    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
 ) {
     use http_body_util::Full;
     use hyper::{

@@ -9,11 +9,12 @@ use thiserror::Error;
 use crate::{
     connection::{
         Connection, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
+        message::{BatchSyncRequest, BatchSyncResponse},
     },
     peer::id::PeerId,
     storage::traits::Storage,
 };
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_crypto::verified_meta::BlobMismatch;
 
 /// The peer is not authorized to perform the requested operation.
@@ -50,7 +51,8 @@ pub enum HydrationError<F: FutureForm, S: Storage<F>> {
 pub enum IoError<
     F: FutureForm + ?Sized,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    M: Encode + Decode,
 > {
     /// An error occurred while using storage.
     #[error(transparent)]
@@ -78,11 +80,12 @@ pub enum IoError<
 pub enum BlobRequestErr<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    M: Encode + Decode,
 > {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
-    IoError(#[from] IoError<F, S, C>),
+    IoError(#[from] IoError<F, S, C, M>),
 
     /// Some requested blobs were missing locally.
     #[error("Missing blobs: {0:?}")]
@@ -94,11 +97,12 @@ pub enum BlobRequestErr<
 pub enum ListenError<
     F: FutureForm + ?Sized,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    M: Encode + Decode,
 > {
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
-    IoError(#[from] IoError<F, S, C>),
+    IoError(#[from] IoError<F, S, C, M>),
 
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
@@ -124,12 +128,13 @@ pub enum AddConnectionError<D> {
 pub enum WriteError<
     F: FutureForm + ?Sized,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
-    PutErr,
+    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    M: Encode + Decode,
+    PutErr = core::convert::Infallible,
 > {
     /// An I/O error occurred.
     #[error(transparent)]
-    Io(#[from] IoError<F, S, C>),
+    Io(#[from] IoError<F, S, C, M>),
 
     /// The storage policy rejected the write.
     #[error("put disallowed: {0}")]
@@ -145,11 +150,12 @@ pub enum WriteError<
 pub enum SendRequestedDataError<
     F: FutureForm + ?Sized,
     S: Storage<F>,
-    C: Connection<F, SyncMessage> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    M: Encode + Decode,
 > {
     /// An I/O error occurred.
     #[error(transparent)]
-    Io(#[from] IoError<F, S, C>),
+    Io(#[from] IoError<F, S, C, M>),
 
     /// The peer is not authorized to access the requested sedimentree.
     #[error(transparent)]

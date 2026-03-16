@@ -138,7 +138,7 @@ struct Inner<O, M> {
 /// Use [`WireMessage`](subduction_ephemeral::wire::WireMessage) (with the
 /// `ephemeral` feature) to multiplex sync and ephemeral traffic.
 #[derive(Debug, Clone)]
-pub struct HttpLongPollConnection<O, M = SyncMessage> {
+pub struct HttpLongPollConnection<O, M> {
     inner: Arc<Inner<O, M>>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
     outbound_rx: async_channel::Receiver<M>,

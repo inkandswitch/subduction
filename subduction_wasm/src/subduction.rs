@@ -27,7 +27,7 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{handshake::audience::DiscoveryId, manager::Spawn},
+    connection::{handshake::audience::DiscoveryId, manager::Spawn, message::SyncMessage},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -96,6 +96,7 @@ pub struct WasmSubduction {
             Local,
             JsStorage,
             JsConnection,
+            SyncMessage,
             OpenPolicy,
             JsSigner,
             WasmHashMetric,

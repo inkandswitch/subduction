@@ -90,19 +90,13 @@ const fn hex_digit(b: u8) -> Option<u8> {
 ///
 /// The `M` parameter is the channel message type — typically [`SyncMessage`].
 #[derive(Debug, Clone)]
-pub struct SessionStore<
-    O: Timeout<Sendable> + Send + Sync,
-    M: Clone + Send + Sync + 'static = subduction_core::connection::message::SyncMessage,
-> {
+pub struct SessionStore<O: Timeout<Sendable> + Send + Sync, M: Clone + Send + Sync + 'static> {
     pub(crate) sessions: Arc<Mutex<BTreeMap<SessionId, SessionEntry<O, M>>>>,
 }
 
 /// A single session entry containing the connection and peer identity.
 #[derive(Debug, Clone)]
-pub struct SessionEntry<
-    O: Timeout<Sendable> + Send + Sync,
-    M: Clone + Send + Sync + 'static = subduction_core::connection::message::SyncMessage,
-> {
+pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync, M: Clone + Send + Sync + 'static> {
     /// The peer's identity.
     pub peer_id: PeerId,
 

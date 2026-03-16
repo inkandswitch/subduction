@@ -65,7 +65,7 @@ impl Timeout<Local> for JsTimeout {
 }
 
 /// Type alias for the long-poll connection used in wasm.
-pub type WasmLongPollConnection = HttpLongPollConnection<JsTimeout>;
+pub type WasmLongPollConnection = HttpLongPollConnection<JsTimeout, SyncMessage>;
 
 /// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
 /// [`Connection`](super::JsConnection) interface so it can be used as a

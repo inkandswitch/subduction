@@ -45,11 +45,7 @@ use crate::{
 
 /// Server-side handler state, shared across request handlers.
 #[derive(Debug, Clone)]
-pub struct LongPollHandler<
-    Sig,
-    O: Timeout<Sendable> + Send + Sync,
-    M: ChannelMessage = subduction_core::connection::message::SyncMessage,
-> {
+pub struct LongPollHandler<Sig, O: Timeout<Sendable> + Send + Sync, M: ChannelMessage> {
     sessions: SessionStore<O, M>,
     signer: Sig,
     nonce_cache: Arc<NonceCache>,

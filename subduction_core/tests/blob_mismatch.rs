@@ -5,6 +5,7 @@
 //! referencing non-existent blobs.
 
 use std::{collections::BTreeSet, sync::Arc};
+use subduction_core::connection::message::SyncMessage;
 
 use core::{future::Future, time::Duration};
 use future_form::Sendable;
@@ -95,6 +96,7 @@ fn make_subduction() -> (
             Sendable,
             MemoryStorage,
             ChannelMockConnection,
+            SyncMessage,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
             CountLeadingZeroBytes,

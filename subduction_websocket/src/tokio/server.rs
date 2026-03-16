@@ -575,7 +575,7 @@ where
 }
 
 type TokioWebSocketSubduction<S, P, Sig, O, M> =
-    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O, SyncMessage>, P, Sig, M>>;
+    Arc<Subduction<'static, Sendable, S, UnifiedWebSocket<O, SyncMessage>, SyncMessage, P, Sig, M>>;
 
 /// Error type for connecting to a peer.
 #[derive(Debug, thiserror::Error)]
