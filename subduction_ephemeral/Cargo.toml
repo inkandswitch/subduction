@@ -31,9 +31,27 @@ subduction_ephemeral = { path = ".", features = ["std"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
+[dependencies.keyhive_core]
+workspace = true
+optional = true
+
+[dependencies.rand]
+workspace = true
+optional = true
+
+[dependencies.serde]
+workspace = true
+optional = true
+
+[dependencies.subduction_keyhive]
+workspace = true
+optional = true
+features = ["serde"]
+
 [features]
 default = []
 bolero = ["dep:bolero", "sedimentree_core/bolero", "std"]
+keyhive = ["dep:keyhive_core", "dep:rand", "dep:serde", "dep:subduction_keyhive"]
 std = [
   "async-channel/std",
   "async-lock/std",

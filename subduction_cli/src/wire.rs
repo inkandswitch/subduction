@@ -1,8 +1,8 @@
-//! Wire message enum for multiplexing sync and ephemeral traffic over
-//! a single physical connection.
+//! Wire message enum for multiplexing sync, ephemeral, and keyhive
+//! traffic over a single physical connection.
 //!
 //! This is an application-level type. The transport layer is generic
-//! over message types via `ChannelMessage`; this module provides the
+//! over message types via `MessageTransport`; this module provides the
 //! concrete enum and trait impls for the CLI server.
 
 use std::vec::Vec;
@@ -12,21 +12,25 @@ use sedimentree_core::codec::{
     encode::Encode,
     error::{DecodeError, InvalidSchema},
 };
-use subduction_core::connection::message::{MESSAGE_SCHEMA, SyncMessage};
-use subduction_ephemeral::message::{EPHEMERAL_SCHEMA, EphemeralMessage};
+use subduction_core::connection::message::{SyncMessage, MESSAGE_SCHEMA};
+use subduction_ephemeral::message::{EphemeralMessage, EPHEMERAL_SCHEMA};
+use subduction_keyhive::wire::{KeyhiveMessage, KEYHIVE_SCHEMA};
 
 /// Composed wire message for the CLI server.
 ///
-/// Carries sync or ephemeral traffic. Decode reads the 4-byte schema
-/// header and dispatches to the appropriate decoder.
+/// Carries sync, ephemeral, or keyhive traffic. Decode reads the 4-byte
+/// schema header and dispatches to the appropriate decoder.
 #[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CliWireMessage {
-    /// A sync-protocol message.
+    /// A sync-protocol message (`SUM\x00`).
     Sync(Box<SyncMessage>),
 
-    /// An ephemeral-protocol message.
+    /// An ephemeral-protocol message (`SUE\x00`).
     Ephemeral(EphemeralMessage),
+
+    /// A keyhive-protocol message (`SUK\x00`).
+    Keyhive(KeyhiveMessage),
 }
 
 impl From<SyncMessage> for CliWireMessage {
@@ -41,11 +45,18 @@ impl From<EphemeralMessage> for CliWireMessage {
     }
 }
 
+impl From<KeyhiveMessage> for CliWireMessage {
+    fn from(msg: KeyhiveMessage) -> Self {
+        Self::Keyhive(msg)
+    }
+}
+
 impl Encode for CliWireMessage {
     fn encode(&self) -> Vec<u8> {
         match self {
             Self::Sync(msg) => Encode::encode(msg.as_ref()),
             Self::Ephemeral(msg) => msg.encode(),
+            Self::Keyhive(msg) => msg.encode(),
         }
     }
 
@@ -53,6 +64,7 @@ impl Encode for CliWireMessage {
         match self {
             Self::Sync(msg) => msg.encoded_size(),
             Self::Ephemeral(msg) => msg.encoded_size(),
+            Self::Keyhive(msg) => msg.encoded_size(),
         }
     }
 }
@@ -83,6 +95,7 @@ impl Decode for CliWireMessage {
                 SyncMessage::try_decode(buf).map(|m| CliWireMessage::Sync(Box::new(m)))
             }
             EPHEMERAL_SCHEMA => EphemeralMessage::try_decode(buf).map(CliWireMessage::Ephemeral),
+            KEYHIVE_SCHEMA => KeyhiveMessage::try_decode(buf).map(CliWireMessage::Keyhive),
             _ => Err(InvalidSchema {
                 expected: MESSAGE_SCHEMA,
                 got: schema,

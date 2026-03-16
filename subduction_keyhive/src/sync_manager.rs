@@ -938,9 +938,10 @@ mod tests {
         tx: Sender<Vec<u8>>,
     ) -> impl Fn(Vec<u8>) -> futures::future::LocalBoxFuture<'static, Result<(), TestSendError>>
     {
+        use futures::FutureExt;
+
         move |bytes: Vec<u8>| {
             let tx = tx.clone();
-            use futures::FutureExt;
             async move {
                 tx.send(bytes).await.map_err(|_| TestSendError)?;
                 Ok(())
@@ -949,7 +950,8 @@ mod tests {
         }
     }
 
-    /// Create a (send_fn, receiver) pair for capturing outbound messages.
+    /// Create a (`send_fn`, receiver) pair for capturing outbound messages.
+    #[allow(clippy::type_complexity)]
     fn make_outbound_channel() -> (
         impl Fn(Vec<u8>) -> futures::future::LocalBoxFuture<'static, Result<(), TestSendError>>,
         Receiver<Vec<u8>>,

@@ -39,6 +39,7 @@ sedimentree_fs_storage = { workspace = true }
 subduction_core = { workspace = true, features = ["system_time", "metrics"] }
 subduction_ephemeral = { workspace = true, features = ["std"] }
 subduction_crypto = { workspace = true }
+subduction_keyhive = { workspace = true, features = ["serde"] }
 subduction_http_longpoll = { workspace = true, features = ["server", "std"] }
 subduction_iroh = { workspace = true }
 subduction_websocket = { workspace = true }

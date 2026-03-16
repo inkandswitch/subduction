@@ -582,6 +582,7 @@ mod tests {
     /// Two peers with divergent groups both converge after bidirectional
     /// relay sync.
     #[tokio::test(flavor = "current_thread")]
+    #[allow(clippy::too_many_lines)]
     async fn relay_e2e_bidirectional_convergence() {
         let local = tokio::task::LocalSet::new();
         local
