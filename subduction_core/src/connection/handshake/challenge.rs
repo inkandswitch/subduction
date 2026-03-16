@@ -127,7 +127,7 @@ impl EncodeFields for Challenge {
 impl DecodeFields for Challenge {
     const MIN_SIGNED_SIZE: usize = CHALLENGE_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < CHALLENGE_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Challenge",
@@ -136,11 +136,15 @@ impl DecodeFields for Challenge {
             });
         }
 
+        let mut offset = 0;
+
         // AudienceTag (1 byte)
-        let audience_tag = decode::u8(buf, 0)?;
+        let audience_tag = decode::u8(buf, offset)?;
+        offset += 1;
 
         // AudienceValue (32 bytes)
-        let audience_value: [u8; 32] = decode::array(buf, 1)?;
+        let audience_value: [u8; 32] = decode::array(buf, offset)?;
+        offset += 32;
 
         let audience = match audience_tag {
             0x00 => Audience::Known(PeerId::new(audience_value)),
@@ -155,18 +159,23 @@ impl DecodeFields for Challenge {
         };
 
         // Timestamp (8 bytes)
-        let timestamp_secs = decode::u64(buf, 33)?;
+        let timestamp_secs = decode::u64(buf, offset)?;
+        offset += 8;
         let timestamp = TimestampSeconds::new(timestamp_secs);
 
         // Nonce (16 bytes)
-        let nonce_bytes: [u8; 16] = decode::array(buf, 41)?;
+        let nonce_bytes: [u8; 16] = decode::array(buf, offset)?;
+        offset += 16;
         let nonce = Nonce::from_bytes(nonce_bytes);
 
-        Ok(Self {
-            audience,
-            timestamp,
-            nonce,
-        })
+        Ok((
+            Self {
+                audience,
+                timestamp,
+                nonce,
+            },
+            offset,
+        ))
     }
 }
 

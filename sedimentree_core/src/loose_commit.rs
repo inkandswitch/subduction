@@ -135,7 +135,7 @@ impl EncodeFields for LooseCommit {
 impl DecodeFields for LooseCommit {
     const MIN_SIGNED_SIZE: usize = CODEC_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < CODEC_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "LooseCommit",
@@ -188,7 +188,7 @@ impl DecodeFields for LooseCommit {
 
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        Ok(LooseCommit::new(sedimentree_id, parents, blob_meta))
+        Ok((LooseCommit::new(sedimentree_id, parents, blob_meta), offset))
     }
 }
 
@@ -252,7 +252,10 @@ mod proptests {
                 let mut buf = Vec::new();
                 commit.encode_fields(&mut buf);
                 match LooseCommit::try_decode_fields(&buf) {
-                    Ok(decoded) => assert_eq!(&decoded, commit),
+                    Ok((decoded, consumed)) => {
+                        assert_eq!(&decoded, commit);
+                        assert_eq!(consumed, buf.len());
+                    }
                     Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
                 }
             });
@@ -289,6 +292,33 @@ mod proptests {
             .for_each(|commit| {
                 let encoded = commit.encode();
                 assert_eq!(encoded.len(), commit.encoded_size());
+            });
+    }
+
+    /// Decoded struct's `fields_size()` matches the consumed byte count
+    /// returned by `try_decode_fields`.
+    ///
+    /// This is the invariant that the old `Signed::try_decode` assumed
+    /// but never verified — if these disagree, `bytes.truncate()` corrupts
+    /// the signed data.
+    #[test]
+    #[allow(clippy::panic)]
+    fn decoded_fields_size_matches_consumed() {
+        bolero::check!()
+            .with_arbitrary::<LooseCommit>()
+            .for_each(|commit| {
+                let mut buf = Vec::new();
+                commit.encode_fields(&mut buf);
+                match LooseCommit::try_decode_fields(&buf) {
+                    Ok((decoded, consumed)) => {
+                        assert_eq!(
+                            consumed,
+                            decoded.fields_size(),
+                            "consumed byte count must equal decoded struct's fields_size()"
+                        );
+                    }
+                    Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
+                }
             });
     }
 }

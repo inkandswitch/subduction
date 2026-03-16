@@ -338,7 +338,7 @@ impl EncodeFields for Fragment {
 impl DecodeFields for Fragment {
     const MIN_SIGNED_SIZE: usize = CODEC_MIN_SIZE;
 
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
         if buf.len() < CODEC_MIN_FIELDS_SIZE {
             return Err(DecodeError::MessageTooShort {
                 type_name: "Fragment",
@@ -418,12 +418,9 @@ impl DecodeFields for Fragment {
 
         let blob_meta = BlobMeta::from_digest_size(blob_digest, blob_size);
 
-        Ok(Fragment::from_parts(
-            sedimentree_id,
-            head,
-            boundary,
-            checkpoints,
-            blob_meta,
+        Ok((
+            Fragment::from_parts(sedimentree_id, head, boundary, checkpoints, blob_meta),
+            offset,
         ))
     }
 }
@@ -708,7 +705,10 @@ mod tests {
                     let mut buf = alloc::vec::Vec::new();
                     fragment.encode_fields(&mut buf);
                     match Fragment::try_decode_fields(&buf) {
-                        Ok(decoded) => assert_eq!(&decoded, fragment),
+                        Ok((decoded, consumed)) => {
+                            assert_eq!(&decoded, fragment);
+                            assert_eq!(consumed, buf.len());
+                        }
                         Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
                     }
                 });
@@ -745,6 +745,29 @@ mod tests {
                 .for_each(|fragment| {
                     let encoded = fragment.encode();
                     assert_eq!(encoded.len(), fragment.encoded_size());
+                });
+        }
+
+        /// Decoded struct's `fields_size()` matches the consumed byte count
+        /// returned by `try_decode_fields`.
+        #[test]
+        #[allow(clippy::panic)]
+        fn decoded_fields_size_matches_consumed() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    let mut buf = alloc::vec::Vec::new();
+                    fragment.encode_fields(&mut buf);
+                    match Fragment::try_decode_fields(&buf) {
+                        Ok((decoded, consumed)) => {
+                            assert_eq!(
+                                consumed,
+                                decoded.fields_size(),
+                                "consumed byte count must equal decoded struct's fields_size()"
+                            );
+                        }
+                        Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
+                    }
                 });
         }
 

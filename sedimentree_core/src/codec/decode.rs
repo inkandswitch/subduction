@@ -45,11 +45,16 @@ pub trait DecodeFields: Schema + Sized {
     /// before signature). The implementation should parse and validate
     /// all fields, including checking sort order for arrays.
     ///
+    /// Returns `(decoded_value, bytes_consumed)` where `bytes_consumed`
+    /// is the number of bytes actually read from `buf`. This is the
+    /// authoritative encoded fields size — derived from walking the wire
+    /// bytes, not from the reconstructed struct's `fields_size()`.
+    ///
     /// # Errors
     ///
     /// Returns [`DecodeError`] if the buffer is malformed, too short,
     /// contains invalid values, or fails validation (e.g., unsorted arrays).
-    fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError>;
+    fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError>;
 }
 
 /// Decode a u8.

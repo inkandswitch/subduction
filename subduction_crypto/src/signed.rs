@@ -164,7 +164,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
     ///
     /// Returns an error if the payload cannot be decoded.
     pub fn try_decode_trusted_payload(&self) -> Result<T, DecodeError> {
-        T::try_decode_fields(self.fields_bytes())
+        T::try_decode_fields(self.fields_bytes()).map(|(payload, _)| payload)
     }
 
     /// Decode from wire bytes.
@@ -225,6 +225,9 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
         // Decode the payload to determine the actual message size.
         // The fields start after schema + issuer, and we need to parse them
         // to know where they end (since they have variable-length arrays).
+        // The consumed byte count from try_decode_fields is the authoritative
+        // encoded fields size — derived from the wire bytes, not from the
+        // reconstructed struct (which could disagree, e.g., after BTreeSet dedup).
         let fields_start = SCHEMA_SIZE + VERIFYING_KEY_SIZE;
         let fields_bytes = bytes
             .get(fields_start..)
@@ -233,8 +236,7 @@ impl<T: Schema + EncodeFields + DecodeFields> Signed<T> {
                 need: fields_start + 1,
                 have: bytes.len(),
             })?;
-        let payload = T::try_decode_fields(fields_bytes)?;
-        let fields_size = payload.fields_size();
+        let (_payload, fields_size) = T::try_decode_fields(fields_bytes)?;
 
         // Calculate the actual message size and validate we have enough bytes
         let actual_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
@@ -445,7 +447,7 @@ mod tests {
     use super::*;
 
     /// Minimal test payload for testing Signed round-trips.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, arbitrary::Arbitrary)]
     struct TestPayload {
         value: u64,
     }
@@ -469,9 +471,9 @@ mod tests {
     impl DecodeFields for TestPayload {
         const MIN_SIGNED_SIZE: usize = 4 + 32 + 8 + 64; // schema + issuer + value + signature
 
-        fn try_decode_fields(buf: &[u8]) -> Result<Self, DecodeError> {
+        fn try_decode_fields(buf: &[u8]) -> Result<(Self, usize), DecodeError> {
             let value = decode::u64(buf, 0)?;
-            Ok(Self { value })
+            Ok((Self { value }, 8))
         }
     }
 
@@ -544,5 +546,77 @@ mod tests {
 
         assert!(result.is_err(), "tampered bytes should fail verification");
         Ok(())
+    }
+
+    /// Seal → `as_bytes` → `try_decode` → `as_bytes` must produce identical bytes.
+    ///
+    /// This catches truncation bugs where `try_decode` computes the wrong
+    /// `actual_size` and silently truncates the stored bytes.
+    #[test]
+    fn prop_seal_roundtrip_preserves_bytes() {
+        bolero::check!()
+            .with_arbitrary::<(TestPayload, [u8; 32])>()
+            .for_each(|(payload, key_bytes)| {
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(key_bytes);
+                let issuer = signing_key.verifying_key();
+
+                // Build signed bytes (synchronous, same as Signed::seal internals)
+                let fields_size = payload.fields_size();
+                let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+                let mut original_bytes = Vec::with_capacity(total_size);
+                original_bytes.extend_from_slice(&TestPayload::SCHEMA);
+                original_bytes.extend_from_slice(issuer.as_bytes());
+                payload.encode_fields(&mut original_bytes);
+                let signature = <ed25519_dalek::SigningKey as ed25519_dalek::Signer<_>>::sign(
+                    &signing_key,
+                    &original_bytes,
+                );
+                original_bytes.extend_from_slice(&signature.to_bytes());
+
+                // Round-trip through try_decode
+                let decoded = Signed::<TestPayload>::try_decode(original_bytes.clone())
+                    .expect("decode should succeed for sealed bytes");
+
+                assert_eq!(
+                    decoded.as_bytes(),
+                    &original_bytes[..],
+                    "try_decode must preserve exact byte identity"
+                );
+            });
+    }
+
+    /// `try_decode` of sealed bytes produces a `Signed` whose `try_verify` succeeds.
+    ///
+    /// This catches corruption in the `try_decode` path that would break
+    /// signature verification on reload (e.g., wrong truncation point).
+    #[test]
+    fn prop_try_decode_of_sealed_bytes_verifies() {
+        bolero::check!()
+            .with_arbitrary::<(TestPayload, [u8; 32])>()
+            .for_each(|(payload, key_bytes)| {
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(key_bytes);
+                let issuer = signing_key.verifying_key();
+
+                let fields_size = payload.fields_size();
+                let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+                let mut bytes = Vec::with_capacity(total_size);
+                bytes.extend_from_slice(&TestPayload::SCHEMA);
+                bytes.extend_from_slice(issuer.as_bytes());
+                payload.encode_fields(&mut bytes);
+                let signature = <ed25519_dalek::SigningKey as ed25519_dalek::Signer<_>>::sign(
+                    &signing_key,
+                    &bytes,
+                );
+                bytes.extend_from_slice(&signature.to_bytes());
+
+                let decoded =
+                    Signed::<TestPayload>::try_decode(bytes).expect("decode should succeed");
+
+                let verified = decoded
+                    .try_verify()
+                    .expect("verification must succeed for sealed bytes after try_decode");
+
+                assert_eq!(verified.payload(), payload);
+            });
     }
 }
