@@ -152,7 +152,6 @@ impl<O> Multiplexer<O> {
     /// Encode a [`BatchSyncRequest`] as wire bytes for sending.
     #[must_use]
     pub fn encode_request(req: &BatchSyncRequest) -> Vec<u8> {
-        use sedimentree_core::codec::encode::Encode;
         SyncMessage::BatchSyncRequest(req.clone()).encode()
     }
 }
