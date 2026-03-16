@@ -69,8 +69,8 @@ impl Timeout<Local> for JsTimeout {
 pub type WasmLongPollConnection = HttpLongPollConnection<JsTimeout>;
 
 /// JS-facing wrapper around [`WasmLongPollConnection`] that exposes the
-/// [`Connection`](super::JsConnection) interface so it can be used as a
-/// duck-typed `JsConnection` from JavaScript.
+/// [`Transport`](super::JsTransport) interface so it can be used as a
+/// duck-typed `JsTransport` from JavaScript.
 #[wasm_bindgen(js_name = SubductionLongPollConnection)]
 #[derive(Debug, Clone)]
 pub struct WasmLongPollConn(WasmLongPollConnection);
@@ -214,9 +214,12 @@ impl WasmAuthenticatedLongPoll {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
+        use subduction_core::connection::transport::MessageTransport;
         super::WasmAuthenticatedConnection::from_authenticated(self.inner.map(|lp| {
-            wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp))
-                .unchecked_into::<super::JsConnection>()
+            MessageTransport::new(
+                wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp))
+                    .unchecked_into::<super::JsTransport>(),
+            )
         }))
     }
 }

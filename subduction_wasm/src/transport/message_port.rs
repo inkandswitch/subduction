@@ -56,25 +56,8 @@ struct MessageQueue {
 
 type SharedQueue = Rc<RefCell<MessageQueue>>;
 
-fn dequeue_or_wait(queue: &SharedQueue) -> Promise {
-    let mut q = queue.borrow_mut();
-    if !q.incoming.is_empty() {
-        return Promise::resolve(&q.incoming.remove(0));
-    }
-    drop(q);
-
-    let queue = Rc::clone(queue);
-    Promise::new(&mut |resolve, _reject| {
-        queue.borrow_mut().waiters.push(resolve);
-    })
-}
-
 fn resolved_void() -> Promise {
     Promise::resolve(&JsValue::UNDEFINED)
-}
-
-fn rejected(msg: &str) -> Promise {
-    Promise::reject(&JsValue::from_str(msg))
 }
 
 // ---------------------------------------------------------------------------
@@ -84,11 +67,8 @@ fn rejected(msg: &str) -> Promise {
 /// A [`HandshakeConnection`] backed by a `MessagePort` (or any object with
 /// `postMessage` / `onmessage` / `close`).
 ///
-/// Implements the full `HandshakeConnection` interface (`sendBytes`,
-/// `recvBytes`, `send`, `recv`, `disconnect`) using the port for transport.
-///
-/// `nextRequestId` and `call` return rejected promises — `MessagePort`
-/// connections are used for peer-to-peer handshakes, not RPC-style sync.
+/// Implements the byte-oriented `Transport` interface (`sendBytes`,
+/// `recvBytes`, `disconnect`) using the port for transport.
 /// After the handshake, the [`Authenticated`] wrapper provides the sync API.
 #[wasm_bindgen(js_name = MessagePortConnection)]
 pub struct WasmMessagePortConnection {
@@ -180,28 +160,6 @@ impl WasmMessagePortConnection {
     pub fn disconnect(&self) -> Promise {
         self.port.close();
         resolved_void()
-    }
-
-    /// Send a structured message (post-handshake).
-    pub fn send(&self, message: &JsValue) -> Promise {
-        self.port.post_message(message);
-        resolved_void()
-    }
-
-    /// Receive the next message.
-    pub fn recv(&self) -> Promise {
-        dequeue_or_wait(&self.queue)
-    }
-
-    /// Not supported on `MessagePort` connections.
-    #[wasm_bindgen(js_name = nextRequestId)]
-    pub fn next_request_id(&self) -> Promise {
-        rejected("nextRequestId is not supported on MessagePort connections")
-    }
-
-    /// Not supported on `MessagePort` connections.
-    pub fn call(&self, _request: &JsValue, _timeout_ms: Option<f64>) -> Promise {
-        rejected("call is not supported on MessagePort connections")
     }
 }
 

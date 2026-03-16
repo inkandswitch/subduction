@@ -27,7 +27,7 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{handshake::audience::DiscoveryId, manager::Spawn},
+    connection::{handshake::audience::DiscoveryId, manager::Spawn, transport::MessageTransport},
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -43,7 +43,7 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     connection::{
-        JsConnection, JsConnectionError, WasmAuthenticatedConnection,
+        JsConnectionError, WasmAuthenticatedConnection, WasmJsConnection,
         longpoll::{WasmLongPoll, WasmLongPollConn},
         websocket::WasmWebSocket,
     },
@@ -89,13 +89,13 @@ impl Spawn<Local> for WasmSpawn {
 }
 
 type WasmSyncHandler =
-    SyncHandler<Local, JsStorage, JsConnection, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
+    SyncHandler<Local, JsStorage, WasmJsConnection, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
 
 type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
-    JsConnection,
+    WasmJsConnection,
     WasmSyncHandler,
     OpenPolicy,
     JsSigner,
@@ -370,9 +370,11 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(
-                authenticated.map(|ws| JsValue::from(ws).unchecked_into::<JsConnection>()),
-            )
+            .add_connection(authenticated.map(|ws| {
+                MessageTransport::new(
+                    JsValue::from(ws).unchecked_into::<crate::connection::JsTransport>(),
+                )
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -407,9 +409,11 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(
-                authenticated.map(|ws| JsValue::from(ws).unchecked_into::<JsConnection>()),
-            )
+            .add_connection(authenticated.map(|ws| {
+                MessageTransport::new(
+                    JsValue::from(ws).unchecked_into::<crate::connection::JsTransport>(),
+                )
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -445,7 +449,10 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(authenticated.map(|lp| {
-                JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsConnection>()
+                MessageTransport::new(
+                    JsValue::from(WasmLongPollConn::new(lp))
+                        .unchecked_into::<crate::connection::JsTransport>(),
+                )
             }))
             .await?;
         Ok(peer_id.into())
@@ -482,7 +489,10 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(authenticated.map(|lp| {
-                JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsConnection>()
+                MessageTransport::new(
+                    JsValue::from(WasmLongPollConn::new(lp))
+                        .unchecked_into::<crate::connection::JsTransport>(),
+                )
             }))
             .await?;
         Ok(peer_id.into())
@@ -722,7 +732,7 @@ impl WasmSubduction {
             conn_errors: conn_errors
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: conn.into_inner(),
+                    _conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -809,7 +819,7 @@ impl WasmSubduction {
             conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: conn.into_inner(),
+                    _conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -840,7 +850,7 @@ impl WasmSubduction {
             conn_errors: conn_errs
                 .into_iter()
                 .map(|(conn, err)| ConnErrPair {
-                    conn: conn.into_inner(),
+                    _conn: conn.into_inner(),
                     err: WasmCallError::from(err),
                 })
                 .collect(),
@@ -935,19 +945,12 @@ impl PeerBatchSyncResult {
 #[wasm_bindgen(js_name = ConnErrorPair)]
 #[derive(Debug, Clone)]
 pub struct ConnErrPair {
-    conn: JsConnection,
+    _conn: WasmJsConnection,
     err: WasmCallError,
 }
 
 #[wasm_bindgen(js_class = ConnErrorPair)]
 impl ConnErrPair {
-    /// The connection that encountered the error.
-    #[must_use]
-    #[wasm_bindgen(getter)]
-    pub fn conn(&self) -> JsConnection {
-        self.conn.clone()
-    }
-
     /// The error that occurred during the call.
     #[must_use]
     #[wasm_bindgen(getter)]
@@ -961,7 +964,7 @@ impl ConnErrPair {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    Map<PeerId, (bool, WasmSyncStats, Vec<(JsConnection, WasmCallError)>)>,
+    Map<PeerId, (bool, WasmSyncStats, Vec<(WasmJsConnection, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]
@@ -978,7 +981,7 @@ impl WasmPeerResultMap {
                 conn_errors: conn_errs
                     .iter()
                     .map(|(conn, err)| ConnErrPair {
-                        conn: conn.clone(),
+                        _conn: conn.clone(),
                         err: err.clone(),
                     })
                     .collect(),
@@ -996,7 +999,7 @@ impl WasmPeerResultMap {
                 conn_errors: conn_errs
                     .iter()
                     .map(|(conn, err)| ConnErrPair {
-                        conn: conn.clone(),
+                        _conn: conn.clone(),
                         err: err.clone(),
                     })
                     .collect(),

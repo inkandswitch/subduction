@@ -840,10 +840,12 @@ impl WasmAuthenticatedWebSocket {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
-        super::WasmAuthenticatedConnection::from_authenticated(
-            self.inner
-                .map(|ws| wasm_bindgen::JsValue::from(ws).unchecked_into::<super::JsConnection>()),
-        )
+        use subduction_core::connection::transport::MessageTransport;
+        super::WasmAuthenticatedConnection::from_authenticated(self.inner.map(|ws| {
+            MessageTransport::new(
+                wasm_bindgen::JsValue::from(ws).unchecked_into::<super::JsTransport>(),
+            )
+        }))
     }
 }
 

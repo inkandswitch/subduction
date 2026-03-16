@@ -3,7 +3,7 @@
 //! This module provides [`Handshake`] trait implementations for:
 //! - [`WasmWebSocketHandshake`] — operates on a raw `web_sys::WebSocket`
 //! - [`JsHandshakeConnection`] — operates on a user-provided JS object that
-//!   implements `HandshakeConnection` (extends `Connection` with `sendBytes`/`recvBytes`)
+//!   implements `HandshakeConnection` (extends `Transport` with `sendBytes`/`recvBytes`)
 
 use alloc::{format, string::String, vec::Vec};
 
@@ -92,7 +92,7 @@ impl Handshake<Local> for WasmWebSocketHandshake {
 
 #[wasm_bindgen(typescript_custom_section)]
 const TS_HANDSHAKE: &str = r#"
-export interface HandshakeConnection extends Connection {
+export interface HandshakeConnection extends Transport {
     sendBytes(bytes: Uint8Array): Promise<void>;
     recvBytes(): Promise<Uint8Array>;
 }
@@ -100,13 +100,12 @@ export interface HandshakeConnection extends Connection {
 
 #[wasm_bindgen]
 extern "C" {
-    /// A JS `Connection` that also supports raw byte send/recv for the
-    /// handshake phase.
+    /// A JS `Transport` that supports raw byte send/recv for the handshake phase.
     ///
     /// Implement this interface in JavaScript to run the Subduction handshake
     /// over any transport (WebSocket, WebRTC data channel, `MessageChannel`, etc.).
     /// The same object is used for both the handshake (via `sendBytes`/`recvBytes`)
-    /// and post-handshake communication (via the `Connection` methods).
+    /// and post-handshake communication.
     #[wasm_bindgen(js_name = HandshakeConnection, typescript_type = "HandshakeConnection")]
     pub type JsHandshakeConnection;
 

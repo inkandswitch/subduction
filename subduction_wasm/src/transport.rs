@@ -1,4 +1,4 @@
-//! JS [`Connection`] interface for Subduction.
+//! JS [`Transport`] interface for Subduction.
 
 pub mod fetch_client;
 pub mod handshake;
@@ -8,20 +8,21 @@ pub mod message_port;
 pub mod nonce;
 pub mod websocket;
 
-use alloc::string::ToString;
+use alloc::{string::ToString, vec::Vec};
 use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
-use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{FutureExt, future::LocalBoxFuture};
 use js_sys::{self, Promise};
 use subduction_core::{
     connection::{
-        Connection, Roundtrip,
+        Roundtrip,
         authenticated::Authenticated,
         handshake::{self as hs, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+        multiplexer::Multiplexer,
+        transport::{MessageTransport, Transport},
     },
     timestamp::TimestampSeconds,
 };
@@ -31,77 +32,90 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use crate::{
-    connection::{message::WasmMessage, nonce::WasmNonce},
+    connection::{longpoll::JsTimeout, nonce::WasmNonce},
     error::WasmHandshakeError,
     peer_id::WasmPeerId,
     signer::JsSigner,
 };
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
+/// Type alias for the `MessageTransport`-wrapped `JsTransport`.
+///
+/// This is the connection type used by `WasmSubductionCore` and error aliases.
+pub type WasmJsConnection = MessageTransport<JsTransport>;
+
 #[wasm_bindgen(typescript_custom_section)]
 const TS: &str = r#"
-export interface Connection {
+export interface Transport {
+    sendBytes(bytes: Uint8Array): Promise<void>;
+    recvBytes(): Promise<Uint8Array>;
     disconnect(): Promise<void>;
-    send(message: SyncMessage): Promise<void>;
-    recv(): Promise<SyncMessage>;
-    nextRequestId(): Promise<RequestId>;
-    call(request: BatchSyncRequest, timeoutMs: number | null): Promise<BatchSyncResponse>;
 }
 "#;
 
 #[wasm_bindgen]
 extern "C" {
-    /// Connection interface.
-    #[wasm_bindgen(js_name = Connection, typescript_type = "Connection")]
-    pub type JsConnection;
+    /// Byte-oriented transport interface.
+    #[wasm_bindgen(js_name = Transport, typescript_type = "Transport")]
+    pub type JsTransport;
+
+    /// Send raw bytes over the transport.
+    #[wasm_bindgen(method, js_name = sendBytes)]
+    fn js_send_bytes(this: &JsTransport, bytes: &js_sys::Uint8Array) -> Promise;
+
+    /// Receive the next message frame as raw bytes.
+    #[wasm_bindgen(method, js_name = recvBytes)]
+    fn js_recv_bytes(this: &JsTransport) -> Promise;
 
     /// Disconnect from the peer gracefully.
     #[wasm_bindgen(method, js_name = disconnect)]
-    fn js_disconnect(this: &JsConnection) -> Promise;
-
-    /// Send a message.
-    #[wasm_bindgen(method, js_name = send)]
-    fn js_send(this: &JsConnection, message: WasmMessage) -> Promise;
-
-    /// Receive a message.
-    #[wasm_bindgen(method, js_name = recv)]
-    fn js_recv(this: &JsConnection) -> Promise;
-
-    /// Get the next request ID.
-    #[wasm_bindgen(method, js_name = nextRequestId)]
-    fn js_next_request_id(this: &JsConnection) -> Promise;
-
-    /// Make a synchronous call to the peer.
-    #[wasm_bindgen(method, js_name = call)]
-    fn js_call(
-        this: &JsConnection,
-        request: WasmBatchSyncRequest,
-        timeout_ms: Option<f64>,
-    ) -> Promise;
+    fn js_disconnect(this: &JsTransport) -> Promise;
 }
 
-impl core::fmt::Debug for JsConnection {
+impl core::fmt::Debug for JsTransport {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("JsConnection").finish()
+        f.debug_tuple("JsTransport").finish()
     }
 }
 
-impl Clone for JsConnection {
+impl Clone for JsTransport {
     fn clone(&self) -> Self {
         JsCast::unchecked_into(JsValue::from(self).clone())
     }
 }
 
-impl PartialEq for JsConnection {
+impl PartialEq for JsTransport {
     fn eq(&self, other: &Self) -> bool {
         JsValue::from(self) == JsValue::from(other)
     }
 }
 
-impl Connection<Local, SyncMessage> for JsConnection {
-    type DisconnectionError = JsConnectionError;
+impl Transport<Local> for JsTransport {
     type SendError = JsConnectionError;
     type RecvError = JsConnectionError;
+    type DisconnectionError = JsConnectionError;
+
+    fn send_bytes(&self, bytes: &[u8]) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+        let uint8_array = js_sys::Uint8Array::from(bytes);
+        async move {
+            JsFuture::from(self.js_send_bytes(&uint8_array))
+                .await
+                .map_err(JsConnectionError::Send)?;
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn recv_bytes(&self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        async move {
+            let js_value = JsFuture::from(self.js_recv_bytes())
+                .await
+                .map_err(JsConnectionError::Recv)?;
+            let uint8_array = js_sys::Uint8Array::new(&js_value);
+            Ok(uint8_array.to_vec())
+        }
+        .boxed_local()
+    }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async move {
@@ -112,48 +126,29 @@ impl Connection<Local, SyncMessage> for JsConnection {
         }
         .boxed_local()
     }
-
-    fn send(&self, message: &SyncMessage) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
-        let wasm_msg = WasmMessage::from(message.clone());
-        async move {
-            JsFuture::from(self.js_send(wasm_msg))
-                .await
-                .map_err(JsConnectionError::Send)?;
-            Ok(())
-        }
-        .boxed_local()
-    }
-
-    fn recv(&self) -> LocalBoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
-        async move {
-            let js_value = JsFuture::from(self.js_recv())
-                .await
-                .map_err(JsConnectionError::Recv)?;
-            let wasm_msg = WasmMessage::try_from_js_value(&js_value).ok_or_else(|| {
-                JsConnectionError::UnexpectedJsType {
-                    expected: "SyncMessage",
-                    value: js_value,
-                }
-            })?;
-            Ok(wasm_msg.into())
-        }
-        .boxed_local()
-    }
 }
 
-impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for JsConnection {
+/// Default timeout for roundtrip calls via `JsTransport`.
+const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_secs(30);
+
+impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for JsTransport {
     type CallError = JsConnectionError;
 
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
+        // Generate a locally-random request ID.
+        // We can't use a Multiplexer here since JsTransport is a JS extern type
+        // without interior state. Use a global-ish random nonce instead.
         async move {
+            let mut buf = [0u8; 8];
             #[allow(clippy::expect_used)]
-            let js_value = JsFuture::from(self.js_next_request_id())
-                .await
-                .expect("JsConnection.nextRequestId() promise rejected");
-            #[allow(clippy::expect_used)]
-            let wasm_req_id = WasmRequestId::try_from_js_value(&js_value)
-                .expect("JsConnection.nextRequestId() did not return a RequestId");
-            wasm_req_id.into()
+            getrandom::getrandom(&mut buf).expect("platform CSPRNG unavailable");
+            let nonce = u64::from_le_bytes(buf);
+            // Requestor is zeroed — it will be filled in by the caller (Subduction)
+            // using the authenticated peer_id.
+            RequestId {
+                requestor: subduction_core::peer::id::PeerId::new([0u8; 32]),
+                nonce,
+            }
         }
         .boxed_local()
     }
@@ -164,52 +159,66 @@ impl Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for JsConnection {
         timeout: Option<Duration>,
     ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
         async move {
-            let wasm_req = WasmBatchSyncRequest::from(req);
-            #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-            let timeout_ms = timeout.map(|d| d.as_millis() as f64);
-            let js_value = JsFuture::from(self.js_call(wasm_req, timeout_ms))
+            // Encode request as bytes
+            let bytes = Multiplexer::<JsTimeout>::encode_request(&req);
+
+            // Send via the transport
+            self.send_bytes(&bytes)
                 .await
-                .map_err(JsConnectionError::Call)?;
-            let wasm_resp =
-                WasmBatchSyncResponse::try_from_js_value(&js_value).ok_or_else(|| {
-                    JsConnectionError::UnexpectedJsType {
-                        expected: "BatchSyncResponse",
-                        value: js_value,
-                    }
-                })?;
-            Ok(wasm_resp.into())
+                .map_err(|_| JsConnectionError::Call(JsValue::from_str("send failed")))?;
+
+            // Wait for a response matching our request ID
+            let req_id = req.req_id;
+            let deadline = timeout.unwrap_or(DEFAULT_CALL_TIMEOUT);
+            let start = js_sys::Date::now();
+
+            #[allow(clippy::cast_possible_truncation)]
+            let deadline_ms = deadline.as_millis().min(u128::from(u64::MAX)) as u64;
+
+            loop {
+                #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+                let elapsed_ms = (js_sys::Date::now() - start) as u64;
+                if elapsed_ms >= deadline_ms {
+                    return Err(JsConnectionError::Call(JsValue::from_str("call timed out")));
+                }
+
+                let resp_bytes = self.recv_bytes().await?;
+
+                if let Ok(SyncMessage::BatchSyncResponse(resp)) =
+                    SyncMessage::try_decode(&resp_bytes)
+                    && resp.req_id == req_id
+                {
+                    return Ok(resp);
+                }
+
+                // Not our response — in a real multiplexed setup this
+                // would be dispatched elsewhere. For now, loop and
+                // discard non-matching messages.
+                tracing::debug!("JsTransport::call: received non-matching message, retrying");
+            }
         }
         .boxed_local()
     }
 }
 
-/// Errors from the JS connection.
+/// Errors from the JS transport.
 #[derive(Error, Debug, Clone)]
 pub enum JsConnectionError {
     /// An error that occurred while disconnecting.
     #[error("Disconnect error")]
     Disconnect(JsValue),
 
-    /// An error that occurred while sending a message.
+    /// An error that occurred while sending bytes.
     #[error("Send error")]
     Send(JsValue),
 
-    /// An error that occurred while receiving a message.
+    /// An error that occurred while receiving bytes.
     #[error("Recv error")]
     Recv(JsValue),
 
-    /// An error that occurred during a synchronous call.
+    /// An error that occurred during a roundtrip call.
     #[error("Call error")]
     Call(JsValue),
-
-    /// A JS value could not be cast to the expected type.
-    #[error("JS type cast failed: expected {expected}, got {value:?}")]
-    UnexpectedJsType {
-        /// The type name that was expected.
-        expected: &'static str,
-        /// The actual JS value received.
-        value: JsValue,
-    },
 }
 
 impl From<JsConnectionError> for JsValue {
@@ -342,7 +351,7 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 
 /// A transport-erased authenticated connection.
 ///
-/// Wraps an [`Authenticated<JsConnection>`] and is the common type
+/// Wraps an [`Authenticated<WasmJsConnection>`] and is the common type
 /// accepted by [`addConnection`](crate::subduction::WasmSubduction::add_connection).
 ///
 /// # Construction
@@ -350,7 +359,7 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 /// There are three ways to obtain an `AuthenticatedConnection`:
 ///
 /// 1. **Custom transport** — implement [`HandshakeConnection`](handshake::JsHandshakeConnection)
-///    (extends `Connection` with `sendBytes`/`recvBytes`) and call [`setup`](Self::setup):
+///    (a `Transport` with `sendBytes`/`recvBytes`/`disconnect`) and call [`setup`](Self::setup):
 ///
 ///    ```js
 ///    const auth = await AuthenticatedConnection.setup(myConn, signer, peerId);
@@ -372,21 +381,21 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 #[wasm_bindgen(js_name = AuthenticatedConnection)]
 #[derive(Debug)]
 pub struct WasmAuthenticatedConnection {
-    inner: Authenticated<JsConnection, Local>,
+    inner: Authenticated<WasmJsConnection, Local>,
 }
 
 impl WasmAuthenticatedConnection {
     /// Access the inner `Authenticated` connection.
-    pub(crate) fn inner(&self) -> &Authenticated<JsConnection, Local> {
+    pub(crate) fn inner(&self) -> &Authenticated<WasmJsConnection, Local> {
         &self.inner
     }
 
-    /// Construct from an `Authenticated<JsConnection>`.
+    /// Construct from an `Authenticated<WasmJsConnection>`.
     ///
     /// Used by [`WasmAuthenticatedWebSocket::to_connection`] and
     /// [`WasmAuthenticatedLongPoll::to_connection`] to wrap transport-specific
     /// authenticated connections.
-    pub(crate) fn from_authenticated(inner: Authenticated<JsConnection, Local>) -> Self {
+    pub(crate) fn from_authenticated(inner: Authenticated<WasmJsConnection, Local>) -> Self {
         Self { inner }
     }
 }
@@ -396,13 +405,14 @@ impl WasmAuthenticatedConnection {
     /// Run the Subduction handshake over a custom transport, producing an
     /// authenticated connection.
     ///
-    /// The `connection` object must implement both `HandshakeConnection`
-    /// (for the handshake phase) and `Connection` (for post-handshake
-    /// communication). The same object is used for both phases.
+    /// The `connection` object must implement `Transport`
+    /// (`sendBytes`/`recvBytes`/`disconnect`).
+    /// The same object is used for both the handshake phase and post-handshake
+    /// communication.
     ///
     /// # Arguments
     ///
-    /// * `connection` - A `HandshakeConnection` (extends `Connection`)
+    /// * `connection` - A `HandshakeConnection` (extends `Transport`)
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     ///
@@ -423,8 +433,8 @@ impl WasmAuthenticatedConnection {
         let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
             connection,
             |hs_conn, peer_id| {
-                let transport: JsConnection = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
-                (transport, peer_id)
+                let transport: JsTransport = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
+                (MessageTransport::new(transport), peer_id)
             },
             signer,
             audience,
@@ -448,7 +458,7 @@ impl WasmAuthenticatedConnection {
     ///
     /// # Arguments
     ///
-    /// * `connection` - A `HandshakeConnection` (extends `Connection`)
+    /// * `connection` - A `HandshakeConnection` (extends `Transport`)
     /// * `signer` - The responder's signer for authentication
     /// * `max_drift_seconds` - Maximum acceptable clock drift in seconds (default: 600)
     ///
@@ -474,8 +484,8 @@ impl WasmAuthenticatedConnection {
         let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
             connection,
             |hs_conn, peer_id| {
-                let transport: JsConnection = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
-                (transport, peer_id)
+                let transport: JsTransport = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
+                (MessageTransport::new(transport), peer_id)
             },
             signer,
             &nonce_cache,
