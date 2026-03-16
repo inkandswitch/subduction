@@ -19,7 +19,6 @@ pub mod multiplexer;
 pub mod nonce_cache;
 pub mod stats;
 pub mod timeout;
-pub mod transport;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;

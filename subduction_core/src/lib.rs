@@ -100,6 +100,7 @@ pub mod sharded_map;
 pub mod storage;
 pub mod subduction;
 pub mod timestamp;
+pub mod transport;
 
 #[cfg(feature = "metrics")]
 #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
