@@ -1,4 +1,4 @@
-//! # Generic WebSocket connection for Subduction
+//! # Generic WebSocket transport for Subduction
 
 use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
@@ -228,9 +228,9 @@ impl<T, K: FutureForm, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for 
 }
 
 impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
-    /// Create a new WebSocket connection.
+    /// Create a new WebSocket transport.
     ///
-    /// Returns the connection and a sender task future. The sender task drains
+    /// Returns the transport and a sender task future. The sender task drains
     /// the outbound message channel to the WebSocket write half and should be
     /// spawned as a background task.
     ///
@@ -305,7 +305,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         self.multiplexer.default_time_limit()
     }
 
-    /// Get the [`PeerId`] associated with this connection.
+    /// Get the [`PeerId`] associated with this transport.
     #[must_use]
     pub fn peer_id(&self) -> PeerId {
         self.multiplexer.peer_id()

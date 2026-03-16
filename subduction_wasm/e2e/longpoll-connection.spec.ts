@@ -200,7 +200,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
         const authA = await SubductionLongPoll.tryDiscover(baseUrl, signerA, 10000, serviceName);
         const serverPeerId = authA.peerId;
-        await syncerA.addConnection(authA.toConnection());
+        await syncerA.addConnection(authA.toTransport());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(99));
         await syncerA.addCommit(sedId, [], new Uint8Array([1, 2, 3, 4, 5]));
@@ -212,7 +212,7 @@ test.describe("Long-Poll Connection Tests", () => {
 
         const authB = await SubductionLongPoll.tryDiscover(baseUrl, signerB, 10000, serviceName);
         const serverPeerIdB = authB.peerId;
-        await syncerB.addConnection(authB.toConnection());
+        await syncerB.addConnection(authB.toTransport());
         await syncerB.syncWithPeer(serverPeerIdB, sedId, true, 5000n);
 
         const idsB = await syncerB.sedimentreeIds();
@@ -326,7 +326,7 @@ test.describe("Long-Poll Connection Tests", () => {
           serverPeerId,
           10000
         );
-        const isNew = await syncer.addConnection(knownAuth.toConnection());
+        const isNew = await syncer.addConnection(knownAuth.toTransport());
 
         const peers = await syncer.getConnectedPeerIds();
 

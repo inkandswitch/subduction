@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    FutureExt,
-    future::{Either, select},
+    future::{select, Either},
     stream::Aborted,
+    FutureExt,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -34,8 +34,8 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        Subduction, builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
+        builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
     },
 };
 use wasm_bindgen::prelude::*;
@@ -52,10 +52,10 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        DEFAULT_MUX_TIME_LIMIT, JsTransport, WasmAuthenticatedTransport, WasmTransport,
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
+        JsTransport, WasmAuthenticatedTransport, WasmTransport, DEFAULT_MUX_TIME_LIMIT,
     },
 };
 use sedimentree_wasm::{
@@ -559,10 +559,10 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = addConnection)]
     pub async fn add_connection(
         &self,
-        conn: &WasmAuthenticatedTransport,
+        transport: &WasmAuthenticatedTransport,
     ) -> Result<bool, WasmAddConnectionError> {
         self.core
-            .add_connection(conn.inner().clone())
+            .add_connection(transport.inner().clone())
             .await
             .map_err(Into::into)
     }
@@ -729,7 +729,7 @@ impl WasmSubduction {
         timeout_milliseconds: Option<u64>,
     ) -> Result<PeerBatchSyncResult, WasmIoError> {
         let timeout = timeout_milliseconds.map(Duration::from_millis);
-        let (success, stats, conn_errors) = self
+        let (success, stats, transport_errors) = self
             .core
             .sync_with_peer(
                 &to_ask.clone().into(),
@@ -743,12 +743,9 @@ impl WasmSubduction {
         Ok(PeerBatchSyncResult {
             success,
             stats: stats.into(),
-            conn_errors: conn_errors
+            transport_errors: transport_errors
                 .into_iter()
-                .map(|(conn, err)| ConnErrPair {
-                    _conn: conn.into_inner(),
-                    err: WasmCallError::from(err),
-                })
+                .map(|(_conn, err)| WasmCallError::from(err))
                 .collect(),
         })
     }
@@ -830,12 +827,9 @@ impl WasmSubduction {
         PeerBatchSyncResult {
             success,
             stats: stats.into(),
-            conn_errors: conn_errs
+            transport_errors: conn_errs
                 .into_iter()
-                .map(|(conn, err)| ConnErrPair {
-                    _conn: conn.into_inner(),
-                    err: WasmCallError::from(err),
-                })
+                .map(|(_conn, err)| WasmCallError::from(err))
                 .collect(),
         }
     }
@@ -861,12 +855,9 @@ impl WasmSubduction {
         PeerBatchSyncResult {
             success,
             stats: stats.into(),
-            conn_errors: conn_errs
+            transport_errors: conn_errs
                 .into_iter()
-                .map(|(conn, err)| ConnErrPair {
-                    _conn: conn.into_inner(),
-                    err: WasmCallError::from(err),
-                })
+                .map(|(_conn, err)| WasmCallError::from(err))
                 .collect(),
         }
     }
@@ -927,7 +918,7 @@ impl WasmSubduction {
 pub struct PeerBatchSyncResult {
     success: bool,
     stats: WasmSyncStats,
-    conn_errors: Vec<ConnErrPair>,
+    transport_errors: Vec<WasmCallError>,
 }
 
 #[wasm_bindgen(js_class = PeerBatchSyncResult)]
@@ -947,29 +938,14 @@ impl PeerBatchSyncResult {
         self.stats
     }
 
-    /// List of connection errors that occurred during the batch sync.
+    /// Errors that occurred during the batch sync.
     #[must_use]
     #[wasm_bindgen(getter, js_name = transportErrors)]
-    pub fn conn_errors(&self) -> Vec<ConnErrPair> {
-        self.conn_errors.clone()
-    }
-}
-
-/// A pair of a connection and an error that occurred during a call.
-#[wasm_bindgen(js_name = TransportErrorPair)]
-#[derive(Debug, Clone)]
-pub struct ConnErrPair {
-    _conn: WasmTransport,
-    err: WasmCallError,
-}
-
-#[wasm_bindgen(js_class = TransportErrorPair)]
-impl ConnErrPair {
-    /// The error that occurred during the call.
-    #[must_use]
-    #[wasm_bindgen(getter)]
-    pub fn err(&self) -> js_sys::Error {
-        self.err.clone().into()
+    pub fn transport_errors(&self) -> Vec<js_sys::Error> {
+        self.transport_errors
+            .iter()
+            .map(|e| e.clone().into())
+            .collect()
     }
 }
 
@@ -992,13 +968,7 @@ impl WasmPeerResultMap {
             .map(|(success, stats, conn_errs)| PeerBatchSyncResult {
                 success: *success,
                 stats: *stats,
-                conn_errors: conn_errs
-                    .iter()
-                    .map(|(conn, err)| ConnErrPair {
-                        _conn: conn.clone(),
-                        err: err.clone(),
-                    })
-                    .collect(),
+                transport_errors: conn_errs.iter().map(|(_conn, err)| err.clone()).collect(),
             })
     }
 
@@ -1010,13 +980,7 @@ impl WasmPeerResultMap {
             results.push(PeerBatchSyncResult {
                 success: *success,
                 stats: *stats,
-                conn_errors: conn_errs
-                    .iter()
-                    .map(|(conn, err)| ConnErrPair {
-                        _conn: conn.clone(),
-                        err: err.clone(),
-                    })
-                    .collect(),
+                transport_errors: conn_errs.iter().map(|(_conn, err)| err.clone()).collect(),
             });
         }
         results
