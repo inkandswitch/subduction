@@ -55,7 +55,8 @@ pub(crate) async fn write_framed(send: &mut SendStream, data: &[u8]) -> Result<(
         });
     }
 
-    // Length fits in u32 because MAX_FRAME_SIZE < u32::MAX.
+    // SAFETY: length fits in u32 because MAX_FRAME_SIZE (50 MiB) < u32::MAX (4 GiB).
+    #[allow(clippy::cast_possible_truncation)]
     let len = data.len() as u32;
     send.write_all(&len.to_be_bytes())
         .await

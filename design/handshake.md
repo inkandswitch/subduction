@@ -233,7 +233,7 @@ enum HandshakeMessage {
 }
 ```
 
-Sent as WebSocket binary frames.
+Sent as binary frames over the transport layer (WebSocket, HTTP long-poll, or QUIC).
 
 ## Security Properties
 
@@ -423,7 +423,7 @@ The `initiate` and `respond` functions perform the complete handshake protocol a
 ### Initiator Side
 
 ```rust
-use subduction_core::connection::handshake;
+use subduction_core::handshake;
 
 // Closure returns (Connection, ExtraData) tuple
 let (authenticated, ()) = handshake::initiate(
@@ -441,7 +441,7 @@ let (authenticated, ()) = handshake::initiate(
 ### Responder Side
 
 ```rust
-use subduction_core::connection::handshake;
+use subduction_core::handshake;
 
 // Closure returns (Connection, ExtraData) tuple
 let (authenticated, ()) = handshake::respond(
@@ -463,13 +463,14 @@ let (authenticated, ()) = handshake::respond(
 The `Authenticated<C, K>` wrapper is a _witness type_ proving the connection completed handshake verification:
 
 ```rust
-pub struct Authenticated<C: Connection<K>, K: FutureForm> {
+pub struct Authenticated<C, K: FutureForm> {
     inner: C,
+    peer_id: PeerId,
     _marker: PhantomData<fn() -> K>,
 }
 ```
 
-The `peer_id()` method delegates to `self.inner.peer_id()` — the inner `Connection` stores the verified peer ID (set by `build_connection` during handshake). There's no redundant field because the connection already holds the authoritative identity.
+`Authenticated` stores the verified `PeerId` directly — this is the identity proven by the handshake signature. The `Connection` bound is on the trait impls, not the struct itself.
 
 Key properties:
 

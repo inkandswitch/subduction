@@ -18,17 +18,17 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
+        test_utils::{new_test_subduction, test_signer, ChannelMockConnection, TokioSpawn},
     },
     handler::sync::SyncHandler,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
     subduction::{
+        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
 };
 use testresult::TestResult;

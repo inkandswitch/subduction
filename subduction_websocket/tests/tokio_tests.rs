@@ -13,11 +13,10 @@ use std::{
     time::Duration,
 };
 use subduction_core::{
-    connection::{
-        Connection, Reconnect, handshake::audience::Audience, message::SyncMessage,
-        nonce_cache::NonceCache,
-    },
+    connection::{Connection, Reconnect, message::SyncMessage},
     handler::sync::SyncHandler,
+    handshake::audience::Audience,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,

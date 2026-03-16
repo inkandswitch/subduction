@@ -60,7 +60,7 @@ Multi-commit atomicity is _not_ assumed — peers may see partial sync results.
 
 > **Assumption:** Messages sent on an established connection either arrive intact or the connection fails.
 
-The protocol assumes the transport layer (WebSocket) handles:
+The protocol assumes the transport layer handles:
 
 - Ordering (messages arrive in send order)
 - Integrity (no silent corruption)
@@ -141,7 +141,7 @@ The protocol uses `getrandom` on native platforms and `crypto.getRandomValues()`
 
 **Consequence of violation:** Replay attacks, authentication bypass.
 
-## CBOR Encoding
+## Canonical Binary Codec
 
 ### Deterministic Encoding
 
@@ -158,21 +158,14 @@ encode(decoded_challenge) → bytes_2
 verify(bytes_2, signature)  // Must match!
 ```
 
-This requires:
+The custom binary codec (see [protocol.md](./protocol.md#serialization)) achieves this via:
 
-- Sorted map keys (by encoded length, then lexicographically)
-- Canonical integer encoding (smallest representation)
-- No indefinite-length containers
+- Fixed field order defined by `EncodeFields` implementations
+- Big-endian integers (no smallest-encoding ambiguity)
+- Bijective `bijou64` for variable-length sizes (no overlong forms)
+- Sorted arrays with no duplicates
 
 **Consequence of violation:** Signature verification failures.
-
-### No Duplicate Map Keys
-
-> **Assumption:** CBOR maps do not contain duplicate keys.
-
-Per RFC 8949, duplicate keys are invalid. The protocol currently does _not_ detect duplicates on decode (see TODOs).
-
-**Consequence of violation:** Ambiguous parsing, potential security issues.
 
 ## Concurrency
 

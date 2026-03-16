@@ -2412,11 +2412,9 @@ impl<
 mod tests {
     use super::*;
     use crate::{
-        connection::{
-            nonce_cache::NonceCache,
-            test_utils::{FailingSendMockConnection, TestSpawn, test_signer},
-        },
+        connection::test_utils::{FailingSendMockConnection, TestSpawn, test_signer},
         handler::sync::SyncHandler,
+        nonce_cache::NonceCache,
         policy::open::OpenPolicy,
         sharded_map::ShardedMap,
         storage::{memory::MemoryStorage, powerbox::StoragePowerbox},

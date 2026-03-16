@@ -182,7 +182,7 @@ impl<K: FutureForm, T, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for 
             match self
                 .multiplexer
                 .timeout()
-                .timeout(req_timeout, K::from_future(async { rx.await }))
+                .timeout(req_timeout, K::from_future(rx))
                 .await
             {
                 Ok(Ok(resp)) => Ok(resp),

@@ -9,11 +9,9 @@ use sedimentree_core::{
     id::SedimentreeId, loose_commit::LooseCommit,
 };
 use subduction_core::{
-    connection::{
-        nonce_cache::NonceCache,
-        test_utils::{FailingSendMockConnection, MockConnection, TestSpawn, test_signer},
-    },
+    connection::test_utils::{FailingSendMockConnection, MockConnection, TestSpawn, test_signer},
     handler::sync::SyncHandler,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
