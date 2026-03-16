@@ -24,7 +24,7 @@
 //!     │                                         │
 //!     │  POST /lp/send                          │
 //!     │  X-Session-Id: <id>                     │
-//!     │  Body: SyncMessage (binary)                 │
+//!     │  Body: SyncMessage (binary)             │
 //!     │ ──────────────────────────────────────► │
 //!     │  204 No Content                         │
 //!     │ ◄────────────────────────────────────── │
@@ -33,7 +33,7 @@
 //!     │  X-Session-Id: <id>                     │
 //!     │ ──────────────────────────────────────► │
 //!     │            ... (blocks) ...             │
-//!     │  200 + SyncMessage (binary)                 │
+//!     │  200 + SyncMessage (binary)             │
 //!     │ ◄────────────────────────────────────── │
 //!     │                                         │
 //!     │  POST /lp/disconnect                    │
