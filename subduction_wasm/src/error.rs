@@ -11,8 +11,8 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::transport::{
-    JsTransportError, WasmJsConnection, longpoll::LongPollConnectionError,
-    websocket::WebSocketAuthenticatedConnectionError,
+    JsTransportError, WasmTransport, longpoll::LongPollTransportError,
+    websocket::WebSocketAuthenticatedTransportError,
 };
 use sedimentree_wasm::storage::JsStorage;
 
@@ -35,7 +35,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmJsConnection, SyncMessage>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmTransport, SyncMessage>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -52,7 +52,7 @@ impl From<WasmIoError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmWriteError(
-    #[from] WriteError<Local, JsStorage, WasmJsConnection, SyncMessage, Infallible>,
+    #[from] WriteError<Local, JsStorage, WasmTransport, SyncMessage, Infallible>,
 );
 
 impl From<WasmWriteError> for JsValue {
@@ -66,9 +66,9 @@ impl From<WasmWriteError> for JsValue {
 /// Error connecting to a peer (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmConnectError {
-    /// WebSocket connection or handshake failed.
-    #[error("connection failed: {0}")]
-    Connection(#[from] WebSocketAuthenticatedConnectionError),
+    /// WebSocket transport or handshake failed.
+    #[error("transport failed: {0}")]
+    Transport(#[from] WebSocketAuthenticatedTransportError),
 
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]
@@ -86,7 +86,7 @@ impl From<WasmConnectError> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, WasmJsConnection, SyncMessage>);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, WasmTransport, SyncMessage>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
@@ -133,9 +133,9 @@ impl From<WasmDisconnectionError> for JsValue {
 /// Error connecting via HTTP long-poll (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmLongPollConnectError {
-    /// Long-poll connection or handshake failed.
-    #[error("connection failed: {0}")]
-    Connection(#[from] LongPollConnectionError),
+    /// Long-poll transport or handshake failed.
+    #[error("transport failed: {0}")]
+    Transport(#[from] LongPollTransportError),
 
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]

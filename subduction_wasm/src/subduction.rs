@@ -52,9 +52,9 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        DEFAULT_MUX_TIME_LIMIT, JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
+        DEFAULT_MUX_TIME_LIMIT, JsTransport, WasmAuthenticatedTransport, WasmTransport,
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
-        make_connection,
+        make_transport,
         websocket::WasmWebSocket,
     },
 };
@@ -91,13 +91,13 @@ impl Spawn<Local> for WasmSpawn {
 }
 
 type WasmSyncHandler =
-    SyncHandler<Local, JsStorage, WasmJsConnection, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
+    SyncHandler<Local, JsStorage, WasmTransport, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
 
 type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
-    WasmJsConnection,
+    WasmTransport,
     WasmSyncHandler,
     OpenPolicy,
     JsSigner,
@@ -374,7 +374,7 @@ impl WasmSubduction {
         let time_limit = Duration::from_millis(u64::from(timeout_milliseconds));
         self.core
             .add_connection(authenticated.map(|ws| {
-                make_connection(
+                make_transport(
                     JsValue::from(ws).unchecked_into::<JsTransport>(),
                     peer_id,
                     time_limit,
@@ -418,7 +418,7 @@ impl WasmSubduction {
         });
         self.core
             .add_connection(authenticated.map(|ws| {
-                make_connection(
+                make_transport(
                     JsValue::from(ws).unchecked_into::<JsTransport>(),
                     peer_id,
                     time_limit,
@@ -464,7 +464,7 @@ impl WasmSubduction {
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_connection(transport, peer_id, time_limit)
+                make_transport(transport, peer_id, time_limit)
             }))
             .await?;
         Ok(peer_id.into())
@@ -506,7 +506,7 @@ impl WasmSubduction {
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_connection(transport, peer_id, time_limit)
+                make_transport(transport, peer_id, time_limit)
             }))
             .await?;
         Ok(peer_id.into())
@@ -542,7 +542,7 @@ impl WasmSubduction {
     ///
     /// Accepts an [`AuthenticatedTransport`](WasmAuthenticatedTransport),
     /// obtained via [`AuthenticatedTransport.setup`](WasmAuthenticatedTransport::setup),
-    /// [`AuthenticatedWebSocket.toConnection`], or [`AuthenticatedLongPoll.toConnection`].
+    /// [`AuthenticatedWebSocket.toTransport`], or [`AuthenticatedLongPoll.toTransport`].
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
     ///
@@ -949,21 +949,21 @@ impl PeerBatchSyncResult {
 
     /// List of connection errors that occurred during the batch sync.
     #[must_use]
-    #[wasm_bindgen(getter, js_name = connErrors)]
+    #[wasm_bindgen(getter, js_name = transportErrors)]
     pub fn conn_errors(&self) -> Vec<ConnErrPair> {
         self.conn_errors.clone()
     }
 }
 
 /// A pair of a connection and an error that occurred during a call.
-#[wasm_bindgen(js_name = ConnErrorPair)]
+#[wasm_bindgen(js_name = TransportErrorPair)]
 #[derive(Debug, Clone)]
 pub struct ConnErrPair {
-    _conn: WasmJsConnection,
+    _conn: WasmTransport,
     err: WasmCallError,
 }
 
-#[wasm_bindgen(js_class = ConnErrorPair)]
+#[wasm_bindgen(js_class = TransportErrorPair)]
 impl ConnErrPair {
     /// The error that occurred during the call.
     #[must_use]
@@ -978,7 +978,7 @@ impl ConnErrPair {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    Map<PeerId, (bool, WasmSyncStats, Vec<(WasmJsConnection, WasmCallError)>)>,
+    Map<PeerId, (bool, WasmSyncStats, Vec<(WasmTransport, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]

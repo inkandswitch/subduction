@@ -4,8 +4,8 @@ use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     fmt::Debug,
     future::{Future, IntoFuture},
-    time::Duration,
     marker::PhantomData,
+    time::Duration,
 };
 
 use async_lock::Mutex;
@@ -165,9 +165,7 @@ impl<T, K: FutureForm, O> Transport<K> for WebSocket<T, K, O> {
         T: AsyncRead + AsyncWrite + Unpin + Send,
         O: Timeout<Local>
 )]
-impl<T, K: FutureForm, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
-    for WebSocket<T, K, O>
-{
+impl<T, K: FutureForm, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, K, O> {
     type CallError = CallError;
 
     fn next_request_id(&self) -> K::Future<'_, RequestId> {

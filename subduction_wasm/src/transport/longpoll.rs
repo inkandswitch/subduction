@@ -162,13 +162,13 @@ impl WasmAuthenticatedLongPoll {
 
     /// Convert to a transport-erased [`AuthenticatedTransport`](super::WasmAuthenticatedTransport).
     #[must_use]
-    #[wasm_bindgen(js_name = toConnection)]
-    pub fn to_connection(self) -> super::WasmAuthenticatedTransport {
+    #[wasm_bindgen(js_name = toTransport)]
+    pub fn to_transport(self) -> super::WasmAuthenticatedTransport {
         let peer_id = self.inner.peer_id();
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
             let transport: super::JsTransport =
                 wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-            super::make_connection(transport, peer_id, super::DEFAULT_MUX_TIME_LIMIT)
+            super::make_transport(transport, peer_id, super::DEFAULT_MUX_TIME_LIMIT)
         }))
     }
 }
@@ -216,14 +216,14 @@ impl WasmLongPoll {
     ///
     /// # Errors
     ///
-    /// Returns [`LongPollConnectionError`] if connection or handshake fails.
+    /// Returns [`LongPollTransportError`] if connection or handshake fails.
     #[wasm_bindgen(js_name = tryConnect)]
     pub async fn try_connect(
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: Option<u32>,
-    ) -> Result<WasmAuthenticatedLongPoll, LongPollConnectionError> {
+    ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
         let client = make_client(base_url, default_time_limit);
@@ -231,7 +231,7 @@ impl WasmLongPoll {
         let result = client
             .connect(signer, expected_peer_id.clone().into(), js_now())
             .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
 
         // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
@@ -254,14 +254,14 @@ impl WasmLongPoll {
     ///
     /// # Errors
     ///
-    /// Returns [`LongPollConnectionError`] if connection or handshake fails.
+    /// Returns [`LongPollTransportError`] if connection or handshake fails.
     #[wasm_bindgen(js_name = tryDiscover)]
     pub async fn try_discover(
         base_url: &str,
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<WasmAuthenticatedLongPoll, LongPollConnectionError> {
+    ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
         let client = make_client(base_url, default_time_limit);
@@ -270,7 +270,7 @@ impl WasmLongPoll {
         let result = client
             .connect_discover(signer, &service_name, js_now())
             .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
 
         // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
@@ -288,7 +288,7 @@ impl WasmLongPoll {
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollConnectionError>
+    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
         let default_time_limit = Duration::from_millis(timeout_milliseconds.into());
         let client = make_client(base_url, default_time_limit);
@@ -296,7 +296,7 @@ impl WasmLongPoll {
         let result = client
             .connect(signer, expected_peer_id.clone().into(), js_now())
             .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
 
         // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
@@ -311,7 +311,7 @@ impl WasmLongPoll {
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollConnectionError>
+    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
         let timeout_ms = timeout_milliseconds.unwrap_or(30_000);
         let default_time_limit = Duration::from_millis(timeout_ms.into());
@@ -321,7 +321,7 @@ impl WasmLongPoll {
         let result = client
             .connect_discover(signer, &service_name, js_now())
             .await
-            .map_err(|e| LongPollConnectionError::Connection(e.to_string()))?;
+            .map_err(|e| LongPollTransportError::Connection(e.to_string()))?;
 
         // Spawn background tasks
         wasm_bindgen_futures::spawn_local(result.poll_task);
@@ -333,16 +333,16 @@ impl WasmLongPoll {
 
 /// Error connecting via HTTP long-poll.
 #[derive(Debug, Error)]
-pub enum LongPollConnectionError {
+pub enum LongPollTransportError {
     /// Connection or handshake failed.
     #[error("long-poll connection failed: {0}")]
     Connection(String),
 }
 
-impl From<LongPollConnectionError> for JsValue {
-    fn from(err: LongPollConnectionError) -> Self {
+impl From<LongPollTransportError> for JsValue {
+    fn from(err: LongPollTransportError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("LongPollConnectionError");
+        js_err.set_name("LongPollTransportError");
         js_err.into()
     }
 }

@@ -112,7 +112,7 @@ impl WasmWebSocket {
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         _timeout_milliseconds: u32,
-    ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedConnectionError> {
+    ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
         // Ensure WebSocket is ready
         let ws = Self::wait_for_open(ws.clone()).await?;
 
@@ -133,7 +133,7 @@ impl WasmWebSocket {
             nonce,
         )
         .await
-        .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
+        .map_err(WebSocketAuthenticatedTransportError::Handshake)?;
 
         tracing::info!(
             "Handshake complete: authenticated peer {}",
@@ -165,7 +165,7 @@ impl WasmWebSocket {
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         timeout_milliseconds: u32,
-    ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedConnectionError> {
+    ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
         Self::connect_authenticated(address, signer, expected_peer_id, timeout_milliseconds)
             .await
             .map(|inner| WasmAuthenticatedWebSocket { inner })
@@ -196,7 +196,7 @@ impl WasmWebSocket {
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedConnectionError> {
+    ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
         Self::connect_discover_authenticated(address, signer, timeout_milliseconds, service_name)
             .await
             .map(|inner| WasmAuthenticatedWebSocket { inner })
@@ -211,9 +211,9 @@ impl WasmWebSocket {
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
         _timeout_milliseconds: u32,
-    ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
+    ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedTransportError> {
         let ws = WebSocket::new(&address.href())
-            .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
+            .map_err(WebSocketAuthenticatedTransportError::SocketCreationFailed)?;
         ws.set_binary_type(BinaryType::Arraybuffer);
 
         let ws = Self::wait_for_open(ws).await?;
@@ -235,7 +235,7 @@ impl WasmWebSocket {
             nonce,
         )
         .await
-        .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
+        .map_err(WebSocketAuthenticatedTransportError::Handshake)?;
 
         tracing::info!(
             "Handshake complete: connected to server {}",
@@ -254,12 +254,12 @@ impl WasmWebSocket {
         signer: &JsSigner,
         timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
-    ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedConnectionError> {
+    ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedTransportError> {
         let _timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);
         let service_name = service_name.unwrap_or_else(|| address.host());
 
         let ws = WebSocket::new(&address.href())
-            .map_err(WebSocketAuthenticatedConnectionError::SocketCreationFailed)?;
+            .map_err(WebSocketAuthenticatedTransportError::SocketCreationFailed)?;
         ws.set_binary_type(BinaryType::Arraybuffer);
 
         let ws = Self::wait_for_open(ws).await?;
@@ -281,7 +281,7 @@ impl WasmWebSocket {
             nonce,
         )
         .await
-        .map_err(WebSocketAuthenticatedConnectionError::Handshake)?;
+        .map_err(WebSocketAuthenticatedTransportError::Handshake)?;
 
         tracing::info!(
             "Discovery handshake complete: connected to server {}",
@@ -294,8 +294,8 @@ impl WasmWebSocket {
     /// Wait for a WebSocket to reach OPEN state.
     async fn wait_for_open(
         ws: WebSocket,
-    ) -> Result<WebSocket, WebSocketAuthenticatedConnectionError> {
-        let (open_tx, open_rx) = oneshot::channel::<Result<(), WebSocketConnectionFailed>>();
+    ) -> Result<WebSocket, WebSocketAuthenticatedTransportError> {
+        let (open_tx, open_rx) = oneshot::channel::<Result<(), WebSocketTransportFailed>>();
         let open_tx_cell = Rc::new(RefCell::new(Some(open_tx)));
         let open_tx_clone = open_tx_cell.clone();
 
@@ -308,7 +308,7 @@ impl WasmWebSocket {
         let onerror_tx = open_tx_cell.clone();
         let onerror = Closure::<dyn FnMut(_)>::new(move |_event: Event| {
             if let Some(tx) = onerror_tx.borrow_mut().take() {
-                let _ = tx.send(Err(WebSocketConnectionFailed));
+                let _ = tx.send(Err(WebSocketTransportFailed));
             }
         });
 
@@ -325,7 +325,7 @@ impl WasmWebSocket {
         // Wait for open or error
         open_rx
             .await
-            .map_err(|_| WebSocketAuthenticatedConnectionError::Canceled)??;
+            .map_err(|_| WebSocketAuthenticatedTransportError::Canceled)??;
 
         // Clear temporary handlers
         ws.set_onopen(None);
@@ -447,17 +447,17 @@ impl From<ReadFromClosedChannel> for JsValue {
 
 /// Error connecting to a WebSocket server with handshake authentication.
 #[derive(Debug, Error)]
-pub enum WebSocketAuthenticatedConnectionError {
+pub enum WebSocketAuthenticatedTransportError {
     /// Problem creating the WebSocket.
     #[error("WebSocket creation failed: {0:?}")]
     SocketCreationFailed(JsValue),
 
-    /// WebSocket connection failed.
+    /// WebSocket transport failed to open.
     #[error(transparent)]
-    ConnectionFailed(#[from] WebSocketConnectionFailed),
+    TransportFailed(#[from] WebSocketTransportFailed),
 
-    /// Connection was canceled.
-    #[error("connection canceled")]
+    /// Transport setup was canceled.
+    #[error("transport setup canceled")]
     Canceled,
 
     /// Handshake failed.
@@ -469,18 +469,18 @@ pub enum WebSocketAuthenticatedConnectionError {
     Setup(#[from] WasmWebSocketSetupCanceled),
 }
 
-impl From<WebSocketAuthenticatedConnectionError> for JsValue {
-    fn from(err: WebSocketAuthenticatedConnectionError) -> Self {
+impl From<WebSocketAuthenticatedTransportError> for JsValue {
+    fn from(err: WebSocketAuthenticatedTransportError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("WebSocketAuthenticatedConnectionError");
+        js_err.set_name("WebSocketAuthenticatedTransportError");
         js_err.into()
     }
 }
 
-/// WebSocket connection failed during open.
+/// WebSocket transport failed during open.
 #[derive(Debug, Clone, Copy, Error)]
-#[error("WebSocket connection failed")]
-pub struct WebSocketConnectionFailed;
+#[error("WebSocket transport failed")]
+pub struct WebSocketTransportFailed;
 
 /// WebSocket setup was canceled.
 #[derive(Debug, Clone, Error)]
@@ -539,12 +539,12 @@ impl WasmAuthenticatedWebSocket {
 
     /// Convert to a transport-erased [`AuthenticatedTransport`](super::WasmAuthenticatedTransport).
     #[must_use]
-    #[wasm_bindgen(js_name = toConnection)]
-    pub fn to_connection(self) -> super::WasmAuthenticatedTransport {
+    #[wasm_bindgen(js_name = toTransport)]
+    pub fn to_transport(self) -> super::WasmAuthenticatedTransport {
         let peer_id = self.inner.peer_id();
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
             let transport: super::JsTransport = wasm_bindgen::JsValue::from(ws).unchecked_into();
-            super::make_connection(transport, peer_id, super::DEFAULT_MUX_TIME_LIMIT)
+            super::make_transport(transport, peer_id, super::DEFAULT_MUX_TIME_LIMIT)
         }))
     }
 }

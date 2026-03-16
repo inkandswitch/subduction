@@ -14,9 +14,9 @@ use sedimentree_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{
+    Connection, Roundtrip,
     manager::Spawn,
     message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    Connection, Roundtrip,
 };
 use crate::{
     authenticated::Authenticated,
@@ -24,7 +24,7 @@ use crate::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{builder::SubductionBuilder, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder},
 };
 
 /// A minimal mock connection for testing.

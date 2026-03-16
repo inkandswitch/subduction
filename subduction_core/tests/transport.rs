@@ -10,9 +10,9 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
+        Connection, Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
         test_utils::{ChannelTransport, InstantTimeout},
-        Connection, Roundtrip,
     },
     multiplexer::Multiplexer,
     peer::id::PeerId,
