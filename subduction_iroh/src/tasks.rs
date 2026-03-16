@@ -15,11 +15,28 @@ use crate::{
 /// Length-prefix size (4 bytes, big-endian u32).
 const LENGTH_PREFIX_SIZE: usize = 4;
 
+/// Maximum frame size (50 MiB).
+///
+/// Matches `DEFAULT_MAX_MESSAGE_SIZE` / `DEFAULT_MAX_BODY_SIZE` in the
+/// WebSocket and HTTP long-poll transports.
+const MAX_FRAME_SIZE: usize = 50 * 1024 * 1024;
+
 /// Read a length-prefixed message from a QUIC recv stream.
+///
+/// Returns [`StreamError::FrameTooLarge`] if the peer sends a length
+/// prefix exceeding [`MAX_FRAME_SIZE`], preventing OOM from a
+/// malicious or buggy peer.
 pub(crate) async fn read_framed(recv: &mut RecvStream) -> Result<Vec<u8>, StreamError> {
     let mut len_buf = [0u8; LENGTH_PREFIX_SIZE];
     recv.read_exact(&mut len_buf).await?;
     let len = u32::from_be_bytes(len_buf) as usize;
+
+    if len > MAX_FRAME_SIZE {
+        return Err(StreamError::FrameTooLarge {
+            actual: len,
+            max: MAX_FRAME_SIZE,
+        });
+    }
 
     let mut buf = vec![0u8; len];
     recv.read_exact(&mut buf).await?;
@@ -27,12 +44,19 @@ pub(crate) async fn read_framed(recv: &mut RecvStream) -> Result<Vec<u8>, Stream
 }
 
 /// Write a length-prefixed message to a QUIC send stream.
+///
+/// Returns [`StreamError::FrameTooLarge`] if `data` exceeds
+/// [`MAX_FRAME_SIZE`].
 pub(crate) async fn write_framed(send: &mut SendStream, data: &[u8]) -> Result<(), StreamError> {
-    #[allow(clippy::expect_used)]
-    let len: u32 = data
-        .len()
-        .try_into()
-        .expect("message too large for u32 length prefix");
+    if data.len() > MAX_FRAME_SIZE {
+        return Err(StreamError::FrameTooLarge {
+            actual: data.len(),
+            max: MAX_FRAME_SIZE,
+        });
+    }
+
+    // Length fits in u32 because MAX_FRAME_SIZE < u32::MAX.
+    let len = data.len() as u32;
     send.write_all(&len.to_be_bytes())
         .await
         .map_err(StreamError::Write)?;
