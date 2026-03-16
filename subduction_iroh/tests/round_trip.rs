@@ -24,6 +24,7 @@ use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::Sedimentre
 use subduction_core::{
     connection::{
         handshake::audience::{Audience, DiscoveryId},
+        message::SyncMessage,
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
     },
@@ -45,7 +46,8 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        IrohConnection<FuturesTimerTimeout>,
+        IrohConnection<FuturesTimerTimeout, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -88,7 +90,7 @@ fn spawn_subduction(sig: &MemorySigner, discovery_id: Option<DiscoveryId>) -> Te
     }
 
     let (subduction, _handler, listener_fut, manager_fut) =
-        builder.build::<Sendable, IrohConnection<FuturesTimerTimeout>>();
+        builder.build::<Sendable, IrohConnection<FuturesTimerTimeout, SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -791,7 +793,7 @@ async fn discovery_wrong_service_name_rejected() -> TestResult {
 
     let server_addr = server.endpoint.addr();
 
-    let result = subduction_iroh::client::connect(
+    let result = subduction_iroh::client::connect::<_, _, SyncMessage>(
         &client_ep,
         server_addr,
         REQUEST_TIMEOUT,
@@ -1036,7 +1038,7 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
         .await
         .expect("bind client endpoint");
 
-    let result = subduction_iroh::client::connect(
+    let result = subduction_iroh::client::connect::<_, _, SyncMessage>(
         &client_ep,
         server_addr,
         Duration::from_secs(2),

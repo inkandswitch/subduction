@@ -5,7 +5,7 @@
 
 use core::time::Duration;
 
-pub use subduction_core::connection::timeout::{TimedOut, Timeout};
+use subduction_core::connection::timeout::{TimedOut, Timeout};
 
 #[cfg(feature = "futures-timer")]
 use future_form::{Local, Sendable};

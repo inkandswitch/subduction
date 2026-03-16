@@ -1,10 +1,11 @@
 //! # Subduction [`WebSocket`] client for Tokio
 
+use subduction_core::connection::timeout::Timeout;
+
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
     error::{CallError, DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    timeout::Timeout,
     websocket::{ChannelMessage, ListenerTask, SenderTask, WebSocket},
 };
 use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};

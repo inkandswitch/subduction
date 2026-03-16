@@ -30,10 +30,9 @@ use subduction_core::{
     peer::id::PeerId,
 };
 
-use crate::{
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    timeout::{TimedOut, Timeout},
-};
+use subduction_core::connection::timeout::{TimedOut, Timeout};
+
+use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
 
 /// Channel capacity for outbound messages.
 ///
@@ -718,7 +717,7 @@ mod tests {
             &'a self,
             _dur: Duration,
             fut: LocalBoxFuture<'a, T>,
-        ) -> LocalBoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+        ) -> LocalBoxFuture<'a, Result<T, TimedOut>> {
             async move { Ok(fut.await) }.boxed_local()
         }
     }
@@ -728,7 +727,7 @@ mod tests {
             &'a self,
             _dur: Duration,
             fut: BoxFuture<'a, T>,
-        ) -> BoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+        ) -> BoxFuture<'a, Result<T, TimedOut>> {
             async move { Ok(fut.await) }.boxed()
         }
     }

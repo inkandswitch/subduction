@@ -42,7 +42,7 @@ use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{handshake::audience::Audience, nonce_cache::NonceCache},
+    connection::{handshake::audience::Audience, message::SyncMessage, nonce_cache::NonceCache},
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -106,7 +106,8 @@ type ClientSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
     >,
@@ -152,7 +153,7 @@ fn assert_full_sync(
         subduction_core::connection::stats::SyncStats,
         Vec<(
             subduction_core::connection::authenticated::Authenticated<
-                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+                TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
                 Sendable,
             >,
             subduction_websocket::error::CallError,
@@ -162,7 +163,8 @@ fn assert_full_sync(
             subduction_core::subduction::error::IoError<
                 Sendable,
                 MemoryStorage,
-                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+                TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>,
+                SyncMessage,
             >,
         )>,
     ),
@@ -191,7 +193,7 @@ async fn connected_client(
         .signer(client_signer.clone())
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>();
+        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio, SyncMessage>>();
 
     // `listener_fut` already runs `Subduction::listen()` internally —
     // do NOT spawn an additional `client.listen()` call.
@@ -251,7 +253,7 @@ fn bench_handshake(c: &mut Criterion) {
                             .parse()
                             .expect("valid uri");
 
-                    let (_ws, listener, sender) = TokioWebSocketClient::new(
+                    let (_ws, listener, sender) = TokioWebSocketClient::<_, _, SyncMessage>::new(
                         uri,
                         TimeoutTokio,
                         TIMEOUT,

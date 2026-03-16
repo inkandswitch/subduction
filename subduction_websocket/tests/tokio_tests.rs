@@ -188,7 +188,7 @@ async fn client_reconnect() -> TestResult {
     let bound = server.address();
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
 
-    let (mut client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
+    let (mut client_ws, listener_fut, sender_fut) = TokioWebSocketClient::<_, _, SyncMessage>::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -266,7 +266,7 @@ async fn server_graceful_shutdown() -> TestResult {
 
     // Connect a client
     let uri = format!("ws://{}:{}", bound.ip(), bound.port()).parse()?;
-    let (_client_ws, listener_fut, sender_fut) = TokioWebSocketClient::new(
+    let (_client_ws, listener_fut, sender_fut) = TokioWebSocketClient::<_, _, SyncMessage>::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(5),
@@ -292,7 +292,7 @@ async fn server_graceful_shutdown() -> TestResult {
     tokio::time::sleep(Duration::from_millis(100)).await;
 
     // Attempting to connect should fail
-    let result = TokioWebSocketClient::new(
+    let result = TokioWebSocketClient::<_, _, SyncMessage>::new(
         format!("ws://{}:{}", bound.ip(), bound.port()).parse()?,
         TimeoutTokio,
         Duration::from_secs(1),
@@ -477,7 +477,7 @@ async fn connection_to_invalid_address() -> TestResult {
     // Try to connect to an address that's not listening
     let uri = "ws://127.0.0.1:9".parse()?; // Port 9 is discard protocol, unlikely to have WS server
 
-    let result = TokioWebSocketClient::new(
+    let result = TokioWebSocketClient::<_, _, SyncMessage>::new(
         uri,
         TimeoutTokio,
         Duration::from_secs(1),

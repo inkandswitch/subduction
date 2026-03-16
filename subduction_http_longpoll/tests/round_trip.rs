@@ -25,6 +25,7 @@ use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::Sedimentre
 use subduction_core::{
     connection::{
         handshake::audience::{Audience, DiscoveryId},
+        message::SyncMessage,
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
     },
@@ -53,7 +54,8 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        HttpLongPollConnection<FuturesTimerTimeout>,
+        HttpLongPollConnection<FuturesTimerTimeout, SyncMessage>,
+        SyncMessage,
         OpenPolicy,
         MemorySigner,
         CountLeadingZeroBytes,
@@ -99,7 +101,7 @@ impl TestServer {
                 .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
                 .spawner(TokioSpawn)
                 .discovery_id(discovery_id)
-                .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+                .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout, SyncMessage>>();
 
         tokio::spawn(listener_fut);
         tokio::spawn(manager_fut);
@@ -136,7 +138,7 @@ impl TestServer {
 async fn accept_loop(
     tcp: TcpListener,
     subduction: TestSubduction,
-    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
     cancel: async_channel::Receiver<()>,
 ) {
     use tokio::task::JoinSet;
@@ -170,7 +172,7 @@ async fn accept_loop(
 async fn serve_http_connection(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
-    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
+    handler: LongPollHandler<MemorySigner, FuturesTimerTimeout, SyncMessage>,
     subduction: TestSubduction,
 ) {
     use hyper_util::rt::TokioIo;
@@ -227,7 +229,7 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout, SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -301,7 +303,7 @@ async fn connected_client_known_peer(
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout, SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);

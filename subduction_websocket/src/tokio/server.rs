@@ -1,9 +1,11 @@
 //! # Subduction WebSocket server for Tokio
 
+use subduction_core::connection::timeout::Timeout;
+
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    timeout::{FuturesTimerTimeout, Timeout},
+    timeout::FuturesTimerTimeout,
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
 };

@@ -1,8 +1,9 @@
 //! Unified WebSocket connection type for both accepted and dialed connections.
 
+use subduction_core::connection::timeout::Timeout;
+
 use crate::{
     error::{CallError, DisconnectionError, RecvError, SendError},
-    timeout::Timeout,
     websocket::{ChannelMessage, WebSocket},
 };
 
