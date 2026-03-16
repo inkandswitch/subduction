@@ -1,8 +1,9 @@
 //! Error types.
 
+use core::fmt;
+
 use futures::channel::oneshot;
 use sedimentree_core::codec::error::DecodeError;
-use subduction_core::connection::message::SyncMessage;
 use thiserror::Error;
 
 /// Outbound channel closed — the sender task has stopped.
@@ -37,12 +38,16 @@ pub struct RecvError;
 pub struct DisconnectionError;
 
 /// Errors while running the connection loop.
+///
+/// Generic over the channel message type `M` so that the [`ChanSend`]
+/// variant preserves the full [`async_channel::SendError<M>`].
+///
+/// [`ChanSend`]: RunError::ChanSend
 #[derive(Debug, Error)]
-#[allow(clippy::large_enum_variant)]
-pub enum RunError {
-    /// Internal MPSC channel error.
+pub enum RunError<M: fmt::Debug> {
+    /// Internal channel send failed (receiver dropped).
     #[error("channel send error: {0}")]
-    ChanSend(async_channel::SendError<SyncMessage>),
+    ChanSend(Box<async_channel::SendError<M>>),
 
     /// WebSocket error.
     #[error(transparent)]

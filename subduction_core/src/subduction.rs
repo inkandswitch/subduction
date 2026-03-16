@@ -483,13 +483,16 @@ impl<
                     #[allow(clippy::type_complexity)]
                     let (conn, dispatch_result): (Authenticated<C, F>, Result<(), H::HandlerError>) = result;
                     if let Err(e) = dispatch_result {
+                        let peer_id = conn.peer_id();
                         tracing::error!(
-                            peer = %conn.peer_id(),
+                            peer = %peer_id,
                             "error dispatching message: {e}"
                         );
                         // Connection is broken — remove from conns map.
-                        self.remove_connection(&conn).await;
-                        tracing::info!("removed failed connection from peer {}", conn.peer_id());
+                        if self.remove_connection(&conn).await == Some(true) {
+                            handler.on_peer_disconnect(peer_id).await;
+                        }
+                        tracing::info!("removed failed connection from peer {}", peer_id);
                     }
                 }
                 // Second: receive new messages
@@ -531,7 +534,9 @@ impl<
                         tracing::info!(
                             "Connection {conn_id} from peer {peer_id} closed, removing"
                         );
-                        self.remove_connection(&conn).await;
+                        if self.remove_connection(&conn).await == Some(true) {
+                            handler.on_peer_disconnect(peer_id).await;
+                        }
                     }
                 }
             }

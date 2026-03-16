@@ -9,9 +9,9 @@ use core::time::Duration;
 use future_form::Sendable;
 use futures::future::BoxFuture;
 use subduction_core::connection::{
+    Connection, Roundtrip,
     message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
     timeout::Timeout,
-    Connection, Roundtrip,
 };
 use subduction_http_longpoll::connection::HttpLongPollConnection;
 use subduction_iroh::connection::IrohConnection;

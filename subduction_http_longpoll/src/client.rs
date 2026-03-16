@@ -26,17 +26,17 @@
 use alloc::{format, string::String, vec::Vec};
 use core::time::Duration;
 
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
-    future::{select, Either},
+    future::{Either, select},
     pin_mut,
 };
 use subduction_core::{
     connection::{
-        handshake::{self, audience::Audience, HandshakeMessage},
+        Connection,
+        handshake::{self, HandshakeMessage, audience::Audience},
         message::SyncMessage,
         timeout::Timeout,
-        Connection,
     },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
@@ -44,8 +44,8 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 
 use crate::{
-    connection::HttpLongPollConnection, error::ClientError, http_client::HttpClient,
-    session::SessionId, SESSION_ID_HEADER,
+    SESSION_ID_HEADER, connection::HttpLongPollConnection, error::ClientError,
+    http_client::HttpClient, session::SessionId,
 };
 
 /// Result of a successful connection, containing the authenticated connection
@@ -146,12 +146,8 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
 }
 
 #[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
-impl<
-        K: FutureForm,
-        Sig: Signer<K>,
-        H: HttpClient<K> + 'static,
-        O: Timeout<K> + Clone + 'static,
-    > Connect<K, Sig> for HttpLongPollClient<H, O>
+impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
+    Connect<K, Sig> for HttpLongPollClient<H, O>
 {
     type Timeout = O;
 
