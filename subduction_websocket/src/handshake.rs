@@ -28,8 +28,8 @@
 //! ).await?;
 //! ```
 //!
-//! [`handshake::initiate`]: subduction_core::connection::handshake::initiate
-//! [`handshake::respond`]: subduction_core::connection::handshake::respond
+//! [`handshake::initiate`]: subduction_core::handshake::initiate
+//! [`handshake::respond`]: subduction_core::handshake::respond
 
 use alloc::vec::Vec;
 use core::ops::{Deref, DerefMut};

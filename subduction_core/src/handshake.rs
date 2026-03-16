@@ -33,7 +33,7 @@
 //! connection on success.
 //!
 //! ```ignore
-//! use subduction_core::connection::handshake;
+//! use subduction_core::handshake;
 //!
 //! // Initiator side - transport is consumed, returned to build_connection
 //! let authenticated = handshake::initiate(
