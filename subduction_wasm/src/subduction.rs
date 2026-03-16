@@ -372,7 +372,7 @@ impl WasmSubduction {
         self.core
             .add_connection(authenticated.map(|ws| {
                 MessageTransport::new(
-                    JsValue::from(ws).unchecked_into::<crate::connection::JsTransport>(),
+                    JsValue::from(ws).unchecked_into::<crate::transport::JsTransport>(),
                 )
             }))
             .await?;
@@ -411,7 +411,7 @@ impl WasmSubduction {
         self.core
             .add_connection(authenticated.map(|ws| {
                 MessageTransport::new(
-                    JsValue::from(ws).unchecked_into::<crate::connection::JsTransport>(),
+                    JsValue::from(ws).unchecked_into::<crate::transport::JsTransport>(),
                 )
             }))
             .await?;
@@ -451,7 +451,7 @@ impl WasmSubduction {
             .add_connection(authenticated.map(|lp| {
                 MessageTransport::new(
                     JsValue::from(WasmLongPollConn::new(lp))
-                        .unchecked_into::<crate::connection::JsTransport>(),
+                        .unchecked_into::<crate::transport::JsTransport>(),
                 )
             }))
             .await?;
@@ -491,7 +491,7 @@ impl WasmSubduction {
             .add_connection(authenticated.map(|lp| {
                 MessageTransport::new(
                     JsValue::from(WasmLongPollConn::new(lp))
-                        .unchecked_into::<crate::connection::JsTransport>(),
+                        .unchecked_into::<crate::transport::JsTransport>(),
                 )
             }))
             .await?;

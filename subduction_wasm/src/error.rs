@@ -10,7 +10,7 @@ use subduction_core::{
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use crate::connection::{
+use crate::transport::{
     JsConnectionError, WasmJsConnection,
     longpoll::LongPollConnectionError,
     websocket::{CallError, WebSocketAuthenticatedConnectionError},

@@ -32,7 +32,6 @@ pub fn start() {
     set_panic_hook();
 }
 
-pub mod connection_id;
 pub mod error;
 pub mod fragment;
 pub mod memory_signer;
