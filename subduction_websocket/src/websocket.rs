@@ -9,11 +9,8 @@ use core::{
 
 use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
-use future_form::{FutureForm, Local, Sendable};
-use futures::{
-    FutureExt,
-    future::{BoxFuture, LocalBoxFuture},
-};
+use future_form::{FutureForm, Local, Sendable, future_form};
+use futures::future::BoxFuture;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
     connection::{
@@ -112,29 +109,34 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
     _phantom: core::marker::PhantomData<K>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Transport<Local>
-    for WebSocket<T, Local, O>
-{
+#[future_form(
+    Sendable where
+        T: AsyncRead + AsyncWrite + Unpin + Send,
+        O: Timeout<Sendable> + Send + Sync,
+    Local where
+        T: AsyncRead + AsyncWrite + Unpin + Send,
+        O: Timeout<Local>
+)]
+impl<T, K: FutureForm, O> Transport<K> for WebSocket<T, K, O> {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
-    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
+    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         tracing::info!(peer_id = %self.multiplexer.peer_id(), "WebSocket::disconnect");
-        async { Ok(()) }.boxed_local()
+        K::from_future(async { Ok(()) })
     }
 
-    fn send_bytes(&self, bytes: &[u8]) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
+    fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>> {
         let msg = tungstenite::Message::Binary(bytes.to_vec().into());
         let tx = self.outbound_tx.clone();
-        async move {
+        K::from_future(async move {
             tx.send(msg).await.map_err(|_| SendError)?;
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
-    fn recv_bytes(&self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+    fn recv_bytes(&self) -> K::Future<'_, Result<Vec<u8>, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
         tracing::debug!(
             chan_id = self.chan_id,
@@ -142,7 +144,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Transport<Loca
             self.multiplexer.peer_id()
         );
 
-        async move {
+        K::from_future(async move {
             let bytes = chan.recv().await.map_err(|_| {
                 tracing::error!("inbound channel closed unexpectedly");
                 RecvError
@@ -150,32 +152,38 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Transport<Loca
 
             tracing::debug!("recv: inbound {} bytes", bytes.len());
             Ok(bytes)
-        }
-        .boxed_local()
+        })
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
-    Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Local, O>
+#[future_form(
+    Sendable where
+        T: AsyncRead + AsyncWrite + Unpin + Send,
+        O: Timeout<Sendable> + Send + Sync,
+    Local where
+        T: AsyncRead + AsyncWrite + Unpin + Send,
+        O: Timeout<Local>
+)]
+impl<T, K: FutureForm, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
+    for WebSocket<T, K, O>
 {
     type CallError = CallError;
 
-    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        async {
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
+        K::from_future(async {
             let req_id = self.multiplexer.next_request_id();
             tracing::debug!("generated message id {:?}", req_id);
             req_id
-        }
-        .boxed_local()
+        })
     }
 
     fn call(
         &self,
         req: BatchSyncRequest,
         override_timeout: Option<Duration>,
-    ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         let outbound_tx = self.outbound_tx.clone();
-        async move {
+        K::from_future(async move {
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
 
@@ -199,7 +207,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
             match self
                 .multiplexer
                 .timeout()
-                .timeout(req_timeout, Box::pin(rx))
+                .timeout(req_timeout, K::from_future(rx))
                 .await
             {
                 Ok(Ok(resp)) => {
@@ -216,8 +224,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
                     Err(CallError::Timeout)
                 }
             }
-        }
-        .boxed_local()
+        })
     }
 }
 
@@ -401,115 +408,6 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
             | Error::AlreadyClosed
             | Error::Protocol(tungstenite::error::ProtocolError::ResetWithoutClosingHandshake)
     )
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Send + Sync>
-    Transport<Sendable> for WebSocket<T, Sendable, O>
-{
-    type SendError = SendError;
-    type RecvError = RecvError;
-    type DisconnectionError = DisconnectionError;
-
-    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.multiplexer.peer_id(), "WebSocket::disconnect");
-        async { Ok(()) }.boxed()
-    }
-
-    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        let msg = tungstenite::Message::Binary(bytes.to_vec().into());
-        let tx = self.outbound_tx.clone();
-        async move {
-            tx.send(msg).await.map_err(|_| SendError)?;
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
-        let chan = self.inbound_reader.clone();
-        tracing::debug!(
-            chan_id = self.chan_id,
-            "waiting on recv {:?}",
-            self.multiplexer.peer_id()
-        );
-
-        async move {
-            let bytes = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel closed unexpectedly");
-                RecvError
-            })?;
-
-            tracing::debug!("recv: inbound {} bytes", bytes.len());
-            Ok(bytes)
-        }
-        .boxed()
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Send + Sync>
-    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Sendable, O>
-{
-    type CallError = CallError;
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async {
-            let req_id = self.multiplexer.next_request_id();
-            tracing::debug!("generated message id {:?}", req_id);
-            req_id
-        }
-        .boxed()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        let outbound_tx = self.outbound_tx.clone();
-        async move {
-            tracing::debug!("making call with request id {:?}", req.req_id);
-            let req_id = req.req_id;
-
-            let rx = self.multiplexer.register_pending(req_id).await;
-
-            let msg_bytes = Multiplexer::<O>::encode_request(&req);
-
-            outbound_tx
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await
-                .map_err(|_| CallError::SenderTaskStopped)?;
-
-            tracing::info!(
-                chan_id = self.chan_id,
-                "sent WebSocket request {:?}",
-                req_id
-            );
-
-            let req_timeout = override_timeout.unwrap_or(self.multiplexer.default_time_limit());
-
-            match self
-                .multiplexer
-                .timeout()
-                .timeout(req_timeout, Box::pin(rx))
-                .await
-            {
-                Ok(Ok(resp)) => {
-                    tracing::info!("request {:?} completed", req_id);
-                    Ok(resp)
-                }
-                Ok(Err(_)) => {
-                    tracing::error!("request {:?} response dropped", req_id);
-                    Err(CallError::ResponseDropped)
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {:?} timed out", req_id);
-                    self.multiplexer.cancel_pending(&req_id).await;
-                    Err(CallError::Timeout)
-                }
-            }
-        }
-        .boxed()
-    }
 }
 
 // --- Clone, PartialEq ---
