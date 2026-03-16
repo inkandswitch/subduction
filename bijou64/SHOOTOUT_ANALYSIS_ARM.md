@@ -45,19 +45,19 @@ All charts are auto-generated from Criterion's raw sample data (`target/criterio
 nix run .#bench-charts
 
 # or via uv (auto-installs Python deps)
-uv run bijou64/charts/analyze.py
+uv run bijou64/charts/analyze.py --arch arm
 ```
 
-Output:
-- `bijou64/charts/percentiles.csv` -- machine-readable statistics
-- `bijou64/charts/percentiles.md` -- markdown tables with p50/p90/p95/p99/p99.9
-- `bijou64/charts/*_box.svg` -- box-and-whisker plots
-- `bijou64/charts/*_bar.svg` -- grouped bar charts (median + p5-p95 whiskers)
-- `bijou64/charts/*_cdf.svg` -- CDF overlay plots
-- `bijou64/charts/*_heatmap.svg` -- library x distribution heatmaps
-- `bijou64/charts/*_cdf.html` -- interactive Plotly CDFs (hover, zoom)
-- `bijou64/charts/*_heatmap.html` -- interactive Plotly heatmaps
-- `bijou64/charts/percentiles.html` -- sortable/filterable percentile table
+Output (into `bijou64/charts/<arch>/`):
+- `bijou64/charts/<arch>/percentiles.csv` -- machine-readable statistics
+- `bijou64/charts/<arch>/percentiles.md` -- markdown tables with p50/p90/p95/p99/p99.9
+- `bijou64/charts/<arch>/*_box.svg` -- box-and-whisker plots
+- `bijou64/charts/<arch>/*_bar.svg` -- grouped bar charts (median + p5-p95 whiskers)
+- `bijou64/charts/<arch>/*_cdf.svg` -- CDF overlay plots
+- `bijou64/charts/<arch>/*_heatmap.svg` -- library x distribution heatmaps
+- `bijou64/charts/<arch>/*_cdf.html` -- interactive Plotly CDFs (hover, zoom)
+- `bijou64/charts/<arch>/*_heatmap.html` -- interactive Plotly heatmaps
+- `bijou64/charts/<arch>/percentiles.html` -- sortable/filterable percentile table
 
 ### Value Distributions
 
@@ -96,9 +96,9 @@ Encode to a `Vec<u8>`.
 <details open>
 <summary>Charts</summary>
 
-![Encode — Bar Chart](charts/encode_bar.svg)
-![Encode — Box Plot](charts/encode_box.svg)
-![Encode — CDF](charts/encode_cdf.svg)
+![Encode — Bar Chart](charts/arm/encode_bar.svg)
+![Encode — Box Plot](charts/arm/encode_box.svg)
+![Encode — CDF](charts/arm/encode_cdf.svg)
 
 </details>
 
@@ -118,8 +118,8 @@ Encode to a fixed `[u8; 9]` with no allocation. leb128 is excluded because its A
 <details open>
 <summary>Charts</summary>
 
-![Encode Array — Bar Chart](charts/encode_array_bar.svg)
-![Encode Array — Box Plot](charts/encode_array_box.svg)
+![Encode Array — Bar Chart](charts/arm/encode_array_bar.svg)
+![Encode Array — Box Plot](charts/arm/encode_array_box.svg)
 
 </details>
 
@@ -139,9 +139,9 @@ Decode from a `&[u8]` buffer.
 <details open>
 <summary>Charts</summary>
 
-![Decode — Bar Chart](charts/decode_bar.svg)
-![Decode — Box Plot](charts/decode_box.svg)
-![Decode — CDF](charts/decode_cdf.svg)
+![Decode — Bar Chart](charts/arm/decode_bar.svg)
+![Decode — Box Plot](charts/arm/decode_box.svg)
+![Decode — CDF](charts/arm/decode_cdf.svg)
 
 </details>
 
@@ -163,8 +163,8 @@ bijou64 achieves canonicality structurally: its disjoint tier ranges make overlo
 <details open>
 <summary>Charts</summary>
 
-![Canonical Decode — Bar Chart](charts/canonical_decode_bar.svg)
-![Canonical Decode — CDF](charts/canonical_decode_cdf.svg)
+![Canonical Decode — Bar Chart](charts/arm/canonical_decode_bar.svg)
+![Canonical Decode — CDF](charts/arm/canonical_decode_cdf.svg)
 
 </details>
 
@@ -188,8 +188,8 @@ Decode a concatenated stream of encoded values. vu128 is excluded because its AP
 <details open>
 <summary>Charts</summary>
 
-![Stream Decode — Bar Chart](charts/stream_decode_bar.svg)
-![Stream Decode — CDF](charts/stream_decode_cdf.svg)
+![Stream Decode — Bar Chart](charts/arm/stream_decode_bar.svg)
+![Stream Decode — CDF](charts/arm/stream_decode_cdf.svg)
 
 </details>
 
@@ -197,23 +197,23 @@ Decode a concatenated stream of encoded values. vu128 is excluded because its AP
 
 Full percentile breakdowns (p50/p90/p95/p99/p99.9) are available in:
 
-- [`charts/percentiles.md`](charts/percentiles.md) -- markdown tables
-- [`charts/percentiles.csv`](charts/percentiles.csv) -- machine-readable CSV
-- [`charts/percentiles.html`](charts/percentiles.html) -- interactive sortable table
+- [`charts/arm/percentiles.md`](charts/arm/percentiles.md) -- markdown tables
+- [`charts/arm/percentiles.csv`](charts/arm/percentiles.csv) -- machine-readable CSV
+- [`charts/arm/percentiles.html`](charts/arm/percentiles.html) -- interactive sortable table
 
 Heatmaps provide a quick visual overview of which library performs best across all distributions:
 
 <details>
 <summary>Heatmaps (click to expand)</summary>
 
-![Decode Heatmap](charts/decode_heatmap.svg)
-![Canonical Decode Heatmap](charts/canonical_decode_heatmap.svg)
-![Stream Decode Heatmap](charts/stream_decode_heatmap.svg)
-![Encode Heatmap](charts/encode_heatmap.svg)
+![Decode Heatmap](charts/arm/decode_heatmap.svg)
+![Canonical Decode Heatmap](charts/arm/canonical_decode_heatmap.svg)
+![Stream Decode Heatmap](charts/arm/stream_decode_heatmap.svg)
+![Encode Heatmap](charts/arm/encode_heatmap.svg)
 
 </details>
 
-Interactive versions with hover-for-detail are in `charts/*_heatmap.html`.
+Interactive versions with hover-for-detail are in `charts/arm/*_heatmap.html`.
 
 ## Encoded Size
 
