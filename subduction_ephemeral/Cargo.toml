@@ -45,7 +45,7 @@ optional = true
 [dependencies.subduction_keyhive]
 workspace = true
 optional = true
-features = ["serde"]
+features = ["policy"]
 
 [features]
 default = []

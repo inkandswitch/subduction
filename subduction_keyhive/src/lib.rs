@@ -14,6 +14,11 @@ pub mod message;
 pub mod peer_id;
 pub mod signed_message;
 pub mod storage;
+#[cfg(feature = "serde")]
+pub mod sync_manager;
+#[cfg(feature = "policy")]
+pub mod sync_manager_policy;
+pub mod wire;
 
 #[cfg(feature = "serde")]
 pub mod protocol;

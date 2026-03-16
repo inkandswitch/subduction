@@ -11,7 +11,7 @@ use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
 use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,
@@ -27,6 +27,7 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
+use subduction_ephemeral::policy::EphemeralPolicy;
 
 /// Error returned when a connection is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -80,6 +81,46 @@ pub enum PutDisallowedError {
     InsufficientAccess,
 }
 
+/// Error returned when an ephemeral subscribe is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SubscribeDisallowedError {
+    /// The peer ID is not a valid Ed25519 public key.
+    #[error("peer ID is not a valid Ed25519 public key")]
+    InvalidPeerId,
+
+    /// The sedimentree ID is not a valid document ID.
+    #[error("sedimentree ID is not a valid document ID")]
+    InvalidSedimentreeId,
+
+    /// The document does not exist in keyhive.
+    #[error("document not found")]
+    DocumentNotFound,
+
+    /// The peer does not have sufficient access.
+    #[error("peer does not have Pull access")]
+    InsufficientAccess,
+}
+
+/// Error returned when an ephemeral publish is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PublishDisallowedError {
+    /// The peer ID is not a valid Ed25519 public key.
+    #[error("peer ID is not a valid Ed25519 public key")]
+    InvalidPeerId,
+
+    /// The sedimentree ID is not a valid document ID.
+    #[error("sedimentree ID is not a valid document ID")]
+    InvalidSedimentreeId,
+
+    /// The document does not exist in keyhive.
+    #[error("document not found")]
+    DocumentNotFound,
+
+    /// The peer does not have sufficient access.
+    #[error("peer does not have Write access")]
+    InsufficientAccess,
+}
+
 /// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
 #[allow(missing_debug_implementations)]
 pub struct SubductionKeyhive<
@@ -92,13 +133,13 @@ pub struct SubductionKeyhive<
 >(Keyhive<S, T, P, C, L, R>);
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > SubductionKeyhive<S, T, P, C, L, R>
 {
     /// Create a new [`SubductionKeyhive`] from a [`Keyhive`].
     #[must_use]
@@ -114,13 +155,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
-    T: ContentRef + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
-    R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone + Send + Sync,
+        T: ContentRef + Send + Sync,
+        P: for<'de> Deserialize<'de> + Send + Sync,
+        C: CiphertextStore<T, P> + Clone + Send + Sync,
+        L: MembershipListener<S, T> + Send + Sync,
+        R: rand::CryptoRng + rand::RngCore + Send + Sync,
+    > ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
@@ -143,13 +184,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
-    T: ContentRef + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
-    R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone + Send + Sync,
+        T: ContentRef + Send + Sync,
+        P: for<'de> Deserialize<'de> + Send + Sync,
+        C: CiphertextStore<T, P> + Clone + Send + Sync,
+        L: MembershipListener<S, T> + Send + Sync,
+        R: rand::CryptoRng + rand::RngCore + Send + Sync,
+    > StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -258,13 +299,120 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone + Send + Sync,
+        T: ContentRef + Send + Sync,
+        P: for<'de> Deserialize<'de> + Send + Sync,
+        C: CiphertextStore<T, P> + Clone + Send + Sync,
+        L: MembershipListener<S, T> + Send + Sync,
+        R: rand::CryptoRng + rand::RngCore + Send + Sync,
+    > EphemeralPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+{
+    type SubscribeDisallowed = SubscribeDisallowedError;
+    type PublishDisallowed = PublishDisallowedError;
+
+    fn authorize_subscribe(
+        &self,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::SubscribeDisallowed>> {
+        async move {
+            let identifier =
+                try_peer_id_to_identifier(peer).ok_or(SubscribeDisallowedError::InvalidPeerId)?;
+
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(SubscribeDisallowedError::InvalidSedimentreeId)?;
+
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(SubscribeDisallowedError::DocumentNotFound)?;
+
+            let members = doc.lock().await.transitive_members().await;
+
+            if members
+                .get(&identifier)
+                .is_some_and(|(_, access)| *access >= Access::Pull)
+            {
+                Ok(())
+            } else {
+                Err(SubscribeDisallowedError::InsufficientAccess)
+            }
+        }
+        .boxed()
+    }
+
+    fn authorize_publish(
+        &self,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> BoxFuture<'_, Result<(), Self::PublishDisallowed>> {
+        async move {
+            let identifier =
+                try_peer_id_to_identifier(peer).ok_or(PublishDisallowedError::InvalidPeerId)?;
+
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(PublishDisallowedError::InvalidSedimentreeId)?;
+
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(PublishDisallowedError::DocumentNotFound)?;
+
+            let members = doc.lock().await.transitive_members().await;
+
+            if members
+                .get(&identifier)
+                .is_some_and(|(_, access)| *access >= Access::Write)
+            {
+                Ok(())
+            } else {
+                Err(PublishDisallowedError::InsufficientAccess)
+            }
+        }
+        .boxed()
+    }
+
+    fn filter_authorized_subscribers(
+        &self,
+        sedimentree_id: SedimentreeId,
+        peers: Vec<PeerId>,
+    ) -> BoxFuture<'_, Vec<PeerId>> {
+        async move {
+            let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
+                return Vec::new();
+            };
+
+            let Some(doc) = self.0.get_document(doc_id).await else {
+                return Vec::new();
+            };
+
+            let members = doc.lock().await.transitive_members().await;
+
+            peers
+                .into_iter()
+                .filter(|peer| {
+                    try_peer_id_to_identifier(*peer).is_some_and(|identifier| {
+                        members
+                            .get(&identifier)
+                            .is_some_and(|(_, access)| *access >= Access::Pull)
+                    })
+                })
+                .collect()
+        }
+        .boxed()
+    }
+}
+
+impl<
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<Keyhive<S, T, P, C, L, R>> for SubductionKeyhive<S, T, P, C, L, R>
 {
     fn from(keyhive: Keyhive<S, T, P, C, L, R>) -> Self {
         SubductionKeyhive(keyhive)
@@ -272,13 +420,13 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone,
-    T: ContentRef,
-    P: for<'de> Deserialize<'de>,
-    C: CiphertextStore<T, P> + Clone,
-    L: MembershipListener<S, T>,
-    R: rand::CryptoRng + rand::RngCore,
-> From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
+        S: AsyncSigner + Clone,
+        T: ContentRef,
+        P: for<'de> Deserialize<'de>,
+        C: CiphertextStore<T, P> + Clone,
+        L: MembershipListener<S, T>,
+        R: rand::CryptoRng + rand::RngCore,
+    > From<SubductionKeyhive<S, T, P, C, L, R>> for Keyhive<S, T, P, C, L, R>
 {
     fn from(subduction_keyhive: SubductionKeyhive<S, T, P, C, L, R>) -> Self {
         subduction_keyhive.0

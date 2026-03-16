@@ -22,11 +22,13 @@ future_form = { workspace = true }
 keyhive_core = { workspace = true }
 rand = "0.8.5"
 serde = { workspace = true, optional = true, features = ["derive"] }
+subduction_core = { workspace = true, default-features = false, optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [features]
 default = []
+policy = ["dep:subduction_core", "serde"]
 serde = ["dep:serde", "std"]
 std = ["thiserror/std"]
 

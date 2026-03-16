@@ -23,6 +23,8 @@ rand = { workspace = true }
 sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true }
 subduction_core = { workspace = true, default-features = false }
+subduction_ephemeral = { workspace = true, default-features = false }
+subduction_keyhive = { workspace = true, features = ["policy"] }
 thiserror = { workspace = true }
 
 [features]
