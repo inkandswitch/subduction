@@ -548,10 +548,10 @@ mod tests {
         Ok(())
     }
 
-    /// Seal → as_bytes → try_decode → as_bytes must produce identical bytes.
+    /// Seal → `as_bytes` → `try_decode` → `as_bytes` must produce identical bytes.
     ///
-    /// This catches truncation bugs where try_decode computes the wrong
-    /// actual_size and silently truncates the stored bytes.
+    /// This catches truncation bugs where `try_decode` computes the wrong
+    /// `actual_size` and silently truncates the stored bytes.
     #[test]
     fn prop_seal_roundtrip_preserves_bytes() {
         bolero::check!()
@@ -585,9 +585,9 @@ mod tests {
             });
     }
 
-    /// try_decode of sealed bytes produces a Signed whose try_verify succeeds.
+    /// `try_decode` of sealed bytes produces a `Signed` whose `try_verify` succeeds.
     ///
-    /// This catches corruption in the try_decode path that would break
+    /// This catches corruption in the `try_decode` path that would break
     /// signature verification on reload (e.g., wrong truncation point).
     #[test]
     fn prop_try_decode_of_sealed_bytes_verifies() {

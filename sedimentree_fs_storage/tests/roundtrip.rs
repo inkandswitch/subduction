@@ -1,10 +1,10 @@
-//! Save/load roundtrip tests for FsStorage.
+//! Save/load roundtrip tests for `FsStorage`.
 //!
 //! These catch storage corruption bugs where a `Signed<T>` written to disk
 //! cannot be decoded on reload (e.g., truncation from `fields_size()`
 //! disagreeing with actual encoded byte count).
 
-#![allow(clippy::expect_used)]
+#![allow(clippy::expect_used, clippy::missing_const_for_fn)]
 
 use std::collections::BTreeSet;
 
@@ -28,7 +28,7 @@ fn make_sedimentree_id(seed: u8) -> SedimentreeId {
     SedimentreeId::new([seed; 32])
 }
 
-/// Save a LooseCommit via FsStorage, reload it, and verify byte identity.
+/// Save a `LooseCommit` via `FsStorage`, reload it, and verify byte identity.
 #[tokio::test]
 async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
@@ -79,7 +79,7 @@ async fn save_load_loose_commit_roundtrip() -> testresult::TestResult {
     Ok(())
 }
 
-/// Save a LooseCommit with parents, reload, verify parents are preserved.
+/// Save a `LooseCommit` with parents, reload, verify parents are preserved.
 #[tokio::test]
 async fn save_load_loose_commit_with_parents_roundtrip() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
@@ -122,7 +122,7 @@ async fn save_load_loose_commit_with_parents_roundtrip() -> testresult::TestResu
     Ok(())
 }
 
-/// Save a Fragment via FsStorage, reload it, and verify byte identity.
+/// Save a `Fragment` via `FsStorage`, reload it, and verify byte identity.
 #[tokio::test]
 async fn save_load_fragment_roundtrip() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
@@ -168,7 +168,7 @@ async fn save_load_fragment_roundtrip() -> testresult::TestResult {
     Ok(())
 }
 
-/// Save multiple commits, load_loose_commits returns all of them.
+/// Save multiple commits, `load_loose_commits` returns all of them.
 #[tokio::test]
 async fn save_load_multiple_commits_roundtrip() -> testresult::TestResult {
     let dir = tempfile::tempdir()?;
