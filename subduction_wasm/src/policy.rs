@@ -1,12 +1,12 @@
 //! Pluggable policy types for Wasm.
 //!
-//! [`JsPolicy`] wraps a single JS object and implements both
-//! [`ConnectionPolicy<Local>`] and [`StoragePolicy<Local>`]. Any JS object
-//! with the right method signatures can serve as a policy.
+//! [`JsPolicy`] is a duck-typed JS-imported interface for connection and
+//! storage authorization. Any JS object with the right method signatures
+//! can serve as a policy — including Rust-exported types like a future
+//! `WasmKeyhivePolicy`.
 //!
-//! [`JsEphemeralPolicy`] is a separate type for ephemeral message
-//! authorization (subscribe/publish), since [`EphemeralPolicy`] is a
-//! different trait consumed by [`EphemeralHandler`], not by [`Subduction`].
+//! [`JsEphemeralPolicy`] is a separate interface for ephemeral message
+//! authorization (subscribe/publish).
 //!
 //! # JS interface
 //!
@@ -23,14 +23,8 @@
 //!
 //! Throwing (or returning a rejected promise) denies the operation.
 //! Resolving allows it.
-//!
-//! [`EphemeralPolicy`]: subduction_ephemeral::policy::EphemeralPolicy
-//! [`EphemeralHandler`]: subduction_ephemeral::handler::EphemeralHandler
-//! [`Subduction`]: subduction_core::subduction::Subduction
 
 pub mod ephemeral;
-
-pub use ephemeral::JsEphemeralPolicy;
 
 use alloc::{format, string::String, vec::Vec};
 
@@ -42,16 +36,66 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
-use wasm_bindgen::{JsCast, prelude::*};
+use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-/// A connection + storage policy backed by a single JS object.
-///
-/// See the [module-level docs](self) for the required JS interface.
-#[derive(Debug, Clone)]
-pub struct JsPolicy {
-    inner: JsValue,
+// ── Duck-typed JS import ────────────────────────────────────────────────
+
+#[wasm_bindgen]
+extern "C" {
+    /// A duck-typed JS policy object for connection and storage authorization.
+    ///
+    /// Any JS object with the required methods can be passed where a
+    /// `JsPolicy` is expected. See the [module-level docs](self) for
+    /// the required interface.
+    #[wasm_bindgen(js_name = Policy)]
+    pub type JsPolicy;
+
+    #[wasm_bindgen(method, catch, js_name = authorizeConnect)]
+    fn js_authorize_connect(this: &JsPolicy, peer_id: Uint8Array) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = authorizeFetch)]
+    fn js_authorize_fetch(
+        this: &JsPolicy,
+        peer_id: Uint8Array,
+        sedimentree_id: Uint8Array,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = authorizePut)]
+    fn js_authorize_put(
+        this: &JsPolicy,
+        requestor: Uint8Array,
+        author: Uint8Array,
+        sedimentree_id: Uint8Array,
+    ) -> Result<Promise, JsValue>;
+
+    #[wasm_bindgen(method, catch, js_name = filterAuthorizedFetch)]
+    fn js_filter_authorized_fetch(
+        this: &JsPolicy,
+        peer_id: Uint8Array,
+        ids: Array,
+    ) -> Result<Promise, JsValue>;
 }
+
+// ── Open policy (JS glue) ───────────────────────────────────────────────
+
+#[wasm_bindgen(inline_js = r#"
+export function makeOpenPolicy() {
+    return {
+        authorizeConnect() { return Promise.resolve(); },
+        authorizeFetch() { return Promise.resolve(); },
+        authorizePut() { return Promise.resolve(); },
+        filterAuthorizedFetch(_peer, ids) { return Promise.resolve(ids); },
+    };
+}
+"#)]
+extern "C" {
+    /// Create an open (allow-all) policy JS object.
+    #[wasm_bindgen(js_name = makeOpenPolicy)]
+    pub fn make_open_policy() -> JsPolicy;
+}
+
+// ── Error type ──────────────────────────────────────────────────────────
 
 /// Error returned when a JS policy denies an operation.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, thiserror::Error)]
@@ -65,7 +109,7 @@ impl JsPolicyDenied {
         let reason = val
             .as_string()
             .or_else(|| {
-                js_sys::Reflect::get(&val, &"message".into())
+                js_sys::Reflect::get(val, &"message".into())
                     .ok()
                     .and_then(|v| v.as_string())
             })
@@ -74,76 +118,22 @@ impl JsPolicyDenied {
     }
 }
 
-impl JsPolicy {
-    /// Wrap a JS object as a policy.
-    #[must_use]
-    pub const fn new(inner: JsValue) -> Self {
-        Self { inner }
-    }
-
-    /// Create an open (allow-all) policy.
-    ///
-    /// All authorization methods resolve immediately. Equivalent to
-    /// [`OpenPolicy`](subduction_core::policy::open::OpenPolicy).
-    #[must_use]
-    pub fn open() -> Self {
-        Self {
-            inner: make_open_policy_object(),
-        }
-    }
-}
-
-// ── JS glue ─────────────────────────────────────────────────────────────
-
-#[wasm_bindgen(inline_js = r#"
-export function makeOpenPolicyObject() {
-    return {
-        authorizeConnect() { return Promise.resolve(); },
-        authorizeFetch() { return Promise.resolve(); },
-        authorizePut() { return Promise.resolve(); },
-        filterAuthorizedFetch(_peer, ids) { return Promise.resolve(ids); },
-    };
-}
-"#)]
-extern "C" {
-    #[wasm_bindgen(js_name = makeOpenPolicyObject)]
-    fn make_open_policy_object() -> JsValue;
-}
-
 // ── Helpers ─────────────────────────────────────────────────────────────
 
-/// Call a JS method that returns `Promise<void>`, mapping rejection to an error.
-async fn call_void(
-    inner: &JsValue,
-    method_name: &str,
-    args: &[JsValue],
-) -> Result<(), JsPolicyDenied> {
-    let method = js_sys::Reflect::get(inner, &method_name.into())
+fn peer_bytes(peer: PeerId) -> Uint8Array {
+    Uint8Array::from(peer.as_bytes().as_slice())
+}
+
+fn sed_bytes(id: SedimentreeId) -> Uint8Array {
+    Uint8Array::from(id.as_bytes().as_slice())
+}
+
+async fn await_void_promise(result: Result<Promise, JsValue>) -> Result<(), JsPolicyDenied> {
+    let promise = result.map_err(|e| JsPolicyDenied::from_js(&e))?;
+    JsFuture::from(promise)
+        .await
         .map_err(|e| JsPolicyDenied::from_js(&e))?;
-    let func: js_sys::Function = method.dyn_into().map_err(|_| JsPolicyDenied {
-        reason: format!("{method_name} is not a function"),
-    })?;
-    let js_args = Array::new();
-    for arg in args {
-        js_args.push(arg);
-    }
-    let result = func
-        .apply(inner, &js_args)
-        .map_err(|e| JsPolicyDenied::from_js(&e))?;
-    if let Ok(promise) = result.dyn_into::<Promise>() {
-        JsFuture::from(promise)
-            .await
-            .map_err(|e| JsPolicyDenied::from_js(&e))?;
-    }
     Ok(())
-}
-
-fn peer_bytes(peer: PeerId) -> JsValue {
-    Uint8Array::from(peer.as_bytes().as_slice()).into()
-}
-
-fn sed_bytes(id: SedimentreeId) -> JsValue {
-    Uint8Array::from(id.as_bytes().as_slice()).into()
 }
 
 // ── ConnectionPolicy ────────────────────────────────────────────────────
@@ -156,9 +146,8 @@ impl ConnectionPolicy<Local> for JsPolicy {
         peer_id: PeerId,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::ConnectionDisallowed>>
     {
-        let inner = self.inner.clone();
-        async move { call_void(&inner, "authorizeConnect", &[peer_bytes(peer_id)]).await }
-            .boxed_local()
+        let result = self.js_authorize_connect(peer_bytes(peer_id));
+        async move { await_void_promise(result).await }.boxed_local()
     }
 }
 
@@ -173,16 +162,8 @@ impl StoragePolicy<Local> for JsPolicy {
         peer: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::FetchDisallowed>> {
-        let inner = self.inner.clone();
-        async move {
-            call_void(
-                &inner,
-                "authorizeFetch",
-                &[peer_bytes(peer), sed_bytes(sedimentree_id)],
-            )
-            .await
-        }
-        .boxed_local()
+        let result = self.js_authorize_fetch(peer_bytes(peer), sed_bytes(sedimentree_id));
+        async move { await_void_promise(result).await }.boxed_local()
     }
 
     fn authorize_put(
@@ -191,20 +172,12 @@ impl StoragePolicy<Local> for JsPolicy {
         author: PeerId,
         sedimentree_id: SedimentreeId,
     ) -> <Local as future_form::FutureForm>::Future<'_, Result<(), Self::PutDisallowed>> {
-        let inner = self.inner.clone();
-        async move {
-            call_void(
-                &inner,
-                "authorizePut",
-                &[
-                    peer_bytes(requestor),
-                    peer_bytes(author),
-                    sed_bytes(sedimentree_id),
-                ],
-            )
-            .await
-        }
-        .boxed_local()
+        let result = self.js_authorize_put(
+            peer_bytes(requestor),
+            peer_bytes(author),
+            sed_bytes(sedimentree_id),
+        );
+        async move { await_void_promise(result).await }.boxed_local()
     }
 
     fn filter_authorized_fetch(
@@ -212,33 +185,17 @@ impl StoragePolicy<Local> for JsPolicy {
         peer: PeerId,
         ids: Vec<SedimentreeId>,
     ) -> <Local as future_form::FutureForm>::Future<'_, Vec<SedimentreeId>> {
-        let inner = self.inner.clone();
+        let js_ids = Array::new();
+        for id in &ids {
+            js_ids.push(&sed_bytes(*id));
+        }
+        let result = self.js_filter_authorized_fetch(peer_bytes(peer), js_ids);
         async move {
-            let Ok(method) = js_sys::Reflect::get(&inner, &"filterAuthorizedFetch".into()) else {
-                return ids;
-            };
-            let Ok(func): Result<js_sys::Function, _> = method.dyn_into() else {
-                return ids;
-            };
-
-            let js_ids = Array::new();
-            for id in &ids {
-                js_ids.push(&Uint8Array::from(id.as_bytes().as_slice()));
-            }
-
-            let Ok(result) = func.call2(&inner, &peer_bytes(peer), &js_ids) else {
-                return ids;
-            };
-
-            let Ok(promise): Result<Promise, _> = result.dyn_into() else {
-                return ids;
-            };
-
+            let Ok(promise) = result else { return ids };
             let Ok(resolved) = JsFuture::from(promise).await else {
                 return ids;
             };
-
-            let Ok(arr): Result<Array, _> = resolved.dyn_into() else {
+            let Ok(arr) = resolved.dyn_into::<Array>() else {
                 return ids;
             };
 
