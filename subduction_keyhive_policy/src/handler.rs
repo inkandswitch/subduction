@@ -230,3 +230,164 @@ where
         .boxed()
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+mod tests {
+    use alloc::{string::ToString, sync::Arc, vec};
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    use subduction_keyhive::SignedMessage;
+    use testresult::TestResult;
+
+    use super::*;
+
+    #[derive(Clone, PartialEq)]
+    struct DummyConn;
+
+    fn test_peer_id() -> PeerId {
+        PeerId::new([0xAB; 32])
+    }
+
+    fn valid_keyhive_message() -> KeyhiveMessage {
+        let signed = SignedMessage::with_contact_card(vec![1, 2, 3], vec![4, 5, 6]);
+        let cbor = signed.to_cbor().expect("CBOR serialization");
+        KeyhiveMessage::new(cbor)
+    }
+
+    fn test_conn() -> Authenticated<DummyConn, future_form::Sendable> {
+        Authenticated::new_for_test(DummyConn, test_peer_id())
+    }
+
+    #[tokio::test]
+    async fn actor_processes_handle_inbound() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id| async {},
+        ));
+
+        let conn = test_conn();
+        let msg = valid_keyhive_message();
+        let result = Handler::<future_form::Sendable, DummyConn>::handle(&handle, &conn, msg).await;
+        assert!(result.is_ok());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn actor_processes_peer_disconnect() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        let disconnected = Arc::new(AtomicBool::new(false));
+        let flag = disconnected.clone();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Ok(()) },
+            move |_peer_id| {
+                let flag = flag.clone();
+                async move {
+                    flag.store(true, Ordering::SeqCst);
+                }
+            },
+        ));
+
+        Handler::<future_form::Sendable, DummyConn>::on_peer_disconnect(&handle, test_peer_id())
+            .await;
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert!(disconnected.load(Ordering::SeqCst));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_returns_actor_gone_when_receiver_dropped() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        drop(rx);
+
+        let conn = test_conn();
+        let msg = valid_keyhive_message();
+        let result = Handler::<future_form::Sendable, DummyConn>::handle(&handle, &conn, msg).await;
+
+        assert!(matches!(result, Err(HandleError::ActorGone)));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_returns_decode_error_for_invalid_cbor() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Ok(()) },
+            |_peer_id| async {},
+        ));
+
+        let conn = test_conn();
+        let msg = KeyhiveMessage::new(vec![0xFF, 0xFF]);
+        let result = Handler::<future_form::Sendable, DummyConn>::handle(&handle, &conn, msg).await;
+
+        assert!(matches!(result, Err(HandleError::Decode(_))));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn handle_returns_protocol_error_from_process() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        tokio::spawn(run_actor(
+            rx,
+            |_peer_id, _msg| async { Err("boom".to_string()) },
+            |_peer_id| async {},
+        ));
+
+        let conn = test_conn();
+        let msg = valid_keyhive_message();
+        let result = Handler::<future_form::Sendable, DummyConn>::handle(&handle, &conn, msg).await;
+
+        match result {
+            Err(HandleError::Protocol(s)) => assert_eq!(s, "boom"),
+            other => panic!("expected Protocol(\"boom\"), got {other:?}"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn disconnect_is_fire_and_forget_when_actor_gone() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+        drop(rx);
+
+        // Should not panic even though the actor is gone.
+        Handler::<future_form::Sendable, DummyConn>::on_peer_disconnect(&handle, test_peer_id())
+            .await;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn actor_shuts_down_when_all_handles_dropped() -> TestResult {
+        let (handle, rx) = KeyhiveProtocolHandle::channel();
+
+        let shut_down = Arc::new(AtomicBool::new(false));
+        let flag = shut_down.clone();
+
+        tokio::spawn(async move {
+            run_actor(rx, |_peer_id, _msg| async { Ok(()) }, |_peer_id| async {}).await;
+            flag.store(true, Ordering::SeqCst);
+        });
+
+        drop(handle);
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(50)).await;
+        assert!(shut_down.load(Ordering::SeqCst));
+
+        Ok(())
+    }
+}

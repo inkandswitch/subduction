@@ -190,11 +190,6 @@ mod tests {
     }
 
     #[test]
-    fn schema_bytes_are_correct() {
-        assert_eq!(&KEYHIVE_SCHEMA, b"SUK\x00");
-    }
-
-    #[test]
     fn encoded_starts_with_schema() {
         let msg = KeyhiveMessage::new(vec![1, 2, 3]);
         let encoded = msg.encode();
@@ -249,12 +244,40 @@ mod tests {
     }
 
     #[test]
-    fn payload_accessible() {
-        let payload = vec![10, 20, 30];
-        let msg = KeyhiveMessage::new(payload.clone());
+    fn extra_trailing_bytes_rejected() {
+        let msg = KeyhiveMessage::new(vec![1, 2, 3]);
+        let mut encoded = msg.encode();
+        encoded.push(0xFF); // extra byte
 
-        assert_eq!(msg.payload(), &payload[..]);
-        assert_eq!(msg.into_payload(), payload);
+        let err = KeyhiveMessage::try_decode(&encoded).unwrap_err();
+        assert!(
+            matches!(err, DecodeError::SizeMismatch(_)),
+            "expected SizeMismatch, got {err:?}"
+        );
+    }
+
+    #[cfg(feature = "bolero")]
+    #[test]
+    fn prop_roundtrip() {
+        bolero::check!()
+            .with_type::<alloc::vec::Vec<u8>>()
+            .for_each(|payload| {
+                let msg = KeyhiveMessage::new(payload.clone());
+                let encoded = msg.encode();
+                let decoded = KeyhiveMessage::try_decode(&encoded).expect("roundtrip decode");
+                assert_eq!(decoded, msg);
+            });
+    }
+
+    #[cfg(feature = "bolero")]
+    #[test]
+    fn prop_encoded_size_matches_encode_len() {
+        bolero::check!()
+            .with_type::<alloc::vec::Vec<u8>>()
+            .for_each(|payload| {
+                let msg = KeyhiveMessage::new(payload.clone());
+                assert_eq!(msg.encoded_size(), msg.encode().len());
+            });
     }
 
     #[cfg(all(feature = "serde", feature = "std"))]

@@ -15,6 +15,7 @@ repository.workspace = true
 async-lock = { workspace = true }
 base64 = { workspace = true }
 blake3 = { workspace = true }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 ciborium = { workspace = true }
 ed25519-dalek = { workspace = true, features = ["serde"] }
 futures = { workspace = true }
@@ -28,6 +29,7 @@ tracing = { workspace = true }
 
 [features]
 default = []
+bolero = ["dep:bolero"]
 serde = ["dep:serde", "std"]
 std = ["thiserror/std"]
 
