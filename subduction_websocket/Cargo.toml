@@ -34,12 +34,15 @@ tungstenite = { workspace = true }
 
 [dev-dependencies]
 arbitrary = { workspace = true }
+async-lock = { workspace = true }
 criterion = { workspace = true }
 criterion_pprof = { workspace = true }
 eyre = { workspace = true }
+nonempty = { workspace = true, features = ["std"] }
 rand = { workspace = true, features = ["std_rng"] }
 sedimentree_core = { workspace = true, features = ["arbitrary", "serde", "std"] }
 subduction_core = { workspace = true, features = ["test_utils"] }
+subduction_ephemeral = { workspace = true, features = ["std"] }
 testresult = { workspace = true }
 tokio = { workspace = true }
 tokio-test = { workspace = true }
@@ -55,6 +58,10 @@ required-features = ["tokio_server", "tokio_client"]
 
 [[test]]
 name = "tokio_tests"
+required-features = ["tokio_server", "tokio_client"]
+
+[[test]]
+name = "ephemeral_e2e"
 required-features = ["tokio_server", "tokio_client"]
 
 [features]
