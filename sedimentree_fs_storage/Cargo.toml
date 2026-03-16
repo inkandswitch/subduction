@@ -24,5 +24,11 @@ thiserror = { workspace = true }
 tokio = { workspace = true, features = ["fs", "io-util"] }
 tracing = { workspace = true, default-features = true }
 
+[dev-dependencies]
+subduction_crypto = { workspace = true, features = ["std"] }
+tempfile = { workspace = true }
+testresult = { workspace = true }
+tokio = { workspace = true, features = ["macros", "rt"] }
+
 [lints]
 workspace = true

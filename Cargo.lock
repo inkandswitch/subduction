@@ -4654,6 +4654,8 @@ dependencies = [
  "sedimentree_core",
  "subduction_core",
  "subduction_crypto",
+ "tempfile",
+ "testresult",
  "thiserror 2.0.18",
  "tokio",
  "tracing",

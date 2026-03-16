@@ -447,7 +447,7 @@ mod tests {
     use super::*;
 
     /// Minimal test payload for testing Signed round-trips.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, arbitrary::Arbitrary)]
     struct TestPayload {
         value: u64,
     }
@@ -546,5 +546,77 @@ mod tests {
 
         assert!(result.is_err(), "tampered bytes should fail verification");
         Ok(())
+    }
+
+    /// Seal → as_bytes → try_decode → as_bytes must produce identical bytes.
+    ///
+    /// This catches truncation bugs where try_decode computes the wrong
+    /// actual_size and silently truncates the stored bytes.
+    #[test]
+    fn prop_seal_roundtrip_preserves_bytes() {
+        bolero::check!()
+            .with_arbitrary::<(TestPayload, [u8; 32])>()
+            .for_each(|(payload, key_bytes)| {
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(key_bytes);
+                let issuer = signing_key.verifying_key();
+
+                // Build signed bytes (synchronous, same as Signed::seal internals)
+                let fields_size = payload.fields_size();
+                let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+                let mut original_bytes = Vec::with_capacity(total_size);
+                original_bytes.extend_from_slice(&TestPayload::SCHEMA);
+                original_bytes.extend_from_slice(issuer.as_bytes());
+                payload.encode_fields(&mut original_bytes);
+                let signature = <ed25519_dalek::SigningKey as ed25519_dalek::Signer<_>>::sign(
+                    &signing_key,
+                    &original_bytes,
+                );
+                original_bytes.extend_from_slice(&signature.to_bytes());
+
+                // Round-trip through try_decode
+                let decoded = Signed::<TestPayload>::try_decode(original_bytes.clone())
+                    .expect("decode should succeed for sealed bytes");
+
+                assert_eq!(
+                    decoded.as_bytes(),
+                    &original_bytes[..],
+                    "try_decode must preserve exact byte identity"
+                );
+            });
+    }
+
+    /// try_decode of sealed bytes produces a Signed whose try_verify succeeds.
+    ///
+    /// This catches corruption in the try_decode path that would break
+    /// signature verification on reload (e.g., wrong truncation point).
+    #[test]
+    fn prop_try_decode_of_sealed_bytes_verifies() {
+        bolero::check!()
+            .with_arbitrary::<(TestPayload, [u8; 32])>()
+            .for_each(|(payload, key_bytes)| {
+                let signing_key = ed25519_dalek::SigningKey::from_bytes(key_bytes);
+                let issuer = signing_key.verifying_key();
+
+                let fields_size = payload.fields_size();
+                let total_size = SCHEMA_SIZE + VERIFYING_KEY_SIZE + fields_size + SIGNATURE_SIZE;
+                let mut bytes = Vec::with_capacity(total_size);
+                bytes.extend_from_slice(&TestPayload::SCHEMA);
+                bytes.extend_from_slice(issuer.as_bytes());
+                payload.encode_fields(&mut bytes);
+                let signature = <ed25519_dalek::SigningKey as ed25519_dalek::Signer<_>>::sign(
+                    &signing_key,
+                    &bytes,
+                );
+                bytes.extend_from_slice(&signature.to_bytes());
+
+                let decoded =
+                    Signed::<TestPayload>::try_decode(bytes).expect("decode should succeed");
+
+                let verified = decoded
+                    .try_verify()
+                    .expect("verification must succeed for sealed bytes after try_decode");
+
+                assert_eq!(verified.payload(), payload);
+            });
     }
 }

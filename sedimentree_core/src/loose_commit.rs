@@ -294,4 +294,31 @@ mod proptests {
                 assert_eq!(encoded.len(), commit.encoded_size());
             });
     }
+
+    /// Decoded struct's `fields_size()` matches the consumed byte count
+    /// returned by `try_decode_fields`.
+    ///
+    /// This is the invariant that the old `Signed::try_decode` assumed
+    /// but never verified — if these disagree, `bytes.truncate()` corrupts
+    /// the signed data.
+    #[test]
+    #[allow(clippy::panic)]
+    fn decoded_fields_size_matches_consumed() {
+        bolero::check!()
+            .with_arbitrary::<LooseCommit>()
+            .for_each(|commit| {
+                let mut buf = Vec::new();
+                commit.encode_fields(&mut buf);
+                match LooseCommit::try_decode_fields(&buf) {
+                    Ok((decoded, consumed)) => {
+                        assert_eq!(
+                            consumed,
+                            decoded.fields_size(),
+                            "consumed byte count must equal decoded struct's fields_size()"
+                        );
+                    }
+                    Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
+                }
+            });
+    }
 }

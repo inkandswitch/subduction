@@ -748,6 +748,29 @@ mod tests {
                 });
         }
 
+        /// Decoded struct's `fields_size()` matches the consumed byte count
+        /// returned by `try_decode_fields`.
+        #[test]
+        #[allow(clippy::panic)]
+        fn decoded_fields_size_matches_consumed() {
+            bolero::check!()
+                .with_arbitrary::<Fragment>()
+                .for_each(|fragment| {
+                    let mut buf = alloc::vec::Vec::new();
+                    fragment.encode_fields(&mut buf);
+                    match Fragment::try_decode_fields(&buf) {
+                        Ok((decoded, consumed)) => {
+                            assert_eq!(
+                                consumed,
+                                decoded.fields_size(),
+                                "consumed byte count must equal decoded struct's fields_size()"
+                            );
+                        }
+                        Err(e) => panic!("decode should succeed for valid encoded data: {e}"),
+                    }
+                });
+        }
+
         #[test]
         fn supports_self() {
             bolero::check!()
