@@ -16,18 +16,11 @@ use futures::{
     channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
 };
-use subduction_core::{
-    peer::id::PeerId,
-    timestamp::TimestampSeconds,
-    transport::{MessageTransport, Transport},
-};
+use subduction_core::{peer::id::PeerId, timestamp::TimestampSeconds, transport::Transport};
 use subduction_crypto::nonce::Nonce;
 use thiserror::Error;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
-use web_sys::{
-    BinaryType, Event, MessageEvent, Url, WebSocket,
-    js_sys,
-};
+use web_sys::{BinaryType, Event, MessageEvent, Url, WebSocket, js_sys};
 
 use super::handshake::WasmWebSocketHandshake;
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
@@ -132,10 +125,7 @@ impl WasmWebSocket {
         let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
-                (
-                    Self::setup_open_socket(ws_for_setup, peer_id),
-                    (),
-                )
+                (Self::setup_open_socket(ws_for_setup, peer_id), ())
             },
             signer,
             audience,
@@ -237,10 +227,7 @@ impl WasmWebSocket {
         let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
-                (
-                    Self::setup_open_socket(ws_for_setup, peer_id),
-                    (),
-                )
+                (Self::setup_open_socket(ws_for_setup, peer_id), ())
             },
             signer,
             audience,
@@ -286,10 +273,7 @@ impl WasmWebSocket {
         let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
             WasmWebSocketHandshake::new(ws),
             move |_handshake_transport, peer_id| {
-                (
-                    Self::setup_open_socket(ws_for_setup, peer_id),
-                    (),
-                )
+                (Self::setup_open_socket(ws_for_setup, peer_id), ())
             },
             signer,
             audience,
@@ -581,12 +565,10 @@ impl WasmAuthenticatedWebSocket {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedTransport {
+        let peer_id = self.inner.peer_id();
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
-            MessageTransport::new(
-                wasm_bindgen::JsValue::from(ws).unchecked_into::<super::JsTransport>(),
-            )
+            let transport: super::JsTransport = wasm_bindgen::JsValue::from(ws).unchecked_into();
+            super::make_connection(transport, peer_id)
         }))
     }
 }
-
-

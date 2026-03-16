@@ -12,9 +12,9 @@ use sedimentree_core::collections::{Map, Set};
 use from_js_ref::FromJsRef;
 use future_form::Local;
 use futures::{
-    future::{select, Either},
-    stream::Aborted,
     FutureExt,
+    future::{Either, select},
+    stream::Aborted,
 };
 use js_sys::Uint8Array;
 use sedimentree_core::{
@@ -34,10 +34,9 @@ use subduction_core::{
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
     subduction::{
-        builder::SubductionBuilder, error::HydrationError,
-        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS, Subduction,
+        Subduction, builder::SubductionBuilder, error::HydrationError,
+        pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
-    transport::MessageTransport,
 };
 use wasm_bindgen::prelude::*;
 
@@ -53,9 +52,10 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
+        JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
+        make_connection,
         websocket::WasmWebSocket,
-        JsConnectionError, JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
     },
 };
 use sedimentree_wasm::{
@@ -372,11 +372,9 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(
-                authenticated.map(|ws| {
-                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
-                }),
-            )
+            .add_connection(authenticated.map(|ws| {
+                make_connection(JsValue::from(ws).unchecked_into::<JsTransport>(), peer_id)
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -411,11 +409,9 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(
-                authenticated.map(|ws| {
-                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
-                }),
-            )
+            .add_connection(authenticated.map(|ws| {
+                make_connection(JsValue::from(ws).unchecked_into::<JsTransport>(), peer_id)
+            }))
             .await?;
         Ok(peer_id.into())
     }
@@ -451,9 +447,9 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(authenticated.map(|lp| {
-                MessageTransport::new(
-                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into::<JsTransport>(),
-                )
+                let transport: JsTransport =
+                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
+                make_connection(transport, peer_id)
             }))
             .await?;
         Ok(peer_id.into())
@@ -490,9 +486,9 @@ impl WasmSubduction {
         let peer_id = authenticated.peer_id();
         self.core
             .add_connection(authenticated.map(|lp| {
-                MessageTransport::new(
-                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into::<JsTransport>(),
-                )
+                let transport: JsTransport =
+                    JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
+                make_connection(transport, peer_id)
             }))
             .await?;
         Ok(peer_id.into())
@@ -1050,8 +1046,14 @@ impl DepthMetric for WasmHashMetric {
 /// Wasm wrapper for call errors.
 #[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone, thiserror::Error)]
-#[error(transparent)]
-pub struct WasmCallError(#[from] JsConnectionError);
+#[error("{0}")]
+pub struct WasmCallError(String);
+
+impl<E: core::error::Error> From<subduction_core::transport::MuxCallError<E>> for WasmCallError {
+    fn from(err: subduction_core::transport::MuxCallError<E>) -> Self {
+        Self(err.to_string())
+    }
+}
 
 impl From<WasmCallError> for js_sys::Error {
     fn from(err: WasmCallError) -> Self {

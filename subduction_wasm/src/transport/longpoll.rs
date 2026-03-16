@@ -40,7 +40,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{select, Either},
+            future::{Either, select},
             pin_mut,
         };
 
@@ -178,12 +178,11 @@ impl WasmAuthenticatedLongPoll {
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedTransport {
-        use subduction_core::transport::MessageTransport;
+        let peer_id = self.inner.peer_id();
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
-            MessageTransport::new(
-                wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp))
-                    .unchecked_into::<super::JsTransport>(),
-            )
+            let transport: super::JsTransport =
+                wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
+            super::make_connection(transport, peer_id)
         }))
     }
 }

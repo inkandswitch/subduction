@@ -4,15 +4,15 @@ use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
-    connection::{message::SyncMessage, ConnectionDisallowed},
+    connection::{ConnectionDisallowed, message::SyncMessage},
     subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::transport::{
-    longpoll::LongPollConnectionError, websocket::WebSocketAuthenticatedConnectionError,
-    JsConnectionError, WasmJsConnection,
+    JsConnectionError, WasmJsConnection, longpoll::LongPollConnectionError,
+    websocket::WebSocketAuthenticatedConnectionError,
 };
 use sedimentree_wasm::storage::JsStorage;
 
