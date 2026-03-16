@@ -14,9 +14,9 @@ use sedimentree_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{
-    Connection, Roundtrip,
     manager::Spawn,
     message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+    Connection, Roundtrip,
 };
 use crate::{
     authenticated::Authenticated,
@@ -24,7 +24,7 @@ use crate::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 
 /// A minimal mock connection for testing.
@@ -551,6 +551,85 @@ impl<C: Roundtrip<Local, BatchSyncRequest, BatchSyncResponse>>
         timeout: Option<Duration>,
     ) -> <Local as FutureForm>::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         self.inner.call(req, timeout)
+    }
+}
+
+// ── Transport mocks ─────────────────────────────────────────────────────
+
+/// A channel-based [`Transport`](crate::transport::Transport) mock for testing.
+///
+/// Bytes written via `send_bytes` appear on the paired `ChannelTransport`'s
+/// `recv_bytes`, and vice versa.
+///
+/// # Construction
+///
+/// ```ignore
+/// let (a, b) = ChannelTransport::pair();
+/// // a.send_bytes(bytes) → b.recv_bytes()
+/// // b.send_bytes(bytes) → a.recv_bytes()
+/// ```
+#[derive(Debug, Clone)]
+pub struct ChannelTransport {
+    tx: async_channel::Sender<Vec<u8>>,
+    rx: async_channel::Receiver<Vec<u8>>,
+}
+
+impl ChannelTransport {
+    /// Create a bidirectional pair of transports.
+    #[must_use]
+    pub fn pair() -> (Self, Self) {
+        let (tx_a, rx_a) = async_channel::bounded(64);
+        let (tx_b, rx_b) = async_channel::bounded(64);
+        (Self { tx: tx_a, rx: rx_b }, Self { tx: tx_b, rx: rx_a })
+    }
+}
+
+impl PartialEq for ChannelTransport {
+    fn eq(&self, other: &Self) -> bool {
+        self.tx.same_channel(&other.tx) && self.rx.same_channel(&other.rx)
+    }
+}
+
+/// Error from a [`ChannelTransport`] operation.
+#[derive(Debug, Clone, Copy, thiserror::Error)]
+#[error("channel closed")]
+pub struct ChannelClosed;
+
+impl crate::transport::Transport<Sendable> for ChannelTransport {
+    type SendError = ChannelClosed;
+    type RecvError = ChannelClosed;
+    type DisconnectionError = core::convert::Infallible;
+
+    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        let data = bytes.to_vec();
+        let tx = self.tx.clone();
+        Box::pin(async move { tx.send(data).await.map_err(|_| ChannelClosed) })
+    }
+
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        let rx = self.rx.clone();
+        Box::pin(async move { rx.recv().await.map_err(|_| ChannelClosed) })
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        Box::pin(async { Ok(()) })
+    }
+}
+
+/// A [`Timeout`](crate::timeout::Timeout) that never times out.
+///
+/// Returns the inner future's result directly, ignoring the duration.
+/// Useful for deterministic testing where timeouts should not fire.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct InstantTimeout;
+
+impl crate::timeout::Timeout<Sendable> for InstantTimeout {
+    fn timeout<'a, T: 'a>(
+        &'a self,
+        _dur: Duration,
+        fut: BoxFuture<'a, T>,
+    ) -> BoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+        Box::pin(async move { Ok(fut.await) })
     }
 }
 

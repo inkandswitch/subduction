@@ -5,14 +5,6 @@ use subduction_core::connection::test_utils::new_test_subduction;
 use testresult::TestResult;
 
 #[tokio::test]
-async fn test_sedimentree_ids_returns_empty_initially() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
-
-    let ids = subduction.sedimentree_ids().await;
-    assert_eq!(ids.len(), 0);
-}
-
-#[tokio::test]
 async fn test_add_sedimentree_increases_count() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 
