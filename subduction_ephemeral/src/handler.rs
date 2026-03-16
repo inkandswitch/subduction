@@ -224,7 +224,7 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
         id: SedimentreeId,
         payload: Vec<u8>,
     ) {
-        let sender = Connection::<F, EphemeralMessage>::peer_id(conn);
+        let sender = conn.peer_id();
 
         if payload.len() > self.max_payload_size {
             warn!(
@@ -294,7 +294,7 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
 
     /// Handle a subscribe request from a peer.
     async fn recv_subscribe(&self, conn: &Authenticated<C, F>, ids: Vec<SedimentreeId>) {
-        let peer = Connection::<F, EphemeralMessage>::peer_id(conn);
+        let peer = conn.peer_id();
         let mut rejected = Vec::new();
 
         for id in &ids {
@@ -326,7 +326,7 @@ impl<F: FutureForm, C: Connection<F, EphemeralMessage> + Clone + 'static, E: Eph
 
     /// Handle an unsubscribe request from a peer.
     async fn recv_unsubscribe(&self, conn: &Authenticated<C, F>, ids: Vec<SedimentreeId>) {
-        let peer = Connection::<F, EphemeralMessage>::peer_id(conn);
+        let peer = conn.peer_id();
         let mut subs = self.ephemeral_subscriptions.lock().await;
 
         for id in &ids {
