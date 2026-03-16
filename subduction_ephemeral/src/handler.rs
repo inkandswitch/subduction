@@ -26,9 +26,7 @@ use sedimentree_core::{
     id::SedimentreeId,
 };
 use subduction_core::{
-    connection::{Connection, authenticated::Authenticated},
-    handler::Handler,
-    peer::id::PeerId,
+    authenticated::Authenticated, connection::Connection, handler::Handler, peer::id::PeerId,
 };
 use thiserror::Error;
 use tracing::{debug, warn};
