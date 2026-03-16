@@ -88,29 +88,25 @@ impl Spawn<Local> for WasmSpawn {
     }
 }
 
+type WasmSyncHandler =
+    SyncHandler<Local, JsStorage, JsConnection, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
+
+type WasmSubductionCore = Subduction<
+    'static,
+    Local,
+    JsStorage,
+    JsConnection,
+    WasmSyncHandler,
+    OpenPolicy,
+    JsSigner,
+    WasmHashMetric,
+    WASM_SHARD_COUNT,
+>;
+
 /// Wasm bindings for [`Subduction`](subduction_core::Subduction)
 #[wasm_bindgen(js_name = Subduction)]
 pub struct WasmSubduction {
-    core: Arc<
-        Subduction<
-            'static,
-            Local,
-            JsStorage,
-            JsConnection,
-            SyncHandler<
-                Local,
-                JsStorage,
-                JsConnection,
-                OpenPolicy,
-                WasmHashMetric,
-                WASM_SHARD_COUNT,
-            >,
-            OpenPolicy,
-            JsSigner,
-            WasmHashMetric,
-            WASM_SHARD_COUNT,
-        >,
-    >,
+    core: Arc<WasmSubductionCore>,
     js_storage: JsValue, // helpful for implementations to registering callbacks on the original object
 }
 

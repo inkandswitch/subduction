@@ -15,6 +15,7 @@ pub mod handshake;
 pub mod id;
 pub mod manager;
 pub mod message;
+pub mod multiplexer;
 pub mod nonce_cache;
 pub mod stats;
 pub mod timeout;

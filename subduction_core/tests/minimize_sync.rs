@@ -53,24 +53,23 @@ fn make_unique_blob(seed: u8) -> Blob {
 /// futures are spawned onto the tokio runtime automatically.
 ///
 /// Must be called from within a tokio runtime context.
-fn make_subduction() -> Arc<
+type TestSyncHandler =
+    SyncHandler<Sendable, MemoryStorage, ChannelMockConnection, OpenPolicy, CountLeadingZeroBytes>;
+
+type TestSubduction = Arc<
     Subduction<
         'static,
         Sendable,
         MemoryStorage,
         ChannelMockConnection,
-        SyncHandler<
-            Sendable,
-            MemoryStorage,
-            ChannelMockConnection,
-            OpenPolicy,
-            CountLeadingZeroBytes,
-        >,
+        TestSyncHandler,
         OpenPolicy,
         subduction_crypto::signer::memory::MemorySigner,
         CountLeadingZeroBytes,
     >,
-> {
+>;
+
+fn make_subduction() -> TestSubduction {
     let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))

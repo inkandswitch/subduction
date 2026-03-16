@@ -1,6 +1,5 @@
 //! Error types for the HTTP long-poll transport.
 
-use futures::channel::oneshot;
 use thiserror::Error;
 
 /// Outbound channel closed — no more messages can be sent to the client.
@@ -13,7 +12,7 @@ pub struct SendError;
 pub enum CallError {
     /// Response oneshot was dropped before a reply arrived.
     #[error("response dropped")]
-    ResponseDropped(oneshot::Canceled),
+    ResponseDropped,
 
     /// Timed out waiting for response.
     #[error("timed out waiting for response")]

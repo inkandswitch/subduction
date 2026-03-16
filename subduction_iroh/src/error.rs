@@ -15,7 +15,7 @@ pub struct SendError;
 pub enum CallError {
     /// Response oneshot was dropped before a reply arrived.
     #[error("response dropped")]
-    ResponseDropped(futures::channel::oneshot::Canceled),
+    ResponseDropped,
 
     /// Timed out waiting for response.
     #[error("timed out waiting for response")]

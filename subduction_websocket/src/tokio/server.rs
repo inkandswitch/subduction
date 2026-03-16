@@ -5,7 +5,6 @@ use subduction_core::connection::timeout::Timeout;
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    timeout::FuturesTimerTimeout,
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
 };
@@ -14,7 +13,7 @@ use alloc::sync::Arc;
 use async_tungstenite::tokio::{accept_hdr_async_with_config, connect_async_with_config};
 use core::{net::SocketAddr, time::Duration};
 use future_form::Sendable;
-use sedimentree_core::{commit::CountLeadingZeroBytes, depth::DepthMetric};
+use sedimentree_core::depth::DepthMetric;
 use subduction_core::{
     connection::{
         authenticated::Authenticated,

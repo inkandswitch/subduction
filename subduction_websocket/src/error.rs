@@ -2,7 +2,6 @@
 
 use alloc::vec::Vec;
 
-use futures::channel::oneshot;
 use thiserror::Error;
 
 /// Outbound channel closed — the sender task has stopped.
@@ -15,7 +14,7 @@ pub struct SendError;
 pub enum CallError {
     /// Response oneshot was dropped before a reply arrived.
     #[error("response dropped")]
-    ResponseDropped(oneshot::Canceled),
+    ResponseDropped,
 
     /// Timed out waiting for response.
     #[error("timed out waiting for response")]

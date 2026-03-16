@@ -9,25 +9,20 @@
 //! send_bytes()    ──► outbound_tx     ──► outbound_rx      ──► POST /lp/recv
 //! ```
 //!
-//! The `call()` method uses the same pending-map + oneshot pattern as WebSocket:
-//! the caller pre-registers a oneshot channel keyed by [`RequestId`], sends the
-//! request, and waits on the oneshot receiver with a timeout.
+//! The `call()` method delegates request-response correlation to the shared
+//! [`Multiplexer`], identical to other transports.
 
 use alloc::{sync::Arc, vec::Vec};
-use core::{
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
-};
+use core::time::Duration;
 
 use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
-use futures::channel::oneshot;
 use rand::{RngCore, rngs::OsRng};
-use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
         Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+        multiplexer::Multiplexer,
         timeout::{TimedOut, Timeout},
         transport::Transport,
     },
@@ -48,13 +43,8 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 /// and pending-request map — exactly like the WebSocket transport.
 #[derive(Debug)]
 struct Inner<O> {
-    peer_id: PeerId,
     chan_id: u64,
-    req_id_counter: AtomicU64,
-    default_time_limit: Duration,
-    timeout: O,
-
-    pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
+    multiplexer: Multiplexer<O>,
 
     /// Raw bytes from `send_bytes()` / `call()` → picked up by `/lp/recv` handler.
     outbound_tx: async_channel::Sender<Vec<u8>>,
@@ -90,17 +80,12 @@ impl<O> HttpLongPollConnection<O> {
     pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
-        let starting_counter = OsRng.next_u64();
         let chan_id = OsRng.next_u64();
 
         Self {
             inner: Arc::new(Inner {
-                peer_id,
                 chan_id,
-                req_id_counter: AtomicU64::new(starting_counter),
-                default_time_limit,
-                timeout,
-                pending: Mutex::new(Map::new()),
+                multiplexer: Multiplexer::new(peer_id, timeout, default_time_limit),
                 outbound_tx,
                 inbound_writer,
                 inbound_reader,
@@ -136,17 +121,9 @@ impl<O> HttpLongPollConnection<O> {
         bytes: Vec<u8>,
     ) -> Result<(), async_channel::SendError<Vec<u8>>> {
         // Try to decode as SyncMessage to route BatchSyncResponse to pending waiters.
-        if let Ok(sync_msg) = SyncMessage::try_decode(&bytes) {
-            if let SyncMessage::BatchSyncResponse(ref resp) = sync_msg {
-                let req_id = resp.req_id;
-                if let Some(waiting) = self.inner.pending.lock().await.remove(&req_id) {
-                    if waiting.send(resp.clone()).is_err() {
-                        tracing::error!(
-                            "oneshot closed before sending response for req_id {req_id:?}"
-                        );
-                    }
-                    return Ok(());
-                }
+        if let Ok(SyncMessage::BatchSyncResponse(ref resp)) = SyncMessage::try_decode(&bytes) {
+            if self.inner.multiplexer.resolve_pending(resp).await {
+                return Ok(());
             }
         }
 
@@ -185,11 +162,11 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollConnection<O> {
     type DisconnectionError = DisconnectionError;
 
     fn peer_id(&self) -> PeerId {
-        self.inner.peer_id
+        self.inner.multiplexer.peer_id()
     }
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.inner.peer_id, "HttpLongPoll::disconnect");
+        tracing::info!(peer_id = %self.inner.multiplexer.peer_id(), "HttpLongPoll::disconnect");
         let conn = self.clone();
         K::from_future(async move {
             conn.close();
@@ -201,7 +178,7 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollConnection<O> {
         tracing::debug!(
             "http-lp: sending {} outbound bytes to peer {}",
             bytes.len(),
-            self.inner.peer_id
+            self.inner.multiplexer.peer_id()
         );
 
         let data = bytes.to_vec();
@@ -217,7 +194,7 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollConnection<O> {
         tracing::debug!(
             chan_id = self.inner.chan_id,
             "waiting on recv {:?}",
-            self.inner.peer_id
+            self.inner.multiplexer.peer_id()
         );
 
         K::from_future(async move {
@@ -240,12 +217,9 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
 
     fn next_request_id(&self) -> K::Future<'_, RequestId> {
         K::from_future(async {
-            let counter = self.inner.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated request id {counter:?}");
-            RequestId {
-                requestor: self.inner.peer_id,
-                nonce: counter,
-            }
+            let req_id = self.inner.multiplexer.next_request_id();
+            tracing::debug!("generated request id {req_id:?}");
+            req_id
         })
     }
 
@@ -255,18 +229,15 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
         override_timeout: Option<Duration>,
     ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
         let outbound_tx = self.inner.outbound_tx.clone();
-        let timeout = self.inner.timeout.clone();
-        let default_time_limit = self.inner.default_time_limit;
         let inner = self.inner.clone();
 
         K::from_future(async move {
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
 
-            let (tx, rx) = oneshot::channel();
-            inner.pending.lock().await.insert(req_id, tx);
+            let rx = inner.multiplexer.register_pending(req_id).await;
 
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
+            let msg_bytes = Multiplexer::<O>::encode_request(&req);
             outbound_tx
                 .send(msg_bytes)
                 .await
@@ -277,21 +248,26 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
                 "sent HTTP long-poll request {req_id:?}"
             );
 
-            let req_timeout = override_timeout.unwrap_or(default_time_limit);
+            let req_timeout = override_timeout.unwrap_or(inner.multiplexer.default_time_limit());
             let rx_fut = K::from_future(rx);
 
-            match timeout.timeout(req_timeout, rx_fut).await {
+            match inner
+                .multiplexer
+                .timeout()
+                .timeout(req_timeout, rx_fut)
+                .await
+            {
                 Ok(Ok(resp)) => {
                     tracing::info!("request {req_id:?} completed");
                     Ok(resp)
                 }
-                Ok(Err(e)) => {
-                    tracing::error!("request {req_id:?} failed: {e}");
-                    Err(CallError::ResponseDropped(e))
+                Ok(Err(_)) => {
+                    tracing::error!("request {req_id:?} failed: response dropped");
+                    Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {req_id:?} timed out");
-                    inner.pending.lock().await.remove(&req_id);
+                    inner.multiplexer.cancel_pending(&req_id).await;
                     Err(CallError::Timeout)
                 }
             }

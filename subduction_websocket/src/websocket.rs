@@ -4,7 +4,6 @@ use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
     fmt::Debug,
     future::{Future, IntoFuture},
-    sync::atomic::{AtomicU64, Ordering},
     time::Duration,
 };
 
@@ -13,21 +12,19 @@ use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
 use future_form::{FutureForm, Local, Sendable};
 use futures::{
     FutureExt,
-    channel::oneshot,
     future::{BoxFuture, LocalBoxFuture},
 };
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
-use sedimentree_core::collections::Map;
 use subduction_core::{
     connection::{
         Roundtrip,
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+        multiplexer::Multiplexer,
+        timeout::{TimedOut, Timeout},
         transport::Transport,
     },
     peer::id::PeerId,
 };
-
-use subduction_core::connection::timeout::{TimedOut, Timeout};
 
 use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
 
@@ -98,11 +95,7 @@ impl<'a> IntoFuture for SenderTask<'a> {
 #[derive(Debug)]
 pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
     chan_id: u64,
-    peer_id: PeerId,
-    req_id_counter: Arc<AtomicU64>,
-
-    timeout_strategy: O,
-    default_time_limit: Duration,
+    multiplexer: Arc<Multiplexer<O>>,
 
     ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
 
@@ -112,8 +105,6 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
 
     /// The actual WebSocket sender, used only by the sender task.
     ws_sender: Arc<Mutex<WebSocketSender<T>>>,
-
-    pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
 
     inbound_writer: async_channel::Sender<Vec<u8>>,
     inbound_reader: async_channel::Receiver<Vec<u8>>,
@@ -129,11 +120,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Transport<Loca
     type DisconnectionError = DisconnectionError;
 
     fn peer_id(&self) -> PeerId {
-        self.peer_id
+        self.multiplexer.peer_id()
     }
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
+        tracing::info!(peer_id = %self.multiplexer.peer_id(), "WebSocket::disconnect");
         async { Ok(()) }.boxed_local()
     }
 
@@ -149,7 +140,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Transport<Loca
 
     fn recv_bytes(&self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
-        tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
+        tracing::debug!(
+            chan_id = self.chan_id,
+            "waiting on recv {:?}",
+            self.multiplexer.peer_id()
+        );
 
         async move {
             let bytes = chan.recv().await.map_err(|_| {
@@ -171,12 +166,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
 
     fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
         async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: self.peer_id,
-                nonce: counter,
-            }
+            let req_id = self.multiplexer.next_request_id();
+            tracing::debug!("generated message id {:?}", req_id);
+            req_id
         }
         .boxed_local()
     }
@@ -191,11 +183,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
 
-            // Pre-register channel
-            let (tx, rx) = oneshot::channel();
-            self.pending.lock().await.insert(req_id, tx);
+            let rx = self.multiplexer.register_pending(req_id).await;
 
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
+            let msg_bytes = Multiplexer::<O>::encode_request(&req);
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
@@ -208,10 +198,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
                 req_id
             );
 
-            let req_timeout = override_timeout.unwrap_or(self.default_time_limit);
+            let req_timeout = override_timeout.unwrap_or(self.multiplexer.default_time_limit());
 
             match self
-                .timeout_strategy
+                .multiplexer
+                .timeout()
                 .timeout(req_timeout, Box::pin(rx))
                 .await
             {
@@ -219,12 +210,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>>
                     tracing::info!("request {:?} completed", req_id);
                     Ok(resp)
                 }
-                Ok(Err(e)) => {
-                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ResponseDropped(e))
+                Ok(Err(_)) => {
+                    tracing::error!("request {:?} response dropped", req_id);
+                    Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {:?} timed out", req_id);
+                    self.multiplexer.cancel_pending(&req_id).await;
                     Err(CallError::Timeout)
                 }
             }
@@ -256,13 +248,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     ) {
         tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
-        let pending = Arc::new(Mutex::new(Map::<
-            RequestId,
-            oneshot::Sender<BatchSyncResponse>,
-        >::new()));
         let (inbound_writer, inbound_reader) = async_channel::bounded(128);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
-        let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
 
         let ws_sender = Arc::new(Mutex::new(ws_writer));
@@ -285,17 +272,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         };
 
         let ws = Self {
-            peer_id,
             chan_id,
-
-            req_id_counter: Arc::new(starting_counter.into()),
-            timeout_strategy,
-            default_time_limit,
+            multiplexer: Arc::new(Multiplexer::new(
+                peer_id,
+                timeout_strategy,
+                default_time_limit,
+            )),
 
             ws_reader: Arc::new(Mutex::new(ws_reader)),
             outbound_tx,
             ws_sender,
-            pending,
             inbound_writer,
             inbound_reader,
 
@@ -307,20 +293,20 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
     /// The timeout strategy used for requests.
     #[must_use]
-    pub const fn timeout_strategy(&self) -> &O {
-        &self.timeout_strategy
+    pub fn timeout_strategy(&self) -> &O {
+        self.multiplexer.timeout()
     }
 
     /// The timeout for requests.
     #[must_use]
-    pub const fn default_time_limit(&self) -> Duration {
-        self.default_time_limit
+    pub fn default_time_limit(&self) -> Duration {
+        self.multiplexer.default_time_limit()
     }
 
     /// Get the [`PeerId`] associated with this connection.
     #[must_use]
-    pub const fn peer_id(&self) -> PeerId {
-        self.peer_id
+    pub fn peer_id(&self) -> PeerId {
+        self.multiplexer.peer_id()
     }
 
     /// Listen for incoming messages and dispatch them appropriately.
@@ -334,12 +320,15 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     /// If there is an error reading from the WebSocket or processing messages.
     #[allow(clippy::too_many_lines)]
     pub async fn listen(&self) -> Result<(), RunError> {
-        tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
+        tracing::info!(
+            "starting WebSocket listener for peer {:?}",
+            self.multiplexer.peer_id()
+        );
         let mut in_chan = self.ws_reader.lock().await;
         while let Some(ws_msg) = in_chan.next().await {
             tracing::debug!(
                 "received WebSocket message for peer {} on channel {}",
-                self.peer_id,
+                self.multiplexer.peer_id(),
                 self.chan_id
             );
 
@@ -349,24 +338,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
                     // Attempt to decode as SyncMessage to check for BatchSyncResponse.
                     // This is needed for the Roundtrip pending-map routing.
-                    if let Ok(sync_msg) = SyncMessage::try_decode(&bytes_vec) {
-                        if let SyncMessage::BatchSyncResponse(ref resp) = sync_msg {
-                            let req_id = resp.req_id;
-                            if let Some(waiting) = self.pending.lock().await.remove(&req_id) {
-                                tracing::info!(
-                                    "received BatchSyncResponse for req_id {:?}",
-                                    req_id
-                                );
-                                tracing::info!("dispatching to waiter {:?}", req_id);
-                                let result = waiting.send(resp.clone());
-                                if result.is_err() {
-                                    tracing::error!(
-                                        "oneshot channel closed before sending response for req_id {:?}",
-                                        req_id
-                                    );
-                                }
-                                continue;
-                            }
+                    if let Ok(SyncMessage::BatchSyncResponse(ref resp)) =
+                        SyncMessage::try_decode(&bytes_vec)
+                    {
+                        if self.multiplexer.resolve_pending(resp).await {
+                            continue;
                         }
                     }
 
@@ -432,19 +408,19 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Transport<Sendable>
-    for WebSocket<T, Sendable, O>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Send + Sync>
+    Transport<Sendable> for WebSocket<T, Sendable, O>
 {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
 
     fn peer_id(&self) -> PeerId {
-        self.peer_id
+        self.multiplexer.peer_id()
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
+        tracing::info!(peer_id = %self.multiplexer.peer_id(), "WebSocket::disconnect");
         async { Ok(()) }.boxed()
     }
 
@@ -460,7 +436,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Tran
 
     fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
-        tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
+        tracing::debug!(
+            chan_id = self.chan_id,
+            "waiting on recv {:?}",
+            self.multiplexer.peer_id()
+        );
 
         async move {
             let bytes = chan.recv().await.map_err(|_| {
@@ -475,19 +455,16 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Tran
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
+impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Send + Sync>
     Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, Sendable, O>
 {
     type CallError = CallError;
 
     fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
         async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: self.peer_id,
-                nonce: counter,
-            }
+            let req_id = self.multiplexer.next_request_id();
+            tracing::debug!("generated message id {:?}", req_id);
+            req_id
         }
         .boxed()
     }
@@ -502,11 +479,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
             tracing::debug!("making call with request id {:?}", req.req_id);
             let req_id = req.req_id;
 
-            // Pre-register channel
-            let (tx, rx) = oneshot::channel();
-            self.pending.lock().await.insert(req_id, tx);
+            let rx = self.multiplexer.register_pending(req_id).await;
 
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
+            let msg_bytes = Multiplexer::<O>::encode_request(&req);
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
@@ -519,10 +494,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
                 req_id
             );
 
-            let req_timeout = override_timeout.unwrap_or(self.default_time_limit);
+            let req_timeout = override_timeout.unwrap_or(self.multiplexer.default_time_limit());
 
             match self
-                .timeout_strategy
+                .multiplexer
+                .timeout()
                 .timeout(req_timeout, Box::pin(rx))
                 .await
             {
@@ -530,12 +506,13 @@ impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync>
                     tracing::info!("request {:?} completed", req_id);
                     Ok(resp)
                 }
-                Ok(Err(e)) => {
-                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ResponseDropped(e))
+                Ok(Err(_)) => {
+                    tracing::error!("request {:?} response dropped", req_id);
+                    Err(CallError::ResponseDropped)
                 }
                 Err(TimedOut) => {
                     tracing::error!("request {:?} timed out", req_id);
+                    self.multiplexer.cancel_pending(&req_id).await;
                     Err(CallError::Timeout)
                 }
             }
@@ -550,14 +527,10 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for 
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,
-            peer_id: self.peer_id,
-            req_id_counter: self.req_id_counter.clone(),
-            timeout_strategy: self.timeout_strategy.clone(),
-            default_time_limit: self.default_time_limit,
+            multiplexer: self.multiplexer.clone(),
             ws_reader: self.ws_reader.clone(),
             outbound_tx: self.outbound_tx.clone(),
             ws_sender: self.ws_sender.clone(),
-            pending: self.pending.clone(),
             inbound_writer: self.inbound_writer.clone(),
             inbound_reader: self.inbound_reader.clone(),
             _phantom: core::marker::PhantomData,
@@ -569,10 +542,9 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
     for WebSocket<T, K, O>
 {
     fn eq(&self, other: &Self) -> bool {
-        self.peer_id == other.peer_id
+        Arc::ptr_eq(&self.multiplexer, &other.multiplexer)
             && Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
             && self.outbound_tx.same_channel(&other.outbound_tx)
-            && Arc::ptr_eq(&self.pending, &other.pending)
             && self.inbound_writer.same_channel(&other.inbound_writer)
             && self.inbound_reader.same_channel(&other.inbound_reader)
     }
