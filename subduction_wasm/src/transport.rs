@@ -356,13 +356,13 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 ///
 /// # Construction
 ///
-/// There are three ways to obtain an `AuthenticatedConnection`:
+/// There are three ways to obtain an `AuthenticatedTransport`:
 ///
-/// 1. **Custom transport** — implement [`HandshakeConnection`](handshake::JsHandshakeConnection)
+/// 1. **Custom transport** — implement [`HandshakeConnection`](handshake::JsHandshakeTransport)
 ///    (a `Transport` with `sendBytes`/`recvBytes`/`disconnect`) and call [`setup`](Self::setup):
 ///
 ///    ```js
-///    const auth = await AuthenticatedConnection.setup(myConn, signer, peerId);
+///    const auth = await AuthenticatedTransport.setup(myConn, signer, peerId);
 ///    ```
 ///
 /// 2. **From WebSocket** — authenticate via [`SubductionWebSocket`] then convert:
@@ -378,13 +378,13 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 ///    const lpAuth = await SubductionLongPoll.tryConnect(url, signer, peerId, timeout);
 ///    const auth = lpAuth.toConnection();
 ///    ```
-#[wasm_bindgen(js_name = AuthenticatedConnection)]
+#[wasm_bindgen(js_name = AuthenticatedTransport)]
 #[derive(Debug)]
-pub struct WasmAuthenticatedConnection {
+pub struct WasmAuthenticatedTransport {
     inner: Authenticated<WasmJsConnection, Local>,
 }
 
-impl WasmAuthenticatedConnection {
+impl WasmAuthenticatedTransport {
     /// Access the inner `Authenticated` connection.
     pub(crate) fn inner(&self) -> &Authenticated<WasmJsConnection, Local> {
         &self.inner
@@ -400,8 +400,8 @@ impl WasmAuthenticatedConnection {
     }
 }
 
-#[wasm_bindgen(js_class = AuthenticatedConnection)]
-impl WasmAuthenticatedConnection {
+#[wasm_bindgen(js_class = AuthenticatedTransport)]
+impl WasmAuthenticatedTransport {
     /// Run the Subduction handshake over a custom transport, producing an
     /// authenticated connection.
     ///
@@ -421,10 +421,10 @@ impl WasmAuthenticatedConnection {
     /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
     #[wasm_bindgen]
     pub async fn setup(
-        connection: handshake::JsHandshakeConnection,
+        connection: handshake::JsHandshakeTransport,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-    ) -> Result<WasmAuthenticatedConnection, WasmHandshakeError> {
+    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
         let audience = Audience::known(expected_peer_id.clone().into());
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
@@ -467,10 +467,10 @@ impl WasmAuthenticatedConnection {
     /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
     #[wasm_bindgen]
     pub async fn accept(
-        connection: handshake::JsHandshakeConnection,
+        connection: handshake::JsHandshakeTransport,
         signer: &JsSigner,
         max_drift_seconds: Option<u32>,
-    ) -> Result<WasmAuthenticatedConnection, WasmHandshakeError> {
+    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
         use core::time::Duration;
         use subduction_core::connection::nonce_cache::NonceCache;
 

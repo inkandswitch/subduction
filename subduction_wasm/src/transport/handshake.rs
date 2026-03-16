@@ -2,7 +2,7 @@
 //!
 //! This module provides [`Handshake`] trait implementations for:
 //! - [`WasmWebSocketHandshake`] — operates on a raw `web_sys::WebSocket`
-//! - [`JsHandshakeConnection`] — operates on a user-provided JS object that
+//! - [`JsHandshakeTransport`] — operates on a user-provided JS object that
 //!   implements `HandshakeConnection` (extends `Transport` with `sendBytes`/`recvBytes`)
 
 use alloc::{format, string::String, vec::Vec};
@@ -11,9 +11,9 @@ use future_form::{FutureForm, Local};
 use futures::{channel::oneshot, future::LocalBoxFuture};
 use js_sys::{Promise, Uint8Array};
 use subduction_core::connection::handshake::Handshake;
-use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
+use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use wasm_bindgen_futures::JsFuture;
-use web_sys::{MessageEvent, WebSocket, js_sys};
+use web_sys::{js_sys, MessageEvent, WebSocket};
 
 use crate::error::WasmHandshakeError;
 
@@ -90,41 +90,33 @@ impl Handshake<Local> for WasmWebSocketHandshake {
 
 // ── Generic JS handshake connection ──────────────────────────────────────────
 
-#[wasm_bindgen(typescript_custom_section)]
-const TS_HANDSHAKE: &str = r#"
-export interface HandshakeConnection extends Transport {
-    sendBytes(bytes: Uint8Array): Promise<void>;
-    recvBytes(): Promise<Uint8Array>;
-}
-"#;
-
 #[wasm_bindgen]
 extern "C" {
-    /// A JS `Transport` that supports raw byte send/recv for the handshake phase.
+    /// A JS `Transport` used for the handshake phase.
     ///
-    /// Implement this interface in JavaScript to run the Subduction handshake
-    /// over any transport (WebSocket, WebRTC data channel, `MessageChannel`, etc.).
-    /// The same object is used for both the handshake (via `sendBytes`/`recvBytes`)
-    /// and post-handshake communication.
-    #[wasm_bindgen(js_name = HandshakeConnection, typescript_type = "HandshakeConnection")]
-    pub type JsHandshakeConnection;
+    /// Any object that implements the `Transport` interface (`sendBytes`,
+    /// `recvBytes`, `disconnect`) can be passed to
+    /// [`AuthenticatedTransport.setup`] or [`.accept`].
+    /// The same object is reused as the post-handshake transport.
+    #[wasm_bindgen(js_name = Transport, typescript_type = "Transport")]
+    pub type JsHandshakeTransport;
 
     /// Send raw bytes over the transport (handshake phase).
     #[wasm_bindgen(method, js_name = sendBytes)]
-    fn js_send_bytes(this: &JsHandshakeConnection, bytes: Uint8Array) -> Promise;
+    fn js_send_bytes(this: &JsHandshakeTransport, bytes: Uint8Array) -> Promise;
 
     /// Receive raw bytes from the transport (handshake phase).
     #[wasm_bindgen(method, js_name = recvBytes)]
-    fn js_recv_bytes(this: &JsHandshakeConnection) -> Promise;
+    fn js_recv_bytes(this: &JsHandshakeTransport) -> Promise;
 }
 
-impl core::fmt::Debug for JsHandshakeConnection {
+impl core::fmt::Debug for JsHandshakeTransport {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("JsHandshakeConnection").finish()
+        f.debug_tuple("JsHandshakeTransport").finish()
     }
 }
 
-impl Handshake<Local> for JsHandshakeConnection {
+impl Handshake<Local> for JsHandshakeTransport {
     type Error = WasmHandshakeError;
 
     fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {

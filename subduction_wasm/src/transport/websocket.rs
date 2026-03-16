@@ -29,6 +29,7 @@ use subduction_core::{
     },
     peer::id::PeerId,
     timestamp::TimestampSeconds,
+    transport::MessageTransport,
 };
 use subduction_crypto::nonce::Nonce;
 use thiserror::Error;
@@ -836,12 +837,11 @@ impl WasmAuthenticatedWebSocket {
         self.inner.peer_id().into()
     }
 
-    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedConnection).
+    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedTransport).
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
-    pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
-        use subduction_core::connection::transport::MessageTransport;
-        super::WasmAuthenticatedConnection::from_authenticated(self.inner.map(|ws| {
+    pub fn to_connection(self) -> super::WasmAuthenticatedTransport {
+        super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
             MessageTransport::new(
                 wasm_bindgen::JsValue::from(ws).unchecked_into::<super::JsTransport>(),
             )

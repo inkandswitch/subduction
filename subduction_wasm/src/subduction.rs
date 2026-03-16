@@ -42,11 +42,6 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 
 use crate::{
-    connection::{
-        JsConnectionError, WasmAuthenticatedConnection, WasmJsConnection,
-        longpoll::{WasmLongPoll, WasmLongPollConn},
-        websocket::WasmWebSocket,
-    },
     error::{
         WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHydrationError,
         WasmIoError, WasmLongPollConnectError, WasmWriteError,
@@ -55,6 +50,11 @@ use crate::{
     peer_id::WasmPeerId,
     signer::JsSigner,
     sync_stats::WasmSyncStats,
+    transport::{
+        JsConnectionError, JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
+        longpoll::{WasmLongPoll, WasmLongPollConn},
+        websocket::WasmWebSocket,
+    },
 };
 use sedimentree_wasm::{
     depth::{JsToDepth, WasmDepth},
@@ -370,11 +370,11 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(|ws| {
-                MessageTransport::new(
-                    JsValue::from(ws).unchecked_into::<crate::transport::JsTransport>(),
-                )
-            }))
+            .add_connection(
+                authenticated.map(|ws| {
+                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
+                }),
+            )
             .await?;
         Ok(peer_id.into())
     }
@@ -409,11 +409,11 @@ impl WasmSubduction {
 
         let peer_id = authenticated.peer_id();
         self.core
-            .add_connection(authenticated.map(|ws| {
-                MessageTransport::new(
-                    JsValue::from(ws).unchecked_into::<crate::transport::JsTransport>(),
-                )
-            }))
+            .add_connection(
+                authenticated.map(|ws| {
+                    MessageTransport::new(JsValue::from(ws).unchecked_into::<JsTransport>())
+                }),
+            )
             .await?;
         Ok(peer_id.into())
     }
@@ -450,8 +450,7 @@ impl WasmSubduction {
         self.core
             .add_connection(authenticated.map(|lp| {
                 MessageTransport::new(
-                    JsValue::from(WasmLongPollConn::new(lp))
-                        .unchecked_into::<crate::transport::JsTransport>(),
+                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsTransport>(),
                 )
             }))
             .await?;
@@ -490,8 +489,7 @@ impl WasmSubduction {
         self.core
             .add_connection(authenticated.map(|lp| {
                 MessageTransport::new(
-                    JsValue::from(WasmLongPollConn::new(lp))
-                        .unchecked_into::<crate::transport::JsTransport>(),
+                    JsValue::from(WasmLongPollConn::new(lp)).unchecked_into::<JsTransport>(),
                 )
             }))
             .await?;
@@ -526,8 +524,8 @@ impl WasmSubduction {
 
     /// Onboard an authenticated connection: add it and sync all sedimentrees.
     ///
-    /// Accepts an [`AuthenticatedConnection`](WasmAuthenticatedConnection),
-    /// obtained via [`AuthenticatedConnection.setup`](WasmAuthenticatedConnection::setup),
+    /// Accepts an [`AuthenticatedConnection`](WasmAuthenticatedTransport),
+    /// obtained via [`AuthenticatedConnection.setup`](WasmAuthenticatedTransport::setup),
     /// [`AuthenticatedWebSocket.toConnection`], or [`AuthenticatedLongPoll.toConnection`].
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
@@ -545,7 +543,7 @@ impl WasmSubduction {
     #[wasm_bindgen(js_name = addConnection)]
     pub async fn add_connection(
         &self,
-        conn: &WasmAuthenticatedConnection,
+        conn: &WasmAuthenticatedTransport,
     ) -> Result<bool, WasmAddConnectionError> {
         self.core
             .add_connection(conn.inner().clone())

@@ -3,20 +3,20 @@
 //! Provides [`MessagePortConnection`] — a Wasm-exported class that wraps a
 //! [`MessagePort`] (or any object with the same `postMessage` / `onmessage`
 //! interface) into a [`HandshakeConnection`] suitable for peer-to-peer
-//! authentication via [`AuthenticatedConnection.setup`] / `.accept`.
+//! authentication via [`AuthenticatedTransport.setup`] / `.accept`.
 //!
 //! # Example (JavaScript)
 //!
 //! ```js
-//! const { MessagePortConnection, AuthenticatedConnection } = await import("subduction_wasm");
+//! const { MessagePortConnection, AuthenticatedTransport } = await import("subduction_wasm");
 //!
 //! const channel = new MessageChannel();
 //! const connA = new MessagePortConnection(channel.port1);
 //! const connB = new MessagePortConnection(channel.port2);
 //!
 //! const [authA, authB] = await Promise.all([
-//!   AuthenticatedConnection.setup(connA, signerA, 5000),
-//!   AuthenticatedConnection.accept(connB, signerB, nonceCache, 5000),
+//!   AuthenticatedTransport.setup(connA, signerA, 5000),
+//!   AuthenticatedTransport.accept(connB, signerB, nonceCache, 5000),
 //! ]);
 //! ```
 

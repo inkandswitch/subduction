@@ -190,7 +190,7 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
 /// [`Reconnect`] (which requires `Connection`) is satisfied. Downstream
 /// code should prefer [`MessageTransport`] for new integrations.
 ///
-/// [`MessageTransport`]: subduction_core::connection::transport::MessageTransport
+/// [`MessageTransport`]: subduction_core::transport::MessageTransport
 impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
     Connection<Sendable, SyncMessage> for TokioWebSocketClient<R, O>
 {

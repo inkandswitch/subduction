@@ -210,12 +210,12 @@ impl WasmAuthenticatedLongPoll {
         self.session_id.to_hex()
     }
 
-    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedConnection).
+    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedTransport).
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
-    pub fn to_connection(self) -> super::WasmAuthenticatedConnection {
-        use subduction_core::connection::transport::MessageTransport;
-        super::WasmAuthenticatedConnection::from_authenticated(self.inner.map(|lp| {
+    pub fn to_connection(self) -> super::WasmAuthenticatedTransport {
+        use subduction_core::transport::MessageTransport;
+        super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
             MessageTransport::new(
                 wasm_bindgen::JsValue::from(WasmLongPollConn::new(lp))
                     .unchecked_into::<super::JsTransport>(),

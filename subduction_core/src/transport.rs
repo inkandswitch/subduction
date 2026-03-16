@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 
-use super::Connection;
+use crate::connection::{Connection, Reconnect, Roundtrip, message::RequestId};
 
 /// A bidirectional transport.
 ///
@@ -149,14 +149,14 @@ impl<K: FutureForm, T, M> Connection<K, M> for MessageTransport<T> {
 
 // ── Roundtrip delegation ─────────────────────────────────────────────────
 
-impl<T, K, Req, Resp> super::Roundtrip<K, Req, Resp> for MessageTransport<T>
+impl<T, K, Req, Resp> Roundtrip<K, Req, Resp> for MessageTransport<T>
 where
-    T: super::Roundtrip<K, Req, Resp>,
+    T: Roundtrip<K, Req, Resp>,
     K: FutureForm,
 {
     type CallError = T::CallError;
 
-    fn next_request_id(&self) -> K::Future<'_, super::message::RequestId> {
+    fn next_request_id(&self) -> K::Future<'_, RequestId> {
         self.inner.next_request_id()
     }
 
