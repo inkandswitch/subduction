@@ -5,6 +5,7 @@ use core::{
     fmt::Debug,
     future::{Future, IntoFuture},
     time::Duration,
+    marker::PhantomData,
 };
 
 use async_lock::Mutex;
@@ -106,7 +107,7 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
     inbound_writer: async_channel::Sender<Vec<u8>>,
     inbound_reader: async_channel::Receiver<Vec<u8>>,
 
-    _phantom: core::marker::PhantomData<K>,
+    _phantom: PhantomData<K>,
 }
 
 #[future_form(
@@ -288,7 +289,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
             inbound_writer,
             inbound_reader,
 
-            _phantom: core::marker::PhantomData,
+            _phantom: PhantomData,
         };
 
         (ws, sender_task)
@@ -410,8 +411,6 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-// --- Clone, PartialEq ---
-
 impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for WebSocket<T, K, O> {
     fn clone(&self) -> Self {
         Self {
@@ -422,7 +421,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for 
             ws_sender: self.ws_sender.clone(),
             inbound_writer: self.inbound_writer.clone(),
             inbound_reader: self.inbound_reader.clone(),
-            _phantom: core::marker::PhantomData,
+            _phantom: PhantomData,
         }
     }
 }
@@ -443,7 +442,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
 mod tests {
     use super::*;
     use core::time::Duration;
-    use futures::io::Cursor;
+    use futures::{FutureExt, future::LocalBoxFuture, io::Cursor};
     use testresult::TestResult;
 
     // Mock timeout strategy for testing
