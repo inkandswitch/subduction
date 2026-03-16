@@ -31,7 +31,7 @@ use std::{
 use future_form::Sendable;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::test_utils::TokioSpawn,
+    connection::{test_utils::TokioSpawn, transport::MessageTransport},
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -54,11 +54,11 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        HttpLongPollConnection<FuturesTimerTimeout>,
+        MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            HttpLongPollConnection<FuturesTimerTimeout>,
+            MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>,
             OpenPolicy,
             CountLeadingZeroBytes,
         >,
@@ -201,7 +201,7 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .build::<Sendable, MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -222,7 +222,7 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
     tokio::spawn(result.poll_task);
     tokio::spawn(result.send_task);
     subduction
-        .add_connection(result.authenticated)
+        .add_connection(result.authenticated.map(MessageTransport::new))
         .await
         .expect("add_connection");
 

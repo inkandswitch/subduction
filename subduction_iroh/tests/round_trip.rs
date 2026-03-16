@@ -148,8 +148,8 @@ impl TestServer {
                     Ok(result) => {
                         tokio::spawn(result.listener_task);
                         tokio::spawn(result.sender_task);
-                        if let Err(e) = accept_subduction.add_connection(result.authenticated).await
-                        {
+                        let auth = result.authenticated.map(MessageTransport::new);
+                        if let Err(e) = accept_subduction.add_connection(auth).await {
                             tracing::error!("add_connection error: {e}");
                         }
                     }
@@ -201,8 +201,9 @@ impl TestClient {
 
         tokio::spawn(result.listener_task);
         tokio::spawn(result.sender_task);
+        let auth = result.authenticated.map(MessageTransport::new);
         subduction
-            .add_connection(result.authenticated)
+            .add_connection(auth)
             .await
             .expect("add_connection");
 
@@ -257,8 +258,8 @@ impl TestServerDiscover {
                     Ok(result) => {
                         tokio::spawn(result.listener_task);
                         tokio::spawn(result.sender_task);
-                        if let Err(e) = accept_subduction.add_connection(result.authenticated).await
-                        {
+                        let auth = result.authenticated.map(MessageTransport::new);
+                        if let Err(e) = accept_subduction.add_connection(auth).await {
                             tracing::error!("add_connection error: {e}");
                         }
                     }
@@ -306,8 +307,9 @@ impl TestClient {
 
         tokio::spawn(result.listener_task);
         tokio::spawn(result.sender_task);
+        let auth = result.authenticated.map(MessageTransport::new);
         subduction
-            .add_connection(result.authenticated)
+            .add_connection(auth)
             .await
             .expect("add_connection");
 
@@ -1027,10 +1029,8 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
         {
             tokio::spawn(result.listener_task);
             tokio::spawn(result.sender_task);
-            accept_subduction
-                .add_connection(result.authenticated)
-                .await
-                .ok();
+            let auth = result.authenticated.map(MessageTransport::new);
+            accept_subduction.add_connection(auth).await.ok();
         }
     });
 

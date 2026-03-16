@@ -361,7 +361,9 @@ mod tests {
     #[tokio::test]
     async fn push_inbound_and_recv() {
         use sedimentree_core::id::SedimentreeId;
-        use subduction_core::connection::message::RemoveSubscriptions;
+        use subduction_core::connection::{
+            Connection, message::RemoveSubscriptions, transport::MessageTransport,
+        };
 
         let peer_id = PeerId::new([2u8; 32]);
         let conn: HttpLongPollConnection<TestTimeout> =
@@ -372,7 +374,8 @@ mod tests {
         });
 
         conn.push_inbound(msg.encode()).await.expect("push ok");
-        let received = Connection::<Sendable, SyncMessage>::recv(&conn)
+        let mt = MessageTransport::new(conn);
+        let received = Connection::<Sendable, SyncMessage>::recv(&mt)
             .await
             .expect("recv ok");
 
@@ -382,7 +385,9 @@ mod tests {
     #[tokio::test]
     async fn send_and_pull_outbound() {
         use sedimentree_core::id::SedimentreeId;
-        use subduction_core::connection::message::RemoveSubscriptions;
+        use subduction_core::connection::{
+            Connection, message::RemoveSubscriptions, transport::MessageTransport,
+        };
 
         let peer_id = PeerId::new([3u8; 32]);
         let conn: HttpLongPollConnection<TestTimeout> =
@@ -392,7 +397,8 @@ mod tests {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
         });
 
-        Connection::<Sendable, SyncMessage>::send(&conn, &msg)
+        let mt = MessageTransport::new(conn.clone());
+        Connection::<Sendable, SyncMessage>::send(&mt, &msg)
             .await
             .expect("send ok");
         let pulled = conn.pull_outbound().await.expect("pull ok");

@@ -27,6 +27,7 @@ use subduction_core::{
         handshake::audience::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
+        transport::MessageTransport,
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -54,11 +55,11 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        HttpLongPollConnection<FuturesTimerTimeout>,
+        MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>,
         SyncHandler<
             Sendable,
             MemoryStorage,
-            HttpLongPollConnection<FuturesTimerTimeout>,
+            MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>,
             OpenPolicy,
             CountLeadingZeroBytes,
         >,
@@ -107,7 +108,7 @@ impl TestServer {
                 .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
                 .spawner(TokioSpawn)
                 .discovery_id(discovery_id)
-                .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+                .build::<Sendable, MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>>();
 
         tokio::spawn(listener_fut);
         tokio::spawn(manager_fut);
@@ -207,7 +208,9 @@ async fn serve_http_connection(
                 && let Ok(sid_str) = session_hdr.to_str()
                 && let Some(sid) = SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
-                && let Err(e) = subduction.add_connection(auth).await
+                && let Err(e) = subduction
+                    .add_connection(auth.map(MessageTransport::new))
+                    .await
             {
                 tracing::error!("failed to add HTTP long-poll connection: {e}");
             }
@@ -235,7 +238,7 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .build::<Sendable, MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -258,7 +261,7 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     tokio::spawn(result.send_task);
 
     client
-        .add_connection(result.authenticated)
+        .add_connection(result.authenticated.map(MessageTransport::new))
         .await
         .expect("add_connection");
     client
@@ -309,7 +312,7 @@ async fn connected_client_known_peer(
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .build::<Sendable, MessageTransport<HttpLongPollConnection<FuturesTimerTimeout>>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -332,7 +335,7 @@ async fn connected_client_known_peer(
     tokio::spawn(result.send_task);
 
     client
-        .add_connection(result.authenticated)
+        .add_connection(result.authenticated.map(MessageTransport::new))
         .await
         .expect("add_connection");
     client
