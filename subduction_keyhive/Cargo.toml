@@ -21,6 +21,7 @@ futures = { workspace = true }
 future_form = { workspace = true }
 keyhive_core = { workspace = true }
 rand = "0.8.5"
+sedimentree_core = { workspace = true, default-features = false }
 serde = { workspace = true, optional = true, features = ["derive"] }
 thiserror = { workspace = true }
 tracing = { workspace = true }

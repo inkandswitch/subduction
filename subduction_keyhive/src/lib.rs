@@ -14,6 +14,9 @@ pub mod message;
 pub mod peer_id;
 pub mod signed_message;
 pub mod storage;
+#[cfg(feature = "serde")]
+pub mod sync_manager;
+pub mod wire;
 
 #[cfg(feature = "serde")]
 pub mod protocol;
@@ -32,6 +35,7 @@ pub use message::Message;
 pub use peer_id::KeyhivePeerId;
 pub use signed_message::{SignedMessage, VerifiedMessage};
 pub use storage::{KeyhiveStorage, MemoryKeyhiveStorage, StorageHash};
+pub use wire::{KeyhiveMessage, KEYHIVE_SCHEMA};
 
 #[cfg(feature = "serde")]
 pub use protocol::KeyhiveProtocol;
@@ -40,3 +44,5 @@ pub use storage_ops::{
     compact, hash_event_bytes, ingest_from_storage, load_archives, load_event_bytes, load_events,
     save_event, save_event_bytes, save_keyhive_archive,
 };
+#[cfg(feature = "serde")]
+pub use sync_manager::{AsyncSendFn, KeyhiveSyncManager, SyncManagerError};

@@ -1,17 +1,26 @@
-//! Keyhive-based authorization policy for Subduction connections.
-
-#![cfg_attr(not(feature = "std"), no_std)]
-
-#[cfg(feature = "std")]
-extern crate std;
+//! Keyhive-based authorization policy and handler for Subduction.
+//!
+//! Implements [`ConnectionPolicy`], [`StoragePolicy`], and [`EphemeralPolicy`]
+//! by checking keyhive membership and access levels.
+//!
+//! Also provides [`KeyhiveHandler`], which bridges the [`Handler`] trait to
+//! [`KeyhiveSyncManager`] for receiving keyhive messages through the
+//! composed handler.
+//!
+//! [`Handler`]: subduction_core::handler::Handler
+//! [`KeyhiveSyncManager`]: subduction_keyhive::KeyhiveSyncManager
 
 extern crate alloc;
+
+pub mod actor;
+pub mod handler;
+pub mod relay;
 
 use alloc::vec::Vec;
 
 use ed25519_dalek::VerifyingKey;
-use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use future_form::Local;
+use futures::{FutureExt, future::LocalBoxFuture};
 use keyhive_core::{
     access::Access,
     content::reference::ContentRef,
@@ -27,10 +36,15 @@ use subduction_core::{
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
 };
+use subduction_ephemeral::policy::EphemeralPolicy;
 
 /// Error returned when a connection is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectionDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The peer ID is not a valid Ed25519 public key.
     #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
@@ -43,6 +57,10 @@ pub enum ConnectionDisallowedError {
 /// Error returned when a fetch operation is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FetchDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The peer ID is not a valid Ed25519 public key.
     #[error("peer ID is not a valid Ed25519 public key")]
     InvalidPeerId,
@@ -63,6 +81,10 @@ pub enum FetchDisallowedError {
 /// Error returned when a put operation is not allowed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum PutDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
     /// The author peer ID is not a valid Ed25519 public key.
     #[error("author ID is not a valid Ed25519 public key")]
     InvalidAuthorId,
@@ -80,7 +102,56 @@ pub enum PutDisallowedError {
     InsufficientAccess,
 }
 
-/// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`] and [`StoragePolicy`] for Subduction.
+/// Error returned when an ephemeral subscribe is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum SubscribeDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
+    /// The peer ID is not a valid Ed25519 public key.
+    #[error("peer ID is not a valid Ed25519 public key")]
+    InvalidPeerId,
+
+    /// The sedimentree ID is not a valid Ed25519 public key (document ID).
+    #[error("sedimentree ID is not a valid document ID")]
+    InvalidSedimentreeId,
+
+    /// The document does not exist.
+    #[error("document not found")]
+    DocumentNotFound,
+
+    /// The peer does not have sufficient access to subscribe to this document.
+    #[error("peer does not have Pull access")]
+    InsufficientAccess,
+}
+
+/// Error returned when an ephemeral publish is not allowed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum PublishDisallowedError {
+    /// The keyhive policy actor has shut down.
+    #[error("keyhive actor has shut down")]
+    ActorGone,
+
+    /// The peer ID is not a valid Ed25519 public key.
+    #[error("peer ID is not a valid Ed25519 public key")]
+    InvalidPeerId,
+
+    /// The sedimentree ID is not a valid Ed25519 public key (document ID).
+    #[error("sedimentree ID is not a valid document ID")]
+    InvalidSedimentreeId,
+
+    /// The document does not exist.
+    #[error("document not found")]
+    DocumentNotFound,
+
+    /// The peer does not have sufficient access to publish to this document.
+    #[error("peer does not have Write access")]
+    InsufficientAccess,
+}
+
+/// A wrapper around [`Keyhive`] that implements [`ConnectionPolicy`], [`StoragePolicy`],
+/// and [`EphemeralPolicy`] for Subduction.
 #[allow(missing_debug_implementations)]
 pub struct SubductionKeyhive<
     S: AsyncSigner + Clone,
@@ -114,20 +185,20 @@ impl<
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
-    T: ContentRef + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
-    R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> ConnectionPolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> ConnectionPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type ConnectionDisallowed = ConnectionDisallowedError;
 
     fn authorize_connect(
         &self,
         peer_id: PeerId,
-    ) -> BoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::ConnectionDisallowed>> {
         async move {
             let identifier = try_peer_id_to_identifier(peer_id)
                 .ok_or(ConnectionDisallowedError::InvalidPeerId)?;
@@ -138,18 +209,18 @@ impl<
 
             Err(ConnectionDisallowedError::UnknownAgent)
         }
-        .boxed()
+        .boxed_local()
     }
 }
 
 impl<
-    S: AsyncSigner + Clone + Send + Sync,
-    T: ContentRef + Send + Sync,
-    P: for<'de> Deserialize<'de> + Send + Sync,
-    C: CiphertextStore<T, P> + Clone + Send + Sync,
-    L: MembershipListener<S, T> + Send + Sync,
-    R: rand::CryptoRng + rand::RngCore + Send + Sync,
-> StoragePolicy<Sendable> for SubductionKeyhive<S, T, P, C, L, R>
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> StoragePolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
 {
     type FetchDisallowed = FetchDisallowedError;
     type PutDisallowed = PutDisallowedError;
@@ -158,7 +229,7 @@ impl<
         &self,
         peer: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::FetchDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::FetchDisallowed>> {
         async move {
             let identifier =
                 try_peer_id_to_identifier(peer).ok_or(FetchDisallowedError::InvalidPeerId)?;
@@ -174,7 +245,6 @@ impl<
 
             let members = doc.lock().await.transitive_members().await;
 
-            // Check if the peer has at least Pull access
             if members
                 .get(&identifier)
                 .is_some_and(|(_, access)| *access >= Access::Pull)
@@ -184,7 +254,7 @@ impl<
                 Err(FetchDisallowedError::InsufficientAccess)
             }
         }
-        .boxed()
+        .boxed_local()
     }
 
     fn authorize_put(
@@ -192,7 +262,7 @@ impl<
         _requestor: PeerId,
         author: PeerId,
         sedimentree_id: SedimentreeId,
-    ) -> BoxFuture<'_, Result<(), Self::PutDisallowed>> {
+    ) -> LocalBoxFuture<'_, Result<(), Self::PutDisallowed>> {
         async move {
             let identifier =
                 try_peer_id_to_identifier(author).ok_or(PutDisallowedError::InvalidAuthorId)?;
@@ -208,7 +278,6 @@ impl<
 
             let members = doc.lock().await.transitive_members().await;
 
-            // Check if the author has at least Write access
             if members
                 .get(&identifier)
                 .is_some_and(|(_, access)| *access >= Access::Write)
@@ -218,14 +287,14 @@ impl<
                 Err(PutDisallowedError::InsufficientAccess)
             }
         }
-        .boxed()
+        .boxed_local()
     }
 
     fn filter_authorized_fetch(
         &self,
         peer: PeerId,
         ids: Vec<SedimentreeId>,
-    ) -> BoxFuture<'_, Vec<SedimentreeId>> {
+    ) -> LocalBoxFuture<'_, Vec<SedimentreeId>> {
         async move {
             let Some(identifier) = try_peer_id_to_identifier(peer) else {
                 return Vec::new();
@@ -253,7 +322,114 @@ impl<
 
             authorized
         }
-        .boxed()
+        .boxed_local()
+    }
+}
+
+impl<
+    S: AsyncSigner + Clone,
+    T: ContentRef,
+    P: for<'de> Deserialize<'de>,
+    C: CiphertextStore<T, P> + Clone,
+    L: MembershipListener<S, T>,
+    R: rand::CryptoRng + rand::RngCore,
+> EphemeralPolicy<Local> for SubductionKeyhive<S, T, P, C, L, R>
+{
+    type SubscribeDisallowed = SubscribeDisallowedError;
+    type PublishDisallowed = PublishDisallowedError;
+
+    fn authorize_subscribe(
+        &self,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<(), Self::SubscribeDisallowed>> {
+        async move {
+            let identifier =
+                try_peer_id_to_identifier(peer).ok_or(SubscribeDisallowedError::InvalidPeerId)?;
+
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(SubscribeDisallowedError::InvalidSedimentreeId)?;
+
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(SubscribeDisallowedError::DocumentNotFound)?;
+
+            let members = doc.lock().await.transitive_members().await;
+
+            if members
+                .get(&identifier)
+                .is_some_and(|(_, access)| *access >= Access::Pull)
+            {
+                Ok(())
+            } else {
+                Err(SubscribeDisallowedError::InsufficientAccess)
+            }
+        }
+        .boxed_local()
+    }
+
+    fn authorize_publish(
+        &self,
+        peer: PeerId,
+        sedimentree_id: SedimentreeId,
+    ) -> LocalBoxFuture<'_, Result<(), Self::PublishDisallowed>> {
+        async move {
+            let identifier =
+                try_peer_id_to_identifier(peer).ok_or(PublishDisallowedError::InvalidPeerId)?;
+
+            let doc_id = try_sedimentree_id_to_document_id(sedimentree_id)
+                .ok_or(PublishDisallowedError::InvalidSedimentreeId)?;
+
+            let doc = self
+                .0
+                .get_document(doc_id)
+                .await
+                .ok_or(PublishDisallowedError::DocumentNotFound)?;
+
+            let members = doc.lock().await.transitive_members().await;
+
+            if members
+                .get(&identifier)
+                .is_some_and(|(_, access)| *access >= Access::Write)
+            {
+                Ok(())
+            } else {
+                Err(PublishDisallowedError::InsufficientAccess)
+            }
+        }
+        .boxed_local()
+    }
+
+    fn filter_authorized_subscribers(
+        &self,
+        sedimentree_id: SedimentreeId,
+        peers: Vec<PeerId>,
+    ) -> LocalBoxFuture<'_, Vec<PeerId>> {
+        async move {
+            let Some(doc_id) = try_sedimentree_id_to_document_id(sedimentree_id) else {
+                return Vec::new();
+            };
+
+            let Some(doc) = self.0.get_document(doc_id).await else {
+                return Vec::new();
+            };
+
+            let members = doc.lock().await.transitive_members().await;
+
+            peers
+                .into_iter()
+                .filter(|peer| {
+                    try_peer_id_to_identifier(*peer).is_some_and(|identifier| {
+                        members
+                            .get(&identifier)
+                            .is_some_and(|(_, access)| *access >= Access::Pull)
+                    })
+                })
+                .collect()
+        }
+        .boxed_local()
     }
 }
 
@@ -317,7 +493,6 @@ pub fn try_sedimentree_id_to_document_id(sedimentree_id: SedimentreeId) -> Optio
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
     use ed25519_dalek::SigningKey;
 
@@ -333,11 +508,8 @@ mod tests {
     /// ed25519-dalek accepts many byte patterns. This uses a pattern with
     /// specific bytes known to not represent a valid curve point.
     fn invalid_peer_id() -> Option<PeerId> {
-        // Try to find bytes that don't represent a valid Ed25519 point
-        // by checking various patterns with the high bit manipulated
         for i in 0..=255u8 {
             let mut bytes = [i; 32];
-            // Manipulate to try to create invalid point
             bytes[0] = 0xFE;
             bytes[31] = 0x80 | i;
             if VerifyingKey::from_bytes(&bytes).is_err() {
@@ -355,7 +527,6 @@ mod tests {
 
     /// Generate an invalid sedimentree ID (not a valid Ed25519 point).
     fn invalid_sedimentree_id() -> Option<SedimentreeId> {
-        // Reuse the same pattern search as invalid_peer_id
         for i in 0..=255u8 {
             let mut bytes = [i; 32];
             bytes[0] = 0xFE;
@@ -380,8 +551,6 @@ mod tests {
         #[test]
         fn try_peer_id_to_identifier_fails_for_invalid_key() {
             let Some(peer_id) = invalid_peer_id() else {
-                // If we can't find an invalid pattern, skip this test
-                // (ed25519-dalek may accept all patterns in some configurations)
                 return;
             };
             let result = try_peer_id_to_identifier(peer_id);
