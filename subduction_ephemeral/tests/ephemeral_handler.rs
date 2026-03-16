@@ -514,11 +514,7 @@ async fn subscribe_rejected_by_policy() -> TestResult {
             assert!(ids.contains(&topic(0xAA)));
             assert!(ids.contains(&topic(0xBB)));
         }
-        other @ (EphemeralMessage::Ephemeral { .. }
-        | EphemeralMessage::Subscribe { .. }
-        | EphemeralMessage::Unsubscribe { .. }) => {
-            panic!("expected SubscribeRejected, got {other:?}")
-        }
+        other => panic!("expected SubscribeRejected, got {other:?}"),
     }
 
     Ok(())
