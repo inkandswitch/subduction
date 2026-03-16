@@ -1,9 +1,9 @@
-//! [`MessagePort`]-based [`HandshakeConnection`] adapter.
+//! [`MessagePort`]-based [`Transport`] adapter.
 //!
 //! Provides [`MessagePortConnection`] — a Wasm-exported class that wraps a
 //! [`MessagePort`] (or any object with the same `postMessage` / `onmessage`
-//! interface) into a [`HandshakeConnection`] suitable for peer-to-peer
-//! authentication via [`AuthenticatedTransport.setup`] / `.accept`.
+//! interface) into a `Transport` suitable for peer-to-peer authentication
+//! via [`AuthenticatedTransport.setup`] / `.accept`.
 //!
 //! # Example (JavaScript)
 //!
@@ -64,11 +64,11 @@ fn resolved_void() -> Promise {
 // Exported struct
 // ---------------------------------------------------------------------------
 
-/// A [`HandshakeConnection`] backed by a `MessagePort` (or any object with
+/// A `Transport` backed by a `MessagePort` (or any object with
 /// `postMessage` / `onmessage` / `close`).
 ///
 /// Implements the byte-oriented `Transport` interface (`sendBytes`,
-/// `recvBytes`, `disconnect`) using the port for transport.
+/// `recvBytes`, `disconnect`) using the port as the underlying channel.
 /// After the handshake, the [`Authenticated`] wrapper provides the sync API.
 #[wasm_bindgen(js_name = MessagePortConnection)]
 pub struct WasmMessagePortConnection {

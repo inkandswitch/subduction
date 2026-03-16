@@ -515,7 +515,7 @@ impl From<WasmSendError> for JsValue {
     }
 }
 
-/// An authenticated WebSocket connection.
+/// An authenticated WebSocket transport.
 ///
 /// This wrapper proves that the connection has completed the Subduction handshake
 /// and the peer identity has been cryptographically verified.
@@ -537,7 +537,7 @@ impl WasmAuthenticatedWebSocket {
         self.inner.peer_id().into()
     }
 
-    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedTransport).
+    /// Convert to a transport-erased [`AuthenticatedTransport`](super::WasmAuthenticatedTransport).
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedTransport {

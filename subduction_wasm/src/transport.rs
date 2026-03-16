@@ -106,16 +106,16 @@ impl PartialEq for JsTransport {
 }
 
 impl Transport<Local> for JsTransport {
-    type SendError = JsConnectionError;
-    type RecvError = JsConnectionError;
-    type DisconnectionError = JsConnectionError;
+    type SendError = JsTransportError;
+    type RecvError = JsTransportError;
+    type DisconnectionError = JsTransportError;
 
     fn send_bytes(&self, bytes: &[u8]) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
         let uint8_array = js_sys::Uint8Array::from(bytes);
         async move {
             JsFuture::from(self.js_send_bytes(&uint8_array))
                 .await
-                .map_err(JsConnectionError::Send)?;
+                .map_err(JsTransportError::Send)?;
             Ok(())
         }
         .boxed_local()
@@ -125,7 +125,7 @@ impl Transport<Local> for JsTransport {
         async move {
             let js_value = JsFuture::from(self.js_recv_bytes())
                 .await
-                .map_err(JsConnectionError::Recv)?;
+                .map_err(JsTransportError::Recv)?;
             let uint8_array = js_sys::Uint8Array::new(&js_value);
             Ok(uint8_array.to_vec())
         }
@@ -136,7 +136,7 @@ impl Transport<Local> for JsTransport {
         async move {
             JsFuture::from(self.js_disconnect())
                 .await
-                .map_err(JsConnectionError::Disconnect)?;
+                .map_err(JsTransportError::Disconnect)?;
             Ok(())
         }
         .boxed_local()
@@ -150,7 +150,7 @@ impl Transport<Local> for JsTransport {
 
 /// Errors from the JS transport.
 #[derive(Error, Debug, Clone)]
-pub enum JsConnectionError {
+pub enum JsTransportError {
     /// An error that occurred while disconnecting.
     #[error("Disconnect error")]
     Disconnect(JsValue),
@@ -164,10 +164,10 @@ pub enum JsConnectionError {
     Recv(JsValue),
 }
 
-impl From<JsConnectionError> for JsValue {
-    fn from(err: JsConnectionError) -> Self {
+impl From<JsTransportError> for JsValue {
+    fn from(err: JsTransportError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("ConnectionError");
+        js_err.set_name("TransportError");
         js_err.into()
     }
 }
@@ -292,7 +292,7 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
     }
 }
 
-/// A transport-erased authenticated connection.
+/// A transport-erased authenticated transport.
 ///
 /// Wraps an [`Authenticated<WasmJsConnection>`] and is the common type
 /// accepted by [`addConnection`](crate::subduction::WasmSubduction::add_connection).
@@ -301,11 +301,11 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 ///
 /// There are three ways to obtain an `AuthenticatedTransport`:
 ///
-/// 1. **Custom transport** — implement [`HandshakeConnection`](handshake::JsHandshakeTransport)
-///    (a `Transport` with `sendBytes`/`recvBytes`/`disconnect`) and call [`setup`](Self::setup):
+/// 1. **Custom transport** — implement the `Transport` interface
+///    (`sendBytes`/`recvBytes`/`disconnect`) and call [`setup`](Self::setup):
 ///
 ///    ```js
-///    const auth = await AuthenticatedTransport.setup(myConn, signer, peerId);
+///    const auth = await AuthenticatedTransport.setup(myTransport, signer, peerId);
 ///    ```
 ///
 /// 2. **From WebSocket** — authenticate via [`SubductionWebSocket`] then convert:
@@ -328,7 +328,7 @@ pub struct WasmAuthenticatedTransport {
 }
 
 impl WasmAuthenticatedTransport {
-    /// Access the inner `Authenticated` connection.
+    /// Access the inner `Authenticated` transport.
     pub(crate) fn inner(&self) -> &Authenticated<WasmJsConnection, Local> {
         &self.inner
     }
@@ -346,16 +346,16 @@ impl WasmAuthenticatedTransport {
 #[wasm_bindgen(js_class = AuthenticatedTransport)]
 impl WasmAuthenticatedTransport {
     /// Run the Subduction handshake over a custom transport, producing an
-    /// authenticated connection.
+    /// authenticated transport.
     ///
-    /// The `connection` object must implement `Transport`
+    /// The `transport` object must implement the `Transport` interface
     /// (`sendBytes`/`recvBytes`/`disconnect`).
     /// The same object is used for both the handshake phase and post-handshake
     /// communication.
     ///
     /// # Arguments
     ///
-    /// * `connection` - A `HandshakeConnection` (extends `Transport`)
+    /// * `connection` - A transport implementing `sendBytes`/`recvBytes`/`disconnect`
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     ///

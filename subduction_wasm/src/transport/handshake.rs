@@ -3,7 +3,7 @@
 //! This module provides [`Handshake`] trait implementations for:
 //! - [`WasmWebSocketHandshake`] — operates on a raw `web_sys::WebSocket`
 //! - [`JsHandshakeTransport`] — operates on a user-provided JS object that
-//!   implements `HandshakeConnection` (extends `Transport` with `sendBytes`/`recvBytes`)
+//!   implements the `Transport` interface (`sendBytes`/`recvBytes`/`disconnect`)
 
 use alloc::{format, string::String, vec::Vec};
 

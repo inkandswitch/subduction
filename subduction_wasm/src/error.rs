@@ -11,8 +11,8 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::transport::{
-    longpoll::LongPollConnectionError, websocket::WebSocketAuthenticatedConnectionError,
-    JsConnectionError, WasmJsConnection,
+    JsTransportError, WasmJsConnection, longpoll::LongPollConnectionError,
+    websocket::WebSocketAuthenticatedConnectionError,
 };
 use sedimentree_wasm::storage::JsStorage;
 
@@ -83,20 +83,6 @@ impl From<WasmConnectError> for JsValue {
     }
 }
 
-/// A Wasm wrapper around the [`ConnectionDisallowed`] type.
-#[derive(Debug, Clone, Error)]
-#[error(transparent)]
-#[allow(missing_copy_implementations)]
-pub struct WasmConnectionDisallowed(#[from] ConnectionDisallowed);
-
-impl From<WasmConnectionDisallowed> for JsValue {
-    fn from(err: WasmConnectionDisallowed) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("ConnectionDisallowed");
-        js_err.into()
-    }
-}
-
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
@@ -134,7 +120,7 @@ impl From<WasmAddConnectionError> for JsValue {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmDisconnectionError(#[from] JsConnectionError);
+pub struct WasmDisconnectionError(#[from] JsTransportError);
 
 impl From<WasmDisconnectionError> for JsValue {
     fn from(err: WasmDisconnectionError) -> Self {

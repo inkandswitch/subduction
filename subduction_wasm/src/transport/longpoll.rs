@@ -76,12 +76,6 @@ impl WasmHttpLongPoll {
     pub(crate) fn new(transport: WasmLongPollTransport) -> Self {
         Self(transport)
     }
-
-    /// Access the inner transport.
-    #[allow(dead_code)]
-    pub(crate) fn inner(&self) -> &WasmLongPollTransport {
-        &self.0
-    }
 }
 
 /// Error from a long-poll transport method exposed to JS.
@@ -137,9 +131,9 @@ impl WasmHttpLongPoll {
     }
 }
 
-/// An authenticated HTTP long-poll connection.
+/// An authenticated HTTP long-poll transport.
 ///
-/// This wrapper proves that the connection has completed the Subduction handshake
+/// This wrapper proves that the transport has completed the Subduction handshake
 /// and the peer identity has been cryptographically verified.
 ///
 /// Obtain via [`SubductionLongPoll::tryConnect`] or [`SubductionLongPoll::tryDiscover`].
@@ -148,14 +142,6 @@ impl WasmHttpLongPoll {
 pub struct WasmAuthenticatedLongPoll {
     inner: Authenticated<WasmLongPollTransport, Local>,
     session_id: SessionId,
-}
-
-impl WasmAuthenticatedLongPoll {
-    /// Access the inner `Authenticated` connection.
-    #[allow(dead_code)]
-    pub(crate) fn inner(&self) -> &Authenticated<WasmLongPollTransport, Local> {
-        &self.inner
-    }
 }
 
 #[wasm_bindgen(js_class = AuthenticatedLongPoll)]
@@ -174,7 +160,7 @@ impl WasmAuthenticatedLongPoll {
         self.session_id.to_hex()
     }
 
-    /// Convert to a transport-erased [`AuthenticatedConnection`](super::WasmAuthenticatedTransport).
+    /// Convert to a transport-erased [`AuthenticatedTransport`](super::WasmAuthenticatedTransport).
     #[must_use]
     #[wasm_bindgen(js_name = toConnection)]
     pub fn to_connection(self) -> super::WasmAuthenticatedTransport {
@@ -188,7 +174,7 @@ impl WasmAuthenticatedLongPoll {
 }
 
 // ---------------------------------------------------------------------------
-// Connection factory
+// Transport factory
 // ---------------------------------------------------------------------------
 
 /// Build an [`HttpLongPollClient`] configured for the browser.
@@ -210,7 +196,7 @@ fn js_now() -> subduction_core::timestamp::TimestampSeconds {
     subduction_core::timestamp::TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64)
 }
 
-/// HTTP long-poll connection factory for browser/worker environments.
+/// HTTP long-poll transport factory for browser/worker environments.
 ///
 /// Analogous to [`SubductionWebSocket`] but uses HTTP long-poll instead of WebSocket.
 #[wasm_bindgen(js_name = SubductionLongPoll)]
@@ -296,7 +282,7 @@ impl WasmLongPoll {
         })
     }
 
-    /// Connect and return the raw `Authenticated` connection (for internal use).
+    /// Connect and return the raw `Authenticated` transport (for internal use).
     pub(crate) async fn connect_authenticated(
         base_url: &str,
         signer: &JsSigner,
@@ -319,7 +305,7 @@ impl WasmLongPoll {
         Ok((result.authenticated, result.session_id))
     }
 
-    /// Connect using discovery and return the raw `Authenticated` connection.
+    /// Connect using discovery and return the raw `Authenticated` transport.
     pub(crate) async fn connect_discover_authenticated(
         base_url: &str,
         signer: &JsSigner,

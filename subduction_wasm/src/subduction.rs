@@ -538,15 +538,15 @@ impl WasmSubduction {
             .await?)
     }
 
-    /// Onboard an authenticated connection: add it and sync all sedimentrees.
+    /// Onboard an authenticated transport: add it and sync all sedimentrees.
     ///
-    /// Accepts an [`AuthenticatedConnection`](WasmAuthenticatedTransport),
-    /// obtained via [`AuthenticatedConnection.setup`](WasmAuthenticatedTransport::setup),
+    /// Accepts an [`AuthenticatedTransport`](WasmAuthenticatedTransport),
+    /// obtained via [`AuthenticatedTransport.setup`](WasmAuthenticatedTransport::setup),
     /// [`AuthenticatedWebSocket.toConnection`], or [`AuthenticatedLongPoll.toConnection`].
     ///
     /// Returns `true` if this is a new peer, `false` if already connected.
     ///
-    /// Add an authenticated connection to tracking.
+    /// Add an authenticated transport to tracking.
     ///
     /// This does not perform any synchronization. To sync after adding,
     /// call [`fullSyncWithPeer`](Self::full_sync_with_peer).
