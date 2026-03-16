@@ -14,11 +14,11 @@ use alloc::{sync::Arc, vec::Vec};
 use core::sync::atomic::{AtomicUsize, Ordering};
 
 use async_lock::Mutex;
-use future_form::{FutureForm, Local, Sendable, future_form};
+use future_form::{future_form, FutureForm, Local, Sendable};
 use futures::stream::AbortHandle;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use super::{Connection, id::ConnectionId};
+use super::{id::ConnectionId, Connection};
 use crate::peer::id::PeerId;
 
 /// Internal task identifier for abort handle tracking.
@@ -161,8 +161,12 @@ pub trait RunManager<C, M: Encode + Decode>: FutureForm + Sized {
         C: Connection<Self, M> + Clone + 'static;
 }
 
-impl<K: FutureForm + RunManager<C, M>, C, M: Encode + Decode, S: Spawn<K> + Send + Sync + 'static>
-    ConnectionManager<K, C, M, S>
+impl<
+        K: FutureForm + RunManager<C, M>,
+        C,
+        M: Encode + Decode,
+        S: Spawn<K> + Send + Sync + 'static,
+    > ConnectionManager<K, C, M, S>
 {
     /// Run the manager, processing commands to add/remove connections.
     pub fn run(self) -> K::Future<'static, ()>
