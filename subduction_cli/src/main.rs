@@ -7,6 +7,7 @@ pub mod metrics;
 mod purge;
 mod server;
 mod transport;
+mod wire;
 
 use clap::{Parser, Subcommand};
 use std::sync::{

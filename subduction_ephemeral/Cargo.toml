@@ -15,41 +15,23 @@ repository.workspace = true
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 bijou64 = { workspace = true }
-ed25519-dalek = { workspace = true, optional = true }
 future_form = { workspace = true }
 futures = { workspace = true }
-keyhive_core = { workspace = true, optional = true }
 nonempty = { workspace = true }
-rand = { workspace = true, optional = true }
 sedimentree_core = { workspace = true }
-serde = { workspace = true, optional = true }
 subduction_core = { workspace = true }
-subduction_keyhive = { workspace = true, features = ["serde"], optional = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 
 [dev-dependencies]
 async-lock = { workspace = true }
-ciborium = { workspace = true }
-keyhive_core = { workspace = true }
-nonempty_0_10 = { package = "nonempty", version = "0.10.0" }
-rand = { workspace = true, features = ["std_rng"] }
-subduction_core = { workspace = true, features = ["keyhive", "std", "test_utils"] }
-subduction_ephemeral = { path = ".", features = ["keyhive", "std"] }
-subduction_keyhive = { workspace = true, features = ["serde"] }
+subduction_core = { workspace = true, features = ["std", "test_utils"] }
+subduction_ephemeral = { path = ".", features = ["std"] }
 testresult = { workspace = true }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [features]
 default = []
-keyhive = [
-  "dep:ed25519-dalek",
-  "dep:keyhive_core",
-  "dep:rand",
-  "dep:serde",
-  "dep:subduction_keyhive",
-  "subduction_core/keyhive",
-]
 std = [
   "async-channel/std",
   "async-lock/std",
