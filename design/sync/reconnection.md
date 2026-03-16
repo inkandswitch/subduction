@@ -75,7 +75,7 @@ Not all errors should trigger reconnection:
 The `Reconnect` trait's `should_retry` method classifies errors:
 
 ```rust
-trait Reconnect<K: FutureForm>: Connection<K> {
+trait Reconnect<K: FutureForm, M: Encode + Decode>: Connection<K, M> {
     type ReconnectionError: core::error::Error + Send + 'static;
 
     fn reconnect(&mut self) -> K::Future<'_, Result<(), Self::ReconnectionError>>;

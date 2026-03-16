@@ -418,24 +418,26 @@ Implementations exist for:
 
 ## High-Level API
 
-The `initiate` and `respond` functions perform the complete handshake protocol and return an `Authenticated<C, K>` connection plus any extra data from the `build_connection` closure:
+The `initiate` and `respond` functions perform the complete handshake protocol and return an `Authenticated<C, K>` wrapper plus any extra data from the `build_transport` closure:
 
 ### Initiator Side
 
 ```rust
 use subduction_core::handshake;
 
-// Closure returns (Connection, ExtraData) tuple
+// Closure returns (Transport, ExtraData) tuple
 let (authenticated, ()) = handshake::initiate(
     transport,  // impl Handshake, consumed
-    |transport, peer_id| (MyConnection::new(transport, peer_id), ()),
+    |transport, peer_id| (MyTransport::new(transport, peer_id), ()),
     &signer,
     Audience::known(expected_peer_id),
     TimestampSeconds::now(),
     Nonce::random(),
 ).await?;
 
-// authenticated: Authenticated<MyConnection, K>
+// authenticated: Authenticated<MyTransport, K>
+// Wrap with MessageTransport / MuxTransport as needed:
+// let conn = MessageTransport::new(MuxTransport::new(authenticated.into_inner(), ...));
 ```
 
 ### Responder Side
@@ -443,10 +445,10 @@ let (authenticated, ()) = handshake::initiate(
 ```rust
 use subduction_core::handshake;
 
-// Closure returns (Connection, ExtraData) tuple
+// Closure returns (Transport, ExtraData) tuple
 let (authenticated, ()) = handshake::respond(
     transport,  // impl Handshake, consumed
-    |transport, peer_id| (MyConnection::new(transport, peer_id), ()),
+    |transport, peer_id| (MyTransport::new(transport, peer_id), ()),
     &signer,
     &nonce_cache,
     our_peer_id,
@@ -455,12 +457,12 @@ let (authenticated, ()) = handshake::respond(
     Duration::from_secs(60),  // max clock drift
 ).await?;
 
-// authenticated: Authenticated<MyConnection, K>
+// authenticated: Authenticated<MyTransport, K>
 ```
 
-### `Authenticated<C>` Witness Type
+### `Authenticated<C, K>` Witness Type
 
-The `Authenticated<C, K>` wrapper is a _witness type_ proving the connection completed handshake verification:
+The `Authenticated<C, K>` wrapper is a _witness type_ proving the inner value completed handshake verification:
 
 ```rust
 pub struct Authenticated<C, K: FutureForm> {
@@ -470,7 +472,7 @@ pub struct Authenticated<C, K: FutureForm> {
 }
 ```
 
-`Authenticated` stores the verified `PeerId` directly — this is the identity proven by the handshake signature. The `Connection` bound is on the trait impls, not the struct itself.
+`Authenticated` stores the verified `PeerId` directly — this is the identity proven by the handshake signature. Trait bounds (e.g., `Connection`, `Transport`) are on the trait impls, not the struct itself.
 
 Key properties:
 

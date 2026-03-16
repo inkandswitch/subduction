@@ -20,8 +20,18 @@ block-beta
     columns 1
     Application
     Sync["Sync<br/>(Batch + Incremental)"]
-    Connection["Connection<br/>(Handshake + Policy)"]
-    Transport["Transport<br/>(WebSocket · HTTP Long-Poll · Iroh/QUIC)"]
+    Connection["Connection + Roundtrip<br/>(Typed Messages + Request-Response)"]
+    Transport["Transport<br/>(Byte-oriented: Handshake · Policy · Multiplexing)"]
+    Backend["Backend<br/>(WebSocket · HTTP Long-Poll · Iroh/QUIC)"]
+```
+
+### Transport Composition
+
+```
+Backend (one impl per transport)
+  └── Transport         send_bytes / recv_bytes / disconnect
+       ├── MessageTransport<T>   Connection<K, M>  (typed encode/decode)
+       └── MuxTransport<T, O>    Roundtrip<K, Req, Resp>  (request-response via Multiplexer)
 ```
 
 ## Typical Flow
@@ -31,7 +41,7 @@ sequenceDiagram
     participant A as Peer A
     participant B as Peer B
 
-    Note over A,B: 1. Connection Layer
+    Note over A,B: 1. Handshake (over Transport)
     A->>B: Signed<Challenge>
     B->>A: Signed<Response>
     Note over A,B: Identities established
