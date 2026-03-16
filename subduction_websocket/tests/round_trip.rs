@@ -14,12 +14,13 @@ use sedimentree_core::{
     blob::Blob, commit::CountLeadingZeroBytes, crypto::digest::Digest, id::SedimentreeId,
 };
 use subduction_core::{
-    connection::{handshake::audience::Audience, transport::MessageTransport},
+    connection::handshake::audience::Audience,
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{

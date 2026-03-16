@@ -31,12 +31,13 @@ use std::{
 use future_form::Sendable;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{test_utils::TokioSpawn, transport::MessageTransport},
+    connection::test_utils::TokioSpawn,
     handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
+    transport::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{

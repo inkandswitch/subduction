@@ -15,13 +15,14 @@ use std::{
 use subduction_core::{
     connection::{
         Connection, Reconnect, handshake::audience::Audience, message::SyncMessage,
-        nonce_cache::NonceCache, transport::MessageTransport,
+        nonce_cache::NonceCache,
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{

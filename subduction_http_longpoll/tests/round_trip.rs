@@ -27,7 +27,6 @@ use subduction_core::{
         handshake::audience::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
-        transport::MessageTransport,
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -35,6 +34,7 @@ use subduction_core::{
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
+    transport::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{

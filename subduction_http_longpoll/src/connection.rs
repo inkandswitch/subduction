@@ -333,8 +333,9 @@ mod tests {
     #[tokio::test]
     async fn push_inbound_and_recv() {
         use sedimentree_core::id::SedimentreeId;
-        use subduction_core::connection::{
-            Connection, message::RemoveSubscriptions, transport::MessageTransport,
+        use subduction_core::{
+            connection::{Connection, message::RemoveSubscriptions},
+            transport::MessageTransport,
         };
 
         let peer_id = PeerId::new([2u8; 32]);
@@ -357,8 +358,9 @@ mod tests {
     #[tokio::test]
     async fn send_and_pull_outbound() {
         use sedimentree_core::id::SedimentreeId;
-        use subduction_core::connection::{
-            Connection, message::RemoveSubscriptions, transport::MessageTransport,
+        use subduction_core::{
+            connection::{Connection, message::RemoveSubscriptions},
+            transport::MessageTransport,
         };
 
         let peer_id = PeerId::new([3u8; 32]);

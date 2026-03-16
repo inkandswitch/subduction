@@ -8,11 +8,13 @@ use core::time::Duration;
 
 use future_form::Local;
 use futures::FutureExt;
-use subduction_core::connection::{
-    Connection, Roundtrip,
-    authenticated::Authenticated,
-    message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
-    timeout::{TimedOut, Timeout},
+use subduction_core::{
+    connection::{
+        Connection, Roundtrip,
+        authenticated::Authenticated,
+        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
+        timeout::{TimedOut, Timeout},
+    },
     transport::MessageTransport,
 };
 use subduction_http_longpoll::{

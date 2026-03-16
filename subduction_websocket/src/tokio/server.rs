@@ -22,7 +22,6 @@ use subduction_core::{
             audience::{Audience, DiscoveryId},
         },
         nonce_cache::NonceCache,
-        transport::MessageTransport,
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -30,6 +29,7 @@ use subduction_core::{
     storage::traits::Storage,
     subduction::{Subduction, builder::SubductionBuilder, error::AddConnectionError},
     timestamp::TimestampSeconds,
+    transport::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 

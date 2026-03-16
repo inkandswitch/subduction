@@ -27,7 +27,7 @@ use sedimentree_core::{
     sedimentree::Sedimentree,
 };
 use subduction_core::{
-    connection::{handshake::audience::DiscoveryId, manager::Spawn, transport::MessageTransport},
+    connection::{handshake::audience::DiscoveryId, manager::Spawn},
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -36,6 +36,7 @@ use subduction_core::{
         Subduction, builder::SubductionBuilder, error::HydrationError,
         pending_blob_requests::DEFAULT_MAX_PENDING_BLOB_REQUESTS,
     },
+    transport::MessageTransport,
 };
 use wasm_bindgen::prelude::*;
 

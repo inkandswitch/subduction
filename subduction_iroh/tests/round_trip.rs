@@ -26,13 +26,13 @@ use subduction_core::{
         handshake::audience::{Audience, DiscoveryId},
         nonce_cache::NonceCache,
         test_utils::TokioSpawn,
-        transport::MessageTransport,
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_iroh::connection::IrohConnection;

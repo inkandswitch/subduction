@@ -16,7 +16,6 @@ use subduction_core::{
             audience::{Audience, DiscoveryId},
         },
         nonce_cache::NonceCache,
-        transport::MessageTransport,
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
@@ -24,6 +23,7 @@ use subduction_core::{
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
+    transport::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;

@@ -14,9 +14,11 @@ use core::time::Duration;
 use future_form::Sendable;
 use futures::future::BoxFuture;
 
-use subduction_core::connection::{
-    Roundtrip,
-    message::{BatchSyncRequest, BatchSyncResponse, RequestId},
+use subduction_core::{
+    connection::{
+        Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId},
+    },
     transport::Transport,
 };
 use tokio::net::TcpStream;

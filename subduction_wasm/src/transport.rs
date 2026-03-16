@@ -22,21 +22,18 @@ use subduction_core::{
         handshake::{self as hs, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
         multiplexer::Multiplexer,
-        transport::{MessageTransport, Transport},
     },
     timestamp::TimestampSeconds,
+    transport::{MessageTransport, Transport},
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
-use crate::{
-    connection::{longpoll::JsTimeout, nonce::WasmNonce},
-    error::WasmHandshakeError,
-    peer_id::WasmPeerId,
-    signer::JsSigner,
-};
+use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
+
+use self::{longpoll::JsTimeout, nonce::WasmNonce};
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
 /// Type alias for the `MessageTransport`-wrapped `JsTransport`.

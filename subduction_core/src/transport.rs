@@ -21,7 +21,7 @@ use alloc::vec::Vec;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 
-use crate::connection::{Connection, Reconnect, Roundtrip, message::RequestId};
+use crate::connection::{Connection, Roundtrip, message::RequestId};
 
 /// A bidirectional transport.
 ///

@@ -21,9 +21,9 @@ use subduction_core::{
         authenticated::Authenticated,
         handshake::{self, AuthenticateError, audience::Audience},
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-        transport::Transport,
     },
     timestamp::TimestampSeconds,
+    transport::Transport,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
