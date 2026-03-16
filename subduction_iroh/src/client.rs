@@ -7,7 +7,7 @@ use core::time::Duration;
 
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use iroh::{endpoint::Connection as QuicConnection, Endpoint, EndpointAddr};
+use iroh::{Endpoint, EndpointAddr, endpoint::Connection as QuicConnection};
 use subduction_core::{
     authenticated::Authenticated,
     handshake::{self, audience::Audience},
@@ -18,10 +18,10 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 
 use crate::{
-    connection::IrohConnection,
+    ALPN,
     error::{ConnectError, RunError},
     handshake::IrohHandshake,
-    ALPN,
+    transport::IrohTransport,
 };
 
 /// Result of a successful connection attempt.
@@ -30,7 +30,7 @@ use crate::{
 /// that must be spawned externally for the connection to function.
 pub struct ConnectResult<O: Timeout<Sendable> + Send + Sync> {
     /// The authenticated connection, ready for use with Subduction.
-    pub authenticated: Authenticated<IrohConnection<O>, Sendable>,
+    pub authenticated: Authenticated<IrohTransport<O>, Sendable>,
 
     /// Background task that reads from the QUIC stream.
     /// Must be spawned (e.g., via `tokio::spawn`).
@@ -106,7 +106,7 @@ where
             move |iroh_handshake, peer_id| {
                 let (send_stream, recv_stream) = iroh_handshake.into_parts();
 
-                let (conn, outbound_rx) = IrohConnection::<O>::new(
+                let (conn, outbound_rx) = IrohTransport::<O>::new(
                     peer_id,
                     quic_conn_clone,
                     default_time_limit,

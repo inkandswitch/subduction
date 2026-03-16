@@ -4,9 +4,9 @@ use core::time::Duration;
 
 use future_form::Sendable;
 use futures::{
+    FutureExt,
     future::BoxFuture,
     stream::{AbortHandle, Abortable},
-    FutureExt,
 };
 use subduction_core::connection::manager::Spawn;
 

@@ -43,6 +43,15 @@ pub struct DisconnectionError;
 /// non-generic error type.
 #[derive(Debug, Error)]
 pub enum StreamError {
+    /// The frame exceeds the maximum allowed size.
+    #[error("frame too large: {actual} bytes (max {max})")]
+    FrameTooLarge {
+        /// Actual frame size (or attempted write size).
+        actual: usize,
+        /// Maximum allowed frame size.
+        max: usize,
+    },
+
     /// Failed to read from the QUIC stream.
     #[error("QUIC read error: {0}")]
     Read(#[from] iroh::endpoint::ReadExactError),

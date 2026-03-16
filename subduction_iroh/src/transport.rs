@@ -62,11 +62,11 @@ struct Inner<O> {
 ///
 /// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio`).
 #[derive(Debug, Clone)]
-pub struct IrohConnection<O> {
+pub struct IrohTransport<O> {
     inner: Arc<Inner<O>>,
 }
 
-impl<O> IrohConnection<O> {
+impl<O> IrohTransport<O> {
     /// Create a new Iroh connection from a QUIC connection.
     ///
     /// The caller is responsible for spawning the listener and sender tasks
@@ -134,7 +134,7 @@ impl<O> IrohConnection<O> {
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohConnection<O> {
+impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohTransport<O> {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
@@ -176,7 +176,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohConnection<
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(peer_id = %self.inner.multiplexer.peer_id(), "IrohConnection::disconnect");
+        tracing::info!(peer_id = %self.inner.multiplexer.peer_id(), "IrohTransport::disconnect");
         let conn = self.clone();
         async move {
             conn.close();
@@ -187,7 +187,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohConnection<
 }
 
 impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
-    for IrohConnection<O>
+    for IrohTransport<O>
 {
     type CallError = CallError;
 
@@ -250,7 +250,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, B
     }
 }
 
-impl<O> PartialEq for IrohConnection<O> {
+impl<O> PartialEq for IrohTransport<O> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }

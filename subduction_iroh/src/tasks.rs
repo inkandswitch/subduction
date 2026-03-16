@@ -8,8 +8,8 @@ use alloc::vec::Vec;
 use iroh::endpoint::{RecvStream, SendStream};
 
 use crate::{
-    connection::IrohConnection,
     error::{RunError, StreamError},
+    transport::IrohTransport,
 };
 
 /// Length-prefix size (4 bytes, big-endian u32).
@@ -49,7 +49,7 @@ pub(crate) async fn write_framed(send: &mut SendStream, data: &[u8]) -> Result<(
 ///
 /// Returns an error if reading from the stream or dispatching fails.
 pub async fn listener_task<O: Send + Sync>(
-    conn: IrohConnection<O>,
+    conn: IrohTransport<O>,
     mut recv: RecvStream,
 ) -> Result<(), RunError> {
     let peer_id = conn.quic_connection().remote_id();

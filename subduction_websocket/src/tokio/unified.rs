@@ -16,8 +16,8 @@ use futures::future::BoxFuture;
 
 use subduction_core::{
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId},
         Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, RequestId},
     },
     transport::Transport,
 };

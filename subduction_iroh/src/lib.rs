@@ -35,7 +35,7 @@
 //! ```ignore
 //! use iroh::{Endpoint, EndpointAddr};
 //! use subduction_iroh::client;
-//! use subduction_core::connection::handshake::audience::Audience;
+//! use subduction_core::handshake::audience::Audience;
 //! use std::time::Duration;
 //!
 //! // Connect to a peer
@@ -54,10 +54,10 @@
 extern crate alloc;
 
 pub mod client;
-pub mod connection;
 pub mod error;
 pub mod handshake;
 pub mod tasks;
+pub mod transport;
 
 #[cfg(feature = "server")]
 pub mod server;

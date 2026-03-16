@@ -7,7 +7,7 @@
 //!
 //! ```text
 //! ┌──────────────────────────────────────────────────────────┐
-//! │                  HttpLongPollClient                       │
+//! │                  HttpLongPollClient                      │
 //! │                                                          │
 //! │  Connection::send(msg) ──► outbound_tx ──► sender_task   │
 //! │                                    POST /lp/send ──────► │
@@ -15,7 +15,7 @@
 //! │  Connection::recv() ◄── inbound_reader ◄── poll_task     │
 //! │                                    POST /lp/recv ◄────── │
 //! │                                                          │
-//! │  HttpLongPollConnection handles channel routing,         │
+//! │  HttpLongPollTransport handles channel routing,          │
 //! │  pending map, and request ID generation.                 │
 //! └──────────────────────────────────────────────────────────┘
 //! ```
@@ -26,13 +26,13 @@
 use alloc::{format, string::String, vec::Vec};
 use core::time::Duration;
 
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::{
-    future::{select, Either},
+    future::{Either, select},
     pin_mut,
 };
 use subduction_core::{
-    handshake::{self, audience::Audience, HandshakeMessage},
+    handshake::{self, HandshakeMessage, audience::Audience},
     peer::id::PeerId,
     timeout::Timeout,
     timestamp::TimestampSeconds,
@@ -40,15 +40,15 @@ use subduction_core::{
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 
 use crate::{
-    connection::HttpLongPollConnection, error::ClientError, http_client::HttpClient,
-    session::SessionId, SESSION_ID_HEADER,
+    SESSION_ID_HEADER, error::ClientError, http_client::HttpClient, session::SessionId,
+    transport::HttpLongPollTransport,
 };
 
 /// Result of a successful connection, containing the authenticated connection
 /// and background task futures that the caller must spawn.
 pub struct ConnectResult<K: FutureForm, O: Clone> {
     /// The authenticated connection, ready for registration with Subduction.
-    pub authenticated: subduction_core::authenticated::Authenticated<HttpLongPollConnection<O>, K>,
+    pub authenticated: subduction_core::authenticated::Authenticated<HttpLongPollTransport<O>, K>,
 
     /// The session ID assigned by the server.
     pub session_id: SessionId,
@@ -134,12 +134,8 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
 }
 
 #[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
-impl<
-        K: FutureForm,
-        Sig: Signer<K>,
-        H: HttpClient<K> + 'static,
-        O: Timeout<K> + Clone + 'static,
-    > Connect<K, Sig> for HttpLongPollClient<H, O>
+impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
+    Connect<K, Sig> for HttpLongPollClient<H, O>
 {
     type Timeout = O;
 
@@ -173,7 +169,7 @@ impl<
                         .session_id
                         .expect("session_id set during handshake send");
 
-                    let conn = HttpLongPollConnection::<O>::new(
+                    let conn = HttpLongPollTransport::<O>::new(
                         peer_id,
                         default_time_limit,
                         timeout.clone(),
@@ -287,7 +283,7 @@ async fn poll_loop<K: FutureForm, H: HttpClient<K>, O>(
     http: H,
     url: String,
     session_id: SessionId,
-    conn: HttpLongPollConnection<O>,
+    conn: HttpLongPollTransport<O>,
     cancel: async_channel::Receiver<()>,
 ) {
     loop {
@@ -340,7 +336,7 @@ async fn send_loop<K: FutureForm, H: HttpClient<K>, O>(
     http: H,
     url: String,
     session_id: SessionId,
-    conn: HttpLongPollConnection<O>,
+    conn: HttpLongPollTransport<O>,
     cancel: async_channel::Receiver<()>,
 ) {
     loop {

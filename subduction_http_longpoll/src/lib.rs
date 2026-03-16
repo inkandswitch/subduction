@@ -50,7 +50,7 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────┐
-//! │            HttpLongPollConnection               │
+//! │            HttpLongPollTransport                │
 //! │                                                 │
 //! │  outbound_tx ──► [bounded channel] ──► /recv    │
 //! │  /send ──► [bounded channel] ──► inbound_reader │
@@ -61,10 +61,10 @@
 extern crate alloc;
 
 pub mod client;
-pub mod connection;
 pub mod error;
 pub mod http_client;
 pub mod session;
+pub mod transport;
 
 #[cfg(feature = "server")]
 pub mod server;

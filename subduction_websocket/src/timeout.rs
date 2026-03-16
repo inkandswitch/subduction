@@ -12,8 +12,8 @@ use future_form::{Local, Sendable};
 
 #[cfg(feature = "futures-timer")]
 use futures::{
-    future::{select, BoxFuture, Either, LocalBoxFuture},
     FutureExt,
+    future::{BoxFuture, Either, LocalBoxFuture, select},
 };
 
 #[cfg(feature = "futures-timer")]

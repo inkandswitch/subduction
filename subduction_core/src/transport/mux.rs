@@ -8,7 +8,6 @@
 use alloc::sync::Arc;
 use core::time::Duration;
 
-use future_form::{FutureForm, Local, Sendable, future_form};
 use super::Transport;
 use crate::{
     connection::{
@@ -19,6 +18,7 @@ use crate::{
     peer::id::PeerId,
     timeout::{TimedOut, Timeout},
 };
+use future_form::{FutureForm, Local, Sendable, future_form};
 
 /// Request-response multiplexer over a [`Transport`].
 ///
@@ -155,9 +155,7 @@ pub enum MuxCallError<S: core::error::Error> {
         T: Transport<Local>,
         O: Timeout<Local>
 )]
-impl<K: FutureForm, T, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
-    for MuxTransport<T, O>
-{
+impl<K: FutureForm, T, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for MuxTransport<T, O> {
     type CallError = MuxCallError<T::SendError>;
 
     fn next_request_id(&self) -> K::Future<'_, RequestId> {

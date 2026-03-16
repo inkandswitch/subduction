@@ -11,8 +11,8 @@ use futures::FutureExt;
 use subduction_core::{
     authenticated::Authenticated,
     connection::{
-        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
         Connection, Roundtrip,
+        message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
     },
     timeout::{TimedOut, Timeout},
     transport::MessageTransport,
@@ -25,8 +25,8 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
 
 use super::{
-    fetch_client::FetchHttpClient, message::WasmMessage, WasmBatchSyncRequest,
-    WasmBatchSyncResponse, WasmRequestId,
+    WasmBatchSyncRequest, WasmBatchSyncResponse, WasmRequestId, fetch_client::FetchHttpClient,
+    message::WasmMessage,
 };
 use crate::{peer_id::WasmPeerId, signer::JsSigner, timer};
 
@@ -47,7 +47,7 @@ impl Timeout<Local> for JsTimeout {
         fut: futures::future::LocalBoxFuture<'a, T>,
     ) -> futures::future::LocalBoxFuture<'a, Result<T, TimedOut>> {
         use futures::{
-            future::{select, Either},
+            future::{Either, select},
             pin_mut,
         };
 

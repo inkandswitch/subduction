@@ -3,10 +3,10 @@
 use subduction_core::timeout::Timeout;
 
 use crate::{
+    DEFAULT_MAX_MESSAGE_SIZE,
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     tokio::unified::UnifiedWebSocket,
     websocket::WebSocket,
-    DEFAULT_MAX_MESSAGE_SIZE,
 };
 
 use alloc::sync::Arc;
@@ -18,15 +18,14 @@ use subduction_core::{
     authenticated::Authenticated,
     handler::sync::SyncHandler,
     handshake::{
-        self,
+        self, AuthenticateError,
         audience::{Audience, DiscoveryId},
-        AuthenticateError,
     },
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::traits::Storage,
-    subduction::{builder::SubductionBuilder, error::AddConnectionError, Subduction},
+    subduction::{Subduction, builder::SubductionBuilder, error::AddConnectionError},
     timestamp::TimestampSeconds,
     transport::MessageTransport,
 };
@@ -81,12 +80,12 @@ where
 }
 
 impl<
-        S: 'static + Send + Sync + Storage<Sendable> + core::fmt::Debug,
-        P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
-        Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
-        M: 'static + Send + Sync + DepthMetric,
-        O: 'static + Send + Sync + Timeout<Sendable> + core::fmt::Debug,
-    > TokioWebSocketServer<S, P, Sig, M, O>
+    S: 'static + Send + Sync + Storage<Sendable> + core::fmt::Debug,
+    P: 'static + Send + Sync + ConnectionPolicy<Sendable> + StoragePolicy<Sendable>,
+    Sig: 'static + Send + Sync + Signer<Sendable> + Clone,
+    M: 'static + Send + Sync + DepthMetric,
+    O: 'static + Send + Sync + Timeout<Sendable> + core::fmt::Debug,
+> TokioWebSocketServer<S, P, Sig, M, O>
 where
     S::Error: 'static + Send + Sync,
     P::PutDisallowed: Send + 'static,

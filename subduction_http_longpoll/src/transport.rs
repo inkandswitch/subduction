@@ -55,7 +55,7 @@ struct Inner<O> {
 
     /// Keeps background poll/send tasks alive. Dropping this closes the cancel
     /// channel, which signals the tasks to exit. Set via
-    /// [`HttpLongPollConnection::set_cancel_guard`] after construction.
+    /// [`HttpLongPollTransport::set_cancel_guard`] after construction.
     cancel_guard: Mutex<Option<async_channel::Sender<()>>>,
 }
 
@@ -68,13 +68,13 @@ struct Inner<O> {
 /// The `O` parameter is the timeout strategy (e.g., `TimeoutTokio` for native,
 /// or a browser-based timeout for Wasm).
 #[derive(Debug, Clone)]
-pub struct HttpLongPollConnection<O> {
+pub struct HttpLongPollTransport<O> {
     inner: Arc<Inner<O>>,
     /// Server-facing receiver: the `/lp/recv` handler drains this.
     outbound_rx: async_channel::Receiver<Vec<u8>>,
 }
 
-impl<O> HttpLongPollConnection<O> {
+impl<O> HttpLongPollTransport<O> {
     /// Create a new HTTP long-poll connection for the given peer.
     #[must_use]
     pub fn new(peer_id: PeerId, default_time_limit: Duration, timeout: O) -> Self {
@@ -156,7 +156,7 @@ impl<O> HttpLongPollConnection<O> {
 }
 
 #[future_form(Sendable where O: Send + Sync, Local)]
-impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollConnection<O> {
+impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollTransport<O> {
     type SendError = SendError;
     type RecvError = RecvError;
     type DisconnectionError = DisconnectionError;
@@ -207,7 +207,7 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollConnection<O> {
 
 #[future_form(Sendable where O: Send + Sync, Local)]
 impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
-    for HttpLongPollConnection<O>
+    for HttpLongPollTransport<O>
 {
     type CallError = CallError;
 
@@ -271,7 +271,7 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
     }
 }
 
-impl<O> PartialEq for HttpLongPollConnection<O> {
+impl<O> PartialEq for HttpLongPollTransport<O> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
     }
@@ -293,8 +293,7 @@ mod tests {
             &'a self,
             dur: Duration,
             fut: futures::future::BoxFuture<'a, T>,
-        ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::timeout::TimedOut>>
-        {
+        ) -> futures::future::BoxFuture<'a, Result<T, subduction_core::timeout::TimedOut>> {
             use futures::{
                 FutureExt,
                 future::{Either, select},
@@ -312,8 +311,8 @@ mod tests {
     #[tokio::test]
     async fn next_request_id_increments() {
         let peer_id = PeerId::new([1u8; 32]);
-        let conn: HttpLongPollConnection<TestTimeout> =
-            HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn: HttpLongPollTransport<TestTimeout> =
+            HttpLongPollTransport::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let id1 =
             Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
@@ -339,8 +338,8 @@ mod tests {
         };
 
         let peer_id = PeerId::new([2u8; 32]);
-        let conn: HttpLongPollConnection<TestTimeout> =
-            HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn: HttpLongPollTransport<TestTimeout> =
+            HttpLongPollTransport::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],
@@ -364,8 +363,8 @@ mod tests {
         };
 
         let peer_id = PeerId::new([3u8; 32]);
-        let conn: HttpLongPollConnection<TestTimeout> =
-            HttpLongPollConnection::new(peer_id, Duration::from_secs(30), TestTimeout);
+        let conn: HttpLongPollTransport<TestTimeout> =
+            HttpLongPollTransport::new(peer_id, Duration::from_secs(30), TestTimeout);
 
         let msg = SyncMessage::RemoveSubscriptions(RemoveSubscriptions {
             ids: alloc::vec![SedimentreeId::from_bytes([0u8; 32])],

@@ -17,7 +17,7 @@
 
 use alloc::{sync::Arc, vec::Vec};
 use async_lock::Mutex;
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use nonempty::NonEmpty;
 use sedimentree_core::{
     blob::Blob,
@@ -34,11 +34,11 @@ use subduction_crypto::{signed::Signed, verified_meta::VerifiedMeta};
 use crate::{
     authenticated::Authenticated,
     connection::{
+        Connection, Roundtrip,
         message::{
             BatchSyncRequest, BatchSyncResponse, RequestId, RequestedData, SyncDiff, SyncMessage,
             SyncResult,
         },
-        Connection, Roundtrip,
     },
     peer::id::PeerId,
     policy::storage::StoragePolicy,
@@ -89,17 +89,17 @@ pub struct SyncHandler<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage>
-            + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
-            + PartialEq
-            + Clone
-            + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        const N: usize,
-    > core::fmt::Debug for SyncHandler<F, S, C, P, M, N>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    const N: usize,
+> core::fmt::Debug for SyncHandler<F, S, C, P, M, N>
 {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         f.debug_struct("SyncHandler").finish_non_exhaustive()
@@ -107,17 +107,17 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage>
-            + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
-            + PartialEq
-            + Clone
-            + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric + Clone,
-        const N: usize,
-    > Clone for SyncHandler<F, S, C, P, M, N>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric + Clone,
+    const N: usize,
+> Clone for SyncHandler<F, S, C, P, M, N>
 {
     fn clone(&self) -> Self {
         Self {
@@ -132,17 +132,17 @@ impl<
 }
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage>
-            + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
-            + PartialEq
-            + Clone
-            + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N>
 {
     /// Create a new `SyncHandler` from shared state.
     ///
@@ -218,17 +218,17 @@ impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K,
 // ---------------------------------------------------------------------------
 
 impl<
-        F: FutureForm,
-        S: Storage<F>,
-        C: Connection<F, SyncMessage>
-            + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
-            + PartialEq
-            + Clone
-            + 'static,
-        P: StoragePolicy<F>,
-        M: DepthMetric,
-        const N: usize,
-    > SyncHandler<F, S, C, P, M, N>
+    F: FutureForm,
+    S: Storage<F>,
+    C: Connection<F, SyncMessage>
+        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
+        + PartialEq
+        + Clone
+        + 'static,
+    P: StoragePolicy<F>,
+    M: DepthMetric,
+    const N: usize,
+> SyncHandler<F, S, C, P, M, N>
 {
     #[allow(clippy::too_many_lines)]
     async fn dispatch(

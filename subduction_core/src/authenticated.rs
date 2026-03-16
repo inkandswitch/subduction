@@ -9,7 +9,7 @@ use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
 use crate::{
-    connection::{message::RequestId, Connection, Reconnect, Roundtrip},
+    connection::{Connection, Reconnect, Roundtrip, message::RequestId},
     peer::id::PeerId,
 };
 

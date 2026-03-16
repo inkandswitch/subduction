@@ -21,15 +21,15 @@ use subduction_crypto::signer::Signer;
 
 use crate::{
     client::iroh_peer_id,
-    connection::IrohConnection,
     error::{AcceptError, RunError},
     handshake::IrohHandshake,
+    transport::IrohTransport,
 };
 
 /// Result of accepting a single incoming connection.
 pub struct AcceptResult<O: Timeout<Sendable> + Send + Sync> {
     /// The authenticated connection.
-    pub authenticated: Authenticated<IrohConnection<O>, Sendable>,
+    pub authenticated: Authenticated<IrohTransport<O>, Sendable>,
 
     /// The remote peer's identity.
     pub peer_id: PeerId,
@@ -110,7 +110,7 @@ where
         move |iroh_handshake, peer_id| {
             let (send_stream, recv_stream) = iroh_handshake.into_parts();
 
-            let (conn, outbound_rx) = IrohConnection::<O>::new(
+            let (conn, outbound_rx) = IrohTransport::<O>::new(
                 peer_id,
                 quic_conn_clone,
                 default_time_limit,

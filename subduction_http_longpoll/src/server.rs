@@ -18,8 +18,8 @@ use core::time::Duration;
 use async_lock::Mutex;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::{
-    body::{Bytes, Incoming},
     Method, Request, Response, StatusCode,
+    body::{Bytes, Incoming},
 };
 use subduction_core::{
     authenticated::Authenticated,
@@ -32,13 +32,13 @@ use subduction_core::{
 use subduction_crypto::signer::Signer;
 
 use future_form::{FutureForm, Sendable};
-use futures::{future::BoxFuture, FutureExt};
+use futures::{FutureExt, future::BoxFuture};
 
 use crate::{
-    connection::HttpLongPollConnection,
+    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
     error::ServerError,
     session::{SessionEntry, SessionId, SessionStore},
-    DEFAULT_MAX_BODY_SIZE, DEFAULT_POLL_TIMEOUT_SECS, SESSION_ID_HEADER,
+    transport::HttpLongPollTransport,
 };
 
 /// Server-side handler state, shared across request handlers.
@@ -167,8 +167,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
         let result = handshake::respond::<Sendable, _, _, _, _>(
             http_handshake,
             |_handshake, peer_id| {
-                let conn =
-                    HttpLongPollConnection::new(peer_id, default_time_limit, timeout.clone());
+                let conn = HttpLongPollTransport::new(peer_id, default_time_limit, timeout.clone());
                 (conn.clone(), conn)
             },
             &self.signer,
@@ -328,7 +327,7 @@ impl<Sig: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Clone +
     pub async fn take_authenticated(
         &self,
         session_id: &SessionId,
-    ) -> Option<Authenticated<HttpLongPollConnection<O>, Sendable>> {
+    ) -> Option<Authenticated<HttpLongPollTransport<O>, Sendable>> {
         let mut sessions = self.sessions.sessions.lock().await;
         sessions
             .get_mut(session_id)

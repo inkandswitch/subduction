@@ -5,11 +5,11 @@
 //! `M: Encode + Decode`. The `M` parameter is phantom — no runtime
 //! overhead.
 
-use future_form::{future_form, FutureForm, Local, Sendable};
+use future_form::{FutureForm, Local, Sendable, future_form};
 use sedimentree_core::codec::{decode::Decode, encode::Encode, error::DecodeError};
 
 use super::Transport;
-use crate::connection::{message::RequestId, Connection, Roundtrip};
+use crate::connection::{Connection, Roundtrip, message::RequestId};
 
 /// Typed message layer over a [`Transport`].
 ///

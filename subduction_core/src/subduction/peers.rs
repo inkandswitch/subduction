@@ -14,8 +14,8 @@ use future_form::FutureForm;
 use nonempty::NonEmpty;
 use sedimentree_core::{
     collections::{
-        nonempty_ext::{NonEmptyExt, RemoveResult},
         Map, Set,
+        nonempty_ext::{NonEmptyExt, RemoveResult},
     },
     id::SedimentreeId,
 };

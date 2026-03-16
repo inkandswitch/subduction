@@ -9,13 +9,13 @@ use core::fmt;
 
 use async_lock::Mutex;
 use future_form::Sendable;
-use rand::{rngs::OsRng, RngCore};
+use rand::{RngCore, rngs::OsRng};
 use subduction_core::{authenticated::Authenticated, peer::id::PeerId, timeout::Timeout};
 
-use crate::connection::HttpLongPollConnection;
+use crate::transport::HttpLongPollTransport;
 
 // NOTE: SessionStore and SessionEntry are concrete on `Sendable` (not generic
-// over `K: FutureForm`) because `HttpLongPollConnection<O>` only implements
+// over `K: FutureForm`) because `HttpLongPollTransport<O>` only implements
 // `Connection<Sendable>`. This mirrors the `subduction_websocket` pattern.
 
 /// An opaque session identifier, assigned after successful handshake.
@@ -96,10 +96,10 @@ pub struct SessionEntry<O: Timeout<Sendable> + Send + Sync> {
     pub peer_id: PeerId,
 
     /// The connection channels for this session.
-    pub connection: HttpLongPollConnection<O>,
+    pub connection: HttpLongPollTransport<O>,
 
     /// The authenticated wrapper, present until consumed by Subduction registration.
-    pub authenticated: Option<Authenticated<HttpLongPollConnection<O>, Sendable>>,
+    pub authenticated: Option<Authenticated<HttpLongPollTransport<O>, Sendable>>,
 }
 
 impl<O: Timeout<Sendable> + Send + Sync> SessionStore<O> {

@@ -68,11 +68,11 @@ use sedimentree_core::{
 use crate::{
     authenticated::Authenticated,
     connection::{
+        Connection, Roundtrip,
         manager::Spawn,
         message::{BatchSyncRequest, BatchSyncResponse, SyncMessage},
-        Connection, Roundtrip,
     },
-    handler::{sync::SyncHandler, Handler},
+    handler::{Handler, sync::SyncHandler},
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
@@ -84,9 +84,9 @@ use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    error::ListenError,
-    pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
     ListenerFuture, StartListener, Subduction, SubductionFutureForm,
+    error::ListenError,
+    pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
 };
 
 /// Marker for a required builder field that hasn't been set yet.
