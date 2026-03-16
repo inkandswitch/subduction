@@ -43,9 +43,10 @@ use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 pub type WasmJsConnection = MessageTransport<MuxTransport<JsTransport, JsTimeout>>;
 
 /// Default time limit for roundtrip calls via `MuxTransport`.
-const DEFAULT_MUX_TIME_LIMIT: Duration = Duration::from_secs(30);
+pub(crate) const DEFAULT_MUX_TIME_LIMIT: Duration = Duration::from_secs(30);
 
-/// Build a [`WasmJsConnection`] from a [`JsTransport`] and peer identity.
+/// Build a [`WasmJsConnection`] from a [`JsTransport`], peer identity, and
+/// call time limit.
 ///
 /// This wraps the transport with `MuxTransport` (for request-response
 /// multiplexing via [`Multiplexer`]) and then `MessageTransport` (for
@@ -53,13 +54,9 @@ const DEFAULT_MUX_TIME_LIMIT: Duration = Duration::from_secs(30);
 pub(crate) fn make_connection(
     transport: JsTransport,
     peer_id: subduction_core::peer::id::PeerId,
+    time_limit: Duration,
 ) -> WasmJsConnection {
-    MessageTransport::new(MuxTransport::new(
-        transport,
-        JsTimeout,
-        DEFAULT_MUX_TIME_LIMIT,
-        peer_id,
-    ))
+    MessageTransport::new(MuxTransport::new(transport, JsTimeout, time_limit, peer_id))
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -165,10 +162,6 @@ pub enum JsConnectionError {
     /// An error that occurred while receiving bytes.
     #[error("Recv error")]
     Recv(JsValue),
-
-    /// An error that occurred during a roundtrip call.
-    #[error("Call error")]
-    Call(JsValue),
 }
 
 impl From<JsConnectionError> for JsValue {
@@ -384,7 +377,10 @@ impl WasmAuthenticatedTransport {
             connection,
             |hs_conn, peer_id| {
                 let transport: JsTransport = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
-                (make_connection(transport, peer_id), peer_id)
+                (
+                    make_connection(transport, peer_id, DEFAULT_MUX_TIME_LIMIT),
+                    peer_id,
+                )
             },
             signer,
             audience,
@@ -435,7 +431,10 @@ impl WasmAuthenticatedTransport {
             connection,
             |hs_conn, peer_id| {
                 let transport: JsTransport = wasm_bindgen::JsValue::from(hs_conn).unchecked_into();
-                (make_connection(transport, peer_id), peer_id)
+                (
+                    make_connection(transport, peer_id, DEFAULT_MUX_TIME_LIMIT),
+                    peer_id,
+                )
             },
             signer,
             &nonce_cache,

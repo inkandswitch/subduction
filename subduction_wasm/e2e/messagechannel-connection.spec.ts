@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
 test.describe("MessageChannel Connection Tests", () => {
   test("should authenticate two peers via MessageChannel", async ({ page }) => {
     const result = await page.evaluate(async () => {
-      const { AuthenticatedConnection, MemorySigner, makeMessagePortConnection } = window.subduction;
+      const { AuthenticatedTransport, MemorySigner, makeMessagePortConnection } = window.subduction;
 
       try {
         const signerA = MemorySigner.generate();
@@ -24,8 +24,8 @@ test.describe("MessageChannel Connection Tests", () => {
         channel.port2.start();
 
         const [authA, authB] = await Promise.all([
-          AuthenticatedConnection.setup(makeMessagePortConnection(channel.port1), signerA, peerIdB),
-          AuthenticatedConnection.accept(makeMessagePortConnection(channel.port2), signerB),
+          AuthenticatedTransport.setup(makeMessagePortConnection(channel.port1), signerA, peerIdB),
+          AuthenticatedTransport.accept(makeMessagePortConnection(channel.port2), signerB),
         ]);
 
         return {
@@ -56,7 +56,7 @@ test.describe("MessageChannel Connection Tests", () => {
   test("should onboard both peers via MessageChannel", async ({ page }) => {
     const result = await page.evaluate(async () => {
       const {
-        AuthenticatedConnection, Subduction, MemoryStorage, MemorySigner,
+        AuthenticatedTransport, Subduction, MemoryStorage, MemorySigner,
         makeMessagePortConnection,
       } = window.subduction;
 
@@ -72,8 +72,8 @@ test.describe("MessageChannel Connection Tests", () => {
         channel.port2.start();
 
         const [authA, authB] = await Promise.all([
-          AuthenticatedConnection.setup(makeMessagePortConnection(channel.port1), signerA, peerIdB),
-          AuthenticatedConnection.accept(makeMessagePortConnection(channel.port2), signerB),
+          AuthenticatedTransport.setup(makeMessagePortConnection(channel.port1), signerA, peerIdB),
+          AuthenticatedTransport.accept(makeMessagePortConnection(channel.port2), signerB),
         ]);
 
         const syncerA = new Subduction(signerA, new MemoryStorage());
@@ -126,7 +126,7 @@ test.describe("MessageChannel Connection Tests", () => {
 
   test("should reject handshake with wrong expected peer ID", async ({ page }) => {
     const result = await page.evaluate(async () => {
-      const { AuthenticatedConnection, MemorySigner, PeerId, makeMessagePortConnection } = window.subduction;
+      const { AuthenticatedTransport, MemorySigner, PeerId, makeMessagePortConnection } = window.subduction;
 
       try {
         const signerA = MemorySigner.generate();
@@ -139,8 +139,8 @@ test.describe("MessageChannel Connection Tests", () => {
         channel.port2.start();
 
         await Promise.all([
-          AuthenticatedConnection.setup(makeMessagePortConnection(channel.port1), signerA, wrongPeerId),
-          AuthenticatedConnection.accept(makeMessagePortConnection(channel.port2), signerB),
+          AuthenticatedTransport.setup(makeMessagePortConnection(channel.port1), signerA, wrongPeerId),
+          AuthenticatedTransport.accept(makeMessagePortConnection(channel.port2), signerB),
         ]);
 
         return { rejected: false, error: null };

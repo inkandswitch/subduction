@@ -52,7 +52,7 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
+        DEFAULT_MUX_TIME_LIMIT, JsTransport, WasmAuthenticatedTransport, WasmJsConnection,
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
         make_connection,
         websocket::WasmWebSocket,
@@ -371,9 +371,14 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
+        let time_limit = Duration::from_millis(u64::from(timeout_milliseconds));
         self.core
             .add_connection(authenticated.map(|ws| {
-                make_connection(JsValue::from(ws).unchecked_into::<JsTransport>(), peer_id)
+                make_connection(
+                    JsValue::from(ws).unchecked_into::<JsTransport>(),
+                    peer_id,
+                    time_limit,
+                )
             }))
             .await?;
         Ok(peer_id.into())
@@ -408,9 +413,16 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
+        let time_limit = timeout_milliseconds.map_or(DEFAULT_MUX_TIME_LIMIT, |ms| {
+            Duration::from_millis(u64::from(ms))
+        });
         self.core
             .add_connection(authenticated.map(|ws| {
-                make_connection(JsValue::from(ws).unchecked_into::<JsTransport>(), peer_id)
+                make_connection(
+                    JsValue::from(ws).unchecked_into::<JsTransport>(),
+                    peer_id,
+                    time_limit,
+                )
             }))
             .await?;
         Ok(peer_id.into())
@@ -445,11 +457,14 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
+        let time_limit = timeout_milliseconds.map_or(DEFAULT_MUX_TIME_LIMIT, |ms| {
+            Duration::from_millis(u64::from(ms))
+        });
         self.core
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_connection(transport, peer_id)
+                make_connection(transport, peer_id, time_limit)
             }))
             .await?;
         Ok(peer_id.into())
@@ -484,11 +499,14 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
+        let time_limit = timeout_milliseconds.map_or(DEFAULT_MUX_TIME_LIMIT, |ms| {
+            Duration::from_millis(u64::from(ms))
+        });
         self.core
             .add_connection(authenticated.map(|lp| {
                 let transport: JsTransport =
                     JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-                make_connection(transport, peer_id)
+                make_connection(transport, peer_id, time_limit)
             }))
             .await?;
         Ok(peer_id.into())

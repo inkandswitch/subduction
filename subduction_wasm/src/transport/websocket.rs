@@ -445,30 +445,6 @@ impl From<ReadFromClosedChannel> for JsValue {
     }
 }
 
-/// Problem while attempting to connect or reconnect the WebSocket.
-#[derive(Debug, Clone, Error)]
-pub enum WebSocketConnectionError {
-    /// Problem creating the WebSocket.
-    #[error("WebSocket creation failed: {0:?}")]
-    SocketCreationFailed(JsValue),
-
-    /// Problem creating the URL.
-    #[error("invalid URL: {0:?}")]
-    InvalidUrl(JsValue),
-
-    /// WebSocket setup was canceled.
-    #[error(transparent)]
-    WasmSetupCanceled(#[from] WasmWebSocketSetupCanceled),
-}
-
-impl From<WebSocketConnectionError> for JsValue {
-    fn from(err: WebSocketConnectionError) -> Self {
-        let err = js_sys::Error::new(&err.to_string());
-        err.set_name("WebSocketConnectionError");
-        err.into()
-    }
-}
-
 /// Error connecting to a WebSocket server with handshake authentication.
 #[derive(Debug, Error)]
 pub enum WebSocketAuthenticatedConnectionError {
@@ -568,7 +544,7 @@ impl WasmAuthenticatedWebSocket {
         let peer_id = self.inner.peer_id();
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
             let transport: super::JsTransport = wasm_bindgen::JsValue::from(ws).unchecked_into();
-            super::make_connection(transport, peer_id)
+            super::make_connection(transport, peer_id, super::DEFAULT_MUX_TIME_LIMIT)
         }))
     }
 }
