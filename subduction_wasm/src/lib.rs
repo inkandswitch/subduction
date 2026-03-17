@@ -32,8 +32,6 @@ pub fn start() {
     set_panic_hook();
 }
 
-pub mod connection;
-pub mod connection_id;
 pub mod error;
 pub mod fragment;
 pub mod memory_signer;
@@ -42,3 +40,4 @@ pub mod signer;
 pub mod subduction;
 pub mod sync_stats;
 pub mod timer;
+pub mod transport;

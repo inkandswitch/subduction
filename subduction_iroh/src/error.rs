@@ -1,6 +1,8 @@
 //! Error types for the Iroh transport.
 
-use subduction_core::connection::handshake::AuthenticateError;
+use alloc::vec::Vec;
+
+use subduction_core::handshake::AuthenticateError;
 use thiserror::Error;
 
 /// Outbound channel closed -- no more messages can be sent.
@@ -13,7 +15,7 @@ pub struct SendError;
 pub enum CallError {
     /// Response oneshot was dropped before a reply arrived.
     #[error("response dropped")]
-    ResponseDropped(futures::channel::oneshot::Canceled),
+    ResponseDropped,
 
     /// Timed out waiting for response.
     #[error("timed out waiting for response")]
@@ -34,28 +36,45 @@ pub struct RecvError;
 #[error("disconnected")]
 pub struct DisconnectionError;
 
-/// Errors during listener task execution.
+/// QUIC stream-level errors.
+///
+/// Extracted from [`RunError`] so that code that never touches the
+/// internal channel (handshake, framing helpers) can use a concrete,
+/// non-generic error type.
 #[derive(Debug, Error)]
-pub enum RunError {
+pub enum StreamError {
+    /// The frame exceeds the maximum allowed size.
+    #[error("frame too large: {actual} bytes (max {max})")]
+    FrameTooLarge {
+        /// Actual frame size (or attempted write size).
+        actual: usize,
+        /// Maximum allowed frame size.
+        max: usize,
+    },
+
     /// Failed to read from the QUIC stream.
     #[error("QUIC read error: {0}")]
     Read(#[from] iroh::endpoint::ReadExactError),
 
     /// Failed to write to the QUIC stream.
     #[error("QUIC write error: {0}")]
-    Write(#[from] iroh::endpoint::WriteError),
-
-    /// Failed to decode an inbound message.
-    #[error("message decode error: {0}")]
-    Deserialize(#[from] sedimentree_core::codec::error::DecodeError),
-
-    /// Failed to send on internal channel.
-    #[error("channel send error")]
-    ChanSend(Box<async_channel::SendError<subduction_core::connection::message::Message>>),
+    Write(iroh::endpoint::WriteError),
 
     /// The QUIC connection was closed.
     #[error("connection closed: {0}")]
     ConnectionClosed(#[from] iroh::endpoint::ConnectionError),
+}
+
+/// Errors during listener/sender task execution.
+#[derive(Debug, Error)]
+pub enum RunError {
+    /// QUIC stream-level error.
+    #[error(transparent)]
+    Stream(#[from] StreamError),
+
+    /// Failed to send on internal channel (receiver dropped).
+    #[error("channel send error: {0}")]
+    ChanSend(Box<async_channel::SendError<Vec<u8>>>),
 }
 
 /// Errors when connecting to a peer.
@@ -75,7 +94,7 @@ pub enum ConnectError {
 
     /// Handshake authentication failed.
     #[error("handshake error: {0}")]
-    Handshake(#[from] Box<AuthenticateError<RunError>>),
+    Handshake(#[from] Box<AuthenticateError<StreamError>>),
 }
 
 /// Errors when accepting a connection.
@@ -95,5 +114,5 @@ pub enum AcceptError {
 
     /// Handshake authentication failed.
     #[error("handshake error: {0}")]
-    Handshake(#[from] Box<AuthenticateError<RunError>>),
+    Handshake(#[from] Box<AuthenticateError<StreamError>>),
 }

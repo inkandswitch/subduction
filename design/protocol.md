@@ -309,9 +309,11 @@ Unlike signed payloads, sync messages are not signed — they're authenticated b
 
 ## Message Size Limits
 
-WebSocket transport enforces a **5 MB maximum message size**. Messages exceeding this limit are rejected at the transport layer before deserialization.
+All transports enforce a maximum message size (default **50 MiB**). Messages exceeding this limit are rejected at the transport layer before deserialization. The limit is configurable per transport:
 
-The codec defines error types for content validation (`BlobTooLarge`, `ArrayTooLarge`) but these are not currently enforced during decoding — they are scaffolding for future validation.
+- WebSocket: `DEFAULT_MAX_MESSAGE_SIZE` (50 MiB)
+- HTTP long-poll: `DEFAULT_MAX_BODY_SIZE` (50 MiB)
+- Iroh/QUIC: `MAX_FRAME_SIZE` (50 MiB, enforced in length-prefix framing)
 
 ## Signed Payload Formats
 

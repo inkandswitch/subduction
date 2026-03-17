@@ -9,9 +9,9 @@ use alloc::vec::Vec;
 use future_form::Sendable;
 use futures::FutureExt;
 use iroh::endpoint::{RecvStream, SendStream};
-use subduction_core::connection::handshake::Handshake;
+use subduction_core::handshake::Handshake;
 
-use crate::error::RunError;
+use crate::error::StreamError;
 
 /// A handshake adapter over a QUIC bi-directional stream.
 ///
@@ -45,7 +45,7 @@ impl IrohHandshake {
 }
 
 impl Handshake<Sendable> for IrohHandshake {
-    type Error = RunError;
+    type Error = StreamError;
 
     fn send(
         &mut self,

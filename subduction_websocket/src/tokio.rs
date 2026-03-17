@@ -10,7 +10,7 @@ use futures::{
 };
 use subduction_core::connection::manager::Spawn;
 
-use crate::timeout::{TimedOut, Timeout};
+use subduction_core::timeout::{TimedOut, Timeout};
 
 #[cfg(feature = "tokio_client_any")]
 pub mod client;

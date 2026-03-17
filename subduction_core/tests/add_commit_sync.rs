@@ -10,7 +10,10 @@ use future_form::Sendable;
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
-    connection::test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+    connection::{
+        message::SyncMessage,
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
+    },
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -28,11 +31,12 @@ fn make_unique_blob(seed: u8) -> Blob {
 #[tokio::test]
 async fn add_single_commit_is_stored() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -54,11 +58,12 @@ async fn add_single_commit_is_stored() -> TestResult {
 #[tokio::test]
 async fn add_multiple_commits_all_stored() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -82,11 +87,12 @@ async fn add_multiple_commits_all_stored() -> TestResult {
 #[tokio::test]
 async fn commits_retrievable_after_add() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -128,11 +134,12 @@ async fn fingerprint_summary_includes_all_commits() -> TestResult {
     use sedimentree_core::crypto::fingerprint::FingerprintSeed;
 
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);
@@ -176,15 +183,16 @@ async fn fingerprint_summary_includes_all_commits() -> TestResult {
 async fn sync_request_includes_all_local_commits() -> TestResult {
     use sedimentree_core::{crypto::fingerprint::FingerprintSeed, sedimentree::FingerprintSummary};
     use subduction_core::connection::message::{
-        BatchSyncRequest, BatchSyncResponse, Message, RequestId, SyncResult,
+        BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult,
     };
 
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let peer_id = PeerId::new([2u8; 32]);
@@ -231,7 +239,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
 
     handle
         .inbound_tx
-        .send(Message::BatchSyncRequest(request))
+        .send(SyncMessage::BatchSyncRequest(request))
         .await?;
 
     // Wait for response
@@ -241,7 +249,7 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
         .await?
         .expect("should receive response");
 
-    let Message::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
+    let SyncMessage::BatchSyncResponse(BatchSyncResponse { result, .. }) = response else {
         panic!("Expected BatchSyncResponse, got {response:?}");
     };
 
@@ -261,13 +269,15 @@ async fn sync_request_includes_all_local_commits() -> TestResult {
 /// Test: Full sync flow - add commits then call `full_sync`.
 #[tokio::test]
 async fn full_sync_sends_all_commits() -> TestResult {
-    use subduction_core::connection::message::Message;
+    use subduction_core::connection::message::SyncMessage;
 
-    let (client, _handler, listener_fut, actor_fut) = SubductionBuilder::<_, _, _, _, 256>::new()
-        .signer(test_signer())
-        .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+    let (client, _handler, listener_fut, actor_fut) =
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
+            .signer(test_signer())
+            .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
+            .spawner(TokioSpawn)
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let sed_id = SedimentreeId::new([1u8; 32]);
     let server_peer_id = PeerId::new([2u8; 32]);
@@ -303,7 +313,7 @@ async fn full_sync_sends_all_commits() -> TestResult {
     // Drain broadcast messages (commits were sent when added)
     let mut broadcast_count = 0;
     while let Ok(msg) = handle.outbound_rx.try_recv() {
-        if matches!(msg, Message::LooseCommit { .. }) {
+        if matches!(msg, SyncMessage::LooseCommit { .. }) {
             broadcast_count += 1;
         }
     }

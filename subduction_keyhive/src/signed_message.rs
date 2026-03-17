@@ -115,7 +115,7 @@ impl SignedMessage {
 
     /// Get a mutable reference to the signed bytes (for testing tamper scenarios).
     #[cfg(test)]
-    #[allow(dead_code)]
+    #[allow(dead_code)] // Used by protocol::tests::verify_rejects_tampered_message (requires all features)
     pub(crate) const fn signed_bytes_mut(&mut self) -> &mut Vec<u8> {
         &mut self.signed
     }

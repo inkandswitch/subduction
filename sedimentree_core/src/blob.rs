@@ -98,7 +98,7 @@ impl Blob {
 
     /// Get the contents of the blob as a slice.
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
+    #[allow(clippy::missing_const_for_fn)] // Vec deref is not const-stable
     pub fn as_slice(&self) -> &[u8] {
         &self.0
     }

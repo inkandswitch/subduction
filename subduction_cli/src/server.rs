@@ -10,18 +10,18 @@ use iroh::EndpointAddr;
 use sedimentree_core::commit::CountLeadingZeroBytes;
 use sedimentree_fs_storage::FsStorage;
 use subduction_core::{
-    connection::{
-        handshake::{
-            self,
-            audience::{Audience, DiscoveryId},
-        },
-        nonce_cache::NonceCache,
+    handler::sync::SyncHandler,
+    handshake::{
+        self,
+        audience::{Audience, DiscoveryId},
     },
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
+    transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;
@@ -44,9 +44,17 @@ type CliSubduction = Arc<
         'static,
         future_form::Sendable,
         MetricsStorage<FsStorage>,
-        UnifiedTransport<FuturesTimerTimeout>,
+        MessageTransport<UnifiedTransport>,
+        SyncHandler<
+            future_form::Sendable,
+            MetricsStorage<FsStorage>,
+            MessageTransport<UnifiedTransport>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
+        FuturesTimerTimeout,
         CountLeadingZeroBytes,
     >,
 >;
@@ -192,7 +200,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
 
     let signer = key::load_signer(&args.key)?;
     let peer_id = PeerId::from(signer.verifying_key());
-    let default_time_limit = Duration::from_secs(args.timeout);
     let handshake_max_drift = Duration::from_secs(args.handshake_max_drift);
 
     let service_name = args
@@ -207,7 +214,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let mut builder = SubductionBuilder::new()
         .signer(signer.clone())
         .storage(storage, Arc::new(OpenPolicy))
-        .spawner(TokioSpawn);
+        .spawner(TokioSpawn)
+        .timer(FuturesTimerTimeout);
 
     if let Some(id) = discovery_id {
         builder = builder.discovery_id(id);
@@ -225,7 +233,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
         server_peer_id,
         discovery_audience,
         handshake_max_drift,
-        default_time_limit,
         FuturesTimerTimeout,
     );
 
@@ -286,8 +293,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
             accept_subduction,
             accept_handler,
             accept_cancel,
-            FuturesTimerTimeout,
-            default_time_limit,
             handshake_max_drift,
             max_message_size,
             server_peer_id,
@@ -344,8 +349,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                         }
                         result = subduction_iroh::server::accept_one(
                             &iroh_ep,
-                            default_time_limit,
-                            FuturesTimerTimeout,
                             &iroh_signer,
                             &iroh_nonce_cache,
                             server_peer_id,
@@ -358,7 +361,7 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                                     tokio::spawn(accepted.listener_task);
                                     tokio::spawn(accepted.sender_task);
 
-                                    let auth = accepted.authenticated.map(UnifiedTransport::Iroh);
+                                    let auth = accepted.authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
                                     match iroh_subduction.add_connection(auth).await {
                                         Ok(_) => {
                                             iroh_subduction.full_sync_with_peer(&remote, true, None).await;
@@ -406,7 +409,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                     &peer_subduction,
                     &peer_signer,
                     &peer_service_name,
-                    default_time_limit,
                     peer_cancel,
                 )
                 .await
@@ -479,8 +481,6 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
                 &peer_subduction,
                 &peer_signer,
                 &peer_service_name,
-                FuturesTimerTimeout,
-                default_time_limit,
                 peer_cancel,
             )
             .await
@@ -534,8 +534,6 @@ async fn accept_loop(
     subduction: CliSubduction,
     lp_handler: LongPollHandler<MemorySigner, FuturesTimerTimeout>,
     cancel: CancellationToken,
-    timeout: FuturesTimerTimeout,
-    default_time_limit: Duration,
     handshake_max_drift: Duration,
     max_message_size: usize,
     server_peer_id: PeerId,
@@ -582,8 +580,6 @@ async fn accept_loop(
                                     tcp,
                                     addr,
                                     task_subduction,
-                                    timeout,
-                                    default_time_limit,
                                     handshake_max_drift,
                                     max_message_size,
                                     server_peer_id,
@@ -625,8 +621,6 @@ async fn handle_websocket(
     tcp: tokio::net::TcpStream,
     addr: SocketAddr,
     subduction: CliSubduction,
-    timeout: FuturesTimerTimeout,
-    default_time_limit: Duration,
     handshake_max_drift: Duration,
     max_message_size: usize,
     server_peer_id: PeerId,
@@ -654,9 +648,8 @@ async fn handle_websocket(
     let now = TimestampSeconds::now();
     let result = handshake::respond::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
-        |ws_handshake, _peer_id| {
-            let (ws, sender_fut) =
-                WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
+        |ws_handshake, peer_id| {
+            let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
 
             let listen_ws = ws.clone();
             tokio::spawn(async move {
@@ -672,7 +665,10 @@ async fn handle_websocket(
             });
 
             let unified_ws = UnifiedWebSocket::Accepted(ws);
-            (UnifiedTransport::WebSocket(unified_ws), ())
+            (
+                MessageTransport::new(UnifiedTransport::WebSocket(unified_ws)),
+                (),
+            )
         },
         subduction.signer(),
         subduction.nonce_cache(),
@@ -765,7 +761,8 @@ async fn handle_http_longpoll(
                 && let Some(sid) = subduction_http_longpoll::session::SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
             {
-                let unified_auth = auth.map(UnifiedTransport::HttpLongPoll);
+                let unified_auth =
+                    auth.map(|lp| MessageTransport::new(UnifiedTransport::HttpLongPoll(lp)));
                 if let Err(e) = subduction.add_connection(unified_auth).await {
                     tracing::error!("Failed to add HTTP long-poll connection: {e}");
                 }
@@ -810,8 +807,6 @@ async fn try_connect_ws(
     subduction: &CliSubduction,
     signer: &MemorySigner,
     service_name: &str,
-    timeout: FuturesTimerTimeout,
-    default_time_limit: Duration,
     cancel: CancellationToken,
 ) -> Result<PeerId, eyre::Error> {
     let uri_str = uri.to_string();
@@ -832,9 +827,8 @@ async fn try_connect_ws(
 
     let (authenticated, ()) = handshake::initiate::<future_form::Sendable, _, _, _, _>(
         WebSocketHandshake::new(ws_stream),
-        move |ws_handshake, _peer_id| {
-            let (ws, sender_fut) =
-                WebSocket::new(ws_handshake.into_inner(), timeout, default_time_limit);
+        move |ws_handshake, peer_id| {
+            let (ws, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
 
             let ws_conn = UnifiedWebSocket::Dialed(ws.clone());
 
@@ -866,7 +860,10 @@ async fn try_connect_ws(
                 }
             });
 
-            (UnifiedTransport::WebSocket(ws_conn), ())
+            (
+                MessageTransport::new(UnifiedTransport::WebSocket(ws_conn)),
+                (),
+            )
         },
         signer,
         audience,
@@ -892,7 +889,6 @@ async fn try_connect_iroh(
     subduction: &CliSubduction,
     signer: &MemorySigner,
     service_name: &str,
-    default_time_limit: Duration,
     cancel: CancellationToken,
 ) -> Result<PeerId, eyre::Error> {
     let node_id = addr.id;
@@ -900,15 +896,7 @@ async fn try_connect_iroh(
 
     let audience = Audience::discover(service_name.as_bytes());
 
-    let connect_result = subduction_iroh::client::connect(
-        endpoint,
-        addr,
-        default_time_limit,
-        FuturesTimerTimeout,
-        signer,
-        audience,
-    )
-    .await?;
+    let connect_result = subduction_iroh::client::connect(endpoint, addr, signer, audience).await?;
 
     let authenticated = connect_result.authenticated;
     let listener_task = connect_result.listener_task;
@@ -944,7 +932,7 @@ async fn try_connect_iroh(
     });
 
     let remote_id = authenticated.peer_id();
-    let auth = authenticated.map(UnifiedTransport::Iroh);
+    let auth = authenticated.map(|c| MessageTransport::new(UnifiedTransport::Iroh(c)));
     subduction.add_connection(auth).await?;
     subduction.full_sync_with_peer(&remote_id, true, None).await;
 

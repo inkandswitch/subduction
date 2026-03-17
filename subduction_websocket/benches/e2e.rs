@@ -42,7 +42,10 @@ use future_form::Sendable;
 use rand::{Rng, SeedableRng, rngs::StdRng};
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{handshake::audience::Audience, nonce_cache::NonceCache},
+    connection::message::SyncMessage,
+    handler::sync::SyncHandler,
+    handshake::audience::Audience,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -84,7 +87,6 @@ async fn fresh_server(seed: u8) -> (ServerGuard, PeerId, SocketAddr) {
     let server = TokioWebSocketServer::setup(
         addr,
         TimeoutTokio,
-        TIMEOUT,
         HANDSHAKE_MAX_DRIFT,
         DEFAULT_MAX_MESSAGE_SIZE,
         sig,
@@ -106,9 +108,17 @@ type ClientSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+        TokioWebSocketClient<MemorySigner>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            TokioWebSocketClient<MemorySigner>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
+        TimeoutTokio,
     >,
 >;
 
@@ -151,18 +161,19 @@ fn assert_full_sync(
         bool,
         subduction_core::connection::stats::SyncStats,
         Vec<(
-            subduction_core::connection::authenticated::Authenticated<
-                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+            subduction_core::authenticated::Authenticated<
+                TokioWebSocketClient<MemorySigner>,
                 Sendable,
             >,
-            subduction_websocket::error::CallError,
+            subduction_core::connection::managed::CallError<subduction_websocket::error::SendError>,
         )>,
         Vec<(
             SedimentreeId,
             subduction_core::subduction::error::IoError<
                 Sendable,
                 MemoryStorage,
-                TokioWebSocketClient<MemorySigner, TimeoutTokio>,
+                TokioWebSocketClient<MemorySigner>,
+                SyncMessage,
             >,
         )>,
     ),
@@ -191,7 +202,8 @@ async fn connected_client(
         .signer(client_signer.clone())
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, TokioWebSocketClient<MemorySigner, TimeoutTokio>>();
+        .timer(TimeoutTokio)
+        .build::<Sendable, TokioWebSocketClient<MemorySigner>>();
 
     // `listener_fut` already runs `Subduction::listen()` internally —
     // do NOT spawn an additional `client.listen()` call.
@@ -202,15 +214,10 @@ async fn connected_client(
         .parse()
         .expect("valid uri");
 
-    let (client_ws, ws_listener, ws_sender) = TokioWebSocketClient::new(
-        uri,
-        TimeoutTokio,
-        TIMEOUT,
-        client_signer,
-        Audience::known(server_peer_id),
-    )
-    .await
-    .expect("client connect");
+    let (client_ws, ws_listener, ws_sender) =
+        TokioWebSocketClient::new(uri, client_signer, Audience::known(server_peer_id))
+            .await
+            .expect("client connect");
 
     tokio::spawn(async {
         if let Err(e) = ws_listener.await {
@@ -253,8 +260,6 @@ fn bench_handshake(c: &mut Criterion) {
 
                     let (_ws, listener, sender) = TokioWebSocketClient::new(
                         uri,
-                        TimeoutTokio,
-                        TIMEOUT,
                         client_signer,
                         Audience::known(server_peer_id),
                     )

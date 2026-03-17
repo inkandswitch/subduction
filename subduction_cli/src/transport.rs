@@ -1,33 +1,27 @@
 //! Unified transport enum for the CLI server.
 //!
-//! Wraps [`UnifiedWebSocket`], [`HttpLongPollConnection`], and
-//! [`IrohConnection`] so the server can use a single [`Subduction`]
+//! Wraps [`UnifiedWebSocket`], [`HttpLongPollTransport`], and
+//! [`IrohTransport`] so the server can use a single [`Subduction`]
 //! instance for all transport types.
-
-use core::time::Duration;
 
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::connection::{
-    Connection,
-    message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    timeout::Timeout,
-};
-use subduction_http_longpoll::connection::HttpLongPollConnection;
-use subduction_iroh::connection::IrohConnection;
+use subduction_core::transport::Transport;
+use subduction_http_longpoll::transport::HttpLongPollTransport;
+use subduction_iroh::transport::IrohTransport;
 use subduction_websocket::tokio::unified::UnifiedWebSocket;
 
 /// A unified connection covering all transport types the CLI server supports.
 #[derive(Debug, Clone)]
-pub(crate) enum UnifiedTransport<O: Timeout<Sendable> + Send + Sync> {
+pub(crate) enum UnifiedTransport {
     /// WebSocket transport (accepted or dialed).
-    WebSocket(UnifiedWebSocket<O>),
+    WebSocket(UnifiedWebSocket),
 
     /// HTTP long-poll transport.
-    HttpLongPoll(HttpLongPollConnection<O>),
+    HttpLongPoll(HttpLongPollTransport),
 
     /// Iroh QUIC transport.
-    Iroh(IrohConnection<O>),
+    Iroh(IrohTransport),
 }
 
 /// Error type for send operations across transports.
@@ -62,22 +56,6 @@ pub(crate) enum TransportRecvError {
     Iroh(#[from] subduction_iroh::error::RecvError),
 }
 
-/// Error type for call operations across transports.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
-pub(crate) enum TransportCallError {
-    /// WebSocket call error.
-    #[error(transparent)]
-    WebSocket(#[from] subduction_websocket::error::CallError),
-
-    /// HTTP long-poll call error.
-    #[error(transparent)]
-    HttpLongPoll(#[from] subduction_http_longpoll::error::CallError),
-
-    /// Iroh call error.
-    #[error(transparent)]
-    Iroh(#[from] subduction_iroh::error::CallError),
-}
-
 /// Error type for disconnect operations across transports.
 #[derive(Debug, Clone, Copy, thiserror::Error)]
 pub(crate) enum TransportDisconnectionError {
@@ -94,89 +72,62 @@ pub(crate) enum TransportDisconnectionError {
     Iroh(#[from] subduction_iroh::error::DisconnectionError),
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTransport<O> {
+impl Transport<Sendable> for UnifiedTransport {
     type SendError = TransportSendError;
     type RecvError = TransportRecvError;
-    type CallError = TransportCallError;
     type DisconnectionError = TransportDisconnectionError;
 
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
+    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
         match self {
-            Self::WebSocket(ws) => Connection::<Sendable>::next_request_id(ws),
-            Self::HttpLongPoll(lp) => Connection::<Sendable>::next_request_id(lp),
-            Self::Iroh(iroh) => Connection::<Sendable>::next_request_id(iroh),
+            Self::WebSocket(ws) => {
+                let fut = Transport::<Sendable>::send_bytes(ws, bytes);
+                Box::pin(async move { fut.await.map_err(Into::into) })
+            }
+            Self::HttpLongPoll(lp) => {
+                let fut = Transport::<Sendable>::send_bytes(lp, bytes);
+                Box::pin(async move { fut.await.map_err(Into::into) })
+            }
+            Self::Iroh(iroh) => {
+                let fut = Transport::<Sendable>::send_bytes(iroh, bytes);
+                Box::pin(async move { fut.await.map_err(Into::into) })
+            }
+        }
+    }
+
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        match self {
+            Self::WebSocket(ws) => Box::pin(async {
+                Transport::<Sendable>::recv_bytes(ws)
+                    .await
+                    .map_err(Into::into)
+            }),
+            Self::HttpLongPoll(lp) => Box::pin(async {
+                Transport::<Sendable>::recv_bytes(lp)
+                    .await
+                    .map_err(Into::into)
+            }),
+            Self::Iroh(iroh) => Box::pin(async {
+                Transport::<Sendable>::recv_bytes(iroh)
+                    .await
+                    .map_err(Into::into)
+            }),
         }
     }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         match self {
             Self::WebSocket(ws) => Box::pin(async {
-                Connection::<Sendable>::disconnect(ws)
+                Transport::<Sendable>::disconnect(ws)
                     .await
                     .map_err(Into::into)
             }),
             Self::HttpLongPoll(lp) => Box::pin(async {
-                Connection::<Sendable>::disconnect(lp)
+                Transport::<Sendable>::disconnect(lp)
                     .await
                     .map_err(Into::into)
             }),
             Self::Iroh(iroh) => Box::pin(async {
-                Connection::<Sendable>::disconnect(iroh)
-                    .await
-                    .map_err(Into::into)
-            }),
-        }
-    }
-
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        match self {
-            Self::WebSocket(ws) => {
-                let fut = Connection::<Sendable>::send(ws, message);
-                Box::pin(async move { fut.await.map_err(Into::into) })
-            }
-            Self::HttpLongPoll(lp) => {
-                let fut = Connection::<Sendable>::send(lp, message);
-                Box::pin(async move { fut.await.map_err(Into::into) })
-            }
-            Self::Iroh(iroh) => {
-                let fut = Connection::<Sendable>::send(iroh, message);
-                Box::pin(async move { fut.await.map_err(Into::into) })
-            }
-        }
-    }
-
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
-        match self {
-            Self::WebSocket(ws) => {
-                Box::pin(async { Connection::<Sendable>::recv(ws).await.map_err(Into::into) })
-            }
-            Self::HttpLongPoll(lp) => {
-                Box::pin(async { Connection::<Sendable>::recv(lp).await.map_err(Into::into) })
-            }
-            Self::Iroh(iroh) => {
-                Box::pin(async { Connection::<Sendable>::recv(iroh).await.map_err(Into::into) })
-            }
-        }
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        match self {
-            Self::WebSocket(ws) => Box::pin(async move {
-                Connection::<Sendable>::call(ws, req, timeout)
-                    .await
-                    .map_err(Into::into)
-            }),
-            Self::HttpLongPoll(lp) => Box::pin(async move {
-                Connection::<Sendable>::call(lp, req, timeout)
-                    .await
-                    .map_err(Into::into)
-            }),
-            Self::Iroh(iroh) => Box::pin(async move {
-                Connection::<Sendable>::call(iroh, req, timeout)
+                Transport::<Sendable>::disconnect(iroh)
                     .await
                     .map_err(Into::into)
             }),
@@ -184,7 +135,7 @@ impl<O: Timeout<Sendable> + Send + Sync> Connection<Sendable> for UnifiedTranspo
     }
 }
 
-impl<O: Timeout<Sendable> + Send + Sync> PartialEq for UnifiedTransport<O> {
+impl PartialEq for UnifiedTransport {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::WebSocket(a), Self::WebSocket(b)) => a == b,

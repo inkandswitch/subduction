@@ -19,9 +19,10 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::Message,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        message::SyncMessage,
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
+    handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
@@ -94,9 +95,17 @@ fn make_subduction() -> (
             'static,
             Sendable,
             MemoryStorage,
-            ChannelMockConnection,
+            ChannelMockConnection<SyncMessage>,
+            SyncHandler<
+                Sendable,
+                MemoryStorage,
+                ChannelMockConnection<SyncMessage>,
+                OpenPolicy,
+                CountLeadingZeroBytes,
+            >,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
+            InstantTimeout,
             CountLeadingZeroBytes,
         >,
     >,
@@ -107,7 +116,8 @@ fn make_subduction() -> (
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     (sd, listener, manager)
 }
@@ -130,7 +140,7 @@ async fn recv_commit_rejects_mismatched_blob() -> TestResult {
     // Send the mismatched commit
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit,
             blob,
@@ -176,7 +186,7 @@ async fn recv_fragment_rejects_mismatched_blob() -> TestResult {
     // Send the mismatched fragment
     handle
         .inbound_tx
-        .send(Message::Fragment {
+        .send(SyncMessage::Fragment {
             id: sedimentree_id,
             fragment,
             blob,
@@ -215,7 +225,7 @@ async fn recv_commit_accepts_valid_blob() -> TestResult {
     // Send the valid commit
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit,
             blob,
@@ -262,7 +272,7 @@ async fn recv_fragment_accepts_valid_blob() -> TestResult {
     // Send the valid fragment
     handle
         .inbound_tx
-        .send(Message::Fragment {
+        .send(SyncMessage::Fragment {
             id: sedimentree_id,
             fragment,
             blob,
@@ -301,7 +311,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
     let (bad_commit, bad_blob) = make_mismatched_commit(&sedimentree_id).await;
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit: bad_commit,
             blob: bad_blob,
@@ -314,7 +324,7 @@ async fn mismatched_commit_does_not_affect_subsequent_valid_commits() -> TestRes
     let (good_commit, good_blob) = make_valid_commit(&sedimentree_id, b"good commit").await;
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit: good_commit,
             blob: good_blob,

@@ -1,6 +1,5 @@
 //! Error types for the HTTP long-poll transport.
 
-use futures::channel::oneshot;
 use thiserror::Error;
 
 /// Outbound channel closed — no more messages can be sent to the client.
@@ -13,7 +12,7 @@ pub struct SendError;
 pub enum CallError {
     /// Response oneshot was dropped before a reply arrived.
     #[error("response dropped")]
-    ResponseDropped(oneshot::Canceled),
+    ResponseDropped,
 
     /// Timed out waiting for response.
     #[error("timed out waiting for response")]
@@ -50,13 +49,9 @@ pub enum ServerError {
     #[error("request body too large")]
     BodyTooLarge,
 
-    /// Failed to decode the message from the request body.
-    #[error("message decode error: {0}")]
-    MessageDecode(sedimentree_core::codec::error::DecodeError),
-
     /// Internal channel error.
-    #[error("channel send error: {0}")]
-    ChanSend(Box<async_channel::SendError<subduction_core::connection::message::Message>>),
+    #[error("channel send error")]
+    ChanSend,
 
     /// The HTTP handshake adapter produced no response bytes.
     #[error("handshake produced no response")]

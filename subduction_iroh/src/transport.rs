@@ -1,0 +1,172 @@
+//! Iroh (QUIC) connection implementing [`Transport<Sendable>`].
+//!
+//! Uses a single QUIC bi-directional stream for framed message exchange.
+//! The connection follows the same internal architecture as the WebSocket
+//! and HTTP long-poll transports:
+//!
+//! ```text
+//! send()  --> outbound_tx --> [sender task] --> QUIC SendStream
+//! QUIC RecvStream --> [listener task] --> inbound_writer --> recv()
+//! ```
+//!
+//! The `call()` method delegates request-response correlation to the
+//! shared [`Multiplexer`], identical to other transports.
+
+use alloc::{sync::Arc, vec::Vec};
+use core::fmt::Debug;
+
+use future_form::Sendable;
+use futures::{FutureExt, future::BoxFuture};
+use rand::RngCore;
+use subduction_core::{peer::id::PeerId, transport::Transport};
+
+use crate::error::{DisconnectionError, RecvError, SendError};
+
+/// Channel capacity for outbound messages.
+const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
+
+/// Channel capacity for inbound messages.
+const INBOUND_CHANNEL_CAPACITY: usize = 128;
+
+/// Shared interior state for an Iroh connection.
+#[derive(Debug)]
+struct Inner {
+    chan_id: u64,
+    peer_id: PeerId,
+
+    /// Raw bytes from `send_bytes()` / `call()` -> drained by the sender task.
+    outbound_tx: async_channel::Sender<Vec<u8>>,
+
+    /// Raw bytes from the listener task -> picked up by `recv_bytes()`.
+    inbound_writer: async_channel::Sender<Vec<u8>>,
+    inbound_reader: async_channel::Receiver<Vec<u8>>,
+
+    /// The underlying iroh QUIC connection (for closing).
+    quic_conn: iroh::endpoint::Connection,
+}
+
+/// An Iroh (QUIC) connection that implements [`Transport<Sendable>`].
+///
+/// Created by [`connect`](crate::client::connect) or the server accept loop.
+/// Uses a single QUIC bi-directional stream under the hood for framed message
+/// passing.
+#[derive(Debug, Clone)]
+pub struct IrohTransport {
+    inner: Arc<Inner>,
+}
+
+impl IrohTransport {
+    /// Create a new Iroh connection from a QUIC connection.
+    ///
+    /// The caller is responsible for spawning the listener and sender tasks
+    /// returned by [`listener_task`] and [`sender_task`].
+    ///
+    /// [`listener_task`]: crate::tasks::listener_task
+    /// [`sender_task`]: crate::tasks::sender_task
+    #[must_use]
+    pub fn new(
+        peer_id: PeerId,
+        quic_conn: iroh::endpoint::Connection,
+    ) -> (Self, async_channel::Receiver<Vec<u8>>) {
+        let (inbound_writer, inbound_reader) = async_channel::bounded(INBOUND_CHANNEL_CAPACITY);
+        let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
+        let chan_id = rand::rngs::OsRng.next_u64();
+
+        let conn = Self {
+            inner: Arc::new(Inner {
+                chan_id,
+                peer_id,
+                outbound_tx,
+                inbound_writer,
+                inbound_reader,
+                quic_conn,
+            }),
+        };
+
+        (conn, outbound_rx)
+    }
+
+    /// Push raw inbound bytes into the connection's channels.
+    ///
+    /// All bytes go to the inbound channel for `recv_bytes()`. Response
+    /// routing is handled by
+    /// [`Subduction::listen`](subduction_core::subduction::Subduction::listen).
+    pub(crate) async fn push_inbound(
+        &self,
+        bytes: Vec<u8>,
+    ) -> Result<(), async_channel::SendError<Vec<u8>>> {
+        self.inner.inbound_writer.send(bytes).await
+    }
+
+    /// Close the connection's channels and the underlying QUIC connection.
+    pub fn close(&self) {
+        self.inner.inbound_writer.close();
+        self.inner.outbound_tx.close();
+        self.inner.inbound_reader.close();
+        self.inner.quic_conn.close(0u32.into(), b"subduction close");
+    }
+
+    /// Access the underlying iroh QUIC connection.
+    #[must_use]
+    pub fn quic_connection(&self) -> &iroh::endpoint::Connection {
+        &self.inner.quic_conn
+    }
+}
+
+impl Transport<Sendable> for IrohTransport {
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type DisconnectionError = DisconnectionError;
+
+    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        tracing::debug!(
+            "iroh: sending {} outbound bytes to peer {}",
+            bytes.len(),
+            self.inner.peer_id
+        );
+
+        let data = bytes.to_vec();
+        let tx = self.inner.outbound_tx.clone();
+        async move {
+            tx.send(data).await.map_err(|_| SendError)?;
+            Ok(())
+        }
+        .boxed()
+    }
+
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        let chan = self.inner.inbound_reader.clone();
+        tracing::debug!(
+            chan_id = self.inner.chan_id,
+            "waiting on recv {:?}",
+            self.inner.peer_id
+        );
+
+        async move {
+            let bytes = chan.recv().await.map_err(|_| {
+                tracing::error!("inbound channel closed unexpectedly");
+                RecvError
+            })?;
+
+            tracing::debug!("recv: inbound {} bytes", bytes.len());
+            Ok(bytes)
+        }
+        .boxed()
+    }
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        tracing::info!(peer_id = %self.inner.peer_id, "IrohTransport::disconnect");
+        let conn = self.clone();
+        async move {
+            conn.close();
+            Ok(())
+        }
+        .boxed()
+    }
+}
+
+impl PartialEq for IrohTransport {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.inner, &other.inner)
+    }
+}

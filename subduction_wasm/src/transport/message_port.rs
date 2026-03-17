@@ -1,22 +1,22 @@
-//! [`MessagePort`]-based [`HandshakeConnection`] adapter.
+//! [`MessagePort`]-based [`Transport`] adapter.
 //!
-//! Provides [`MessagePortConnection`] — a Wasm-exported class that wraps a
+//! Provides [`MessagePortTransport`] — a Wasm-exported class that wraps a
 //! [`MessagePort`] (or any object with the same `postMessage` / `onmessage`
-//! interface) into a [`HandshakeConnection`] suitable for peer-to-peer
-//! authentication via [`AuthenticatedConnection.setup`] / `.accept`.
+//! interface) into a `Transport` suitable for peer-to-peer authentication
+//! via [`AuthenticatedTransport.setup`] / `.accept`.
 //!
 //! # Example (JavaScript)
 //!
 //! ```js
-//! const { MessagePortConnection, AuthenticatedConnection } = await import("subduction_wasm");
+//! const { MessagePortTransport, AuthenticatedTransport } = await import("subduction_wasm");
 //!
 //! const channel = new MessageChannel();
-//! const connA = new MessagePortConnection(channel.port1);
-//! const connB = new MessagePortConnection(channel.port2);
+//! const transportA = new MessagePortTransport(channel.port1);
+//! const transportB = new MessagePortTransport(channel.port2);
 //!
 //! const [authA, authB] = await Promise.all([
-//!   AuthenticatedConnection.setup(connA, signerA, 5000),
-//!   AuthenticatedConnection.accept(connB, signerB, nonceCache, 5000),
+//!   AuthenticatedTransport.setup(transportA, signerA, 5000),
+//!   AuthenticatedTransport.accept(transportB, signerB, nonceCache, 5000),
 //! ]);
 //! ```
 
@@ -56,56 +56,36 @@ struct MessageQueue {
 
 type SharedQueue = Rc<RefCell<MessageQueue>>;
 
-fn dequeue_or_wait(queue: &SharedQueue) -> Promise {
-    let mut q = queue.borrow_mut();
-    if !q.incoming.is_empty() {
-        return Promise::resolve(&q.incoming.remove(0));
-    }
-    drop(q);
-
-    let queue = Rc::clone(queue);
-    Promise::new(&mut |resolve, _reject| {
-        queue.borrow_mut().waiters.push(resolve);
-    })
-}
-
 fn resolved_void() -> Promise {
     Promise::resolve(&JsValue::UNDEFINED)
-}
-
-fn rejected(msg: &str) -> Promise {
-    Promise::reject(&JsValue::from_str(msg))
 }
 
 // ---------------------------------------------------------------------------
 // Exported struct
 // ---------------------------------------------------------------------------
 
-/// A [`HandshakeConnection`] backed by a `MessagePort` (or any object with
+/// A `Transport` backed by a `MessagePort` (or any object with
 /// `postMessage` / `onmessage` / `close`).
 ///
-/// Implements the full `HandshakeConnection` interface (`sendBytes`,
-/// `recvBytes`, `send`, `recv`, `disconnect`) using the port for transport.
-///
-/// `nextRequestId` and `call` return rejected promises — `MessagePort`
-/// connections are used for peer-to-peer handshakes, not RPC-style sync.
+/// Implements the byte-oriented `Transport` interface (`sendBytes`,
+/// `recvBytes`, `disconnect`) using the port as the underlying channel.
 /// After the handshake, the [`Authenticated`] wrapper provides the sync API.
-#[wasm_bindgen(js_name = MessagePortConnection)]
-pub struct WasmMessagePortConnection {
+#[wasm_bindgen(js_name = MessagePortTransport)]
+pub struct WasmMessagePortTransport {
     port: Rc<Port>,
     queue: SharedQueue,
     _onmessage: Closure<dyn FnMut(JsValue)>,
 }
 
-impl core::fmt::Debug for WasmMessagePortConnection {
+impl core::fmt::Debug for WasmMessagePortTransport {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_struct("MessagePortConnection")
+        f.debug_struct("MessagePortTransport")
             .finish_non_exhaustive()
     }
 }
 
-#[wasm_bindgen(js_class = MessagePortConnection)]
-impl WasmMessagePortConnection {
+#[wasm_bindgen(js_class = MessagePortTransport)]
+impl WasmMessagePortTransport {
     /// Create a new connection wrapping the given `MessagePort`.
     #[must_use]
     #[wasm_bindgen(constructor)]
@@ -181,33 +161,11 @@ impl WasmMessagePortConnection {
         self.port.close();
         resolved_void()
     }
-
-    /// Send a structured message (post-handshake).
-    pub fn send(&self, message: &JsValue) -> Promise {
-        self.port.post_message(message);
-        resolved_void()
-    }
-
-    /// Receive the next message.
-    pub fn recv(&self) -> Promise {
-        dequeue_or_wait(&self.queue)
-    }
-
-    /// Not supported on `MessagePort` connections.
-    #[wasm_bindgen(js_name = nextRequestId)]
-    pub fn next_request_id(&self) -> Promise {
-        rejected("nextRequestId is not supported on MessagePort connections")
-    }
-
-    /// Not supported on `MessagePort` connections.
-    pub fn call(&self, _request: &JsValue, _timeout_ms: Option<f64>) -> Promise {
-        rejected("call is not supported on MessagePort connections")
-    }
 }
 
-/// Convenience factory — equivalent to `new MessagePortConnection(port)`.
+/// Convenience factory — equivalent to `new MessagePortTransport(port)`.
 #[must_use]
-#[wasm_bindgen(js_name = makeMessagePortConnection)]
-pub fn make_message_port_connection(port: JsValue) -> WasmMessagePortConnection {
-    WasmMessagePortConnection::new(port)
+#[wasm_bindgen(js_name = makeMessagePortTransport)]
+pub fn make_message_port_transport(port: JsValue) -> WasmMessagePortTransport {
+    WasmMessagePortTransport::new(port)
 }

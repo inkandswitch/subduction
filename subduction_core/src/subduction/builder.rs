@@ -52,11 +52,12 @@
 //! [`.max_pending_blob_requests()`]: SubductionBuilder::max_pending_blob_requests
 //! [`.sedimentrees()`]: SubductionBuilder::sedimentrees
 //! [`CountLeadingZeroBytes`]: sedimentree_core::commit::CountLeadingZeroBytes
-//! [`NonceCache::default()`]: crate::connection::nonce_cache::NonceCache
+//! [`NonceCache::default()`]: crate::nonce_cache::NonceCache
 //! [`ShardedMap::new()`]: crate::sharded_map::ShardedMap::new
 
 use alloc::sync::Arc;
 use async_lock::Mutex;
+use core::time::Duration;
 use sedimentree_core::{
     collections::{Map, Set},
     commit::CountLeadingZeroBytes,
@@ -66,15 +67,16 @@ use sedimentree_core::{
 };
 
 use crate::{
-    connection::{
-        Connection, authenticated::Authenticated, handshake::audience::DiscoveryId, manager::Spawn,
-        message::Message, nonce_cache::NonceCache,
-    },
+    authenticated::Authenticated,
+    connection::{Connection, manager::Spawn, message::SyncMessage},
     handler::{Handler, sync::SyncHandler},
+    handshake::audience::DiscoveryId,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, traits::Storage},
+    timeout::Timeout,
 };
 use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
@@ -107,14 +109,17 @@ pub struct SubductionBuilder<
     Sig = Unset,
     Sp = Unset,
     Sto = Unset,
+    Tmr = Unset,
     M = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
     signer: Sig,
     spawner: Sp,
     storage: Sto,
+    timer: Tmr,
 
     discovery_id: Option<DiscoveryId>,
+    default_call_timeout: Option<Duration>,
     depth_metric: M,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
@@ -138,12 +143,12 @@ impl<const N: usize> Default for SedimentreesOption<N> {
 // Constructor
 // -----------------------------------------------------------------------
 
-impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, CountLeadingZeroBytes, N> {
+impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, N> {
     /// Create a new builder with all defaults.
     ///
-    /// The three required fields — `signer`, `spawner`, and `storage`
-    /// — must be set via their respective methods before calling
-    /// [`build`](SubductionBuilder::build).
+    /// The four required fields — `signer`, `spawner`, `storage`, and
+    /// `timer` — must be set via their respective methods before
+    /// calling [`build`](SubductionBuilder::build).
     ///
     /// The const generic `N` controls the number of shards in the
     /// internal [`ShardedMap`]. Defaults to 256 if not specified.
@@ -153,7 +158,9 @@ impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, CountLeadingZeroByte
             signer: Unset,
             spawner: Unset,
             storage: Unset,
+            timer: Unset,
             discovery_id: None,
+            default_call_timeout: None,
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
             max_pending_blob_requests: DEFAULT_MAX_PENDING_BLOB_REQUESTS,
@@ -162,22 +169,26 @@ impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, CountLeadingZeroByte
     }
 }
 
-impl<const N: usize> Default for SubductionBuilder<Unset, Unset, Unset, CountLeadingZeroBytes, N> {
+impl<const N: usize> Default
+    for SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZeroBytes, N>
+{
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl<Sp, Sto, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, M, N> {
+impl<Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, Tmr, M, N> {
     /// Set the signer for peer identity and handshake authentication.
     ///
     /// This is a required field.
-    pub fn signer<Sig>(self, signer: Sig) -> SubductionBuilder<Sig, Sp, Sto, M, N> {
+    pub fn signer<Sig>(self, signer: Sig) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
         SubductionBuilder {
             signer,
             spawner: self.spawner,
             storage: self.storage,
+            timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -186,18 +197,20 @@ impl<Sp, Sto, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, M, N> {
     }
 }
 
-impl<Sig, Sto, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, M, N> {
+impl<Sig, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, Tmr, M, N> {
     /// Set the task spawner for background work.
     ///
     /// This is a required field. Common implementations:
     /// - `TokioSpawn` for native async (requires `Sendable`)
     /// - `WasmSpawn` for browser environments (requires `Local`)
-    pub fn spawner<Sp>(self, spawner: Sp) -> SubductionBuilder<Sig, Sp, Sto, M, N> {
+    pub fn spawner<Sp>(self, spawner: Sp) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
         SubductionBuilder {
             signer: self.signer,
             spawner,
             storage: self.storage,
+            timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -206,7 +219,7 @@ impl<Sig, Sto, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, M, N> {
     }
 }
 
-impl<Sig, Sp, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, M, N> {
+impl<Sig, Sp, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, Tmr, M, N> {
     /// Set the storage backend and authorization policy.
     ///
     /// This is a required field. The `storage` backend provides
@@ -215,12 +228,14 @@ impl<Sig, Sp, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, M, N> {
         self,
         storage: S,
         policy: Arc<P>,
-    ) -> SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, M, N> {
+    ) -> SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tmr, M, N> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
             storage: StoragePowerbox::new(storage, policy),
+            timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -229,7 +244,29 @@ impl<Sig, Sp, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, M, N> {
     }
 }
 
-impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
+impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Unset, M, N> {
+    /// Set the timeout strategy for roundtrip calls.
+    ///
+    /// This is a required field. Common implementations:
+    /// - `TokioTimeout` for native async
+    /// - `JsTimeout` for browser environments
+    pub fn timer<O>(self, timer: O) -> SubductionBuilder<Sig, Sp, Sto, O, M, N> {
+        SubductionBuilder {
+            signer: self.signer,
+            spawner: self.spawner,
+            storage: self.storage,
+            timer,
+            discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
+            depth_metric: self.depth_metric,
+            nonce_cache: self.nonce_cache,
+            max_pending_blob_requests: self.max_pending_blob_requests,
+            sedimentrees: self.sedimentrees,
+        }
+    }
+}
+
+impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
     /// Set the discovery ID for discovery-mode connections.
     ///
     /// Defaults to `None` (peer-to-peer mode only).
@@ -239,18 +276,31 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
         self
     }
 
+    /// Set the default timeout for sync roundtrips
+    /// (`BatchSyncRequest` → `BatchSyncResponse`).
+    ///
+    /// Defaults to 30 seconds if not set. Individual calls to
+    /// `sync_with_peer` can override this per-request.
+    #[must_use]
+    pub const fn roundtrip_timeout(mut self, timeout: Duration) -> Self {
+        self.default_call_timeout = Some(timeout);
+        self
+    }
+
     /// Override the depth metric used to assign commit depths.
     ///
     /// Defaults to [`CountLeadingZeroBytes`].
     pub fn depth_metric<M2: DepthMetric>(
         self,
         metric: M2,
-    ) -> SubductionBuilder<Sig, Sp, Sto, M2, N> {
+    ) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M2, N> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
             storage: self.storage,
+            timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -295,8 +345,8 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, M, N> {
 // Build methods (only available when all required fields are set)
 // -----------------------------------------------------------------------
 
-impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
-    SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, M, N>
+impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
+    SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tmr, M, N>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -320,29 +370,37 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
     ///     .signer(signer)
     ///     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
     ///     .spawner(TokioSpawn)
+    ///     .timer(TokioTimeout)
     ///     .build::<Sendable, MyConnection>();
     /// ```
     #[allow(clippy::type_complexity)]
     pub fn build<'a, F, C>(
         self,
     ) -> (
-        Arc<Subduction<'a, F, S, C, P, Sig, M, N>>,
+        Arc<Subduction<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tmr, M, N>>,
         Arc<SyncHandler<F, S, C, P, M, N>>,
-        ListenerFuture<'a, F, S, C, P, Sig, M, N>,
+        ListenerFuture<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tmr, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
-        F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, P, Sig, M, SyncHandler<F, S, C, P, M, N>, N>,
+        F: SubductionFutureForm<'a, S, C, SyncMessage, P, Sig, M, N> + 'static,
+        F: StartListener<'a, S, C, SyncMessage, SyncHandler<F, S, C, P, M, N>, P, Sig, M, N>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq + Clone + 'a,
+        C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
+        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
         M: Clone,
-        SyncHandler<F, S, C, P, M, N>: Handler<F, C>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::Message: From<Message>,
-        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError: Into<ListenError<F, S, C>>,
+        SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
+        <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
+            Into<ListenError<F, S, C, SyncMessage>>,
+        crate::connection::managed::ManagedConnection<C, F, Tmr>:
+            crate::connection::managed::ManagedCall<
+                    F,
+                    SyncMessage,
+                    SendError = <C as Connection<F, SyncMessage>>::SendError,
+                >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -377,6 +435,8 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
             self.storage,
             pending_blob_requests,
             nonce_cache,
+            self.timer,
+            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
         );
@@ -400,6 +460,7 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
     ///     .signer(signer)
     ///     .storage(my_storage, Arc::new(policy))
     ///     .spawner(TokioSpawn)
+    ///     .timer(TokioTimeout)
     ///     .build_with_handler::<Sendable, MyConnection, _>(handler);
     /// ```
     #[allow(clippy::type_complexity)]
@@ -407,21 +468,28 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
         self,
         handler: Arc<H>,
     ) -> (
-        Arc<Subduction<'a, F, S, C, P, Sig, M, N>>,
-        ListenerFuture<'a, F, S, C, P, Sig, M, N>,
+        Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
+        ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
-        F: SubductionFutureForm<'a, S, C, P, Sig, M, N> + 'static,
-        F: StartListener<'a, S, C, P, Sig, M, H, N>,
+        F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
+        F: StartListener<'a, S, C, H::Message, H, P, Sig, M, N>,
         S: Storage<F>,
-        C: Connection<F> + PartialEq + Clone + 'a,
+        C: Connection<F, H::Message> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
+        Tmr: Timeout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
-        H::Message: From<Message>,
-        H::HandlerError: Into<ListenError<F, S, C>>,
+        H::Message: From<SyncMessage>,
+        H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
+        crate::connection::managed::ManagedConnection<C, F, Tmr>:
+            crate::connection::managed::ManagedCall<
+                    F,
+                    H::Message,
+                    SendError = <C as Connection<F, H::Message>>::SendError,
+                >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -447,6 +515,8 @@ impl<Sig, Sp, S, P, M: DepthMetric, const N: usize>
             self.storage,
             pending_blob_requests,
             nonce_cache,
+            self.timer,
+            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
         )

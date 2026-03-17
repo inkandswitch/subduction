@@ -121,7 +121,6 @@ test.describe("Long-Poll Connection Tests", () => {
 
         const peerId = await syncer.connectDiscoverLongPoll(
           baseUrl,
-          10000,
           baseUrl.replace("http://", "")
         );
 
@@ -159,7 +158,6 @@ test.describe("Long-Poll Connection Tests", () => {
 
         await syncer.connectDiscoverLongPoll(
           baseUrl,
-          10000,
           baseUrl.replace("http://", "")
         );
 
@@ -198,9 +196,9 @@ test.describe("Long-Poll Connection Tests", () => {
         const signerA = await WebCryptoSigner.setup();
         const syncerA = new Subduction(signerA, new MemoryStorage());
 
-        const authA = await SubductionLongPoll.tryDiscover(baseUrl, signerA, 10000, serviceName);
+        const authA = await SubductionLongPoll.tryDiscover(baseUrl, signerA, serviceName);
         const serverPeerId = authA.peerId;
-        await syncerA.addConnection(authA.toConnection());
+        await syncerA.addConnection(authA.toTransport());
 
         const sedId = SedimentreeId.fromBytes(new Uint8Array(32).fill(99));
         await syncerA.addCommit(sedId, [], new Uint8Array([1, 2, 3, 4, 5]));
@@ -210,9 +208,9 @@ test.describe("Long-Poll Connection Tests", () => {
         const signerB = await WebCryptoSigner.setup();
         const syncerB = new Subduction(signerB, new MemoryStorage());
 
-        const authB = await SubductionLongPoll.tryDiscover(baseUrl, signerB, 10000, serviceName);
+        const authB = await SubductionLongPoll.tryDiscover(baseUrl, signerB, serviceName);
         const serverPeerIdB = authB.peerId;
-        await syncerB.addConnection(authB.toConnection());
+        await syncerB.addConnection(authB.toTransport());
         await syncerB.syncWithPeer(serverPeerIdB, sedId, true, 5000n);
 
         const idsB = await syncerB.sedimentreeIds();
@@ -243,7 +241,6 @@ test.describe("Long-Poll Connection Tests", () => {
         const authenticated = await SubductionLongPoll.tryDiscover(
           baseUrl,
           signer,
-          10000,
           baseUrl.replace("http://", "")
         );
 
@@ -311,7 +308,6 @@ test.describe("Long-Poll Connection Tests", () => {
         const discoveryAuth = await SubductionLongPoll.tryDiscover(
           baseUrl,
           signer1,
-          10000,
           serviceName
         );
         const serverPeerId = discoveryAuth.peerId;
@@ -323,10 +319,9 @@ test.describe("Long-Poll Connection Tests", () => {
         const knownAuth = await SubductionLongPoll.tryConnect(
           baseUrl,
           signer2,
-          serverPeerId,
-          10000
+          serverPeerId
         );
-        const isNew = await syncer.addConnection(knownAuth.toConnection());
+        const isNew = await syncer.addConnection(knownAuth.toTransport());
 
         const peers = await syncer.getConnectedPeerIds();
 
@@ -365,8 +360,8 @@ test.describe("Long-Poll Connection Tests", () => {
 
         const serviceName = baseUrl.replace("http://", "");
 
-        await syncer1.connectDiscoverLongPoll(baseUrl, 10000, serviceName);
-        await syncer2.connectDiscoverLongPoll(baseUrl, 10000, serviceName);
+        await syncer1.connectDiscoverLongPoll(baseUrl, serviceName);
+        await syncer2.connectDiscoverLongPoll(baseUrl, serviceName);
 
         const peers1 = (await syncer1.getConnectedPeerIds()).length;
         const peers2 = (await syncer2.getConnectedPeerIds()).length;

@@ -10,7 +10,9 @@ use futures::{FutureExt, future::BoxFuture};
 use sedimentree_core::id::SedimentreeId;
 use std::vec::Vec;
 use subduction_core::{
-    connection::test_utils::{MockConnection, TestSpawn, new_test_subduction, test_signer},
+    connection::test_utils::{
+        InstantTimeout, MockConnection, TestSpawn, new_test_subduction, test_signer,
+    },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     storage::memory::MemoryStorage,
@@ -87,10 +89,11 @@ impl StoragePolicy<Sendable> for RejectConnectionPolicy {
 #[tokio::test]
 async fn rejected_connection_is_not_registered() -> TestResult {
     let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
             .spawner(TestSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
     let peer_id = PeerId::new([1u8; 32]);
@@ -134,10 +137,11 @@ async fn rejected_connection_does_not_affect_existing_connections() -> TestResul
 
     // Now create a subduction with reject policy and try to add a connection
     let (reject_subduction, _handler, _listener_fut2, _actor_fut2) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectConnectionPolicy))
             .spawner(TestSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
     let rejected_peer = PeerId::new([2u8; 32]);

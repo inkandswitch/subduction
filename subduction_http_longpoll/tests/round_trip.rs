@@ -23,21 +23,21 @@ use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{
-        handshake::audience::{Audience, DiscoveryId},
-        nonce_cache::NonceCache,
-        test_utils::TokioSpawn,
-    },
+    connection::test_utils::TokioSpawn,
+    handler::sync::SyncHandler,
+    handshake::audience::{Audience, DiscoveryId},
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
+    transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection,
-    http_client::reqwest_client::ReqwestHttpClient, server::LongPollHandler, session::SessionId,
+    client::HttpLongPollClient, http_client::reqwest_client::ReqwestHttpClient,
+    server::LongPollHandler, session::SessionId, transport::HttpLongPollTransport,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
@@ -53,9 +53,17 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        HttpLongPollConnection<FuturesTimerTimeout>,
+        MessageTransport<HttpLongPollTransport>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            MessageTransport<HttpLongPollTransport>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
+        FuturesTimerTimeout,
         CountLeadingZeroBytes,
     >,
 >;
@@ -99,7 +107,8 @@ impl TestServer {
                 .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
                 .spawner(TokioSpawn)
                 .discovery_id(discovery_id)
-                .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+                .timer(FuturesTimerTimeout)
+                .build::<Sendable, MessageTransport<HttpLongPollTransport>>();
 
         tokio::spawn(listener_fut);
         tokio::spawn(manager_fut);
@@ -110,7 +119,6 @@ impl TestServer {
             peer_id,
             discovery_audience,
             HANDSHAKE_MAX_DRIFT,
-            REQUEST_TIMEOUT,
             FuturesTimerTimeout,
         )
         .with_poll_timeout(POLL_TIMEOUT);
@@ -199,7 +207,9 @@ async fn serve_http_connection(
                 && let Ok(sid_str) = session_hdr.to_str()
                 && let Some(sid) = SessionId::from_hex(sid_str)
                 && let Some(auth) = handler.take_authenticated(&sid).await
-                && let Err(e) = subduction.add_connection(auth).await
+                && let Err(e) = subduction
+                    .add_connection(auth.map(MessageTransport::new))
+                    .await
             {
                 tracing::error!("failed to add HTTP long-poll connection: {e}");
             }
@@ -227,18 +237,14 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .timer(FuturesTimerTimeout)
+            .build::<Sendable, MessageTransport<HttpLongPollTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
 
     let base_url = format!("http://{server_addr}");
-    let lp_client = HttpLongPollClient::new(
-        &base_url,
-        ReqwestHttpClient::new(),
-        FuturesTimerTimeout,
-        REQUEST_TIMEOUT,
-    );
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect_discover(&client_signer, SERVICE_NAME, TimestampSeconds::now())
@@ -250,7 +256,7 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     tokio::spawn(result.send_task);
 
     client
-        .add_connection(result.authenticated)
+        .add_connection(result.authenticated.map(MessageTransport::new))
         .await
         .expect("add_connection");
     client
@@ -301,18 +307,14 @@ async fn connected_client_known_peer(
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .timer(FuturesTimerTimeout)
+            .build::<Sendable, MessageTransport<HttpLongPollTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
 
     let base_url = format!("http://{server_addr}");
-    let lp_client = HttpLongPollClient::new(
-        &base_url,
-        ReqwestHttpClient::new(),
-        FuturesTimerTimeout,
-        REQUEST_TIMEOUT,
-    );
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect(&client_signer, server_peer_id, TimestampSeconds::now())
@@ -324,7 +326,7 @@ async fn connected_client_known_peer(
     tokio::spawn(result.send_task);
 
     client
-        .add_connection(result.authenticated)
+        .add_connection(result.authenticated.map(MessageTransport::new))
         .await
         .expect("add_connection");
     client
@@ -778,12 +780,7 @@ async fn server_shutdown_rejects_new_connections() -> TestResult {
     // Use a short timeout to avoid hanging if the TCP socket is lingering.
     let client_signer = signer(92);
     let base_url = format!("http://{address}");
-    let lp_client = HttpLongPollClient::new(
-        &base_url,
-        ReqwestHttpClient::new(),
-        FuturesTimerTimeout,
-        Duration::from_secs(2),
-    );
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let connect_fut =
         lp_client.connect_discover(&client_signer, SERVICE_NAME, TimestampSeconds::now());
@@ -814,12 +811,7 @@ async fn connect_wrong_known_peer_rejected() -> TestResult {
 
     let client_signer = signer(96);
     let base_url = format!("http://{}", server.address);
-    let lp_client = HttpLongPollClient::new(
-        &base_url,
-        ReqwestHttpClient::new(),
-        FuturesTimerTimeout,
-        REQUEST_TIMEOUT,
-    );
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect(&client_signer, wrong_peer_id, TimestampSeconds::now())
@@ -840,12 +832,7 @@ async fn connect_wrong_discovery_service_rejected() -> TestResult {
 
     let client_signer = signer(98);
     let base_url = format!("http://{}", server.address);
-    let lp_client = HttpLongPollClient::new(
-        &base_url,
-        ReqwestHttpClient::new(),
-        FuturesTimerTimeout,
-        REQUEST_TIMEOUT,
-    );
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect_discover(

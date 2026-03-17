@@ -20,7 +20,7 @@ impl StorageKey {
 
     /// Get the storage key as a slice of strings.
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
+    #[allow(clippy::missing_const_for_fn)] // Vec::as_slice is not const-stable
     pub fn as_slice(&self) -> &[String] {
         self.0.as_slice()
     }

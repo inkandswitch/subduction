@@ -7,14 +7,6 @@ use subduction_core::{
 use testresult::TestResult;
 
 #[tokio::test]
-async fn test_peer_ids_returns_empty_initially() {
-    let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
-
-    let peer_ids = subduction.connected_peer_ids().await;
-    assert_eq!(peer_ids.len(), 0);
-}
-
-#[tokio::test]
 async fn test_add_connection() -> TestResult {
     let (subduction, _listener_fut, _actor_fut) = new_test_subduction();
 

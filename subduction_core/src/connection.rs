@@ -1,35 +1,33 @@
 //! Manage connections to peers in the network.
+//!
+//! [`Connection<K, M>`] models fire-and-forget cast + async recv (mailbox).
+//! Transports implement this trait via [`MessageTransport`](crate::transport::message::MessageTransport).
 
-pub mod authenticated;
 pub mod backoff;
-pub mod handshake;
 pub mod id;
+pub mod managed;
 pub mod manager;
 pub mod message;
-pub mod nonce_cache;
 pub mod stats;
-pub mod timeout;
 
 #[cfg(feature = "test_utils")]
 pub mod test_utils;
 
 use alloc::sync::Arc;
-use core::time::Duration;
 
-use self::message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId};
 use future_form::FutureForm;
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use thiserror::Error;
 
-/// A trait representing a transport connection to a peer in the network.
+/// Fire-and-forget messaging (cast) and async receive (mailbox).
 ///
-/// A `Connection` is a bidirectional message pipe. It does _not_ carry
-/// identity information — the remote peer's identity is established by
-/// the handshake and stored on the [`Authenticated`] wrapper.
+/// The message type `M` must know how to encode/decode itself to bytes.
+/// Transports call `msg.encode()` in send and `M::try_decode(bytes)` in
+/// recv — they never need to know what `M` _is_.
 ///
-/// Encrypting this channel is strongly recommended.
-///
-/// [`Authenticated`]: authenticated::Authenticated
-pub trait Connection<K: FutureForm + ?Sized>: Clone + PartialEq {
+/// It is assumed that a [`Connection`] is authenticated to a particular peer.
+/// Encrypting this channel is also strongly recommended.
+pub trait Connection<K: FutureForm + ?Sized, M: Encode + Decode>: Clone + PartialEq {
     /// A problem when gracefully disconnecting.
     type DisconnectionError: core::error::Error;
 
@@ -39,65 +37,48 @@ pub trait Connection<K: FutureForm + ?Sized>: Clone + PartialEq {
     /// A problem when receiving a message.
     type RecvError: core::error::Error;
 
-    /// A problem with a roundtrip call.
-    type CallError: core::error::Error;
-
     /// Disconnect from the peer gracefully.
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>>;
 
-    /// Send a message.
-    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>>;
+    /// Send a message (fire-and-forget).
+    fn send(&self, message: &M) -> K::Future<'_, Result<(), Self::SendError>>;
 
-    /// Receive a message.
-    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>>;
-
-    /// Get the next request ID e.g. for a [`call`].
-    fn next_request_id(&self) -> K::Future<'_, RequestId>;
-
-    /// Make a synchronous call to the peer, expecting a response.
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>>;
+    /// Receive the next message from the peer.
+    fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>>;
 }
 
-impl<T: Connection<K>, K: FutureForm> Connection<K> for Arc<T> {
+// ── Blanket impls for Arc<T> ────────────────────────────────────────────
+
+impl<T, K, M> Connection<K, M> for Arc<T>
+where
+    T: Connection<K, M>,
+    K: FutureForm,
+    M: Encode + Decode,
+{
     type DisconnectionError = T::DisconnectionError;
     type SendError = T::SendError;
     type RecvError = T::RecvError;
-    type CallError = T::CallError;
 
     fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
         T::disconnect(self)
     }
 
-    fn send(&self, message: &Message) -> K::Future<'_, Result<(), Self::SendError>> {
+    fn send(&self, message: &M) -> K::Future<'_, Result<(), Self::SendError>> {
         T::send(self, message)
     }
 
-    fn recv(&self) -> K::Future<'_, Result<Message, Self::RecvError>> {
+    fn recv(&self) -> K::Future<'_, Result<M, Self::RecvError>> {
         T::recv(self)
     }
-
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        T::next_request_id(self)
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        T::call(self, req, timeout)
-    }
 }
+
+// ── Reconnect ───────────────────────────────────────────────────────────
 
 /// A trait for connections that can be re-established if they drop.
 ///
 /// Connections implementing this trait can be automatically reconnected
 /// by the connection manager when they drop unexpectedly.
-pub trait Reconnect<K: FutureForm>: Connection<K> {
+pub trait Reconnect<K: FutureForm, M: Encode + Decode>: Connection<K, M> {
     /// A problem when reconnecting.
     type ReconnectionError: core::error::Error + Send + 'static;
 

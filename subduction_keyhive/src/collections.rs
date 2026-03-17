@@ -3,18 +3,16 @@
 
 #[cfg(feature = "std")]
 mod inner {
-    pub(crate) use std::collections::HashMap as Map;
-    #[allow(dead_code)]
-    pub(crate) use std::collections::HashSet as Set;
+    pub(crate) use std::collections::{HashMap as Map, HashSet as Set};
 }
 
 #[cfg(not(feature = "std"))]
 mod inner {
-    pub(crate) use alloc::collections::BTreeMap as Map;
-    #[allow(dead_code)]
-    pub(crate) use alloc::collections::BTreeSet as Set;
+    pub(crate) use alloc::collections::{BTreeMap as Map, BTreeSet as Set};
 }
 
 pub(crate) use inner::Map;
-#[allow(dead_code, unused_imports)]
+
+#[allow(unused_imports)]
+// Used by protocol + storage_ops, but only with certain feature combos
 pub(crate) use inner::Set;

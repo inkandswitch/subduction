@@ -25,8 +25,7 @@ impl PeerId {
 
     /// Get the slice representation of the [`PeerId`].
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
-    pub fn as_slice(&self) -> &[u8] {
+    pub const fn as_slice(&self) -> &[u8] {
         &self.0
     }
 }

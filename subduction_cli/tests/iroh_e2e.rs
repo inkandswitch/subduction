@@ -32,15 +32,17 @@ use future_form::Sendable;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
     connection::test_utils::TokioSpawn,
+    handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
+    transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_http_longpoll::{
-    client::HttpLongPollClient, connection::HttpLongPollConnection,
-    http_client::reqwest_client::ReqwestHttpClient,
+    client::HttpLongPollClient, http_client::reqwest_client::ReqwestHttpClient,
+    transport::HttpLongPollTransport,
 };
 use subduction_websocket::timeout::FuturesTimerTimeout;
 
@@ -53,9 +55,17 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        HttpLongPollConnection<FuturesTimerTimeout>,
+        MessageTransport<HttpLongPollTransport>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            MessageTransport<HttpLongPollTransport>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
+        FuturesTimerTimeout,
         CountLeadingZeroBytes,
     >,
 >;
@@ -193,17 +203,13 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
             .signer(client_signer.clone())
             .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, HttpLongPollConnection<FuturesTimerTimeout>>();
+            .timer(FuturesTimerTimeout)
+            .build::<Sendable, MessageTransport<HttpLongPollTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
 
-    let lp_client = HttpLongPollClient::new(
-        base_url,
-        ReqwestHttpClient::new(),
-        FuturesTimerTimeout,
-        SYNC_TIMEOUT,
-    );
+    let lp_client = HttpLongPollClient::new(base_url, ReqwestHttpClient::new());
 
     let now = TimestampSeconds::now();
     let result = lp_client
@@ -214,7 +220,7 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
     tokio::spawn(result.poll_task);
     tokio::spawn(result.send_task);
     subduction
-        .add_connection(result.authenticated)
+        .add_connection(result.authenticated.map(MessageTransport::new))
         .await
         .expect("add_connection");
 

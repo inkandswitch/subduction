@@ -24,7 +24,7 @@
 //!     │                                         │
 //!     │  POST /lp/send                          │
 //!     │  X-Session-Id: <id>                     │
-//!     │  Body: Message (binary)                 │
+//!     │  Body: SyncMessage (binary)             │
 //!     │ ──────────────────────────────────────► │
 //!     │  204 No Content                         │
 //!     │ ◄────────────────────────────────────── │
@@ -33,7 +33,7 @@
 //!     │  X-Session-Id: <id>                     │
 //!     │ ──────────────────────────────────────► │
 //!     │            ... (blocks) ...             │
-//!     │  200 + Message (binary)                 │
+//!     │  200 + SyncMessage (binary)             │
 //!     │ ◄────────────────────────────────────── │
 //!     │                                         │
 //!     │  POST /lp/disconnect                    │
@@ -50,7 +50,7 @@
 //!
 //! ```text
 //! ┌─────────────────────────────────────────────────┐
-//! │            HttpLongPollConnection               │
+//! │            HttpLongPollTransport                │
 //! │                                                 │
 //! │  outbound_tx ──► [bounded channel] ──► /recv    │
 //! │  /send ──► [bounded channel] ──► inbound_reader │
@@ -61,10 +61,10 @@
 extern crate alloc;
 
 pub mod client;
-pub mod connection;
 pub mod error;
 pub mod http_client;
 pub mod session;
+pub mod transport;
 
 #[cfg(feature = "server")]
 pub mod server;

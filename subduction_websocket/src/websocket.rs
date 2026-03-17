@@ -1,35 +1,20 @@
-//! # Generic WebSocket connection for Subduction
+//! # Generic WebSocket transport for Subduction
 
-use alloc::{boxed::Box, sync::Arc};
+use alloc::{boxed::Box, sync::Arc, vec::Vec};
 use core::{
+    fmt::Debug,
     future::{Future, IntoFuture},
     marker::PhantomData,
-    sync::atomic::{AtomicU64, Ordering},
-    time::Duration,
 };
 
 use async_lock::Mutex;
 use async_tungstenite::{WebSocketReceiver, WebSocketSender, WebSocketStream};
-use future_form::{FutureForm, Local, Sendable};
-use futures::{
-    FutureExt,
-    channel::oneshot,
-    future::{BoxFuture, LocalBoxFuture},
-};
+use future_form::{FutureForm, Local, Sendable, future_form};
+use futures::future::BoxFuture;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
-use sedimentree_core::collections::Map;
-use subduction_core::{
-    connection::{
-        Connection,
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    },
-    peer::id::PeerId,
-};
+use subduction_core::{peer::id::PeerId, transport::Transport};
 
-use crate::{
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
-    timeout::{TimedOut, Timeout},
-};
+use crate::error::{DisconnectionError, RecvError, RunError, SendError};
 
 /// Channel capacity for outbound messages.
 ///
@@ -89,14 +74,15 @@ impl<'a> IntoFuture for SenderTask<'a> {
     }
 }
 
-/// A WebSocket implementation for [`Connection`].
+/// A WebSocket implementation for [`Transport`].
+///
+/// Parameterized over:
+/// - `T`: the underlying async I/O stream (e.g., `TcpStream`, `ConnectStream`)
+/// - `K`: the async future form (`Local` or `Sendable`)
 #[derive(Debug)]
-pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
+pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> {
     chan_id: u64,
-    req_id_counter: Arc<AtomicU64>,
-
-    timeout_strategy: O,
-    default_time_limit: Duration,
+    peer_id: PeerId,
 
     ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
 
@@ -107,131 +93,57 @@ pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeou
     /// The actual WebSocket sender, used only by the sender task.
     ws_sender: Arc<Mutex<WebSocketSender<T>>>,
 
-    pending: Arc<Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>>,
-
-    inbound_writer: async_channel::Sender<Message>,
-    inbound_reader: async_channel::Receiver<Message>,
+    inbound_writer: async_channel::Sender<Vec<u8>>,
+    inbound_reader: async_channel::Receiver<Vec<u8>>,
 
     _phantom: PhantomData<K>,
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Local>> Connection<Local>
-    for WebSocket<T, Local, O>
-{
+#[future_form(
+    Sendable where
+        T: AsyncRead + AsyncWrite + Unpin + Send,
+    Local where
+        T: AsyncRead + AsyncWrite + Unpin + Send
+)]
+impl<T, K: FutureForm> Transport<K> for WebSocket<T, K> {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
 
-    fn next_request_id(&self) -> LocalBoxFuture<'_, RequestId> {
-        async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
-                nonce: counter,
-            }
-        }
-        .boxed_local()
+    fn disconnect(&self) -> K::Future<'_, Result<(), Self::DisconnectionError>> {
+        tracing::info!(peer_id = %self.peer_id, "WebSocket::disconnect");
+        K::from_future(async { Ok(()) })
     }
 
-    fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(chan_id = self.chan_id, "WebSocket::disconnect");
-        async { Ok(()) }.boxed_local()
-    }
-
-    fn send(&self, message: &Message) -> LocalBoxFuture<'_, Result<(), Self::SendError>> {
-        tracing::debug!(
-            "ws: sending outbound with message id {:?} on chan {}",
-            message.request_id(),
-            self.chan_id
-        );
-
-        let msg_bytes = message.encode();
-
+    fn send_bytes(&self, bytes: &[u8]) -> K::Future<'_, Result<(), Self::SendError>> {
+        let msg = tungstenite::Message::Binary(bytes.to_vec().into());
         let tx = self.outbound_tx.clone();
-        async move {
-            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await
-                .map_err(|_| SendError)?;
-
+        K::from_future(async move {
+            tx.send(msg).await.map_err(|_| SendError)?;
             Ok(())
-        }
-        .boxed_local()
+        })
     }
 
-    fn recv(&self) -> LocalBoxFuture<'_, Result<Message, Self::RecvError>> {
+    fn recv_bytes(&self) -> K::Future<'_, Result<Vec<u8>, Self::RecvError>> {
         let chan = self.inbound_reader.clone();
-        tracing::debug!(chan_id = self.chan_id, "waiting on recv");
+        tracing::debug!(chan_id = self.chan_id, "waiting on recv {:?}", self.peer_id);
 
-        async move {
-            let msg = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel {} closed unexpectedly", self.chan_id);
+        K::from_future(async move {
+            let bytes = chan.recv().await.map_err(|_| {
+                tracing::error!("inbound channel closed unexpectedly");
                 RecvError
             })?;
 
-            tracing::debug!("recv: inbound message {msg:?}");
-            Ok(msg)
-        }
-        .boxed_local()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> LocalBoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        let outbound_tx = self.outbound_tx.clone();
-        async move {
-            tracing::debug!("making call with request id {:?}", req.req_id);
-            let req_id = req.req_id;
-
-            // Pre-register channel
-            let (tx, rx) = oneshot::channel();
-            self.pending.lock().await.insert(req_id, tx);
-
-            let msg_bytes = Message::BatchSyncRequest(req).encode();
-
-            outbound_tx
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await
-                .map_err(|_| CallError::SenderTaskStopped)?;
-
-            tracing::debug!(
-                chan_id = self.chan_id,
-                "sent WebSocket request {:?}",
-                req_id
-            );
-
-            let req_timeout = override_timeout.unwrap_or(self.default_time_limit);
-
-            match self
-                .timeout_strategy
-                .timeout(req_timeout, Box::pin(rx))
-                .await
-            {
-                Ok(Ok(resp)) => {
-                    tracing::info!("request {:?} completed", req_id);
-                    Ok(resp)
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ResponseDropped(e))
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {:?} timed out", req_id);
-                    Err(CallError::Timeout)
-                }
-            }
-        }
-        .boxed_local()
+            tracing::debug!("recv: inbound {} bytes", bytes.len());
+            Ok(bytes)
+        })
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
-    /// Create a new WebSocket connection.
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> WebSocket<T, K> {
+    /// Create a new WebSocket transport.
     ///
-    /// Returns the connection and a sender task future. The sender task drains
+    /// Returns the transport and a sender task future. The sender task drains
     /// the outbound message channel to the WebSocket write half and should be
     /// spawned as a background task.
     ///
@@ -239,32 +151,23 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     /// does _not_ retain a clone of the full `WebSocket` (and therefore does
     /// not keep the outbound channel sender alive). When the sender task exits
     /// (e.g., due to a WebSocket write error), the channel closes and
-    /// subsequent `send()`/`call()` attempts fail fast.
+    /// subsequent `send_bytes()`/`call()` attempts fail fast.
     pub fn new(
         ws: WebSocketStream<T>,
-        timeout_strategy: O,
-        default_time_limit: Duration,
-    ) -> (
-        Self,
-        impl Future<Output = Result<(), RunError>> + use<T, K, O>,
-    ) {
+        peer_id: PeerId,
+    ) -> (Self, impl Future<Output = Result<(), RunError>> + use<T, K>) {
+        tracing::info!("new WebSocket connection for peer {:?}", peer_id);
         let (ws_writer, ws_reader) = ws.split();
-        let pending = Arc::new(Mutex::new(Map::<
-            RequestId,
-            oneshot::Sender<BatchSyncResponse>,
-        >::new()));
         let (inbound_writer, inbound_reader) = async_channel::bounded(128);
         let (outbound_tx, outbound_rx) = async_channel::bounded(OUTBOUND_CHANNEL_CAPACITY);
-        let starting_counter = rand::random::<u64>();
         let chan_id = rand::random::<u64>();
-        tracing::info!(chan_id, "new WebSocket connection");
 
         let ws_sender = Arc::new(Mutex::new(ws_writer));
 
         let sender_task = {
             let ws_sender = ws_sender.clone();
             async move {
-                tracing::info!(chan_id, "starting WebSocket sender task");
+                tracing::info!("starting WebSocket sender task for peer {:?}", peer_id);
 
                 let mut ws_sender = ws_sender.lock().await;
 
@@ -280,15 +183,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
         let ws = Self {
             chan_id,
-
-            req_id_counter: Arc::new(starting_counter.into()),
-            timeout_strategy,
-            default_time_limit,
+            peer_id,
 
             ws_reader: Arc::new(Mutex::new(ws_reader)),
             outbound_tx,
             ws_sender,
-            pending,
             inbound_writer,
             inbound_reader,
 
@@ -298,99 +197,46 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
         (ws, sender_task)
     }
 
-    /// The timeout strategy used for requests.
+    /// Get the [`PeerId`] associated with this transport.
     #[must_use]
-    pub const fn timeout_strategy(&self) -> &O {
-        &self.timeout_strategy
+    pub const fn peer_id(&self) -> PeerId {
+        self.peer_id
     }
 
-    /// The timeout for requests.
-    #[must_use]
-    pub const fn default_time_limit(&self) -> Duration {
-        self.default_time_limit
-    }
-
-    /// Listen for incoming messages and dispatch them appropriately.
+    /// Listen for incoming messages and forward them to the inbound channel.
+    ///
+    /// Raw bytes from the WebSocket are forwarded to the inbound channel
+    /// without decoding. Response routing is handled by
+    /// [`Subduction::listen`](subduction_core::subduction::Subduction::listen).
     ///
     /// # Errors
     ///
     /// If there is an error reading from the WebSocket or processing messages.
-    #[allow(clippy::too_many_lines)] // 101/100 allowed lines
+    #[allow(clippy::too_many_lines)]
     pub async fn listen(&self) -> Result<(), RunError> {
-        tracing::info!(chan_id = self.chan_id, "starting WebSocket listener");
+        tracing::info!("starting WebSocket listener for peer {:?}", self.peer_id);
         let mut in_chan = self.ws_reader.lock().await;
         while let Some(ws_msg) = in_chan.next().await {
-            tracing::debug!(chan_id = self.chan_id, "received WebSocket message");
+            tracing::debug!(
+                "received WebSocket message for peer {} on channel {}",
+                self.peer_id,
+                self.chan_id
+            );
 
             match ws_msg {
                 Ok(tungstenite::Message::Binary(bytes)) => {
-                    let msg = Message::try_decode(&bytes).map_err(|e| {
-                        tracing::error!(
-                            chan_id = self.chan_id,
-                            "failed to deserialize inbound message: {e}"
-                        );
-                        RunError::Deserialize(e)
-                    })?;
-
-                    tracing::debug!(
-                        chan_id = self.chan_id,
-                        "decoded inbound message id {:?}, message: {:?}",
-                        msg.request_id(),
-                        &msg
-                    );
-
-                    match msg {
-                        Message::BatchSyncResponse(resp) => {
-                            tracing::info!(
-                                "received BatchSyncResponse for req_id {:?}",
-                                resp.req_id
+                    self.inbound_writer
+                        .send(bytes.to_vec())
+                        .await
+                        .map_err(|e| {
+                            tracing::error!(
+                                "failed to send inbound message to channel {}",
+                                self.chan_id,
                             );
-                            let req_id = resp.req_id;
-                            if let Some(waiting) = self.pending.lock().await.remove(&req_id) {
-                                tracing::info!("dispatching to waiter {:?}", req_id);
-                                let result = waiting.send(resp);
-                                if result.is_err() {
-                                    tracing::error!(
-                                        "oneshot channel closed before sending response for req_id {:?}",
-                                        req_id
-                                    );
-                                }
-                            } else {
-                                self.inbound_writer
-                                    .send(Message::BatchSyncResponse(resp))
-                                    .await
-                                    .map_err(|e| {
-                                        tracing::error!(
-                                            "failed to send inbound message to channel {}: {}",
-                                            self.chan_id,
-                                            e
-                                        );
-                                        RunError::ChanSend(e)
-                                    })?;
-                            }
-                        }
-                        other @ (Message::LooseCommit { .. }
-                        | Message::Fragment { .. }
-                        | Message::BlobsRequest { .. }
-                        | Message::BlobsResponse { .. }
-                        | Message::BatchSyncRequest(_)
-                        | Message::RemoveSubscriptions(_)
-                        | Message::DataRequestRejected(_)) => {
-                            self.inbound_writer.send(other).await.map_err(|e| {
-                                tracing::error!(
-                                    "failed to send inbound message to channel {}: {}",
-                                    self.chan_id,
-                                    e
-                                );
-                                RunError::ChanSend(e)
-                            })?;
+                            RunError::ChanSend(Box::new(e))
+                        })?;
 
-                            tracing::debug!(
-                                "forwarded inbound message to channel {}",
-                                self.chan_id
-                            );
-                        }
-                    }
+                    tracing::debug!("forwarded inbound message to channel {}", self.chan_id);
                 }
                 Ok(tungstenite::Message::Text(text)) => {
                     tracing::warn!("unexpected text message: {}", text);
@@ -444,129 +290,14 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin + Send, O: Timeout<Sendable> + Sync> Connection<Sendable>
-    for WebSocket<T, Sendable, O>
-{
-    type SendError = SendError;
-    type RecvError = RecvError;
-    type CallError = CallError;
-    type DisconnectionError = DisconnectionError;
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async {
-            let counter = self.req_id_counter.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("generated message id {:?}", counter);
-            RequestId {
-                requestor: PeerId::new([0u8; 32]), // FIXME: needs real local peer ID
-                nonce: counter,
-            }
-        }
-        .boxed()
-    }
-
-    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
-        tracing::info!(chan_id = self.chan_id, "WebSocket::disconnect");
-        async { Ok(()) }.boxed()
-    }
-
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        tracing::debug!(
-            "sending outbound message id {:?} / {message:?}",
-            message.request_id()
-        );
-
-        let msg_bytes = message.encode();
-
-        let tx = self.outbound_tx.clone();
-        async move {
-            tx.send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await
-                .map_err(|_| SendError)?;
-
-            Ok(())
-        }
-        .boxed()
-    }
-
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
-        let chan = self.inbound_reader.clone();
-        tracing::debug!(chan_id = self.chan_id, "waiting on recv");
-
-        async move {
-            let msg = chan.recv().await.map_err(|_| {
-                tracing::error!("inbound channel {} closed unexpectedly", self.chan_id);
-                RecvError
-            })?;
-
-            tracing::debug!("recv: inbound message {msg:?}");
-            Ok(msg)
-        }
-        .boxed()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        let outbound_tx = self.outbound_tx.clone();
-        async move {
-            tracing::debug!("making call with request id {:?}", req.req_id);
-            let req_id = req.req_id;
-
-            // Pre-register channel
-            let (tx, rx) = oneshot::channel();
-            self.pending.lock().await.insert(req_id, tx);
-
-            let msg_bytes = Message::BatchSyncRequest(req).encode();
-
-            outbound_tx
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await
-                .map_err(|_| CallError::SenderTaskStopped)?;
-
-            tracing::info!(
-                chan_id = self.chan_id,
-                "sent WebSocket request {:?}",
-                req_id
-            );
-
-            let req_timeout = override_timeout.unwrap_or(self.default_time_limit);
-
-            match self
-                .timeout_strategy
-                .timeout(req_timeout, Box::pin(rx))
-                .await
-            {
-                Ok(Ok(resp)) => {
-                    tracing::info!("request {:?} completed", req_id);
-                    Ok(resp)
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("request {:?} failed to receive response: {}", req_id, e);
-                    Err(CallError::ResponseDropped(e))
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {:?} timed out", req_id);
-                    Err(CallError::Timeout)
-                }
-            }
-        }
-        .boxed()
-    }
-}
-
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for WebSocket<T, K, O> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> Clone for WebSocket<T, K> {
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,
-            req_id_counter: self.req_id_counter.clone(),
-            timeout_strategy: self.timeout_strategy.clone(),
-            default_time_limit: self.default_time_limit,
+            peer_id: self.peer_id,
             ws_reader: self.ws_reader.clone(),
             outbound_tx: self.outbound_tx.clone(),
             ws_sender: self.ws_sender.clone(),
-            pending: self.pending.clone(),
             inbound_writer: self.inbound_writer.clone(),
             inbound_reader: self.inbound_reader.clone(),
             _phantom: PhantomData,
@@ -574,13 +305,11 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for 
     }
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
-    for WebSocket<T, K, O>
-{
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm> PartialEq for WebSocket<T, K> {
     fn eq(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
+        self.peer_id == other.peer_id
+            && Arc::ptr_eq(&self.ws_reader, &other.ws_reader)
             && self.outbound_tx.same_channel(&other.outbound_tx)
-            && Arc::ptr_eq(&self.pending, &other.pending)
             && self.inbound_writer.same_channel(&other.inbound_writer)
             && self.inbound_reader.same_channel(&other.inbound_reader)
     }
@@ -589,90 +318,35 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> PartialEq
 #[cfg(test)]
 mod tests {
     use super::*;
-    use core::time::Duration;
     use futures::io::Cursor;
-    use testresult::TestResult;
-
-    // Mock timeout strategy for testing
-    #[derive(Debug, Clone, Copy, PartialEq)]
-    struct MockTimeout;
-
-    impl Timeout<Local> for MockTimeout {
-        fn timeout<'a, T: 'a>(
-            &'a self,
-            _dur: Duration,
-            fut: LocalBoxFuture<'a, T>,
-        ) -> LocalBoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
-            async move { Ok(fut.await) }.boxed_local()
-        }
-    }
-
-    impl Timeout<Sendable> for MockTimeout {
-        fn timeout<'a, T: 'a>(
-            &'a self,
-            _dur: Duration,
-            fut: BoxFuture<'a, T>,
-        ) -> BoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
-            async move { Ok(fut.await) }.boxed()
-        }
-    }
 
     async fn create_mock_websocket_stream() -> WebSocketStream<Cursor<Vec<u8>>> {
         use async_tungstenite::WebSocketStream;
         use futures::io::Cursor;
 
-        // Create a mock stream
         let buffer = Cursor::new(Vec::new());
         WebSocketStream::from_raw_socket(buffer, tungstenite::protocol::Role::Client, None).await
     }
 
-    mod request_ids {
-        use super::*;
+    #[tokio::test]
+    async fn test_peer_id_preserved() {
+        let ws = create_mock_websocket_stream().await;
+        let peer_id = PeerId::new([99u8; 32]);
 
-        #[tokio::test]
-        async fn test_next_request_id_increments_nonce() {
-            let ws = create_mock_websocket_stream().await;
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
+        let (websocket, _rx): (WebSocket<_, Sendable>, _) = WebSocket::new(ws, peer_id);
 
-            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
-                WebSocket::new(ws, timeout, duration);
+        assert_eq!(websocket.peer_id(), peer_id);
+    }
 
-            let req_id1 = websocket.next_request_id().await;
-            let req_id2 = websocket.next_request_id().await;
-            let req_id3 = websocket.next_request_id().await;
+    #[tokio::test]
+    async fn test_clone_shares_peer_id() {
+        let ws = create_mock_websocket_stream().await;
+        let peer_id = PeerId::new([1u8; 32]);
 
-            assert_eq!(req_id2.nonce, req_id1.nonce + 1);
-            assert_eq!(req_id3.nonce, req_id2.nonce + 1);
-        }
+        let (websocket, _rx): (WebSocket<_, Sendable>, _) = WebSocket::new(ws, peer_id);
 
-        #[tokio::test]
-        async fn test_concurrent_request_ids_are_unique() -> TestResult {
-            let ws = create_mock_websocket_stream().await;
-            let timeout = MockTimeout;
-            let duration = Duration::from_secs(30);
-
-            let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
-                WebSocket::new(ws, timeout, duration);
-
-            let ws1 = websocket.clone();
-            let ws2 = websocket.clone();
-            let ws3 = websocket.clone();
-
-            let handle1 = tokio::spawn(async move { ws1.next_request_id().await });
-            let handle2 = tokio::spawn(async move { ws2.next_request_id().await });
-            let handle3 = tokio::spawn(async move { ws3.next_request_id().await });
-
-            let req_id1 = handle1.await?;
-            let req_id2 = handle2.await?;
-            let req_id3 = handle3.await?;
-
-            // All IDs should be unique (have different nonces)
-            assert_ne!(req_id1.nonce, req_id2.nonce);
-            assert_ne!(req_id2.nonce, req_id3.nonce);
-            assert_ne!(req_id1.nonce, req_id3.nonce);
-
-            Ok(())
-        }
+        let cloned = websocket.clone();
+        assert_eq!(websocket.peer_id(), cloned.peer_id());
+        assert_eq!(websocket, cloned);
     }
 }

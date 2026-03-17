@@ -6,7 +6,15 @@ use future_form::FutureForm;
 use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
-use crate::{connection::Connection, peer::id::PeerId, storage::traits::Storage};
+use crate::{
+    connection::{Connection, managed::CallError},
+    peer::id::PeerId,
+    storage::traits::Storage,
+};
+
+/// No multiplexer was found for a connected peer.
+///
+use sedimentree_core::codec::{decode::Decode, encode::Encode};
 use subduction_crypto::verified_meta::BlobMismatch;
 
 /// The peer is not authorized to perform the requested operation.
@@ -39,8 +47,8 @@ pub enum HydrationError<F: FutureForm, S: Storage<F>> {
 /// An error that can occur during I/O operations.
 ///
 /// This covers storage and network connection errors.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Error)]
-pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+#[derive(Debug, Error)]
+pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode> {
     /// An error occurred while using storage.
     #[error(transparent)]
     Storage(S::Error),
@@ -55,7 +63,7 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
 
     /// An error occurred during a roundtrip call on the connection.
     #[error(transparent)]
-    ConnCall(C::CallError),
+    ConnCall(CallError<C::SendError>),
 
     /// The blob content doesn't match the claimed metadata.
     #[error(transparent)]
@@ -64,10 +72,10 @@ pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
-pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F>> {
+pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode> {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
-    IoError(#[from] IoError<F, S, C>),
+    IoError(#[from] IoError<F, S, C, M>),
 
     /// Some requested blobs were missing locally.
     #[error("Missing blobs: {0:?}")]
@@ -76,10 +84,11 @@ pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F>> {
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode>
+{
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
-    IoError(#[from] IoError<F, S, C>),
+    IoError(#[from] IoError<F, S, C, M>),
 
     /// Tried to send a message to a closed channel.
     #[error("tried to send to closed channel")]
@@ -102,10 +111,16 @@ pub enum AddConnectionError<D> {
 
 /// An error that can occur during local write operations.
 #[derive(Debug, Error)]
-pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, PutErr> {
+pub enum WriteError<
+    F: FutureForm + ?Sized,
+    S: Storage<F>,
+    C: Connection<F, M>,
+    M: Encode + Decode,
+    PutErr = core::convert::Infallible,
+> {
     /// An I/O error occurred.
     #[error(transparent)]
-    Io(#[from] IoError<F, S, C>),
+    Io(#[from] IoError<F, S, C, M>),
 
     /// The storage policy rejected the write.
     #[error("put disallowed: {0}")]
@@ -118,10 +133,15 @@ pub enum WriteError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>, Put
 
 /// An error that can occur when sending requested data to a peer.
 #[derive(Debug, Error)]
-pub enum SendRequestedDataError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F>> {
+pub enum SendRequestedDataError<
+    F: FutureForm + ?Sized,
+    S: Storage<F>,
+    C: Connection<F, M>,
+    M: Encode + Decode,
+> {
     /// An I/O error occurred.
     #[error(transparent)]
-    Io(#[from] IoError<F, S, C>),
+    Io(#[from] IoError<F, S, C, M>),
 
     /// The peer is not authorized to access the requested sedimentree.
     #[error(transparent)]

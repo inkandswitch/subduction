@@ -4,18 +4,18 @@ use alloc::string::{String, ToString};
 use core::convert::Infallible;
 use future_form::Local;
 use subduction_core::{
-    connection::ConnectionDisallowed,
+    connection::message::SyncMessage,
     subduction::error::{AddConnectionError, HydrationError, IoError, ListenError, WriteError},
 };
 use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
-use crate::connection::{
-    JsConnection, JsConnectionError,
-    longpoll::LongPollConnectionError,
-    websocket::{CallError, WebSocketAuthenticatedConnectionError},
+use crate::transport::{
+    JsTransport, JsTransportError, longpoll::LongPollTransportError,
+    websocket::WebSocketAuthenticatedTransportError,
 };
 use sedimentree_wasm::storage::JsStorage;
+use subduction_core::transport::message::MessageTransport;
 
 /// A Wasm wrapper around the [`HydrationError`] type.
 #[derive(Debug, Error)]
@@ -36,7 +36,9 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, JsConnection>);
+pub struct WasmIoError(
+    #[from] IoError<Local, JsStorage, MessageTransport<JsTransport>, SyncMessage>,
+);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -52,7 +54,9 @@ impl From<WasmIoError> for JsValue {
 /// including policy rejections.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmWriteError(#[from] WriteError<Local, JsStorage, JsConnection, Infallible>);
+pub struct WasmWriteError(
+    #[from] WriteError<Local, JsStorage, MessageTransport<JsTransport>, SyncMessage, Infallible>,
+);
 
 impl From<WasmWriteError> for JsValue {
     fn from(err: WasmWriteError) -> Self {
@@ -65,9 +69,13 @@ impl From<WasmWriteError> for JsValue {
 /// Error connecting to a peer (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmConnectError {
-    /// WebSocket connection or handshake failed.
-    #[error("connection failed: {0}")]
-    Connection(#[from] WebSocketAuthenticatedConnectionError),
+    /// WebSocket transport or handshake failed.
+    #[error("transport failed: {0}")]
+    Transport(#[from] WebSocketAuthenticatedTransportError),
+
+    /// Handshake failed on a custom transport.
+    #[error("handshake failed: {0}")]
+    Handshake(#[from] WasmHandshakeError),
 
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]
@@ -82,95 +90,18 @@ impl From<WasmConnectError> for JsValue {
     }
 }
 
-/// A Wasm wrapper around the [`ConnectionDisallowed`] type.
-#[derive(Debug, Clone, Error)]
-#[error(transparent)]
-#[allow(missing_copy_implementations)]
-pub struct WasmConnectionDisallowed(#[from] ConnectionDisallowed);
-
-impl From<WasmConnectionDisallowed> for JsValue {
-    fn from(err: WasmConnectionDisallowed) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("ConnectionDisallowed");
-        js_err.into()
-    }
-}
-
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, JsConnection>);
+pub struct WasmListenError(
+    #[from] ListenError<Local, JsStorage, MessageTransport<JsTransport>, SyncMessage>,
+);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
         js_err.set_name("ListenError");
         js_err.into()
-    }
-}
-
-/// A Wasm wrapper around the [`CallError`] type.
-#[derive(Debug, Clone, Error)]
-#[error(transparent)]
-pub struct WasmCallError(#[from] WasmCallErrorInner);
-
-impl From<WasmCallError> for js_sys::Error {
-    fn from(err: WasmCallError) -> Self {
-        let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("CallError");
-        js_err
-    }
-}
-
-impl From<CallError> for WasmCallError {
-    fn from(err: CallError) -> Self {
-        WasmCallError(err.into())
-    }
-}
-
-impl From<&CallError> for WasmCallError {
-    fn from(err: &CallError) -> Self {
-        WasmCallError((err).into())
-    }
-}
-
-/// Problem while attempting to make a roundtrip call.
-#[derive(Debug, Clone, Error)]
-pub enum WasmCallErrorInner {
-    /// Problem encoding message.
-    #[error("Problem encoding message: {0}")]
-    Encoding(String),
-
-    /// WebSocket error while sending.
-    #[error("WebSocket error while sending: {0:?}")]
-    SocketSend(JsValue),
-
-    /// Tried to read from a canceled channel.
-    #[error("Channel canceled")]
-    ChannelCanceled,
-
-    /// Timed out waiting for response.
-    #[error("Timed out waiting for response")]
-    TimedOut,
-}
-
-impl From<CallError> for WasmCallErrorInner {
-    fn from(err: CallError) -> Self {
-        match err {
-            CallError::SocketSend(e) => Self::SocketSend(e),
-            CallError::ChannelCanceled => Self::ChannelCanceled,
-            CallError::TimedOut => Self::TimedOut,
-        }
-    }
-}
-
-impl From<&CallError> for WasmCallErrorInner {
-    fn from(err: &CallError) -> Self {
-        match err {
-            CallError::SocketSend(e) => Self::SocketSend(e.clone()),
-            CallError::ChannelCanceled => Self::ChannelCanceled,
-            CallError::TimedOut => Self::TimedOut,
-        }
     }
 }
 
@@ -198,7 +129,7 @@ impl From<WasmAddConnectionError> for JsValue {
 #[allow(missing_copy_implementations)]
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmDisconnectionError(#[from] JsConnectionError);
+pub struct WasmDisconnectionError(#[from] JsTransportError);
 
 impl From<WasmDisconnectionError> for JsValue {
     fn from(err: WasmDisconnectionError) -> Self {
@@ -211,9 +142,9 @@ impl From<WasmDisconnectionError> for JsValue {
 /// Error connecting via HTTP long-poll (handshake + add connection).
 #[derive(Debug, Error)]
 pub enum WasmLongPollConnectError {
-    /// Long-poll connection or handshake failed.
-    #[error("connection failed: {0}")]
-    Connection(#[from] LongPollConnectionError),
+    /// Long-poll transport or handshake failed.
+    #[error("transport failed: {0}")]
+    Transport(#[from] LongPollTransportError),
 
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]

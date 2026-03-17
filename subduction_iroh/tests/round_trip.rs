@@ -22,18 +22,18 @@ use future_form::Sendable;
 use rand::RngCore;
 use sedimentree_core::{blob::Blob, commit::CountLeadingZeroBytes, id::SedimentreeId};
 use subduction_core::{
-    connection::{
-        handshake::audience::{Audience, DiscoveryId},
-        nonce_cache::NonceCache,
-        test_utils::TokioSpawn,
-    },
+    connection::test_utils::TokioSpawn,
+    handler::sync::SyncHandler,
+    handshake::audience::{Audience, DiscoveryId},
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
+    transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
-use subduction_iroh::connection::IrohConnection;
+use subduction_iroh::transport::IrohTransport;
 use subduction_websocket::timeout::FuturesTimerTimeout;
 use testresult::TestResult;
 
@@ -45,9 +45,17 @@ type TestSubduction = Arc<
         'static,
         Sendable,
         MemoryStorage,
-        IrohConnection<FuturesTimerTimeout>,
+        MessageTransport<IrohTransport>,
+        SyncHandler<
+            Sendable,
+            MemoryStorage,
+            MessageTransport<IrohTransport>,
+            OpenPolicy,
+            CountLeadingZeroBytes,
+        >,
         OpenPolicy,
         MemorySigner,
+        FuturesTimerTimeout,
         CountLeadingZeroBytes,
     >,
 >;
@@ -81,14 +89,15 @@ fn spawn_subduction(sig: &MemorySigner, discovery_id: Option<DiscoveryId>) -> Te
     let mut builder = SubductionBuilder::new()
         .signer(sig.clone())
         .storage(MemoryStorage::default(), Arc::new(OpenPolicy))
-        .spawner(TokioSpawn);
+        .spawner(TokioSpawn)
+        .timer(FuturesTimerTimeout);
 
     if let Some(id) = discovery_id {
         builder = builder.discovery_id(id);
     }
 
     let (subduction, _handler, listener_fut, manager_fut) =
-        builder.build::<Sendable, IrohConnection<FuturesTimerTimeout>>();
+        builder.build::<Sendable, MessageTransport<IrohTransport>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
@@ -126,8 +135,6 @@ impl TestServer {
             loop {
                 match subduction_iroh::server::accept_one(
                     &accept_ep,
-                    REQUEST_TIMEOUT,
-                    FuturesTimerTimeout,
                     &accept_signer,
                     &nonce_cache,
                     peer_id,
@@ -139,8 +146,8 @@ impl TestServer {
                     Ok(result) => {
                         tokio::spawn(result.listener_task);
                         tokio::spawn(result.sender_task);
-                        if let Err(e) = accept_subduction.add_connection(result.authenticated).await
-                        {
+                        let auth = result.authenticated.map(MessageTransport::new);
+                        if let Err(e) = accept_subduction.add_connection(auth).await {
                             tracing::error!("add_connection error: {e}");
                         }
                     }
@@ -182,8 +189,6 @@ impl TestClient {
         let result = subduction_iroh::client::connect(
             &client_ep,
             server_addr,
-            REQUEST_TIMEOUT,
-            FuturesTimerTimeout,
             &sig,
             Audience::known(server.peer_id),
         )
@@ -192,8 +197,9 @@ impl TestClient {
 
         tokio::spawn(result.listener_task);
         tokio::spawn(result.sender_task);
+        let auth = result.authenticated.map(MessageTransport::new);
         subduction
-            .add_connection(result.authenticated)
+            .add_connection(auth)
             .await
             .expect("add_connection");
 
@@ -235,8 +241,6 @@ impl TestServerDiscover {
             loop {
                 match subduction_iroh::server::accept_one(
                     &accept_ep,
-                    REQUEST_TIMEOUT,
-                    FuturesTimerTimeout,
                     &accept_signer,
                     &nonce_cache,
                     peer_id,
@@ -248,8 +252,8 @@ impl TestServerDiscover {
                     Ok(result) => {
                         tokio::spawn(result.listener_task);
                         tokio::spawn(result.sender_task);
-                        if let Err(e) = accept_subduction.add_connection(result.authenticated).await
-                        {
+                        let auth = result.authenticated.map(MessageTransport::new);
+                        if let Err(e) = accept_subduction.add_connection(auth).await {
                             tracing::error!("add_connection error: {e}");
                         }
                     }
@@ -287,8 +291,6 @@ impl TestClient {
         let result = subduction_iroh::client::connect(
             &client_ep,
             server_addr,
-            REQUEST_TIMEOUT,
-            FuturesTimerTimeout,
             &sig,
             Audience::discover(service_name.as_bytes()),
         )
@@ -297,8 +299,9 @@ impl TestClient {
 
         tokio::spawn(result.listener_task);
         tokio::spawn(result.sender_task);
+        let auth = result.authenticated.map(MessageTransport::new);
         subduction
-            .add_connection(result.authenticated)
+            .add_connection(auth)
             .await
             .expect("add_connection");
 
@@ -546,7 +549,7 @@ async fn server_to_client_sync() -> TestResult {
     Ok(())
 }
 
-// ─── Large Message Handling ─────────────────────────────────────────────────
+// ─── Large SyncMessage Handling ─────────────────────────────────────────────────
 
 /// 1 MB blob traverses the QUIC stream and arrives intact.
 #[tokio::test]
@@ -599,7 +602,7 @@ async fn large_message_handling() -> TestResult {
     Ok(())
 }
 
-// ─── Message Ordering ───────────────────────────────────────────────────────
+// ─── SyncMessage Ordering ───────────────────────────────────────────────────────
 
 /// Five sequential commits all arrive at the server.
 #[tokio::test]
@@ -794,8 +797,6 @@ async fn discovery_wrong_service_name_rejected() -> TestResult {
     let result = subduction_iroh::client::connect(
         &client_ep,
         server_addr,
-        REQUEST_TIMEOUT,
-        FuturesTimerTimeout,
         &sig,
         Audience::discover(b"service-beta"), // wrong service name
     )
@@ -1006,8 +1007,6 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
     tokio::spawn(async move {
         while let Ok(result) = subduction_iroh::server::accept_one(
             &accept_ep,
-            REQUEST_TIMEOUT,
-            FuturesTimerTimeout,
             &accept_signer,
             &nonce_cache,
             peer_id,
@@ -1018,10 +1017,8 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
         {
             tokio::spawn(result.listener_task);
             tokio::spawn(result.sender_task);
-            accept_subduction
-                .add_connection(result.authenticated)
-                .await
-                .ok();
+            let auth = result.authenticated.map(MessageTransport::new);
+            accept_subduction.add_connection(auth).await.ok();
         }
     });
 
@@ -1039,8 +1036,6 @@ async fn endpoint_shutdown_stops_accept() -> TestResult {
     let result = subduction_iroh::client::connect(
         &client_ep,
         server_addr,
-        Duration::from_secs(2),
-        FuturesTimerTimeout,
         &client_sig,
         Audience::known(peer_id),
     )

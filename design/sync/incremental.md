@@ -170,10 +170,10 @@ storage.save_blob(id, blob.clone()).await?;
 sedimentree.add_commit(commit.clone());
 
 // Forward to subscribed and authorized peers
-let msg = Message::LooseCommit { id, commit, blob };
+let msg: M = SyncMessage::LooseCommit { id, commit, blob }.into();
 let subscriber_conns = get_authorized_subscriber_conns(id, &self.peer_id()).await;
 for conn in subscriber_conns {
-    if let Err(e) = conn.send(&msg).await {
+    if let Err(e) = Connection::<K, M>::send(&conn, &msg).await {
         // Connection failed, unregister it
         unregister(&conn).await;
     }
@@ -206,14 +206,14 @@ putter.save_blob(blob.clone()).await?;
 // Forward to subscribed and authorized peers (excluding sender)
 let subscriber_conns = get_authorized_subscriber_conns(id, &sender_peer_id).await;
 for conn in subscriber_conns {
-    conn.send(&msg).await?;
+    Connection::<K, M>::send(&conn, &msg).await?;
 }
 ```
 
 ### Receiving a Fragment
 
 ```rust
-let Message::Fragment { id, signed_fragment, blob } = msg;
+let SyncMessage::Fragment { id, signed_fragment, blob } = msg;
 
 // Verify signature; author extracted from signature
 let verified = signed_fragment.verify()?;
@@ -232,7 +232,7 @@ sedimentree.prune_commits_covered_by(&verified.payload());
 // Forward to subscribed and authorized peers (excluding sender)
 let subscriber_conns = get_authorized_subscriber_conns(id, &sender_peer_id).await;
 for conn in subscriber_conns {
-    conn.send(&msg).await?;
+    Connection::<K, M>::send(&conn, &msg).await?;
 }
 ```
 

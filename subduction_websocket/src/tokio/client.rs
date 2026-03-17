@@ -1,24 +1,23 @@
 //! # Subduction [`WebSocket`] client for Tokio
 
+use alloc::vec::Vec;
+
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    error::{DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
-    timeout::Timeout,
     websocket::{ListenerTask, SenderTask, WebSocket},
 };
 use async_tungstenite::tokio::{ConnectStream, connect_async_with_config};
-use core::time::Duration;
 use future_form::{FutureForm, Sendable};
 use futures::{FutureExt, future::BoxFuture};
+
 use subduction_core::{
-    connection::{
-        Connection, Reconnect,
-        authenticated::Authenticated,
-        handshake::{self, AuthenticateError, audience::Audience},
-        message::{BatchSyncRequest, BatchSyncResponse, Message, RequestId},
-    },
+    authenticated::Authenticated,
+    connection::{Connection, Reconnect, message::SyncMessage},
+    handshake::{self, AuthenticateError, audience::Audience},
     timestamp::TimestampSeconds,
+    transport::Transport,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 use tungstenite::{http::Uri, protocol::WebSocketConfig};
@@ -37,25 +36,21 @@ pub enum ClientConnectError {
 
 /// A Tokio-flavoured [`WebSocket`] client implementation.
 #[derive(Debug, Clone)]
-pub struct TokioWebSocketClient<R: Signer<Sendable> + Clone, O: Timeout<Sendable> + Send + Sync> {
+pub struct TokioWebSocketClient<R: Signer<Sendable> + Clone> {
     address: Uri,
     signer: R,
     audience: Audience,
-    socket: WebSocket<ConnectStream, Sendable, O>,
+    socket: WebSocket<ConnectStream, Sendable>,
 }
 
-impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
-    TokioWebSocketClient<R, O>
-{
-    /// Create a new [`WebSocketClient`] connection.
+impl<R: Signer<Sendable> + Clone + Send + Sync> TokioWebSocketClient<R> {
+    /// Create a new [`TokioWebSocketClient`] connection.
     ///
     /// Performs the handshake protocol to authenticate both sides.
     ///
     /// # Arguments
     ///
     /// * `address` - The WebSocket URI to connect to
-    /// * `timeout` - Timeout strategy for requests
-    /// * `default_time_limit` - Default timeout duration
     /// * `signer` - The client's signer for authentication
     /// * `audience` - The expected server identity ([`Audience::Known`] for a specific peer,
     ///   [`Audience::Discover`] for service discovery)
@@ -79,8 +74,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
     #[allow(clippy::expect_used)]
     pub async fn new<'a>(
         address: Uri,
-        timeout: O,
-        default_time_limit: Duration,
         signer: R,
         audience: Audience,
     ) -> Result<
@@ -92,7 +85,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
         ClientConnectError,
     >
     where
-        O: 'a,
         R: 'a,
     {
         tracing::info!("Connecting to WebSocket server at {address}");
@@ -105,15 +97,10 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
         let now = TimestampSeconds::now();
         let nonce = Nonce::random();
 
-        let timeout_clone = timeout.clone();
         let (authenticated, sender_fut) = handshake::initiate::<Sendable, _, _, _, _>(
             WebSocketHandshake::new(ws_stream),
-            |ws_handshake, _peer_id| {
-                let (socket, sender_fut) = WebSocket::<_, _, O>::new(
-                    ws_handshake.into_inner(),
-                    timeout_clone,
-                    default_time_limit,
-                );
+            |ws_handshake, peer_id| {
+                let (socket, sender_fut) = WebSocket::new(ws_handshake.into_inner(), peer_id);
                 (socket, Sendable::from_future(sender_fut))
             },
             &signer,
@@ -149,67 +136,84 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
     /// Returns an error if:
     /// * the connection drops unexpectedly
     /// * a message could not be sent or received
-    /// * a message could not be parsed
     pub async fn listen(&self) -> Result<(), RunError> {
         self.socket.listen().await
     }
 }
 
-impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
-    Connection<Sendable> for TokioWebSocketClient<R, O>
-{
+impl<R: Signer<Sendable> + Clone + Send + Sync> Transport<Sendable> for TokioWebSocketClient<R> {
     type SendError = SendError;
     type RecvError = RecvError;
-    type CallError = CallError;
     type DisconnectionError = DisconnectionError;
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async { Connection::<Sendable>::next_request_id(&self.socket).await }.boxed()
-    }
 
     fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed()
     }
 
-    fn send(&self, message: &Message) -> BoxFuture<'_, Result<(), Self::SendError>> {
-        tracing::debug!("client sending message: {:?}", message);
-        Connection::<Sendable>::send(&self.socket, message)
+    fn send_bytes(&self, bytes: &[u8]) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        tracing::debug!("client sending {} bytes", bytes.len());
+        Transport::<Sendable>::send_bytes(&self.socket, bytes)
     }
 
-    fn recv(&self) -> BoxFuture<'_, Result<Message, Self::RecvError>> {
-        async {
-            tracing::debug!("client waiting to receive message");
-            Connection::<Sendable>::recv(&self.socket).await
-        }
-        .boxed()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
+    fn recv_bytes(&self) -> BoxFuture<'_, Result<Vec<u8>, Self::RecvError>> {
+        let socket = self.socket.clone();
         async move {
-            tracing::debug!("client making call with request: {:?}", req);
-            Connection::<Sendable>::call(&self.socket, req, override_timeout).await
+            tracing::debug!("client waiting to receive bytes");
+            Transport::<Sendable>::recv_bytes(&socket).await
         }
         .boxed()
     }
 }
 
-impl<
-    R: 'static + Signer<Sendable> + Clone + Send + Sync,
-    O: 'static + Timeout<Sendable> + Send + Sync,
-> Reconnect<Sendable> for TokioWebSocketClient<R, O>
+/// Bridging impl: delegates to [`Transport`] with encode/decode so that
+/// [`Reconnect`] (which requires `Connection`) is satisfied. Downstream
+/// code should prefer [`MessageTransport`] for new integrations.
+///
+/// [`MessageTransport`]: subduction_core::transport::message::MessageTransport
+impl<R: Signer<Sendable> + Clone + Send + Sync> Connection<Sendable, SyncMessage>
+    for TokioWebSocketClient<R>
+{
+    type SendError = SendError;
+    type RecvError = RecvError;
+    type DisconnectionError = DisconnectionError;
+
+    fn disconnect(&self) -> BoxFuture<'_, Result<(), Self::DisconnectionError>> {
+        Transport::<Sendable>::disconnect(self)
+    }
+
+    fn send(&self, message: &SyncMessage) -> BoxFuture<'_, Result<(), Self::SendError>> {
+        let bytes = message.encode();
+        let this = self.socket.clone();
+        async move { Transport::<Sendable>::send_bytes(&this, &bytes).await }.boxed()
+    }
+
+    fn recv(&self) -> BoxFuture<'_, Result<SyncMessage, Self::RecvError>> {
+        let socket = self.socket.clone();
+        async move {
+            loop {
+                let bytes = Transport::<Sendable>::recv_bytes(&socket).await?;
+                match SyncMessage::try_decode(&bytes) {
+                    Ok(msg) => return Ok(msg),
+                    Err(e) => {
+                        tracing::warn!("failed to decode inbound bytes as SyncMessage: {e}");
+                        // Skip non-decodable frames and keep reading
+                    }
+                }
+            }
+        }
+        .boxed()
+    }
+}
+
+impl<R: 'static + Signer<Sendable> + Clone + Send + Sync> Reconnect<Sendable, SyncMessage>
+    for TokioWebSocketClient<R>
 {
     type ReconnectionError = ClientConnectError;
 
     fn reconnect(&mut self) -> BoxFuture<'_, Result<(), Self::ReconnectionError>> {
         async move {
-            let (authenticated, listener, sender) = TokioWebSocketClient::new(
+            let (authenticated, listener, sender) = TokioWebSocketClient::<R>::new(
                 self.address.clone(),
-                self.socket.timeout_strategy().clone(),
-                self.socket.default_time_limit(),
                 self.signer.clone(),
                 self.audience,
             )
@@ -260,10 +264,8 @@ impl<
     }
 }
 
-impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync> PartialEq
-    for TokioWebSocketClient<R, O>
-{
+impl<R: Signer<Sendable> + Clone + Send + Sync> PartialEq for TokioWebSocketClient<R> {
     fn eq(&self, other: &Self) -> bool {
-        self.address == other.address && self.socket == other.socket
+        self.address == other.address && self.socket.peer_id() == other.socket.peer_id()
     }
 }

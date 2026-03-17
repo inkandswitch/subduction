@@ -18,7 +18,11 @@ use sedimentree_core::{
 };
 use std::{collections::BTreeSet, sync::Arc};
 use subduction_core::{
-    connection::test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+    connection::{
+        message::SyncMessage,
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
+    },
+    handler::sync::SyncHandler,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
@@ -52,22 +56,35 @@ fn make_unique_blob(seed: u8) -> Blob {
 /// futures are spawned onto the tokio runtime automatically.
 ///
 /// Must be called from within a tokio runtime context.
-fn make_subduction() -> Arc<
+type TestSyncHandler = SyncHandler<
+    Sendable,
+    MemoryStorage,
+    ChannelMockConnection<SyncMessage>,
+    OpenPolicy,
+    CountLeadingZeroBytes,
+>;
+
+type TestSubduction = Arc<
     Subduction<
         'static,
         Sendable,
         MemoryStorage,
-        ChannelMockConnection,
+        ChannelMockConnection<SyncMessage>,
+        TestSyncHandler,
         OpenPolicy,
         subduction_crypto::signer::memory::MemorySigner,
+        InstantTimeout,
         CountLeadingZeroBytes,
     >,
-> {
+>;
+
+fn make_subduction() -> TestSubduction {
     let (subduction, _handler, listener_fut, actor_fut) = SubductionBuilder::new()
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
-        .build::<Sendable, ChannelMockConnection>();
+        .timer(InstantTimeout)
+        .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     tokio::spawn(listener_fut);
     tokio::spawn(actor_fut);

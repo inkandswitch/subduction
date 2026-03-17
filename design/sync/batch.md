@@ -179,7 +179,7 @@ let commit_lookup: Map<Fingerprint<CommitId>, Digest<LooseCommit>> =
 for fp in response.requesting.commit_fingerprints {
     if let Some(digest) = commit_lookup.get(&fp) {
         let commit = storage.load_commit(id, digest).await?;
-        conn.send(Message::LooseCommit { id, commit, blob }).await?;
+        Connection::<K, SyncMessage>::send(&conn, &SyncMessage::LooseCommit { id, commit, blob }).await?;
     }
 }
 ```
@@ -255,9 +255,14 @@ sequenceDiagram
 ```rust
 let seed = FingerprintSeed::random();
 let summary = local_sedimentree.fingerprint_summarize(&seed);
-let req_id = conn.next_request_id().await;
 
-let response = conn.call(
+// ManagedConnection pairs the connection with a Multiplexer.
+// call() sends the request as the wire message type, and awaits
+// the matching BatchSyncResponse via the Multiplexer's pending map.
+// The Subduction listen loop routes responses to the Multiplexer.
+let req_id = managed_conn.next_request_id();
+
+let response = managed_conn.call::<WireMessage>(
     BatchSyncRequest {
         id,
         req_id,
@@ -266,25 +271,6 @@ let response = conn.call(
     },
     Some(timeout),
 ).await?;
-
-// Verify and store the received data
-for (signed_commit, blob) in response.diff.missing_commits {
-    // Verify signature; author extracted from signature, not sender
-    let verified = signed_commit.verify()?;
-    let putter = policy.authorize_put(sender, verified.author(), id).await?;
-
-    // CAS storage: returns digest, keyed by content hash
-    putter.save_loose_commit(verified).await?;
-    putter.save_blob(blob).await?;
-}
-for (signed_fragment, blob) in response.diff.missing_fragments {
-    let verified = signed_fragment.verify()?;
-    let putter = policy.authorize_put(sender, verified.author(), id).await?;
-
-    putter.save_fragment(verified).await?;
-    putter.save_blob(blob).await?;
-}
-// If subscribe: true, we're now subscribed for incremental updates
 ```
 
 ### Handling a Batch Sync Request
@@ -330,7 +316,7 @@ for fp in response.diff.requesting.commit_fingerprints {
     if let Some(digest) = commit_fp_to_digest.get(&fp) {
         if let Some(commit) = storage.load_commit(id, *digest).await? {
             let blob = storage.load_blob(id, commit.blob_meta().digest()).await?;
-            conn.send(Message::LooseCommit { id, commit, blob }).await?;
+            Connection::<K, SyncMessage>::send(&conn, &SyncMessage::LooseCommit { id, commit, blob }).await?;
         }
     }
 }

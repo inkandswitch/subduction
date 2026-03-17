@@ -19,7 +19,7 @@
 //! ```
 //!
 //! With 4 buckets × 3 minutes = 12 minute window, this covers the 10 minute
-//! [`MAX_PLAUSIBLE_DRIFT`](super::handshake::MAX_PLAUSIBLE_DRIFT) with a 2 minute buffer.
+//! [`MAX_PLAUSIBLE_DRIFT`](crate::handshake::MAX_PLAUSIBLE_DRIFT) with a 2 minute buffer.
 
 use core::time::Duration;
 
@@ -152,80 +152,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn fresh_nonce_succeeds() {
-        let cache = cache();
-        let now = TimestampSeconds::new(1000);
-
-        let result = cache.try_claim(peer(1), Nonce::from_u128(42), now).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn duplicate_nonce_fails() {
-        let cache = cache();
-        let now = TimestampSeconds::new(1000);
-
-        cache
-            .try_claim(peer(1), Nonce::from_u128(42), now)
-            .await
-            .expect("first claim should succeed");
-
-        let result = cache.try_claim(peer(1), Nonce::from_u128(42), now).await;
-        assert!(matches!(result, Err(NonceReused)));
-    }
-
-    #[tokio::test]
-    async fn same_nonce_different_peer_succeeds() {
-        let cache = cache();
-        let now = TimestampSeconds::new(1000);
-
-        cache
-            .try_claim(peer(1), Nonce::from_u128(42), now)
-            .await
-            .expect("first claim should succeed");
-
-        let result = cache.try_claim(peer(2), Nonce::from_u128(42), now).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn different_nonce_same_peer_succeeds() {
-        let cache = cache();
-        let now = TimestampSeconds::new(1000);
-
-        cache
-            .try_claim(peer(1), Nonce::from_u128(1), now)
-            .await
-            .expect("first claim should succeed");
-
-        let result = cache.try_claim(peer(1), Nonce::from_u128(2), now).await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
-    async fn old_nonces_expire_with_time() {
-        let cache = cache();
-        let t0 = TimestampSeconds::new(0);
-        let t_later = TimestampSeconds::new(15 * 60); // 15 minutes later (past 12 min window)
-
-        // Claim a nonce at t0
-        cache
-            .try_claim(peer(1), Nonce::from_u128(42), t0)
-            .await
-            .expect("first claim should succeed");
-
-        // Same nonce still rejected immediately
-        let result = cache.try_claim(peer(1), Nonce::from_u128(42), t0).await;
-        assert!(matches!(result, Err(NonceReused)));
-
-        // After 15 minutes, the bucket has rotated and the nonce is claimable again
-        let result = cache
-            .try_claim(peer(1), Nonce::from_u128(42), t_later)
-            .await;
-        assert!(result.is_ok());
-    }
-
-    #[tokio::test]
     async fn bucket_isolation() {
         let cache = cache();
 
@@ -260,5 +186,120 @@ mod tests {
             cache.try_claim(peer(1), Nonce::from_u128(3), t2).await,
             Err(NonceReused)
         ));
+    }
+
+    #[cfg(feature = "std")]
+    mod proptests {
+        use super::*;
+        use futures::executor::block_on;
+
+        const ITERATIONS: usize = 100;
+
+        fn random_peer_id() -> PeerId {
+            let mut bytes = [0u8; 32];
+            getrandom::getrandom(&mut bytes).expect("rng");
+            PeerId::new(bytes)
+        }
+
+        fn random_nonce() -> Nonce {
+            Nonce::random()
+        }
+
+        fn random_timestamp() -> TimestampSeconds {
+            let mut buf = [0u8; 8];
+            getrandom::getrandom(&mut buf).expect("rng");
+            TimestampSeconds::new(u64::from_le_bytes(buf) % 1_000_000)
+        }
+
+        #[test]
+        fn prop_fresh_nonce_always_succeeds() {
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    assert!(
+                        cache
+                            .try_claim(random_peer_id(), random_nonce(), random_timestamp())
+                            .await
+                            .is_ok()
+                    );
+                }
+            });
+        }
+
+        #[test]
+        fn prop_duplicate_nonce_always_fails() {
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let peer = random_peer_id();
+                    let nonce = random_nonce();
+                    let ts = random_timestamp();
+
+                    cache.try_claim(peer, nonce, ts).await.expect("first claim");
+                    assert!(matches!(
+                        cache.try_claim(peer, nonce, ts).await,
+                        Err(NonceReused)
+                    ));
+                }
+            });
+        }
+
+        #[test]
+        fn prop_same_nonce_different_peer_succeeds() {
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let p1 = random_peer_id();
+                    let p2 = random_peer_id();
+                    let nonce = random_nonce();
+                    let ts = random_timestamp();
+
+                    if p1 == p2 {
+                        continue;
+                    }
+                    cache.try_claim(p1, nonce, ts).await.expect("first claim");
+                    assert!(cache.try_claim(p2, nonce, ts).await.is_ok());
+                }
+            });
+        }
+
+        #[test]
+        fn prop_different_nonce_same_peer_succeeds() {
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let peer = random_peer_id();
+                    let n1 = random_nonce();
+                    let n2 = random_nonce();
+                    let ts = random_timestamp();
+
+                    if n1 == n2 {
+                        continue;
+                    }
+                    cache.try_claim(peer, n1, ts).await.expect("first claim");
+                    assert!(cache.try_claim(peer, n2, ts).await.is_ok());
+                }
+            });
+        }
+
+        #[test]
+        fn prop_nonces_expire_after_full_rotation() {
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let peer = random_peer_id();
+                    let nonce = random_nonce();
+                    let t0 = TimestampSeconds::new(1000);
+                    let t_expired = TimestampSeconds::new(1000 + 15 * 60);
+
+                    cache.try_claim(peer, nonce, t0).await.expect("claim");
+                    assert!(matches!(
+                        cache.try_claim(peer, nonce, t0).await,
+                        Err(NonceReused)
+                    ));
+                    assert!(cache.try_claim(peer, nonce, t_expired).await.is_ok());
+                }
+            });
+        }
     }
 }

@@ -1,8 +1,7 @@
 //! Error types.
 
-use futures::channel::oneshot;
-use sedimentree_core::codec::error::DecodeError;
-use subduction_core::connection::message::Message;
+use alloc::vec::Vec;
+
 use thiserror::Error;
 
 /// Outbound channel closed — the sender task has stopped.
@@ -15,7 +14,7 @@ pub struct SendError;
 pub enum CallError {
     /// Response oneshot was dropped before a reply arrived.
     #[error("response dropped")]
-    ResponseDropped(oneshot::Canceled),
+    ResponseDropped,
 
     /// Timed out waiting for response.
     #[error("timed out waiting for response")]
@@ -37,18 +36,15 @@ pub struct RecvError;
 pub struct DisconnectionError;
 
 /// Errors while running the connection loop.
+///
+/// [`ChanSend`]: RunError::ChanSend
 #[derive(Debug, Error)]
-#[allow(clippy::large_enum_variant)]
 pub enum RunError {
-    /// Internal MPSC channel error.
+    /// Internal channel send failed (receiver dropped).
     #[error("channel send error: {0}")]
-    ChanSend(async_channel::SendError<Message>),
+    ChanSend(Box<async_channel::SendError<Vec<u8>>>),
 
     /// WebSocket error.
     #[error(transparent)]
     WebSocket(#[from] tungstenite::Error),
-
-    /// Message deserialization error.
-    #[error("deserialize error: {0}")]
-    Deserialize(DecodeError),
 }

@@ -17,11 +17,13 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::Message,
-        nonce_cache::NonceCache,
-        test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
+        message::SyncMessage,
+        test_utils::{
+            ChannelMockConnection, InstantTimeout, TokioSpawn, new_test_subduction, test_signer,
+        },
     },
     handler::sync::SyncHandler,
+    nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     sharded_map::ShardedMap,
@@ -65,9 +67,17 @@ fn new_dispatch_subduction() -> (
             'static,
             Sendable,
             MemoryStorage,
-            ChannelMockConnection,
+            ChannelMockConnection<SyncMessage>,
+            SyncHandler<
+                Sendable,
+                MemoryStorage,
+                ChannelMockConnection<SyncMessage>,
+                OpenPolicy,
+                CountLeadingZeroBytes,
+            >,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
+            InstantTimeout,
             CountLeadingZeroBytes,
         >,
     >,
@@ -91,7 +101,7 @@ fn new_dispatch_subduction() -> (
         CountLeadingZeroBytes,
     ));
 
-    Subduction::<'_, Sendable, _, ChannelMockConnection, _, _, _>::new(
+    Subduction::<'_, Sendable, _, ChannelMockConnection<SyncMessage>, _, _, _, InstantTimeout>::new(
         handler,
         None,
         test_signer(),
@@ -101,6 +111,8 @@ fn new_dispatch_subduction() -> (
         storage,
         pending,
         NonceCache::default(),
+        InstantTimeout,
+        Duration::from_secs(30),
         CountLeadingZeroBytes,
         TokioSpawn,
     )
@@ -135,14 +147,14 @@ async fn blobs_response_clears_pending_but_does_not_store() -> TestResult {
         .await?
         .expect("should receive BlobsRequest");
     assert!(
-        matches!(outbound, Message::BlobsRequest { id, ref digests, .. } if id == TEST_TREE && digests.contains(&digest)),
+        matches!(outbound, SyncMessage::BlobsRequest { id, ref digests, .. } if id == TEST_TREE && digests.contains(&digest)),
         "expected BlobsRequest containing our digest for the right tree"
     );
 
     // Simulate peer responding with the requested blob
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: TEST_TREE,
             blobs: vec![blob.clone()],
         })
@@ -185,7 +197,7 @@ async fn unsolicited_blobs_are_rejected() -> TestResult {
     // Peer sends an unsolicited BlobsResponse
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: TEST_TREE,
             blobs: vec![blob],
         })
@@ -241,7 +253,7 @@ async fn blobs_response_does_not_store_any_blobs() -> TestResult {
     // Peer responds with both blobs in a single BlobsResponse
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: TEST_TREE,
             blobs: vec![requested_blob.clone(), unsolicited_blob],
         })
@@ -303,7 +315,7 @@ async fn blobs_response_does_not_store_even_for_valid_tree() -> TestResult {
     // Respond with the blob for tree A
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: tree_a,
             blobs: vec![blob.clone()],
         })
@@ -360,7 +372,7 @@ async fn blobs_response_with_wrong_sedimentree_id_is_rejected() -> TestResult {
     // Peer responds with the blob but claims it's for tree B
     handle
         .inbound_tx
-        .send(Message::BlobsResponse {
+        .send(SyncMessage::BlobsResponse {
             id: tree_b,
             blobs: vec![blob],
         })

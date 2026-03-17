@@ -20,9 +20,25 @@ block-beta
     columns 1
     Application
     Sync["Sync<br/>(Batch + Incremental)"]
-    Connection["Connection<br/>(Handshake + Policy)"]
-    Transport["Transport<br/>(WebSocket · HTTP Long-Poll · Iroh/QUIC)"]
+    Connection["Connection<br/>(Typed Messages)"]
+    Transport["Transport<br/>(Byte-oriented: Handshake · Policy)"]
+    Backend["Backend<br/>(WebSocket · HTTP Long-Poll · Iroh/QUIC)"]
 ```
+
+### Transport Stack
+
+```
+Backend (one impl per transport)
+  └── Transport             send_bytes / recv_bytes / disconnect
+       └── MessageTransport<T>    Connection<K, M>  (typed encode/decode)
+```
+
+Request-response multiplexing (correlating `BatchSyncRequest` →
+`BatchSyncResponse`) is handled by [`ManagedConnection`] in the
+`Subduction` listen loop, _not_ the transport layer. Transports only
+need to implement `send_bytes`/`recv_bytes`/`disconnect`.
+
+[`ManagedConnection`]: ../subduction_core/src/connection/managed.rs
 
 ## Typical Flow
 
@@ -31,7 +47,7 @@ sequenceDiagram
     participant A as Peer A
     participant B as Peer B
 
-    Note over A,B: 1. Connection Layer
+    Note over A,B: 1. Handshake (over Transport)
     A->>B: Signed<Challenge>
     B->>A: Signed<Response>
     Note over A,B: Identities established

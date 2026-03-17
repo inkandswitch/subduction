@@ -393,18 +393,18 @@ test.describe("Subduction", () => {
     });
   });
 
-  test.describe("Message Serialization", () => {
-    test("should round-trip Message through binary codec", async ({ page }) => {
+  test.describe("SyncMessage Serialization", () => {
+    test("should round-trip SyncMessage through binary codec", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Message, SedimentreeId, Digest } = window.subduction;
+        const { SyncMessage, SedimentreeId, Digest } = window.subduction;
 
         const sedimentreeId = SedimentreeId.fromBytes(new Uint8Array(32).fill(42));
         const digestBytes = new Uint8Array(32);
         digestBytes[0] = 42;
         const digest = new Digest(digestBytes);
-        const original = Message.blobsRequest(sedimentreeId, [digest]);
+        const original = SyncMessage.blobsRequest(sedimentreeId, [digest]);
         const bytes = original.toBytes();
-        const restored = Message.fromBytes(bytes);
+        const restored = SyncMessage.fromBytes(bytes);
 
         return {
           hasBytes: bytes instanceof Uint8Array,
@@ -424,11 +424,11 @@ test.describe("Subduction", () => {
 
     test("should throw MessageDeserializationError for invalid bytes", async ({ page }) => {
       const result = await page.evaluate(async () => {
-        const { Message } = window.subduction;
+        const { SyncMessage } = window.subduction;
 
         try {
           const invalidBytes = new Uint8Array([0xff, 0xfe, 0x00, 0x01]);
-          Message.fromBytes(invalidBytes);
+          SyncMessage.fromBytes(invalidBytes);
           return { threw: false, errorName: null };
         } catch (error) {
           return {

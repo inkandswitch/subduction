@@ -18,8 +18,8 @@ use sedimentree_core::{
 };
 use subduction_core::{
     connection::{
-        message::Message,
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        message::SyncMessage,
+        test_utils::{ChannelMockConnection, InstantTimeout, TokioSpawn, test_signer},
     },
     peer::id::PeerId,
     policy::open::OpenPolicy,
@@ -43,11 +43,12 @@ async fn make_test_commit_with_data(
 #[tokio::test]
 async fn test_sendable_single_commit() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -61,7 +62,7 @@ async fn test_sendable_single_commit() -> TestResult {
 
     handle
         .inbound_tx
-        .send(Message::LooseCommit {
+        .send(SyncMessage::LooseCommit {
             id: sedimentree_id,
             commit,
             blob,
@@ -91,11 +92,12 @@ async fn test_sendable_single_commit() -> TestResult {
 #[tokio::test]
 async fn test_sendable_multiple_sequential() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -111,7 +113,7 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 
         handle
             .inbound_tx
-            .send(Message::LooseCommit {
+            .send(SyncMessage::LooseCommit {
                 id: sedimentree_id,
                 commit,
                 blob,
@@ -139,11 +141,12 @@ async fn test_sendable_multiple_sequential() -> TestResult {
 #[tokio::test]
 async fn test_sendable_same_sedimentree() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
             .spawner(TokioSpawn)
-            .build::<Sendable, ChannelMockConnection>();
+            .timer(InstantTimeout)
+            .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
     subduction.add_connection(conn.authenticated()).await?;
@@ -160,7 +163,7 @@ async fn test_sendable_same_sedimentree() -> TestResult {
 
         handle
             .inbound_tx
-            .send(Message::LooseCommit {
+            .send(SyncMessage::LooseCommit {
                 id: sedimentree_id,
                 commit,
                 blob,
@@ -192,11 +195,12 @@ async fn test_local_single_commit() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let (subduction, _handler, listener_fut, actor_fut) =
-                SubductionBuilder::<_, _, _, _, 256>::new()
+                SubductionBuilder::<_, _, _, _, _, 256>::new()
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .build::<Local, ChannelMockConnection>();
+                    .timer(InstantTimeout)
+                    .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
@@ -210,7 +214,7 @@ async fn test_local_single_commit() -> TestResult {
 
             handle
                 .inbound_tx
-                .send(Message::LooseCommit {
+                .send(SyncMessage::LooseCommit {
                     id: sedimentree_id,
                     commit,
                     blob,
@@ -245,11 +249,12 @@ async fn test_local_multiple_sequential() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let (subduction, _handler, listener_fut, actor_fut) =
-                SubductionBuilder::<_, _, _, _, 256>::new()
+                SubductionBuilder::<_, _, _, _, _, 256>::new()
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .build::<Local, ChannelMockConnection>();
+                    .timer(InstantTimeout)
+                    .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
@@ -266,7 +271,7 @@ async fn test_local_multiple_sequential() -> TestResult {
 
                 handle
                     .inbound_tx
-                    .send(Message::LooseCommit {
+                    .send(SyncMessage::LooseCommit {
                         id: sedimentree_id,
                         commit,
                         blob,
@@ -299,11 +304,12 @@ async fn test_local_same_sedimentree() -> TestResult {
     tokio::task::LocalSet::new()
         .run_until(async {
             let (subduction, _handler, listener_fut, actor_fut) =
-                SubductionBuilder::<_, _, _, _, 256>::new()
+                SubductionBuilder::<_, _, _, _, _, 256>::new()
                     .signer(test_signer())
                     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
                     .spawner(TokioSpawn)
-                    .build::<Local, ChannelMockConnection>();
+                    .timer(InstantTimeout)
+                    .build::<Local, ChannelMockConnection<SyncMessage>>();
 
             let (conn, handle) = ChannelMockConnection::new_with_handle(PeerId::new([1u8; 32]));
             subduction.add_connection(conn.authenticated()).await?;
@@ -321,7 +327,7 @@ async fn test_local_same_sedimentree() -> TestResult {
 
                 handle
                     .inbound_tx
-                    .send(Message::LooseCommit {
+                    .send(SyncMessage::LooseCommit {
                         id: sedimentree_id,
                         commit,
                         blob,
