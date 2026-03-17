@@ -57,6 +57,7 @@
 
 use alloc::sync::Arc;
 use async_lock::Mutex;
+use core::time::Duration;
 use sedimentree_core::{
     collections::{Map, Set},
     commit::CountLeadingZeroBytes,
@@ -118,6 +119,7 @@ pub struct SubductionBuilder<
     timer: Tmr,
 
     discovery_id: Option<DiscoveryId>,
+    default_call_timeout: Option<Duration>,
     depth_metric: M,
     nonce_cache: Option<NonceCache>,
     max_pending_blob_requests: usize,
@@ -158,6 +160,7 @@ impl<const N: usize> SubductionBuilder<Unset, Unset, Unset, Unset, CountLeadingZ
             storage: Unset,
             timer: Unset,
             discovery_id: None,
+            default_call_timeout: None,
             depth_metric: CountLeadingZeroBytes,
             nonce_cache: None,
             max_pending_blob_requests: DEFAULT_MAX_PENDING_BLOB_REQUESTS,
@@ -185,6 +188,7 @@ impl<Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, Tmr, M, 
             storage: self.storage,
             timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -206,6 +210,7 @@ impl<Sig, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, Tmr, M
             storage: self.storage,
             timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -230,6 +235,7 @@ impl<Sig, Sp, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, Tmr, M, 
             storage: StoragePowerbox::new(storage, policy),
             timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -251,6 +257,7 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Unset, M, 
             storage: self.storage,
             timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: self.depth_metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -269,6 +276,17 @@ impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, 
         self
     }
 
+    /// Set the default timeout for sync roundtrips
+    /// (`BatchSyncRequest` → `BatchSyncResponse`).
+    ///
+    /// Defaults to 30 seconds if not set. Individual calls to
+    /// `sync_with_peer` can override this per-request.
+    #[must_use]
+    pub const fn roundtrip_timeout(mut self, timeout: Duration) -> Self {
+        self.default_call_timeout = Some(timeout);
+        self
+    }
+
     /// Override the depth metric used to assign commit depths.
     ///
     /// Defaults to [`CountLeadingZeroBytes`].
@@ -282,6 +300,7 @@ impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, 
             storage: self.storage,
             timer: self.timer,
             discovery_id: self.discovery_id,
+            default_call_timeout: self.default_call_timeout,
             depth_metric: metric,
             nonce_cache: self.nonce_cache,
             max_pending_blob_requests: self.max_pending_blob_requests,
@@ -417,6 +436,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             pending_blob_requests,
             nonce_cache,
             self.timer,
+            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
         );
@@ -496,6 +516,7 @@ impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
             pending_blob_requests,
             nonce_cache,
             self.timer,
+            self.default_call_timeout.unwrap_or(Duration::from_secs(30)),
             self.depth_metric,
             self.spawner,
         )

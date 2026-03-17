@@ -164,6 +164,9 @@ pub struct Subduction<
     /// and by the listen loop to route [`BatchSyncResponse`] messages.
     multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
 
+    /// Default timeout for roundtrip calls (`BatchSyncRequest` → `BatchSyncResponse`).
+    default_call_timeout: Duration,
+
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
 
@@ -265,6 +268,7 @@ where
         pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
         nonce_cache: NonceCache,
         timer: O,
+        default_call_timeout: Duration,
         depth_metric: M,
         spawner: Sp,
     ) -> (
@@ -296,6 +300,7 @@ where
             discovery_id,
             signer,
             timer,
+            default_call_timeout,
             depth_metric,
             sedimentrees,
             connections,
@@ -749,7 +754,7 @@ where
 
         // Create a multiplexer for request-response correlation
         {
-            let mux = Arc::new(Multiplexer::new(peer_id, Duration::from_secs(30)));
+            let mux = Arc::new(Multiplexer::new(peer_id, self.default_call_timeout));
             let mut multiplexers = self.multiplexers.lock().await;
             match multiplexers.get_mut(&peer_id) {
                 Some(muxes) => muxes.push(mux),
@@ -2620,6 +2625,7 @@ mod tests {
                 pending,
                 NonceCache::default(),
                 InstantTimeout,
+                Duration::from_secs(30),
                 CountLeadingZeroBytes,
                 TestSpawn,
             );
@@ -2686,6 +2692,7 @@ mod tests {
                 pending,
                 NonceCache::default(),
                 InstantTimeout,
+                Duration::from_secs(30),
                 CountLeadingZeroBytes,
                 TestSpawn,
             );

@@ -137,7 +137,6 @@ test.describe("Peer Connection Tests", () => {
         const authenticated = await SubductionWebSocket.tryDiscover(
           url,
           signer,
-          5000,
           wsUrl.replace("ws://", "")
         );
 
@@ -184,7 +183,6 @@ test.describe("Peer Connection Tests", () => {
         const authenticated = await SubductionWebSocket.tryDiscover(
           url,
           signer,
-          5000,
           wsUrl.replace("ws://", "")
         );
 
@@ -226,7 +224,6 @@ test.describe("Peer Connection Tests", () => {
         const url = new URL(wsUrl);
         const peerId = await syncer.connectDiscover(
           url,
-          5000,
           wsUrl.replace("ws://", "")
         );
 
@@ -266,7 +263,6 @@ test.describe("Peer Connection Tests", () => {
         const url = new URL(wsUrl);
         await syncer.connectDiscover(
           url,
-          5000,
           wsUrl.replace("ws://", "")
         );
 
@@ -308,7 +304,6 @@ test.describe("Peer Connection Tests", () => {
         const url = new URL(wsUrl);
         await syncer.connectDiscover(
           url,
-          5000,
           wsUrl.replace("ws://", "")
         );
 
@@ -349,10 +344,10 @@ test.describe("Peer Connection Tests", () => {
         const serviceName = wsUrl.replace("ws://", "");
 
         // Connect first syncer
-        await syncer1.connectDiscover(url, 5000, serviceName);
+        await syncer1.connectDiscover(url, serviceName);
 
         // Connect second syncer
-        await syncer2.connectDiscover(url, 5000, serviceName);
+        await syncer2.connectDiscover(url, serviceName);
 
         const peers1 = await syncer1.getConnectedPeerIds();
         const peers2 = await syncer2.getConnectedPeerIds();
@@ -391,14 +386,14 @@ test.describe("Known Peer ID Connection", () => {
         const url = new URL(wsUrl);
         const serviceName = wsUrl.replace("ws://", "");
 
-        const discoveryAuth = await SubductionWebSocket.tryDiscover(url, signer, 5000, serviceName);
+        const discoveryAuth = await SubductionWebSocket.tryDiscover(url, signer, serviceName);
         const serverPeerId = discoveryAuth.peerId;
 
         // Now connect with a different signer using the known peer ID
         const signer2 = await WebCryptoSigner.setup();
         const syncer = new Subduction(signer2, new MemoryStorage());
 
-        const knownAuth = await SubductionWebSocket.tryConnect(url, signer2, serverPeerId, 5000);
+        const knownAuth = await SubductionWebSocket.tryConnect(url, signer2, serverPeerId);
         const isNew = await syncer.addConnection(knownAuth.toTransport());
 
         const peers = await syncer.getConnectedPeerIds();
@@ -456,7 +451,7 @@ test.describe("tryDiscover Optional Parameters", () => {
     expect(true).toBe(true); // Test passes if we get here without JS syntax/binding errors
   });
 
-  test("should accept tryDiscover with only timeout parameter", async ({ page }) => {
+  test("should accept tryDiscover with only serviceName parameter", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
       const { SubductionWebSocket, WebCryptoSigner } = window.subduction;
 
@@ -464,8 +459,8 @@ test.describe("tryDiscover Optional Parameters", () => {
         const signer = await WebCryptoSigner.setup();
         const url = new URL(wsUrl);
 
-        // Call with timeout only - service_name should default to URL host
-        const subductionWs = await SubductionWebSocket.tryDiscover(url, signer, 10000);
+        // Call with serviceName only
+        const subductionWs = await SubductionWebSocket.tryDiscover(url, signer, wsUrl.replace("ws://", ""));
 
         return { connected: true, error: null };
       } catch (error) {
@@ -480,7 +475,7 @@ test.describe("tryDiscover Optional Parameters", () => {
     expect(true).toBe(true);
   });
 
-  test("should accept tryDiscover with both optional parameters", async ({ page }) => {
+  test("should accept tryDiscover with serviceName parameter", async ({ page }) => {
     const result = await page.evaluate(async (wsUrl) => {
       const { SubductionWebSocket, WebCryptoSigner } = window.subduction;
 
@@ -488,11 +483,10 @@ test.describe("tryDiscover Optional Parameters", () => {
         const signer = await WebCryptoSigner.setup();
         const url = new URL(wsUrl);
 
-        // Call with both optional parameters explicitly set
+        // Call with serviceName explicitly set
         const subductionWs = await SubductionWebSocket.tryDiscover(
           url,
           signer,
-          10000,
           wsUrl.replace("ws://", "")
         );
 
@@ -521,7 +515,6 @@ test.describe("tryDiscover Optional Parameters", () => {
         const subductionWs = await SubductionWebSocket.tryDiscover(
           url,
           signer,
-          undefined,
           undefined
         );
 

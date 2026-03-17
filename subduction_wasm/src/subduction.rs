@@ -360,7 +360,6 @@ impl WasmSubduction {
     ///
     /// * `address` - The WebSocket URL to connect to
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds
     ///
     /// # Errors
     ///
@@ -370,15 +369,10 @@ impl WasmSubduction {
         &self,
         address: &web_sys::Url,
         expected_peer_id: &WasmPeerId,
-        timeout_milliseconds: u32,
     ) -> Result<WasmPeerId, WasmConnectError> {
-        let authenticated = WasmWebSocket::connect_authenticated(
-            address,
-            self.core.signer(),
-            expected_peer_id,
-            timeout_milliseconds,
-        )
-        .await?;
+        let authenticated =
+            WasmWebSocket::connect_authenticated(address, self.core.signer(), expected_peer_id)
+                .await?;
 
         let peer_id = authenticated.peer_id();
         self.core
@@ -407,13 +401,11 @@ impl WasmSubduction {
     pub async fn connect_discover(
         &self,
         address: &web_sys::Url,
-        timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmConnectError> {
         let authenticated = WasmWebSocket::connect_discover_authenticated(
             address,
             self.core.signer(),
-            timeout_milliseconds,
             service_name,
         )
         .await?;
@@ -446,7 +438,6 @@ impl WasmSubduction {
         &self,
         base_url: &str,
         expected_peer_id: &WasmPeerId,
-        _timeout_milliseconds: Option<u32>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) =
             WasmLongPoll::connect_authenticated(base_url, self.core.signer(), expected_peer_id)
@@ -480,7 +471,6 @@ impl WasmSubduction {
     pub async fn connect_discover_long_poll(
         &self,
         base_url: &str,
-        _timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmPeerId, WasmLongPollConnectError> {
         let (authenticated, _session_id) = WasmLongPoll::connect_discover_authenticated(

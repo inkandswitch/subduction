@@ -1,5 +1,6 @@
 //! Tests for connection cleanup on send failure.
 
+use core::time::Duration;
 use std::{collections::BTreeSet, sync::Arc};
 
 use async_lock::Mutex;
@@ -77,6 +78,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
             pending,
             NonceCache::default(),
             InstantTimeout,
+            Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
         );
@@ -134,6 +136,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
             pending,
             NonceCache::default(),
             InstantTimeout,
+            Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
         );
@@ -197,6 +200,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
             pending,
             NonceCache::default(),
             InstantTimeout,
+            Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
         );
@@ -254,6 +258,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             pending,
             NonceCache::default(),
             InstantTimeout,
+            Duration::from_secs(30),
             CountLeadingZeroBytes,
             TestSpawn,
         );

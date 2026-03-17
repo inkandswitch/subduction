@@ -112,6 +112,7 @@ fn new_dispatch_subduction() -> (
         pending,
         NonceCache::default(),
         InstantTimeout,
+        Duration::from_secs(30),
         CountLeadingZeroBytes,
         TokioSpawn,
     )

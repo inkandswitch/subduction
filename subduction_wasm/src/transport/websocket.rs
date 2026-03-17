@@ -105,7 +105,6 @@ impl WasmWebSocket {
         ws: &WebSocket,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-        _timeout_milliseconds: u32,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
         // Ensure WebSocket is ready
         let ws = Self::wait_for_open(ws.clone()).await?;
@@ -143,8 +142,6 @@ impl WasmWebSocket {
     /// * `address` - The WebSocket URL to connect to
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
-    /// * `timeout_milliseconds` - Request timeout in milliseconds
-    ///
     /// # Errors
     ///
     /// Returns an error if:
@@ -155,9 +152,8 @@ impl WasmWebSocket {
         address: &Url,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-        timeout_milliseconds: u32,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
-        Self::connect_authenticated(address, signer, expected_peer_id, timeout_milliseconds)
+        Self::connect_authenticated(address, signer, expected_peer_id)
             .await
             .map(|inner| WasmAuthenticatedWebSocket { inner })
     }
@@ -185,10 +181,9 @@ impl WasmWebSocket {
     pub async fn try_discover(
         address: &Url,
         signer: &JsSigner,
-        timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<WasmAuthenticatedWebSocket, WebSocketAuthenticatedTransportError> {
-        Self::connect_discover_authenticated(address, signer, timeout_milliseconds, service_name)
+        Self::connect_discover_authenticated(address, signer, service_name)
             .await
             .map(|inner| WasmAuthenticatedWebSocket { inner })
     }
@@ -201,7 +196,6 @@ impl WasmWebSocket {
         address: &Url,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-        _timeout_milliseconds: u32,
     ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedTransportError> {
         let ws = WebSocket::new(&address.href())
             .map_err(WebSocketAuthenticatedTransportError::SocketCreationFailed)?;
@@ -240,10 +234,8 @@ impl WasmWebSocket {
     pub(crate) async fn connect_discover_authenticated(
         address: &Url,
         signer: &JsSigner,
-        timeout_milliseconds: Option<u32>,
         service_name: Option<String>,
     ) -> Result<Authenticated<WasmWebSocket, Local>, WebSocketAuthenticatedTransportError> {
-        let _timeout_milliseconds = timeout_milliseconds.unwrap_or(30_000);
         let service_name = service_name.unwrap_or_else(|| address.host());
 
         let ws = WebSocket::new(&address.href())
