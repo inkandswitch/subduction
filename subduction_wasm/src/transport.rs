@@ -1,7 +1,6 @@
 //! JS [`Transport`] interface for Subduction.
 
 pub mod fetch_client;
-pub mod handshake;
 pub mod longpoll;
 pub mod message;
 pub mod message_port;

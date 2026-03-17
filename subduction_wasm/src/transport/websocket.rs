@@ -16,13 +16,12 @@ use futures::{
     channel::oneshot::{self, Canceled},
     future::LocalBoxFuture,
 };
-use subduction_core::{peer::id::PeerId, timestamp::TimestampSeconds, transport::Transport};
+use subduction_core::{timestamp::TimestampSeconds, transport::Transport};
 use subduction_crypto::nonce::Nonce;
 use thiserror::Error;
 use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
 use web_sys::{BinaryType, Event, MessageEvent, Url, WebSocket, js_sys};
 
-use super::handshake::WasmWebSocketHandshake;
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 use subduction_core::{
     authenticated::Authenticated,
@@ -38,17 +37,13 @@ use subduction_core::{
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
 pub struct WasmWebSocket {
-    peer_id: PeerId,
     socket: WebSocket,
     inbound_reader: async_channel::Receiver<Vec<u8>>,
 }
 
 impl WasmWebSocket {
-    /// Synchronous setup for an already-open WebSocket.
-    ///
-    /// Sets up an `onmessage` handler that pushes raw bytes into a channel.
-    /// The WebSocket MUST be in OPEN state.
-    fn setup_open_socket(ws: WebSocket, peer_id: PeerId) -> Self {
+    /// Set up the byte channel and `onmessage` handler on an already-open `WebSocket`.
+    fn from_open_socket(ws: WebSocket) -> Self {
         let (inbound_writer, inbound_reader) = async_channel::bounded::<Vec<u8>>(64);
 
         let onmessage = Closure::<dyn FnMut(_)>::new(move |event: MessageEvent| {
@@ -82,7 +77,6 @@ impl WasmWebSocket {
         onclose.forget();
 
         Self {
-            peer_id,
             socket: ws,
             inbound_reader,
         }
@@ -116,17 +110,14 @@ impl WasmWebSocket {
         // Ensure WebSocket is ready
         let ws = Self::wait_for_open(ws.clone()).await?;
 
-        let ws_for_setup = ws.clone();
         let audience = Audience::known(expected_peer_id.clone().into());
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
         let nonce = Nonce::random();
 
         let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
-            WasmWebSocketHandshake::new(ws),
-            move |_handshake_transport, peer_id| {
-                (Self::setup_open_socket(ws_for_setup, peer_id), ())
-            },
+            Self::from_open_socket(ws),
+            move |ws_transport, _peer_id| (ws_transport, ()),
             signer,
             audience,
             now,
@@ -218,17 +209,14 @@ impl WasmWebSocket {
 
         let ws = Self::wait_for_open(ws).await?;
 
-        let ws_for_setup = ws.clone();
         let audience = Audience::known(expected_peer_id.clone().into());
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
         let nonce = Nonce::random();
 
         let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
-            WasmWebSocketHandshake::new(ws),
-            move |_handshake_transport, peer_id| {
-                (Self::setup_open_socket(ws_for_setup, peer_id), ())
-            },
+            Self::from_open_socket(ws),
+            move |ws_transport, _peer_id| (ws_transport, ()),
             signer,
             audience,
             now,
@@ -264,17 +252,14 @@ impl WasmWebSocket {
 
         let ws = Self::wait_for_open(ws).await?;
 
-        let ws_for_setup = ws.clone();
         let audience = Audience::discover(service_name.as_bytes());
         #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
         let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
         let nonce = Nonce::random();
 
         let (authenticated, ()) = handshake::initiate::<Local, _, _, _, _>(
-            WasmWebSocketHandshake::new(ws),
-            move |_handshake_transport, peer_id| {
-                (Self::setup_open_socket(ws_for_setup, peer_id), ())
-            },
+            Self::from_open_socket(ws),
+            move |ws_transport, _peer_id| (ws_transport, ()),
             signer,
             audience,
             now,
@@ -336,13 +321,6 @@ impl WasmWebSocket {
         Ok(ws)
     }
 
-    /// Get the peer ID of the remote peer.
-    #[must_use]
-    #[wasm_bindgen(js_name = peerId)]
-    pub fn wasm_peer_id(&self) -> WasmPeerId {
-        self.peer_id.into()
-    }
-
     /// Send raw bytes over the WebSocket.
     ///
     /// # Errors
@@ -374,7 +352,7 @@ impl WasmWebSocket {
 
 impl PartialEq for WasmWebSocket {
     fn eq(&self, other: &Self) -> bool {
-        self.peer_id == other.peer_id && self.socket == other.socket
+        self.socket == other.socket
     }
 }
 
@@ -412,6 +390,30 @@ impl Transport<Local> for WasmWebSocket {
 
     fn disconnect(&self) -> LocalBoxFuture<'_, Result<(), Self::DisconnectionError>> {
         async { Ok(()) }.boxed_local()
+    }
+}
+
+impl subduction_core::handshake::Handshake<Local> for WasmWebSocket {
+    type Error = crate::error::WasmHandshakeError;
+
+    fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        async move {
+            self.socket.send_with_u8_array(&bytes).map_err(|e| {
+                crate::error::WasmHandshakeError::WebSocket(alloc::format!("{e:?}"))
+            })?;
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn recv(&mut self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::Error>> {
+        async move {
+            let bytes = self.inbound_reader.recv().await.map_err(|_| {
+                crate::error::WasmHandshakeError::WebSocket("inbound channel closed".into())
+            })?;
+            Ok(bytes)
+        }
+        .boxed_local()
     }
 }
 
