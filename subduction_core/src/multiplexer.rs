@@ -1,18 +1,20 @@
-//! Generic request-response multiplexer.
+//! Request-response multiplexer.
 //!
-//! [`Multiplexer<O>`] provides the pending-response map and timeout
-//! management that's shared across all transport backends. Each transport
-//! embeds a `Multiplexer` in its `Inner` struct and delegates its
-//! `Roundtrip` methods to it.
+//! [`Multiplexer`] manages the pending-response map for correlating
+//! outbound [`BatchSyncRequest`]s with inbound [`BatchSyncResponse`]s.
 //!
 //! The multiplexer manages:
 //!
-//! - `RequestId` generation (atomic counter)
+//! - `RequestId` generation (atomic counter seeded from the platform CSPRNG)
 //! - A pending-response map (`RequestId` → oneshot sender)
 //! - Response routing via [`resolve_pending`](Multiplexer::resolve_pending)
-//! - Per-call timeout via a pluggable [`Timeout`] strategy
+//!
+//! Timeouts are the caller's responsibility (see [`ManagedConnection::call`]).
+//!
+//! [`BatchSyncRequest`]: crate::connection::message::BatchSyncRequest
+//! [`BatchSyncResponse`]: crate::connection::message::BatchSyncResponse
+//! [`ManagedConnection::call`]: crate::connection::managed::ManagedConnection::call
 
-use alloc::vec::Vec;
 use core::{
     sync::atomic::{AtomicU64, Ordering},
     time::Duration,
@@ -23,7 +25,7 @@ use futures::channel::oneshot;
 use sedimentree_core::collections::Map;
 
 use crate::{
-    connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+    connection::message::{BatchSyncResponse, RequestId},
     peer::id::PeerId,
 };
 
@@ -33,21 +35,19 @@ use crate::{
 /// strategy. Transport backends embed this and delegate their
 /// `Roundtrip` impls to it.
 #[derive(Debug)]
-pub struct Multiplexer<O> {
+pub struct Multiplexer {
     peer_id: PeerId,
     req_id_counter: AtomicU64,
     pending: Mutex<Map<RequestId, oneshot::Sender<BatchSyncResponse>>>,
-    timeout: O,
     default_time_limit: Duration,
 }
 
-impl<O: Clone> Clone for Multiplexer<O> {
+impl Clone for Multiplexer {
     fn clone(&self) -> Self {
         Self {
             peer_id: self.peer_id,
             req_id_counter: AtomicU64::new(self.req_id_counter.load(Ordering::Relaxed)),
             pending: Mutex::new(Map::new()),
-            timeout: self.timeout.clone(),
             default_time_limit: self.default_time_limit,
         }
     }
@@ -69,14 +69,15 @@ pub enum CallError {
     Timeout,
 }
 
-impl<O> Multiplexer<O> {
+impl Multiplexer {
     /// Create a new multiplexer.
     ///
     /// # Panics
     ///
     /// Panics if the platform's random number generator is unavailable.
+    #[must_use]
     #[allow(clippy::expect_used)]
-    pub fn new(peer_id: PeerId, timeout: O, default_time_limit: Duration) -> Self {
+    pub fn new(peer_id: PeerId, default_time_limit: Duration) -> Self {
         Self {
             peer_id,
             req_id_counter: AtomicU64::new({
@@ -85,7 +86,6 @@ impl<O> Multiplexer<O> {
                 u64::from_be_bytes(buf)
             }),
             pending: Mutex::new(Map::new()),
-            timeout,
             default_time_limit,
         }
     }
@@ -98,11 +98,6 @@ impl<O> Multiplexer<O> {
     /// The default per-call time limit.
     pub const fn default_time_limit(&self) -> Duration {
         self.default_time_limit
-    }
-
-    /// Access the timeout strategy.
-    pub const fn timeout(&self) -> &O {
-        &self.timeout
     }
 
     /// Generate the next request ID.
@@ -149,11 +144,5 @@ impl<O> Multiplexer<O> {
         } else {
             false
         }
-    }
-
-    /// Encode a [`BatchSyncRequest`] as wire bytes for sending.
-    #[must_use]
-    pub fn encode_request(req: &BatchSyncRequest) -> Vec<u8> {
-        SyncMessage::BatchSyncRequest(req.clone()).encode()
     }
 }

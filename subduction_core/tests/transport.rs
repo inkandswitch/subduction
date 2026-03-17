@@ -48,14 +48,14 @@ mod multiplexer {
 
     #[test]
     fn next_request_id_uses_peer_id() {
-        let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         let id = mux.next_request_id();
         assert_eq!(id.requestor, test_peer_id());
     }
 
     #[test]
     fn next_request_id_increments() {
-        let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         let id1 = mux.next_request_id();
         let id2 = mux.next_request_id();
         let id3 = mux.next_request_id();
@@ -65,14 +65,14 @@ mod multiplexer {
 
     #[test]
     fn different_instances_have_different_starting_nonces() {
-        let mux1 = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
-        let mux2 = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux1 = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
+        let mux2 = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         assert_ne!(mux1.next_request_id().nonce, mux2.next_request_id().nonce);
     }
 
     #[tokio::test]
     async fn register_then_resolve_delivers_response() -> TestResult {
-        let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         let req_id = mux.next_request_id();
         let rx = mux.register_pending(req_id).await;
 
@@ -86,7 +86,7 @@ mod multiplexer {
 
     #[tokio::test]
     async fn resolve_unknown_request_returns_false() {
-        let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         let unknown_id = test_request_id(test_peer_id(), 9999);
         let resp = test_batch_sync_response(unknown_id);
         assert!(!mux.resolve_pending(&resp).await);
@@ -94,7 +94,7 @@ mod multiplexer {
 
     #[tokio::test]
     async fn cancel_prevents_resolution() {
-        let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         let req_id = mux.next_request_id();
         let mut rx = mux.register_pending(req_id).await;
 
@@ -107,7 +107,7 @@ mod multiplexer {
 
     #[tokio::test]
     async fn double_resolve_second_returns_false() {
-        let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         let req_id = mux.next_request_id();
         let _rx = mux.register_pending(req_id).await;
 
@@ -126,7 +126,7 @@ mod multiplexer {
             subscribe: true,
         };
 
-        let bytes = Multiplexer::<InstantTimeout>::encode_request(&req);
+        let bytes = SyncMessage::BatchSyncRequest(req).encode();
         let decoded = SyncMessage::try_decode(&bytes)?;
 
         let SyncMessage::BatchSyncRequest(r) = decoded else {
@@ -139,7 +139,7 @@ mod multiplexer {
 
     #[test]
     fn clone_preserves_counter_but_clears_pending() {
-        let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
+        let mux = Multiplexer::new(test_peer_id(), Duration::from_secs(30));
         let id1 = mux.next_request_id();
         let cloned = mux.clone();
         let id2 = cloned.next_request_id();

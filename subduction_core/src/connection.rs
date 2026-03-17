@@ -11,6 +11,7 @@
 
 pub mod backoff;
 pub mod id;
+pub mod managed;
 pub mod manager;
 pub mod message;
 pub mod stats;

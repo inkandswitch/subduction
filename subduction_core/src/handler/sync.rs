@@ -198,6 +198,19 @@ impl<K: FutureForm, S, C, P, M, const N: usize> Handler<K, C> for SyncHandler<K,
     type Message = SyncMessage;
     type HandlerError = ListenError<K, S, C, SyncMessage>;
 
+    fn as_batch_sync_response(msg: &Self::Message) -> Option<&BatchSyncResponse> {
+        match msg {
+            SyncMessage::BatchSyncResponse(resp) => Some(resp),
+            SyncMessage::BatchSyncRequest(_)
+            | SyncMessage::BlobsRequest { .. }
+            | SyncMessage::BlobsResponse { .. }
+            | SyncMessage::DataRequestRejected(_)
+            | SyncMessage::Fragment { .. }
+            | SyncMessage::LooseCommit { .. }
+            | SyncMessage::RemoveSubscriptions(_) => None,
+        }
+    }
+
     fn handle<'a>(
         &'a self,
         conn: &'a Authenticated<C, K>,

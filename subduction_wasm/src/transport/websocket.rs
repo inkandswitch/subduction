@@ -33,7 +33,7 @@ use subduction_core::{
 /// Raw bytes from the WebSocket's `onmessage` handler are buffered in an
 /// `async_channel` and returned via `recvBytes`. No message decoding or
 /// request-response routing happens here — that's handled by
-/// [`MessageTransport`] and [`MuxTransport`](subduction_core::transport::mux::MuxTransport).
+/// [`MessageTransport`](subduction_core::transport::message::MessageTransport).
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
 pub struct WasmWebSocket {
@@ -546,7 +546,7 @@ impl WasmAuthenticatedWebSocket {
         let peer_id = self.inner.peer_id();
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|ws| {
             let transport: super::JsTransport = wasm_bindgen::JsValue::from(ws).unchecked_into();
-            super::make_transport(transport, peer_id, super::DEFAULT_MUX_TIME_LIMIT)
+            super::make_transport(transport, peer_id, super::DEFAULT_CALL_TIME_LIMIT)
         }))
     }
 }

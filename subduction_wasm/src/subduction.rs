@@ -52,7 +52,7 @@ use crate::{
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        DEFAULT_MUX_TIME_LIMIT, JsTransport, WasmAuthenticatedTransport, WasmTransport,
+        DEFAULT_CALL_TIME_LIMIT, JsTransport, MuxedTransport, WasmAuthenticatedTransport,
         longpoll::{WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
@@ -91,13 +91,13 @@ impl Spawn<Local> for WasmSpawn {
 }
 
 type WasmSyncHandler =
-    SyncHandler<Local, JsStorage, WasmTransport, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
+    SyncHandler<Local, JsStorage, MuxedTransport, OpenPolicy, WasmHashMetric, WASM_SHARD_COUNT>;
 
 type WasmSubductionCore = Subduction<
     'static,
     Local,
     JsStorage,
-    WasmTransport,
+    MuxedTransport,
     WasmSyncHandler,
     OpenPolicy,
     JsSigner,
@@ -413,7 +413,7 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
-        let time_limit = timeout_milliseconds.map_or(DEFAULT_MUX_TIME_LIMIT, |ms| {
+        let time_limit = timeout_milliseconds.map_or(DEFAULT_CALL_TIME_LIMIT, |ms| {
             Duration::from_millis(u64::from(ms))
         });
         self.core
@@ -457,7 +457,7 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
-        let time_limit = timeout_milliseconds.map_or(DEFAULT_MUX_TIME_LIMIT, |ms| {
+        let time_limit = timeout_milliseconds.map_or(DEFAULT_CALL_TIME_LIMIT, |ms| {
             Duration::from_millis(u64::from(ms))
         });
         self.core
@@ -499,7 +499,7 @@ impl WasmSubduction {
         .await?;
 
         let peer_id = authenticated.peer_id();
-        let time_limit = timeout_milliseconds.map_or(DEFAULT_MUX_TIME_LIMIT, |ms| {
+        let time_limit = timeout_milliseconds.map_or(DEFAULT_CALL_TIME_LIMIT, |ms| {
             Duration::from_millis(u64::from(ms))
         });
         self.core
@@ -954,7 +954,7 @@ impl PeerBatchSyncResult {
 #[derive(Debug)]
 #[allow(clippy::type_complexity)]
 pub struct WasmPeerResultMap(
-    Map<PeerId, (bool, WasmSyncStats, Vec<(WasmTransport, WasmCallError)>)>,
+    Map<PeerId, (bool, WasmSyncStats, Vec<(MuxedTransport, WasmCallError)>)>,
 );
 
 #[wasm_bindgen(js_class = PeerResultMap)]

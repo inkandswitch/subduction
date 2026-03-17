@@ -78,6 +78,7 @@ use crate::{
     },
     handler::Handler,
     handshake::audience::DiscoveryId,
+    multiplexer::Multiplexer,
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -154,6 +155,15 @@ pub struct Subduction<
     storage: StoragePowerbox<S, P>,
 
     connections: Arc<Mutex<Map<PeerId, NonEmpty<Authenticated<C, F>>>>>,
+
+    /// Per-connection multiplexers for request-response correlation.
+    ///
+    /// Keyed by peer ID, with one [`Multiplexer`] per connection (matching
+    /// the order in [`connections`](Self::connections)). Used by
+    /// [`sync_with_peer`](Self::sync_with_peer) to make roundtrip calls
+    /// and by the listen loop to route [`BatchSyncResponse`] messages.
+    multiplexers: Arc<Mutex<Map<PeerId, Vec<Arc<Multiplexer>>>>>,
+
     subscriptions: Arc<Mutex<Map<SedimentreeId, Set<PeerId>>>>,
     nonce_tracker: Arc<NonceCache>,
 
@@ -283,6 +293,7 @@ where
             depth_metric,
             sedimentrees,
             connections,
+            multiplexers: Arc::new(Mutex::new(Map::new())),
             subscriptions,
             storage,
             nonce_tracker: Arc::new(nonce_cache),
@@ -508,6 +519,29 @@ where
                             msg
                         );
 
+                        // Route BatchSyncResponse to pending callers before handler dispatch.
+                        if let Some(resp) = H::as_batch_sync_response(&msg) {
+                            let mut consumed = false;
+                            let multiplexers = self.multiplexers.lock().await;
+                            if let Some(muxes) = multiplexers.get(&peer_id) {
+                                for mux in muxes {
+                                    if mux.resolve_pending(resp).await {
+                                        tracing::debug!(
+                                            "routed BatchSyncResponse to pending caller for peer {}",
+                                            peer_id
+                                        );
+                                        consumed = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            drop(multiplexers);
+                            if consumed {
+                                continue;
+                            }
+                            // Not consumed — fall through to handler dispatch
+                        }
+
                         // Dispatch via handler
                         let h = handler.clone();
                         let conn_clone = conn.clone();
@@ -607,6 +641,7 @@ where
                 .flat_map(NonEmpty::into_iter)
                 .collect()
         };
+        self.multiplexers.lock().await.clear();
 
         #[cfg(feature = "metrics")]
         for _ in &all_conns {
@@ -638,6 +673,7 @@ where
         peer_id: &PeerId,
     ) -> Result<bool, C::DisconnectionError> {
         let peer_conns = { self.connections.lock().await.remove(peer_id) };
+        self.multiplexers.lock().await.remove(peer_id);
 
         if let Some(conns) = peer_conns {
             #[cfg(feature = "metrics")]
@@ -701,6 +737,18 @@ where
                 }
                 None => {
                     connections.insert(peer_id, NonEmpty::new(conn.clone()));
+                }
+            }
+        }
+
+        // Create a multiplexer for request-response correlation
+        {
+            let mux = Arc::new(Multiplexer::new(peer_id, Duration::from_secs(30)));
+            let mut multiplexers = self.multiplexers.lock().await;
+            match multiplexers.get_mut(&peer_id) {
+                Some(muxes) => muxes.push(mux),
+                None => {
+                    multiplexers.insert(peer_id, alloc::vec![mux]);
                 }
             }
         }

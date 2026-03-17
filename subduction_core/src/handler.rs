@@ -53,7 +53,9 @@ pub mod sync;
 use future_form::FutureForm;
 use sedimentree_core::codec::{decode::Decode, encode::Encode};
 
-use crate::{authenticated::Authenticated, peer::id::PeerId};
+use crate::{
+    authenticated::Authenticated, connection::message::BatchSyncResponse, peer::id::PeerId,
+};
 
 /// A handler for messages received from authenticated peers.
 ///
@@ -99,6 +101,18 @@ pub trait Handler<K: FutureForm, C: Clone> {
         conn: &'a Authenticated<C, K>,
         message: Self::Message,
     ) -> K::Future<'a, Result<(), Self::HandlerError>>;
+
+    /// Extract a [`BatchSyncResponse`] from a message, if present.
+    ///
+    /// Used by the `Subduction` listen loop to route responses to pending
+    /// roundtrip callers before dispatching to the handler.
+    ///
+    /// The default returns `None` (no response extraction). Override this
+    /// for message types that can contain `BatchSyncResponse` —
+    /// e.g. `SyncMessage`, `WireMessage`.
+    fn as_batch_sync_response(_msg: &Self::Message) -> Option<&BatchSyncResponse> {
+        None
+    }
 
     /// Called when a peer's last connection drops.
     ///

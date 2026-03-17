@@ -93,7 +93,8 @@ impl<'a> IntoFuture for SenderTask<'a> {
 #[derive(Debug)]
 pub struct WebSocket<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> {
     chan_id: u64,
-    multiplexer: Arc<Multiplexer<O>>,
+    multiplexer: Arc<Multiplexer>,
+    timeout: O,
 
     ws_reader: Arc<Mutex<WebSocketReceiver<T>>>,
 
@@ -188,7 +189,7 @@ impl<T, K: FutureForm, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for 
 
             let rx = self.multiplexer.register_pending(req_id).await;
 
-            let msg_bytes = Multiplexer::<O>::encode_request(&req);
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
 
             outbound_tx
                 .send(tungstenite::Message::Binary(msg_bytes.into()))
@@ -203,12 +204,7 @@ impl<T, K: FutureForm, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for 
 
             let req_timeout = override_timeout.unwrap_or(self.multiplexer.default_time_limit());
 
-            match self
-                .multiplexer
-                .timeout()
-                .timeout(req_timeout, K::from_future(rx))
-                .await
-            {
+            match self.timeout.timeout(req_timeout, K::from_future(rx)).await {
                 Ok(Ok(resp)) => {
                     tracing::info!("request {:?} completed", req_id);
                     Ok(resp)
@@ -275,11 +271,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
         let ws = Self {
             chan_id,
-            multiplexer: Arc::new(Multiplexer::new(
-                peer_id,
-                timeout_strategy,
-                default_time_limit,
-            )),
+            multiplexer: Arc::new(Multiplexer::new(peer_id, default_time_limit)),
+            timeout: timeout_strategy,
 
             ws_reader: Arc::new(Mutex::new(ws_reader)),
             outbound_tx,
@@ -295,8 +288,8 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
 
     /// The timeout strategy used for requests.
     #[must_use]
-    pub fn timeout_strategy(&self) -> &O {
-        self.multiplexer.timeout()
+    pub const fn timeout_strategy(&self) -> &O {
+        &self.timeout
     }
 
     /// The timeout for requests.
@@ -409,11 +402,14 @@ const fn is_expected_disconnect(e: &tungstenite::Error) -> bool {
     )
 }
 
-impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> Clone for WebSocket<T, K, O> {
+impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K> + Clone> Clone
+    for WebSocket<T, K, O>
+{
     fn clone(&self) -> Self {
         Self {
             chan_id: self.chan_id,
             multiplexer: self.multiplexer.clone(),
+            timeout: self.timeout.clone(),
             ws_reader: self.ws_reader.clone(),
             outbound_tx: self.outbound_tx.clone(),
             ws_sender: self.ws_sender.clone(),

@@ -42,14 +42,16 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 #[derive(Debug)]
 pub struct MuxTransport<T, O> {
     transport: T,
-    multiplexer: Arc<Multiplexer<O>>,
+    multiplexer: Arc<Multiplexer>,
+    timeout: O,
 }
 
-impl<T: Clone, O> Clone for MuxTransport<T, O> {
+impl<T: Clone, O: Clone> Clone for MuxTransport<T, O> {
     fn clone(&self) -> Self {
         Self {
             transport: self.transport.clone(),
             multiplexer: self.multiplexer.clone(),
+            timeout: self.timeout.clone(),
         }
     }
 }
@@ -65,7 +67,8 @@ impl<T, O> MuxTransport<T, O> {
     pub fn new(transport: T, timeout: O, default_time_limit: Duration, peer_id: PeerId) -> Self {
         Self {
             transport,
-            multiplexer: Arc::new(Multiplexer::new(peer_id, timeout, default_time_limit)),
+            multiplexer: Arc::new(Multiplexer::new(peer_id, default_time_limit)),
+            timeout,
         }
     }
 
@@ -75,7 +78,7 @@ impl<T, O> MuxTransport<T, O> {
     }
 
     /// Access the multiplexer.
-    pub fn multiplexer(&self) -> &Multiplexer<O> {
+    pub fn multiplexer(&self) -> &Multiplexer {
         &self.multiplexer
     }
 
@@ -183,7 +186,7 @@ impl<K: FutureForm, T, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for 
             let req_id = req.req_id;
             let rx = self.multiplexer.register_pending(req_id).await;
 
-            let msg_bytes = Multiplexer::<O>::encode_request(&req);
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
             self.transport
                 .send_bytes(&msg_bytes)
                 .await
@@ -191,12 +194,7 @@ impl<K: FutureForm, T, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for 
 
             let req_timeout = timeout.unwrap_or(self.multiplexer.default_time_limit());
 
-            match self
-                .multiplexer
-                .timeout()
-                .timeout(req_timeout, K::from_future(rx))
-                .await
-            {
+            match self.timeout.timeout(req_timeout, K::from_future(rx)).await {
                 Ok(Ok(resp)) => Ok(resp),
                 Ok(Err(_)) => {
                     tracing::error!("request {req_id:?} response dropped");

@@ -44,7 +44,8 @@ const INBOUND_CHANNEL_CAPACITY: usize = 128;
 #[derive(Debug)]
 struct Inner<O> {
     chan_id: u64,
-    multiplexer: Multiplexer<O>,
+    multiplexer: Multiplexer,
+    timeout: O,
 
     /// Raw bytes from `send_bytes()` / `call()` → picked up by `/lp/recv` handler.
     outbound_tx: async_channel::Sender<Vec<u8>>,
@@ -85,7 +86,8 @@ impl<O> HttpLongPollTransport<O> {
         Self {
             inner: Arc::new(Inner {
                 chan_id,
-                multiplexer: Multiplexer::new(peer_id, timeout, default_time_limit),
+                multiplexer: Multiplexer::new(peer_id, default_time_limit),
+                timeout,
                 outbound_tx,
                 inbound_writer,
                 inbound_reader,
@@ -233,7 +235,7 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
 
             let rx = inner.multiplexer.register_pending(req_id).await;
 
-            let msg_bytes = Multiplexer::<O>::encode_request(&req);
+            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
             outbound_tx
                 .send(msg_bytes)
                 .await
@@ -247,12 +249,7 @@ impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncRespo
             let req_timeout = override_timeout.unwrap_or(inner.multiplexer.default_time_limit());
             let rx_fut = K::from_future(rx);
 
-            match inner
-                .multiplexer
-                .timeout()
-                .timeout(req_timeout, rx_fut)
-                .await
-            {
+            match inner.timeout.timeout(req_timeout, rx_fut).await {
                 Ok(Ok(resp)) => {
                     tracing::info!("request {req_id:?} completed");
                     Ok(resp)

@@ -179,7 +179,7 @@ impl WasmAuthenticatedLongPoll {
         super::WasmAuthenticatedTransport::from_authenticated(self.inner.map(|lp| {
             let transport: super::JsTransport =
                 wasm_bindgen::JsValue::from(WasmHttpLongPoll::new(lp)).unchecked_into();
-            super::make_transport(transport, peer_id, super::DEFAULT_MUX_TIME_LIMIT)
+            super::make_transport(transport, peer_id, super::DEFAULT_CALL_TIME_LIMIT)
         }))
     }
 }

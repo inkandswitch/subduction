@@ -7,7 +7,7 @@ pub mod message_port;
 pub mod nonce;
 pub mod websocket;
 
-use alloc::{string::ToString, vec::Vec};
+use alloc::{format, string::ToString, vec::Vec};
 use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
@@ -19,7 +19,7 @@ use subduction_core::{
     connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId},
     handshake::{self as hs, Handshake, audience::Audience},
     timestamp::TimestampSeconds,
-    transport::{Transport, message::MessageTransport, mux::MuxTransport},
+    transport::{Transport, message::MessageTransport},
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 use thiserror::Error;
@@ -28,34 +28,38 @@ use wasm_bindgen_futures::JsFuture;
 
 use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 
-use self::{longpoll::JsTimeout, nonce::WasmNonce};
+use self::nonce::WasmNonce;
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
 
-/// Type alias for the full connection stack used by `WasmSubductionCore`.
-///
-/// ```text
-/// MessageTransport<MuxTransport<JsTransport, JsTimeout>>
-///   └── Connection<K, M> for any M: Encode + Decode
-///   └── Roundtrip<K, BatchSyncRequest, BatchSyncResponse> (via MuxTransport)
-///        └── Transport<K> (JsTransport: sendBytes/recvBytes/disconnect)
-/// ```
-pub type WasmTransport = MessageTransport<MuxTransport<JsTransport, JsTimeout>>;
+/// Transitional type alias — will become `MessageTransport<JsTransport>` once
+/// the `Roundtrip` bound is removed from `Subduction`.
+pub(crate) type MuxedTransport = MessageTransport<
+    subduction_core::transport::mux::MuxTransport<JsTransport, longpoll::JsTimeout>,
+>;
 
-/// Default time limit for roundtrip calls via `MuxTransport`.
-pub(crate) const DEFAULT_MUX_TIME_LIMIT: Duration = Duration::from_secs(30);
+/// Default time limit for roundtrip calls.
+pub(crate) const DEFAULT_CALL_TIME_LIMIT: Duration = Duration::from_secs(30);
 
-/// Build a [`WasmTransport`] from a [`JsTransport`], peer identity, and
-/// call time limit.
+/// Build a connection from a [`JsTransport`], peer identity, and time limit.
 ///
-/// This wraps the transport with `MuxTransport` (for request-response
-/// multiplexing via [`Multiplexer`]) and then `MessageTransport` (for
-/// typed encode/decode).
+/// Wraps with `MuxTransport` (for `Roundtrip` via [`Multiplexer`]) and
+/// `MessageTransport` (for typed encode/decode).
+///
+/// NOTE: `MuxTransport` is a transitional layer. Once the `Roundtrip` trait
+/// is removed from `Subduction`'s `C` bound, `MuxTransport` will be deleted
+/// and this will simplify to `MessageTransport::new(transport)`.
 pub(crate) fn make_transport(
     transport: JsTransport,
     peer_id: subduction_core::peer::id::PeerId,
     time_limit: Duration,
-) -> WasmTransport {
-    MessageTransport::new(MuxTransport::new(transport, JsTimeout, time_limit, peer_id))
+) -> MessageTransport<subduction_core::transport::mux::MuxTransport<JsTransport, longpoll::JsTimeout>>
+{
+    MessageTransport::new(subduction_core::transport::mux::MuxTransport::new(
+        transport,
+        longpoll::JsTimeout,
+        time_limit,
+        peer_id,
+    ))
 }
 
 #[wasm_bindgen(typescript_custom_section)]
@@ -174,10 +178,10 @@ impl Handshake<Local> for JsTransport {
     }
 }
 
-// NOTE: `Roundtrip` is intentionally NOT implemented on `JsTransport`.
-// Request-response multiplexing is handled by `MuxTransport<JsTransport, JsTimeout>`
-// which wraps the transport with a `Multiplexer` that properly intercepts
-// `BatchSyncResponse` messages on the recv path. See `WasmTransport`.
+// NOTE: `Roundtrip` is not implemented on `JsTransport`.
+// Request-response multiplexing is handled by `ManagedConnection`,
+// which pairs the connection with a `Multiplexer` and routes responses
+// in the `Subduction` listen loop.
 
 /// Errors from the JS transport.
 #[derive(Error, Debug, Clone)]
@@ -325,7 +329,7 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 
 /// A transport-erased authenticated transport.
 ///
-/// Wraps an [`Authenticated<WasmTransport>`] and is the common type
+/// Wraps an [`Authenticated<MessageTransport<JsTransport>>`] and is the common type
 /// accepted by [`addConnection`](crate::subduction::WasmSubduction::add_connection).
 ///
 /// # Construction
@@ -355,21 +359,21 @@ impl From<WasmBatchSyncResponse> for BatchSyncResponse {
 #[wasm_bindgen(js_name = AuthenticatedTransport)]
 #[derive(Debug)]
 pub struct WasmAuthenticatedTransport {
-    inner: Authenticated<WasmTransport, Local>,
+    inner: Authenticated<MuxedTransport, Local>,
 }
 
 impl WasmAuthenticatedTransport {
     /// Access the inner `Authenticated` transport.
-    pub(crate) fn inner(&self) -> &Authenticated<WasmTransport, Local> {
+    pub(crate) fn inner(&self) -> &Authenticated<MuxedTransport, Local> {
         &self.inner
     }
 
-    /// Construct from an `Authenticated<WasmTransport>`.
+    /// Construct from an `Authenticated<MessageTransport<JsTransport>>`.
     ///
     /// Used by [`WasmAuthenticatedWebSocket::to_connection`] and
     /// [`WasmAuthenticatedLongPoll::to_connection`] to wrap transport-specific
     /// authenticated connections.
-    pub(crate) fn from_authenticated(inner: Authenticated<WasmTransport, Local>) -> Self {
+    pub(crate) fn from_authenticated(inner: Authenticated<MuxedTransport, Local>) -> Self {
         Self { inner }
     }
 }
@@ -408,7 +412,7 @@ impl WasmAuthenticatedTransport {
             transport,
             |transport, peer_id| {
                 (
-                    make_transport(transport, peer_id, DEFAULT_MUX_TIME_LIMIT),
+                    make_transport(transport, peer_id, DEFAULT_CALL_TIME_LIMIT),
                     peer_id,
                 )
             },
@@ -461,7 +465,7 @@ impl WasmAuthenticatedTransport {
             transport,
             |transport, peer_id| {
                 (
-                    make_transport(transport, peer_id, DEFAULT_MUX_TIME_LIMIT),
+                    make_transport(transport, peer_id, DEFAULT_CALL_TIME_LIMIT),
                     peer_id,
                 )
             },

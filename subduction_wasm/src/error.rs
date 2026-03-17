@@ -11,7 +11,7 @@ use thiserror::Error;
 use wasm_bindgen::prelude::*;
 
 use crate::transport::{
-    JsTransportError, WasmTransport, longpoll::LongPollTransportError,
+    JsTransportError, MuxedTransport, longpoll::LongPollTransportError,
     websocket::WebSocketAuthenticatedTransportError,
 };
 use sedimentree_wasm::storage::JsStorage;
@@ -35,7 +35,7 @@ impl From<WasmHydrationError> for JsValue {
 /// such as networking or storage issues.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmIoError(#[from] IoError<Local, JsStorage, WasmTransport, SyncMessage>);
+pub struct WasmIoError(#[from] IoError<Local, JsStorage, MuxedTransport, SyncMessage>);
 
 impl From<WasmIoError> for JsValue {
     fn from(err: WasmIoError) -> Self {
@@ -52,7 +52,7 @@ impl From<WasmIoError> for JsValue {
 #[derive(Debug, Error)]
 #[error(transparent)]
 pub struct WasmWriteError(
-    #[from] WriteError<Local, JsStorage, WasmTransport, SyncMessage, Infallible>,
+    #[from] WriteError<Local, JsStorage, MuxedTransport, SyncMessage, Infallible>,
 );
 
 impl From<WasmWriteError> for JsValue {
@@ -86,7 +86,7 @@ impl From<WasmConnectError> for JsValue {
 /// A Wasm wrapper around the [`ListenError`] type.
 #[derive(Debug, Error)]
 #[error(transparent)]
-pub struct WasmListenError(#[from] ListenError<Local, JsStorage, WasmTransport, SyncMessage>);
+pub struct WasmListenError(#[from] ListenError<Local, JsStorage, MuxedTransport, SyncMessage>);
 
 impl From<WasmListenError> for JsValue {
     fn from(err: WasmListenError) -> Self {
