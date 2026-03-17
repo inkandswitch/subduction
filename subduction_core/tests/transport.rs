@@ -1,10 +1,8 @@
 //! Tests for the transport layer: [`Multiplexer`], [`MuxTransport`], [`MessageTransport`].
 
-use std::time::Duration;
+use std::{collections::BTreeSet, time::Duration};
 
 use future_form::Sendable;
-use std::collections::BTreeSet;
-
 use sedimentree_core::{
     crypto::fingerprint::FingerprintSeed, id::SedimentreeId, sedimentree::FingerprintSummary,
 };
@@ -16,26 +14,31 @@ use subduction_core::{
     },
     multiplexer::Multiplexer,
     peer::id::PeerId,
-    transport::{MessageTransport, MuxTransport},
+    transport::{MessageTransport, MuxTransport, Transport},
 };
+use testresult::TestResult;
 
-fn test_peer_id() -> PeerId {
+const fn test_peer_id() -> PeerId {
     PeerId::new([42u8; 32])
 }
 
-fn test_request_id(peer: PeerId, nonce: u64) -> RequestId {
+const fn test_request_id(peer: PeerId, nonce: u64) -> RequestId {
     RequestId {
         requestor: peer,
         nonce,
     }
 }
 
-fn test_batch_sync_response(req_id: RequestId) -> BatchSyncResponse {
+const fn test_batch_sync_response(req_id: RequestId) -> BatchSyncResponse {
     BatchSyncResponse {
         req_id,
         id: SedimentreeId::new([1u8; 32]),
         result: SyncResult::NotFound,
     }
+}
+
+fn empty_fingerprint_summary() -> FingerprintSummary {
+    FingerprintSummary::new(FingerprintSeed::random(), BTreeSet::new(), BTreeSet::new())
 }
 
 // ── Multiplexer ─────────────────────────────────────────────────────────
@@ -64,12 +67,11 @@ mod multiplexer {
     fn different_instances_have_different_starting_nonces() {
         let mux1 = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
         let mux2 = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
-        // Both are seeded from getrandom; collision is astronomically unlikely.
         assert_ne!(mux1.next_request_id().nonce, mux2.next_request_id().nonce);
     }
 
     #[tokio::test]
-    async fn register_then_resolve_delivers_response() {
+    async fn register_then_resolve_delivers_response() -> TestResult {
         let mux = Multiplexer::new(test_peer_id(), InstantTimeout, Duration::from_secs(30));
         let req_id = mux.next_request_id();
         let rx = mux.register_pending(req_id).await;
@@ -77,8 +79,9 @@ mod multiplexer {
         let resp = test_batch_sync_response(req_id);
         assert!(mux.resolve_pending(&resp).await);
 
-        let received = rx.await.expect("should receive response");
+        let received = rx.await?;
         assert_eq!(received.req_id, req_id);
+        Ok(())
     }
 
     #[tokio::test]
@@ -114,29 +117,24 @@ mod multiplexer {
     }
 
     #[test]
-    fn encode_request_roundtrips_through_sync_message() {
+    fn encode_request_roundtrips_through_sync_message() -> TestResult {
         let req_id = test_request_id(test_peer_id(), 42);
         let req = BatchSyncRequest {
             req_id,
             id: SedimentreeId::new([7u8; 32]),
-            fingerprint_summary: FingerprintSummary::new(
-                FingerprintSeed::random(),
-                BTreeSet::new(),
-                BTreeSet::new(),
-            ),
+            fingerprint_summary: empty_fingerprint_summary(),
             subscribe: true,
         };
 
         let bytes = Multiplexer::<InstantTimeout>::encode_request(&req);
-        let decoded = SyncMessage::try_decode(&bytes).expect("should decode");
+        let decoded = SyncMessage::try_decode(&bytes)?;
 
-        match decoded {
-            SyncMessage::BatchSyncRequest(r) => {
-                assert_eq!(r.req_id, req_id);
-                assert!(r.subscribe);
-            }
-            other => panic!("expected BatchSyncRequest, got {other:?}"),
-        }
+        let SyncMessage::BatchSyncRequest(r) = decoded else {
+            return Err("expected BatchSyncRequest".into());
+        };
+        assert_eq!(r.req_id, req_id);
+        assert!(r.subscribe);
+        Ok(())
     }
 
     #[test]
@@ -145,8 +143,6 @@ mod multiplexer {
         let id1 = mux.next_request_id();
         let cloned = mux.clone();
         let id2 = cloned.next_request_id();
-        // Counter is copied, so the cloned instance continues from the same value.
-        // (The original advanced past id1, so the clone's first ID == original's next.)
         assert_eq!(id2.nonce, id1.nonce + 1);
     }
 }
@@ -171,76 +167,61 @@ mod mux_transport {
     }
 
     #[tokio::test]
-    async fn send_bytes_delegates_to_inner() {
+    async fn send_bytes_delegates_to_inner() -> TestResult {
         let (mux, server) = make_pair();
-        use subduction_core::transport::Transport;
 
-        Transport::<Sendable>::send_bytes(&mux, b"hello")
-            .await
-            .unwrap();
-        let received = Transport::<Sendable>::recv_bytes(&server).await.unwrap();
+        Transport::<Sendable>::send_bytes(&mux, b"hello").await?;
+        let received = Transport::<Sendable>::recv_bytes(&server).await?;
         assert_eq!(received, b"hello");
+        Ok(())
     }
 
     #[tokio::test]
-    async fn recv_bytes_passes_non_response_through() {
+    async fn recv_bytes_passes_non_response_through() -> TestResult {
         let (mux, server) = make_pair();
-        use subduction_core::transport::Transport;
 
-        // Send a non-BatchSyncResponse message from the server side
         let msg = SyncMessage::BlobsRequest {
             id: SedimentreeId::new([0u8; 32]),
             digests: vec![],
         };
-        Transport::<Sendable>::send_bytes(&server, &msg.encode())
-            .await
-            .unwrap();
+        Transport::<Sendable>::send_bytes(&server, &msg.encode()).await?;
 
-        // MuxTransport should pass it through
-        let bytes = Transport::<Sendable>::recv_bytes(&mux).await.unwrap();
-        let decoded = SyncMessage::try_decode(&bytes).unwrap();
+        let bytes = Transport::<Sendable>::recv_bytes(&mux).await?;
+        let decoded = SyncMessage::try_decode(&bytes)?;
         assert!(matches!(decoded, SyncMessage::BlobsRequest { .. }));
+        Ok(())
     }
 
     #[tokio::test]
-    async fn recv_bytes_intercepts_matching_response() {
+    async fn recv_bytes_intercepts_matching_response() -> TestResult {
         let (mux, server) = make_pair();
-        use subduction_core::transport::Transport;
 
-        // Register a pending call
         let req_id = mux.multiplexer().next_request_id();
         let rx = mux.multiplexer().register_pending(req_id).await;
 
-        // Send a matching BatchSyncResponse from the server
         let resp = test_batch_sync_response(req_id);
-        let resp_msg = SyncMessage::BatchSyncResponse(resp.clone());
-        Transport::<Sendable>::send_bytes(&server, &resp_msg.encode())
-            .await
-            .unwrap();
+        let resp_msg = SyncMessage::BatchSyncResponse(resp);
+        Transport::<Sendable>::send_bytes(&server, &resp_msg.encode()).await?;
 
-        // Also send a non-response message after
         let ping = SyncMessage::BlobsRequest {
             id: SedimentreeId::new([0u8; 32]),
             digests: vec![],
         };
-        Transport::<Sendable>::send_bytes(&server, &ping.encode())
-            .await
-            .unwrap();
+        Transport::<Sendable>::send_bytes(&server, &ping.encode()).await?;
 
         // recv_bytes should skip the response and return the BlobsRequest
-        let bytes = Transport::<Sendable>::recv_bytes(&mux).await.unwrap();
-        let decoded = SyncMessage::try_decode(&bytes).unwrap();
+        let bytes = Transport::<Sendable>::recv_bytes(&mux).await?;
+        let decoded = SyncMessage::try_decode(&bytes)?;
         assert!(matches!(decoded, SyncMessage::BlobsRequest { .. }));
 
-        // The response should have been routed to the pending caller
-        let received = rx.await.expect("should receive routed response");
+        let received = rx.await?;
         assert_eq!(received.req_id, req_id);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn call_sends_request_and_receives_response() {
+    async fn call_sends_request_and_receives_response() -> TestResult {
         let (mux, server) = make_pair();
-        use subduction_core::transport::Transport;
 
         let req_id =
             Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&mux).await;
@@ -248,38 +229,31 @@ mod mux_transport {
         let req = BatchSyncRequest {
             req_id,
             id: SedimentreeId::new([5u8; 32]),
-            fingerprint_summary: FingerprintSummary::new(
-                FingerprintSeed::random(),
-                BTreeSet::new(),
-                BTreeSet::new(),
-            ),
+            fingerprint_summary: empty_fingerprint_summary(),
             subscribe: false,
         };
 
-        // Spawn a task that reads the request from the server and responds
-        let server_clone = server.clone();
-        let response_task = tokio::spawn(async move {
-            let bytes = Transport::<Sendable>::recv_bytes(&server_clone)
-                .await
-                .unwrap();
-            let decoded = SyncMessage::try_decode(&bytes).unwrap();
-            let SyncMessage::BatchSyncRequest(received_req) = decoded else {
-                panic!("expected BatchSyncRequest");
-            };
+        // Respond from the server side
+        let server_task = {
+            let server = server.clone();
+            tokio::spawn(async move {
+                let bytes = Transport::<Sendable>::recv_bytes(&server).await?;
+                let SyncMessage::BatchSyncRequest(received_req) = SyncMessage::try_decode(&bytes)?
+                else {
+                    return Err("expected BatchSyncRequest".into());
+                };
 
-            let resp = test_batch_sync_response(received_req.req_id);
-            let resp_bytes = SyncMessage::BatchSyncResponse(resp).encode();
-            Transport::<Sendable>::send_bytes(&server_clone, &resp_bytes)
-                .await
-                .unwrap();
-        });
+                let resp = test_batch_sync_response(received_req.req_id);
+                let resp_bytes = SyncMessage::BatchSyncResponse(resp).encode();
+                Transport::<Sendable>::send_bytes(&server, &resp_bytes).await?;
+                Ok::<_, Box<dyn std::error::Error + Send + Sync>>(())
+            })
+        };
 
-        // We need something reading the mux's recv_bytes to intercept the response.
-        // In practice, the connection_loop does this. Here we spawn a task for it.
-        let mux_clone = mux.clone();
+        // Drive the mux recv loop to intercept the response
+        let mux_recv = mux.clone();
         let _recv_task = tokio::spawn(async move {
-            // This will loop, intercepting the BatchSyncResponse
-            drop(Transport::<Sendable>::recv_bytes(&mux_clone).await);
+            drop(Transport::<Sendable>::recv_bytes(&mux_recv).await);
         });
 
         let resp = Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(
@@ -287,11 +261,11 @@ mod mux_transport {
             req,
             Some(Duration::from_secs(5)),
         )
-        .await
-        .unwrap();
+        .await?;
 
         assert_eq!(resp.req_id, req_id);
-        response_task.await.unwrap();
+        server_task.await??;
+        Ok(())
     }
 }
 
@@ -309,7 +283,7 @@ mod message_transport {
     }
 
     #[tokio::test]
-    async fn send_recv_roundtrip() {
+    async fn send_recv_roundtrip() -> TestResult {
         let (sender, receiver) = make_pair();
 
         let msg = SyncMessage::BlobsRequest {
@@ -317,36 +291,28 @@ mod message_transport {
             digests: vec![],
         };
 
-        Connection::<Sendable, SyncMessage>::send(&sender, &msg)
-            .await
-            .unwrap();
-        let received = Connection::<Sendable, SyncMessage>::recv(&receiver)
-            .await
-            .unwrap();
-
-        assert_eq!(received, msg);
+        Connection::<Sendable, SyncMessage>::send(&sender, &msg).await?;
+        let got = Connection::<Sendable, SyncMessage>::recv(&receiver).await?;
+        assert_eq!(got, msg);
+        Ok(())
     }
 
     #[tokio::test]
-    async fn recv_returns_decode_error_on_garbage() {
-        let (a, b) = ChannelTransport::pair();
-        let sender = a;
+    async fn recv_returns_decode_error_on_garbage() -> TestResult {
+        let (raw_sender, b) = ChannelTransport::pair();
         let receiver = MessageTransport::new(b);
 
-        // Send raw garbage bytes
-        use subduction_core::transport::Transport;
-        Transport::<Sendable>::send_bytes(&sender, &[0xFF, 0xFF, 0xFF])
-            .await
-            .unwrap();
+        Transport::<Sendable>::send_bytes(&raw_sender, &[0xFF, 0xFF, 0xFF]).await?;
 
         let result = Connection::<Sendable, SyncMessage>::recv(&receiver).await;
         assert!(result.is_err());
+        Ok(())
     }
 
     #[tokio::test]
-    async fn disconnect_delegates_to_inner() {
+    async fn disconnect_delegates_to_inner() -> TestResult {
         let (a, _b) = make_pair();
-        let result = Connection::<Sendable, SyncMessage>::disconnect(&a).await;
-        assert!(result.is_ok());
+        Connection::<Sendable, SyncMessage>::disconnect(&a).await?;
+        Ok(())
     }
 }
