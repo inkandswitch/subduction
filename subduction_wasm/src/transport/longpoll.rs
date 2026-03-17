@@ -192,6 +192,22 @@ fn make_client(base_url: &str) -> HttpLongPollClient<FetchHttpClient, JsTimeout>
     HttpLongPollClient::new(base_url, FetchHttpClient::new(), JsTimeout)
 }
 
+/// Extract the host from a URL, falling back to the full URL on parse failure.
+///
+/// Uses simple string parsing to avoid a `web_sys` dependency (which
+/// wouldn't work in Node.js or native contexts).
+fn host_from_url(url: &str) -> alloc::string::String {
+    // Strip scheme (e.g., "http://", "https://")
+    let without_scheme = url.find("://").map_or(url, |i| &url[i + 3..]);
+
+    // Take everything up to the first `/` or end of string
+    let host = without_scheme
+        .find('/')
+        .map_or(without_scheme, |i| &without_scheme[..i]);
+
+    host.into()
+}
+
 /// Get the current timestamp from JS `Date.now()`.
 fn js_now() -> subduction_core::timestamp::TimestampSeconds {
     #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
@@ -260,7 +276,7 @@ impl WasmLongPoll {
         service_name: Option<String>,
     ) -> Result<WasmAuthenticatedLongPoll, LongPollTransportError> {
         let client = make_client(base_url);
-        let service_name = service_name.unwrap_or_else(|| base_url.to_string());
+        let service_name = service_name.unwrap_or_else(|| host_from_url(base_url));
 
         let result = client
             .connect_discover(signer, &service_name, js_now())
@@ -306,7 +322,7 @@ impl WasmLongPoll {
     ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
         let client = make_client(base_url);
-        let service_name = service_name.unwrap_or_else(|| base_url.to_string());
+        let service_name = service_name.unwrap_or_else(|| host_from_url(base_url));
 
         let result = client
             .connect_discover(signer, &service_name, js_now())

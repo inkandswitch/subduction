@@ -73,6 +73,10 @@ pub enum WasmConnectError {
     #[error("transport failed: {0}")]
     Transport(#[from] WebSocketAuthenticatedTransportError),
 
+    /// Handshake failed on a custom transport.
+    #[error("handshake failed: {0}")]
+    Handshake(#[from] WasmHandshakeError),
+
     /// Adding the connection failed after successful handshake.
     #[error("add connection failed: {0}")]
     AddConnection(#[from] AddConnectionError<Infallible>),

@@ -45,15 +45,15 @@ use wasm_bindgen::JsCast;
 
 use crate::{
     error::{
-        WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHydrationError,
-        WasmIoError, WasmLongPollConnectError, WasmWriteError,
+        WasmAddConnectionError, WasmConnectError, WasmDisconnectionError, WasmHandshakeError,
+        WasmHydrationError, WasmIoError, WasmLongPollConnectError, WasmWriteError,
     },
     fragment::WasmFragmentRequested,
     peer_id::WasmPeerId,
     signer::JsSigner,
     sync_stats::WasmSyncStats,
     transport::{
-        JsTransport, WasmAuthenticatedTransport,
+        DEFAULT_LOCAL_SERVICE_NAME, JsTransport, WasmAuthenticatedTransport,
         longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
@@ -544,6 +544,120 @@ impl WasmSubduction {
             .add_connection(transport.inner().clone())
             .await
             .map_err(Into::into)
+    }
+
+    /// Connect to a peer over any [`Transport`](JsTransport) using discovery mode.
+    ///
+    /// Performs a discovery handshake, then adds the authenticated connection.
+    /// The peer's identity is discovered during the handshake.
+    ///
+    /// # Arguments
+    ///
+    /// * `transport` - Any JS object with `sendBytes`/`recvBytes`/`disconnect`
+    /// * `service_name` - Shared service name for discovery
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handshake or connection fails.
+    #[wasm_bindgen(js_name = connectTransport)]
+    pub async fn connect_transport(
+        &self,
+        transport: JsTransport,
+        service_name: String,
+    ) -> Result<WasmPeerId, WasmConnectError> {
+        let authenticated = WasmAuthenticatedTransport::setup_discover(
+            transport,
+            self.core.signer(),
+            Some(service_name),
+        )
+        .await?;
+
+        let peer_id = authenticated.inner().peer_id();
+        self.core.add_connection(authenticated.into_inner()).await?;
+        Ok(peer_id.into())
+    }
+
+    /// Accept a connection from a peer over any [`Transport`](JsTransport).
+    ///
+    /// Performs the responder side of the handshake, then adds the authenticated
+    /// connection. This is the counterpart to [`connectTransport`](Self::connect_transport).
+    ///
+    /// # Arguments
+    ///
+    /// * `transport` - Any JS object with `sendBytes`/`recvBytes`/`disconnect`
+    /// * `service_name` - Shared service name for discovery
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handshake or connection fails.
+    #[wasm_bindgen(js_name = acceptTransport)]
+    pub async fn accept_transport(
+        &self,
+        transport: JsTransport,
+        service_name: String,
+    ) -> Result<WasmPeerId, WasmConnectError> {
+        let authenticated = WasmAuthenticatedTransport::accept_discover(
+            transport,
+            self.core.signer(),
+            service_name,
+        )
+        .await?;
+
+        let peer_id = authenticated.inner().peer_id();
+        self.core.add_connection(authenticated.into_inner()).await?;
+        Ok(peer_id.into())
+    }
+
+    /// Link two local [`Subduction`](WasmSubduction) instances over a
+    /// [`MessageChannel`](web_sys::MessageChannel).
+    ///
+    /// Creates a `MessageChannel`, performs a discovery handshake between
+    /// the two instances, and adds the connections to both. This is the
+    /// simplest way to sync two local instances.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the handshake or connection fails.
+    #[wasm_bindgen]
+    pub async fn link(a: &WasmSubduction, b: &WasmSubduction) -> Result<(), WasmConnectError> {
+        use crate::transport::message_port::WasmMessagePortTransport;
+
+        let channel = web_sys::MessageChannel::new()
+            .map_err(|e| WasmHandshakeError::WebSocket(alloc::format!("{e:?}")))?;
+
+        let port1 = channel.port1();
+        let port2 = channel.port2();
+        port1.start();
+        port2.start();
+
+        let transport_a: JsTransport =
+            JsValue::from(WasmMessagePortTransport::new(port1.into())).unchecked_into();
+        let transport_b: JsTransport =
+            JsValue::from(WasmMessagePortTransport::new(port2.into())).unchecked_into();
+
+        let (auth_a, auth_b) = futures::future::try_join(
+            WasmAuthenticatedTransport::setup_discover(
+                transport_a,
+                a.core.signer(),
+                Some(DEFAULT_LOCAL_SERVICE_NAME.into()),
+            ),
+            WasmAuthenticatedTransport::accept_discover(
+                transport_b,
+                b.core.signer(),
+                DEFAULT_LOCAL_SERVICE_NAME.into(),
+            ),
+        )
+        .await
+        .map_err(WasmConnectError::from)?;
+
+        let (result_a, result_b) = futures::future::try_join(
+            a.core.add_connection(auth_a.into_inner()),
+            b.core.add_connection(auth_b.into_inner()),
+        )
+        .await?;
+
+        tracing::info!("linked two Subduction instances (new_a={result_a}, new_b={result_b})");
+        Ok(())
     }
 
     /// Get a local blob by its digest.

@@ -7,7 +7,11 @@ pub mod message_port;
 pub mod nonce;
 pub mod websocket;
 
-use alloc::{format, string::ToString, vec::Vec};
+use alloc::{
+    format,
+    string::{String, ToString},
+    vec::Vec,
+};
 use wasm_refgen::wasm_refgen;
 
 use future_form::Local;
@@ -29,6 +33,13 @@ use crate::{error::WasmHandshakeError, peer_id::WasmPeerId, signer::JsSigner};
 
 use self::nonce::WasmNonce;
 use sedimentree_wasm::sedimentree_id::WasmSedimentreeId;
+
+/// Default service name for local (non-network) discovery handshakes.
+///
+/// Used by [`connectTransport`](crate::subduction::WasmSubduction::connect_transport)
+/// and [`acceptTransport`](crate::subduction::WasmSubduction::accept_transport) when
+/// no explicit service name is provided.
+pub const DEFAULT_LOCAL_SERVICE_NAME: &str = "subduction:local";
 
 /// Wrap a [`JsTransport`] with typed encode/decode.
 pub(crate) fn make_transport(transport: JsTransport) -> MessageTransport<JsTransport> {
@@ -340,11 +351,12 @@ impl WasmAuthenticatedTransport {
         &self.inner
     }
 
+    /// Consume and return the inner `Authenticated` transport.
+    pub(crate) fn into_inner(self) -> Authenticated<MessageTransport<JsTransport>, Local> {
+        self.inner
+    }
+
     /// Construct from an `Authenticated<MessageTransport<JsTransport>>`.
-    ///
-    /// Used by [`WasmAuthenticatedWebSocket::to_connection`] and
-    /// [`WasmAuthenticatedLongPoll::to_connection`] to wrap transport-specific
-    /// authenticated connections.
     pub(crate) fn from_authenticated(
         inner: Authenticated<MessageTransport<JsTransport>, Local>,
     ) -> Self {
@@ -400,6 +412,53 @@ impl WasmAuthenticatedTransport {
         })
     }
 
+    /// Run the Subduction handshake over a custom transport using discovery
+    /// mode, producing an authenticated transport.
+    ///
+    /// Unlike [`setup`](Self::setup) which requires a known peer ID,
+    /// this method discovers the peer's identity during the handshake
+    /// using a shared service name.
+    ///
+    /// # Arguments
+    ///
+    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`
+    /// * `signer` - The client's signer for authentication
+    /// * `service_name` - Shared service name for discovery.
+    ///   Defaults to [`DEFAULT_LOCAL_SERVICE_NAME`] (`"subduction:local"`) if omitted.
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
+    #[wasm_bindgen(js_name = setupDiscover)]
+    pub async fn setup_discover(
+        transport: JsTransport,
+        signer: &JsSigner,
+        service_name: Option<String>,
+    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
+        let service_name = service_name.unwrap_or_else(|| DEFAULT_LOCAL_SERVICE_NAME.into());
+        let audience = Audience::discover(service_name.as_bytes());
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
+        let nonce = Nonce::random();
+
+        let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
+            transport,
+            |transport, peer_id| (make_transport(transport), peer_id),
+            signer,
+            audience,
+            now,
+            nonce,
+        )
+        .await
+        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+
+        tracing::info!("Discovery handshake complete: authenticated peer {peer_id}");
+
+        Ok(Self {
+            inner: authenticated,
+        })
+    }
+
     /// Accept an incoming handshake over a custom transport (responder side).
     ///
     /// This is the counterpart to [`setup`](Self::setup). The initiator calls
@@ -444,6 +503,58 @@ impl WasmAuthenticatedTransport {
         .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
 
         tracing::info!("Handshake complete (responder): authenticated peer {peer_id}");
+
+        Ok(Self {
+            inner: authenticated,
+        })
+    }
+
+    /// Accept an incoming discovery handshake, verifying the service name.
+    ///
+    /// Like [`accept`](Self::accept) but filters by the expected
+    /// [`Audience::discover`] service name. Rejects handshakes
+    /// targeting a different service.
+    ///
+    /// # Arguments
+    ///
+    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`
+    /// * `signer` - The responder's signer for authentication
+    /// * `service_name` - Expected service name (must match the initiator's)
+    ///
+    /// # Errors
+    ///
+    /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails
+    /// or the service name doesn't match.
+    pub(crate) async fn accept_discover(
+        transport: JsTransport,
+        signer: &JsSigner,
+        service_name: String,
+    ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
+        use core::time::Duration;
+        use subduction_core::nonce_cache::NonceCache;
+
+        let our_peer_id = signer.verifying_key().into();
+        let nonce_cache = NonceCache::default();
+        let max_drift = Duration::from_secs(600);
+        let audience = Audience::discover(service_name.as_bytes());
+
+        #[allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+        let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
+
+        let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
+            transport,
+            |transport, peer_id| (make_transport(transport), peer_id),
+            signer,
+            &nonce_cache,
+            our_peer_id,
+            Some(audience),
+            now,
+            max_drift,
+        )
+        .await
+        .map_err(|e| WasmHandshakeError::WebSocket(e.to_string()))?;
+
+        tracing::info!("Discovery handshake complete (responder): authenticated peer {peer_id}");
 
         Ok(Self {
             inner: authenticated,

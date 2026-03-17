@@ -3,33 +3,23 @@
 //! The core [`Timeout`] trait and [`TimedOut`] error are re-exported from
 //! `subduction_core`. This module provides concrete implementations.
 
-#[cfg(feature = "futures-timer")]
 use core::time::Duration;
 
-#[cfg(feature = "futures-timer")]
-use subduction_core::timeout::{TimedOut, Timeout};
-
-#[cfg(feature = "futures-timer")]
 use future_form::{Local, Sendable};
-
-#[cfg(feature = "futures-timer")]
 use futures::{
     FutureExt,
     future::{BoxFuture, Either, LocalBoxFuture, select},
 };
-
-#[cfg(feature = "futures-timer")]
 use futures_timer::Delay;
+use subduction_core::timeout::{TimedOut, Timeout};
 
 /// A timeout strategy using the [`futures-timer`] crate.
 ///
 /// Works with both `Sendable` and `Local` future forms, making it
 /// suitable for native and Wasm environments.
-#[cfg(feature = "futures-timer")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct FuturesTimerTimeout;
 
-#[cfg(feature = "futures-timer")]
 impl Timeout<Local> for FuturesTimerTimeout {
     fn timeout<'a, T: 'a>(
         &'a self,
@@ -46,7 +36,6 @@ impl Timeout<Local> for FuturesTimerTimeout {
     }
 }
 
-#[cfg(feature = "futures-timer")]
 impl Timeout<Sendable> for FuturesTimerTimeout {
     fn timeout<'a, T: 'a>(
         &'a self,
