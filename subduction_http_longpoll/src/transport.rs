@@ -19,17 +19,11 @@ use async_lock::Mutex;
 use future_form::{FutureForm, Local, Sendable, future_form};
 use rand::{RngCore, rngs::OsRng};
 use subduction_core::{
-    connection::{
-        Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    },
-    multiplexer::Multiplexer,
-    peer::id::PeerId,
-    timeout::{TimedOut, Timeout},
+    connection::message::SyncMessage, multiplexer::Multiplexer, peer::id::PeerId, timeout::Timeout,
     transport::Transport,
 };
 
-use crate::error::{CallError, DisconnectionError, RecvError, SendError};
+use crate::error::{DisconnectionError, RecvError, SendError};
 
 /// Channel capacity for outbound messages (server → client via `/lp/recv`).
 const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
@@ -207,67 +201,6 @@ impl<K: FutureForm, O: Timeout<K>> Transport<K> for HttpLongPollTransport<O> {
     }
 }
 
-#[future_form(Sendable where O: Send + Sync, Local)]
-impl<K: FutureForm, O: Timeout<K>> Roundtrip<K, BatchSyncRequest, BatchSyncResponse>
-    for HttpLongPollTransport<O>
-{
-    type CallError = CallError;
-
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        K::from_future(async {
-            let req_id = self.inner.multiplexer.next_request_id();
-            tracing::debug!("generated request id {req_id:?}");
-            req_id
-        })
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        let outbound_tx = self.inner.outbound_tx.clone();
-        let inner = self.inner.clone();
-
-        K::from_future(async move {
-            tracing::debug!("making call with request id {:?}", req.req_id);
-            let req_id = req.req_id;
-
-            let rx = inner.multiplexer.register_pending(req_id).await;
-
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
-            outbound_tx
-                .send(msg_bytes)
-                .await
-                .map_err(|_| CallError::ChannelClosed)?;
-
-            tracing::debug!(
-                chan_id = inner.chan_id,
-                "sent HTTP long-poll request {req_id:?}"
-            );
-
-            let req_timeout = override_timeout.unwrap_or(inner.multiplexer.default_time_limit());
-            let rx_fut = K::from_future(rx);
-
-            match inner.timeout.timeout(req_timeout, rx_fut).await {
-                Ok(Ok(resp)) => {
-                    tracing::info!("request {req_id:?} completed");
-                    Ok(resp)
-                }
-                Ok(Err(_)) => {
-                    tracing::error!("request {req_id:?} failed: response dropped");
-                    Err(CallError::ResponseDropped)
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {req_id:?} timed out");
-                    inner.multiplexer.cancel_pending(&req_id).await;
-                    Err(CallError::Timeout)
-                }
-            }
-        })
-    }
-}
-
 impl<O> PartialEq for HttpLongPollTransport<O> {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.inner, &other.inner)
@@ -311,15 +244,9 @@ mod tests {
         let conn: HttpLongPollTransport<TestTimeout> =
             HttpLongPollTransport::new(peer_id, Duration::from_secs(30), TestTimeout);
 
-        let id1 =
-            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
-                .await;
-        let id2 =
-            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
-                .await;
-        let id3 =
-            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(&conn)
-                .await;
+        let id1 = conn.inner.multiplexer.next_request_id();
+        let id2 = conn.inner.multiplexer.next_request_id();
+        let id3 = conn.inner.multiplexer.next_request_id();
 
         assert_eq!(id1.requestor, peer_id);
         assert_eq!(id2.nonce, id1.nonce + 1);

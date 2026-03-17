@@ -8,7 +8,6 @@ pub mod nonce;
 pub mod websocket;
 
 use alloc::{format, string::ToString, vec::Vec};
-use core::time::Duration;
 use wasm_refgen::wasm_refgen;
 
 use future_form::Local;

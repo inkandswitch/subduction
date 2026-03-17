@@ -14,17 +14,14 @@ use future_form::{FutureForm, Local, Sendable, future_form};
 use futures::future::BoxFuture;
 use futures_util::{AsyncRead, AsyncWrite, StreamExt};
 use subduction_core::{
-    connection::{
-        Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    },
+    connection::message::SyncMessage,
     multiplexer::Multiplexer,
     peer::id::PeerId,
-    timeout::{TimedOut, Timeout},
+    timeout::Timeout,
     transport::Transport,
 };
 
-use crate::error::{CallError, DisconnectionError, RecvError, RunError, SendError};
+use crate::error::{DisconnectionError, RecvError, RunError, SendError};
 
 /// Channel capacity for outbound messages.
 ///
@@ -158,71 +155,6 @@ impl<T, K: FutureForm, O> Transport<K> for WebSocket<T, K, O> {
     }
 }
 
-#[future_form(
-    Sendable where
-        T: AsyncRead + AsyncWrite + Unpin + Send,
-        O: Timeout<Sendable> + Send + Sync,
-    Local where
-        T: AsyncRead + AsyncWrite + Unpin + Send,
-        O: Timeout<Local>
-)]
-impl<T, K: FutureForm, O> Roundtrip<K, BatchSyncRequest, BatchSyncResponse> for WebSocket<T, K, O> {
-    type CallError = CallError;
-
-    fn next_request_id(&self) -> K::Future<'_, RequestId> {
-        K::from_future(async {
-            let req_id = self.multiplexer.next_request_id();
-            tracing::debug!("generated message id {:?}", req_id);
-            req_id
-        })
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> K::Future<'_, Result<BatchSyncResponse, Self::CallError>> {
-        let outbound_tx = self.outbound_tx.clone();
-        K::from_future(async move {
-            tracing::debug!("making call with request id {:?}", req.req_id);
-            let req_id = req.req_id;
-
-            let rx = self.multiplexer.register_pending(req_id).await;
-
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
-
-            outbound_tx
-                .send(tungstenite::Message::Binary(msg_bytes.into()))
-                .await
-                .map_err(|_| CallError::SenderTaskStopped)?;
-
-            tracing::debug!(
-                chan_id = self.chan_id,
-                "sent WebSocket request {:?}",
-                req_id
-            );
-
-            let req_timeout = override_timeout.unwrap_or(self.multiplexer.default_time_limit());
-
-            match self.timeout.timeout(req_timeout, K::from_future(rx)).await {
-                Ok(Ok(resp)) => {
-                    tracing::info!("request {:?} completed", req_id);
-                    Ok(resp)
-                }
-                Ok(Err(_)) => {
-                    tracing::error!("request {:?} response dropped", req_id);
-                    Err(CallError::ResponseDropped)
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {:?} timed out", req_id);
-                    self.multiplexer.cancel_pending(&req_id).await;
-                    Err(CallError::Timeout)
-                }
-            }
-        })
-    }
-}
-
 impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<T, K, O> {
     /// Create a new WebSocket transport.
     ///
@@ -308,7 +240,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
     ///
     /// Raw bytes from the WebSocket are forwarded to the inbound channel
     /// without decoding. [`BatchSyncResponse`] messages are decoded
-    /// in-band to route them to pending [`Roundtrip::call`] waiters.
+    /// in-band to route them to pending `call()` waiters.
     ///
     /// # Errors
     ///
@@ -332,7 +264,7 @@ impl<T: AsyncRead + AsyncWrite + Unpin, K: FutureForm, O: Timeout<K>> WebSocket<
                     let bytes_vec = bytes.to_vec();
 
                     // Attempt to decode as SyncMessage to check for BatchSyncResponse.
-                    // This is needed for the Roundtrip pending-map routing.
+                    // This is needed for pending-map routing.
                     if let Ok(SyncMessage::BatchSyncResponse(ref resp)) =
                         SyncMessage::try_decode(&bytes_vec)
                         && self.multiplexer.resolve_pending(resp).await
@@ -437,6 +369,7 @@ mod tests {
     use super::*;
     use core::time::Duration;
     use futures::{FutureExt, future::LocalBoxFuture, io::Cursor};
+    use subduction_core::timeout::TimedOut;
     use testresult::TestResult;
 
     // Mock timeout strategy for testing
@@ -485,7 +418,7 @@ mod tests {
             let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
-            let req_id = websocket.next_request_id().await;
+            let req_id = websocket.multiplexer.next_request_id();
             assert_eq!(req_id.requestor, peer_id);
         }
 
@@ -499,9 +432,9 @@ mod tests {
             let (websocket, _rx): (WebSocket<_, Sendable, _>, _) =
                 WebSocket::new(ws, timeout, duration, peer_id);
 
-            let req_id1 = websocket.next_request_id().await;
-            let req_id2 = websocket.next_request_id().await;
-            let req_id3 = websocket.next_request_id().await;
+            let req_id1 = websocket.multiplexer.next_request_id();
+            let req_id2 = websocket.multiplexer.next_request_id();
+            let req_id3 = websocket.multiplexer.next_request_id();
 
             assert_eq!(req_id2.nonce, req_id1.nonce + 1);
             assert_eq!(req_id3.nonce, req_id2.nonce + 1);
@@ -521,9 +454,9 @@ mod tests {
             let ws2 = websocket.clone();
             let ws3 = websocket.clone();
 
-            let handle1 = tokio::spawn(async move { ws1.next_request_id().await });
-            let handle2 = tokio::spawn(async move { ws2.next_request_id().await });
-            let handle3 = tokio::spawn(async move { ws3.next_request_id().await });
+            let handle1 = tokio::spawn(async move { ws1.multiplexer.next_request_id() });
+            let handle2 = tokio::spawn(async move { ws2.multiplexer.next_request_id() });
+            let handle3 = tokio::spawn(async move { ws3.multiplexer.next_request_id() });
 
             let req_id1 = handle1.await?;
             let req_id2 = handle2.await?;

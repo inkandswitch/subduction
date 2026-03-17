@@ -5,22 +5,15 @@ use alloc::vec::Vec;
 use subduction_core::timeout::Timeout;
 
 use crate::{
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    error::{DisconnectionError, RecvError, RunError, SendError},
     websocket::WebSocket,
 };
 
 use async_tungstenite::tokio::{ConnectStream, TokioAdapter};
-use core::time::Duration;
 use future_form::Sendable;
 use futures::future::BoxFuture;
 
-use subduction_core::{
-    connection::{
-        Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId},
-    },
-    transport::Transport,
-};
+use subduction_core::transport::Transport;
 use tokio::net::TcpStream;
 
 /// A unified WebSocket connection that can hold either an accepted or dialed connection.
@@ -73,38 +66,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for UnifiedWebSocke
         match self {
             UnifiedWebSocket::Accepted(in_ws) => Transport::<Sendable>::recv_bytes(in_ws),
             UnifiedWebSocket::Dialed(out_ws) => Transport::<Sendable>::recv_bytes(out_ws),
-        }
-    }
-}
-
-impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
-    for UnifiedWebSocket<O>
-{
-    type CallError = CallError;
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        match self {
-            UnifiedWebSocket::Accepted(in_ws) => {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(in_ws)
-            }
-            UnifiedWebSocket::Dialed(out_ws) => {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(out_ws)
-            }
-        }
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        match self {
-            UnifiedWebSocket::Accepted(ws) => {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(ws, req, timeout)
-            }
-            UnifiedWebSocket::Dialed(ws) => {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(ws, req, timeout)
-            }
         }
     }
 }

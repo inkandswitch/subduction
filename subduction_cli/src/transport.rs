@@ -4,18 +4,9 @@
 //! [`IrohTransport`] so the server can use a single [`Subduction`]
 //! instance for all transport types.
 
-use core::time::Duration;
-
 use future_form::Sendable;
 use futures::future::BoxFuture;
-use subduction_core::{
-    connection::{
-        Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId},
-    },
-    timeout::Timeout,
-    transport::Transport,
-};
+use subduction_core::{timeout::Timeout, transport::Transport};
 use subduction_http_longpoll::transport::HttpLongPollTransport;
 use subduction_iroh::transport::IrohTransport;
 use subduction_websocket::tokio::unified::UnifiedWebSocket;
@@ -63,22 +54,6 @@ pub(crate) enum TransportRecvError {
     /// Iroh recv error.
     #[error(transparent)]
     Iroh(#[from] subduction_iroh::error::RecvError),
-}
-
-/// Error type for call operations across transports.
-#[derive(Debug, Clone, Copy, thiserror::Error)]
-pub(crate) enum TransportCallError {
-    /// WebSocket call error.
-    #[error(transparent)]
-    WebSocket(#[from] subduction_websocket::error::CallError),
-
-    /// HTTP long-poll call error.
-    #[error(transparent)]
-    HttpLongPoll(#[from] subduction_http_longpoll::error::CallError),
-
-    /// Iroh call error.
-    #[error(transparent)]
-    Iroh(#[from] subduction_iroh::error::CallError),
 }
 
 /// Error type for disconnect operations across transports.
@@ -153,50 +128,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for UnifiedTranspor
             }),
             Self::Iroh(iroh) => Box::pin(async {
                 Transport::<Sendable>::disconnect(iroh)
-                    .await
-                    .map_err(Into::into)
-            }),
-        }
-    }
-}
-
-impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
-    for UnifiedTransport<O>
-{
-    type CallError = TransportCallError;
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        match self {
-            Self::WebSocket(ws) => {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(ws)
-            }
-            Self::HttpLongPoll(lp) => {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(lp)
-            }
-            Self::Iroh(iroh) => {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(iroh)
-            }
-        }
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        match self {
-            Self::WebSocket(ws) => Box::pin(async move {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(ws, req, timeout)
-                    .await
-                    .map_err(Into::into)
-            }),
-            Self::HttpLongPoll(lp) => Box::pin(async move {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(lp, req, timeout)
-                    .await
-                    .map_err(Into::into)
-            }),
-            Self::Iroh(iroh) => Box::pin(async move {
-                Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(iroh, req, timeout)
                     .await
                     .map_err(Into::into)
             }),

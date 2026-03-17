@@ -15,21 +15,15 @@
 use alloc::{sync::Arc, vec::Vec};
 use core::{fmt::Debug, time::Duration};
 
-use future_form::{FutureForm, Sendable};
+use future_form::Sendable;
 use futures::{FutureExt, future::BoxFuture};
 use rand::RngCore;
 use subduction_core::{
-    connection::{
-        Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    },
-    multiplexer::Multiplexer,
-    peer::id::PeerId,
-    timeout::{TimedOut, Timeout},
+    connection::message::SyncMessage, multiplexer::Multiplexer, peer::id::PeerId, timeout::Timeout,
     transport::Transport,
 };
 
-use crate::error::{CallError, DisconnectionError, RecvError, SendError};
+use crate::error::{DisconnectionError, RecvError, SendError};
 
 /// Channel capacity for outbound messages.
 const OUTBOUND_CHANNEL_CAPACITY: usize = 1024;
@@ -183,65 +177,6 @@ impl<O: Timeout<Sendable> + Send + Sync> Transport<Sendable> for IrohTransport<O
         async move {
             conn.close();
             Ok(())
-        }
-        .boxed()
-    }
-}
-
-impl<O: Timeout<Sendable> + Send + Sync> Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>
-    for IrohTransport<O>
-{
-    type CallError = CallError;
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async {
-            let req_id = self.inner.multiplexer.next_request_id();
-            tracing::debug!("generated request id {req_id:?}");
-            req_id
-        }
-        .boxed()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        let outbound_tx = self.inner.outbound_tx.clone();
-        let inner = self.inner.clone();
-
-        async move {
-            tracing::debug!("making call with request id {:?}", req.req_id);
-            let req_id = req.req_id;
-
-            let rx = inner.multiplexer.register_pending(req_id).await;
-
-            let msg_bytes = SyncMessage::BatchSyncRequest(req).encode();
-            outbound_tx
-                .send(msg_bytes)
-                .await
-                .map_err(|_| CallError::ChannelClosed)?;
-
-            tracing::debug!(chan_id = inner.chan_id, "sent iroh request {req_id:?}");
-
-            let req_timeout = override_timeout.unwrap_or(inner.multiplexer.default_time_limit());
-            let rx_fut = Sendable::from_future(rx);
-
-            match inner.timeout.timeout(req_timeout, rx_fut).await {
-                Ok(Ok(resp)) => {
-                    tracing::info!("request {req_id:?} completed");
-                    Ok(resp)
-                }
-                Ok(Err(_)) => {
-                    tracing::error!("request {req_id:?} failed: response dropped");
-                    Err(CallError::ResponseDropped)
-                }
-                Err(TimedOut) => {
-                    tracing::error!("request {req_id:?} timed out");
-                    inner.multiplexer.cancel_pending(&req_id).await;
-                    Err(CallError::Timeout)
-                }
-            }
         }
         .boxed()
     }

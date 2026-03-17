@@ -6,7 +6,7 @@ use subduction_core::timeout::Timeout;
 
 use crate::{
     DEFAULT_MAX_MESSAGE_SIZE,
-    error::{CallError, DisconnectionError, RecvError, RunError, SendError},
+    error::{DisconnectionError, RecvError, RunError, SendError},
     handshake::{WebSocketHandshake, WebSocketHandshakeError},
     websocket::{ListenerTask, SenderTask, WebSocket},
 };
@@ -17,10 +17,7 @@ use futures::{FutureExt, future::BoxFuture};
 
 use subduction_core::{
     authenticated::Authenticated,
-    connection::{
-        Connection, Reconnect, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
-    },
+    connection::{Connection, Reconnect, message::SyncMessage},
     handshake::{self, AuthenticateError, audience::Audience},
     timestamp::TimestampSeconds,
     transport::Transport,
@@ -221,39 +218,6 @@ impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sy
                     }
                 }
             }
-        }
-        .boxed()
-    }
-}
-
-impl<R: Signer<Sendable> + Clone + Send + Sync, O: Timeout<Sendable> + Send + Sync>
-    Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> for TokioWebSocketClient<R, O>
-{
-    type CallError = CallError;
-
-    fn next_request_id(&self) -> BoxFuture<'_, RequestId> {
-        async {
-            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::next_request_id(
-                &self.socket,
-            )
-            .await
-        }
-        .boxed()
-    }
-
-    fn call(
-        &self,
-        req: BatchSyncRequest,
-        override_timeout: Option<Duration>,
-    ) -> BoxFuture<'_, Result<BatchSyncResponse, Self::CallError>> {
-        async move {
-            tracing::debug!("client making call with request: {:?}", req);
-            Roundtrip::<Sendable, BatchSyncRequest, BatchSyncResponse>::call(
-                &self.socket,
-                req,
-                override_timeout,
-            )
-            .await
         }
         .boxed()
     }
