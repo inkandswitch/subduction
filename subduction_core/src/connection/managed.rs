@@ -133,6 +133,27 @@ impl<S: core::error::Error> CallError<S> {
     }
 }
 
+/// Trait for performing roundtrip calls on a [`ManagedConnection`].
+///
+/// This trait bridges the `Sendable` and `Local` implementations of
+/// [`ManagedConnection::call`], making the method available in code
+/// generic over `K: FutureForm`.
+pub trait ManagedCall<K: FutureForm, M>: Sized {
+    /// The connection's send-error type.
+    type SendError: core::error::Error;
+
+    /// Send a [`BatchSyncRequest`] and await the matching [`BatchSyncResponse`].
+    ///
+    /// # Errors
+    ///
+    /// Returns [`CallError`] on send failure, dropped response, or timeout.
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> K::Future<'_, Result<BatchSyncResponse, CallError<Self::SendError>>>;
+}
+
 impl<C: Clone, O> ManagedConnection<C, Sendable, O>
 where
     O: Timeout<Sendable> + Send + Sync,
@@ -147,7 +168,7 @@ where
     /// # Errors
     ///
     /// Returns [`CallError`] on send failure, dropped response, or timeout.
-    pub fn call<M>(
+    pub fn call_inner<M>(
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
@@ -187,6 +208,24 @@ where
     }
 }
 
+impl<C, M, O> ManagedCall<Sendable, M> for ManagedConnection<C, Sendable, O>
+where
+    C: Connection<Sendable, M> + PartialEq + Clone + Send + Sync,
+    C::SendError: Send + 'static,
+    M: Encode + Decode + From<SyncMessage> + Send,
+    O: Timeout<Sendable> + Send + Sync,
+{
+    type SendError = C::SendError;
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> futures::future::BoxFuture<'_, Result<BatchSyncResponse, CallError<Self::SendError>>> {
+        self.call_inner(req, timeout)
+    }
+}
+
 impl<C: Clone, O> ManagedConnection<C, Local, O>
 where
     O: Timeout<Local>,
@@ -198,7 +237,7 @@ where
     /// # Errors
     ///
     /// Returns [`CallError`] on send failure, dropped response, or timeout.
-    pub fn call<M>(
+    pub fn call_inner<M>(
         &self,
         req: BatchSyncRequest,
         timeout: Option<Duration>,
@@ -234,5 +273,23 @@ where
             }
         }
         .boxed_local()
+    }
+}
+
+impl<C, M, O> ManagedCall<Local, M> for ManagedConnection<C, Local, O>
+where
+    C: Connection<Local, M> + PartialEq + Clone,
+    M: Encode + Decode + From<SyncMessage>,
+    O: Timeout<Local>,
+{
+    type SendError = C::SendError;
+
+    fn call(
+        &self,
+        req: BatchSyncRequest,
+        timeout: Option<Duration>,
+    ) -> futures::future::LocalBoxFuture<'_, Result<BatchSyncResponse, CallError<Self::SendError>>>
+    {
+        self.call_inner(req, timeout)
     }
 }

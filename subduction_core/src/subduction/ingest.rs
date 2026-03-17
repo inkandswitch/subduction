@@ -17,10 +17,7 @@ use sedimentree_core::{
 use subduction_crypto::verified_meta::VerifiedMeta;
 
 use crate::{
-    connection::{
-        Connection, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse, SyncDiff},
-    },
+    connection::{Connection, message::SyncDiff},
     peer::id::PeerId,
     policy::storage::StoragePolicy,
     sharded_map::ShardedMap,
@@ -37,7 +34,7 @@ use super::error::IoError;
 pub(crate) async fn recv_batch_sync_response<
     F: FutureForm,
     S: Storage<F>,
-    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, M>,
     M: Encode + Decode,
     P: StoragePolicy<F>,
     const N: usize,

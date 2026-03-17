@@ -22,13 +22,13 @@ use std::collections::BTreeSet;
 use subduction_core::{
     connection::{
         message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage, SyncResult},
-        test_utils::{ChannelMockConnection, TokioSpawn, test_signer},
+        test_utils::{test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn},
     },
     handler::sync::SyncHandler,
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 
 use sedimentree_core::{
@@ -38,9 +38,9 @@ use sedimentree_core::{
         digest::Digest,
         fingerprint::{Fingerprint, FingerprintSeed},
     },
-    fragment::{Fragment, FragmentSummary, id::FragmentId},
+    fragment::{id::FragmentId, Fragment, FragmentSummary},
     id::SedimentreeId,
-    loose_commit::{LooseCommit, id::CommitId},
+    loose_commit::{id::CommitId, LooseCommit},
     sedimentree::FingerprintSummary,
 };
 use subduction_crypto::signed::Signed;
@@ -66,6 +66,7 @@ fn make_subduction() -> (
             >,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
+            InstantTimeout,
             CountLeadingZeroBytes,
         >,
     >,
@@ -76,6 +77,7 @@ fn make_subduction() -> (
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TokioSpawn)
+        .timer(InstantTimeout)
         .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     (sd, listener, manager)

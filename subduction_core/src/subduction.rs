@@ -66,9 +66,10 @@ pub(crate) mod peers;
 use crate::{
     authenticated::Authenticated,
     connection::{
-        Connection, Roundtrip,
+        Connection,
         backoff::Backoff,
         id::ConnectionId,
+        managed::{ManagedCall, ManagedConnection},
         manager::{Command, ConnectionManager, RunManager, Spawn},
         message::{
             BatchSyncRequest, BatchSyncResponse, DataRequestRejected, RequestedData, SyncDiff,
@@ -84,6 +85,7 @@ use crate::{
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, putter::Putter, traits::Storage},
+    timeout::Timeout,
 };
 use alloc::{boxed::Box, collections::BTreeSet, string::ToString, sync::Arc, vec::Vec};
 use async_channel::{Sender, bounded};
@@ -135,14 +137,11 @@ pub struct Subduction<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message>
-        + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>
-        + PartialEq
-        + Clone
-        + 'static,
+    C: Connection<F, H::Message> + PartialEq + Clone + 'static,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
@@ -150,6 +149,7 @@ pub struct Subduction<
     signer: Sig,
     discovery_id: Option<DiscoveryId>,
 
+    timer: O,
     depth_metric: M,
     sedimentrees: Arc<ShardedMap<SedimentreeId, Sedimentree, N>>,
     storage: StoragePowerbox<S, P>,
@@ -197,16 +197,19 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N> + 'static,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> Subduction<'a, F, S, C, H, P, Sig, M, N>
+> Subduction<'a, F, S, C, H, P, Sig, O, M, N>
 where
     H::Message: From<SyncMessage>,
     H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
+    ManagedConnection<C, F, O>:
+        ManagedCall<F, H::Message, SendError = <C as Connection<F, H::Message>>::SendError>,
 {
     /// Initialize a new `Subduction` instance.
     ///
@@ -261,15 +264,17 @@ where
         storage: StoragePowerbox<S, P>,
         pending_blob_requests: Arc<Mutex<PendingBlobRequests>>,
         nonce_cache: NonceCache,
+        timer: O,
         depth_metric: M,
         spawner: Sp,
     ) -> (
         Arc<Self>,
-        ListenerFuture<'a, F, S, C, H, P, Sig, M, N>,
+        ListenerFuture<'a, F, S, C, H, P, Sig, O, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
         F: StartListener<'a, S, C, H::Message, H, P, Sig, M, N>,
+        O: Send + Sync + 'a,
     {
         tracing::info!("initializing Subduction instance");
 
@@ -290,6 +295,7 @@ where
             handler,
             discovery_id,
             signer,
+            timer,
             depth_metric,
             sedimentrees,
             connections,
@@ -313,7 +319,7 @@ where
 
         (
             sd.clone(),
-            ListenerFuture::<'a, F, S, C, H, P, Sig, M, N>::new(F::start_listener(
+            ListenerFuture::<'a, F, S, C, H, P, Sig, O, M, N>::new(F::start_listener(
                 sd,
                 abort_listener_reg,
             )),
@@ -897,15 +903,26 @@ where
             if let Some(tree) = tree {
                 let conns = self.all_connections().await;
                 for conn in conns {
+                    let peer_id = conn.peer_id();
                     let seed = FingerprintSeed::random();
                     let summary = tree.fingerprint_summarize(&seed);
-                    let req_id = conn.next_request_id().await;
+
+                    let mux = {
+                        let muxes = self.multiplexers.lock().await;
+                        muxes
+                            .get(&peer_id)
+                            .and_then(|v| v.first())
+                            .cloned()
+                            .expect("multiplexer should exist for connected peer")
+                    };
+                    let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
+                    let req_id = managed.next_request_id();
                     let BatchSyncResponse {
                         id,
                         result,
                         req_id: resp_batch_id,
-                    } = conn
-                        .call(
+                    } = ManagedCall::<F, H::Message>::call(
+                            &managed,
                             BatchSyncRequest {
                                 id,
                                 req_id,
@@ -1313,7 +1330,7 @@ where
             SyncStats,
             Vec<(
                 Authenticated<C, F>,
-                <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+                crate::connection::managed::CallError<<C as Connection<F, H::Message>>::SendError>,
             )>,
         ),
         IoError<F, S, C, H::Message>,
@@ -1353,10 +1370,19 @@ where
                 fp_summary.fragment_fingerprints().len()
             );
 
-            let req_id = conn.next_request_id().await;
+            let mux = {
+                let muxes = self.multiplexers.lock().await;
+                muxes
+                    .get(to_ask)
+                    .and_then(|v| v.first())
+                    .cloned()
+                    .expect("multiplexer should exist for connected peer")
+            };
+            let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
+            let req_id = managed.next_request_id();
 
-            let result = conn
-                .call(
+            let result = ManagedCall::<F, H::Message>::call(
+                    &managed,
                     BatchSyncRequest {
                         id,
                         req_id,
@@ -1526,7 +1552,9 @@ where
                 SyncStats,
                 Vec<(
                     Authenticated<C, F>,
-                    <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+                    crate::connection::managed::CallError<
+                        <C as Connection<F, H::Message>>::SendError,
+                    >,
                 )>,
             ),
         >,
@@ -1572,10 +1600,18 @@ where
                                 |t| t.fingerprint_summarize(&seed),
                             );
 
-                        let req_id = conn.next_request_id().await;
+                        let mux = {
+                            let muxes = self.multiplexers.lock().await;
+                            muxes.get(peer_id)
+                                .and_then(|v| v.first())
+                                .cloned()
+                                .expect("multiplexer should exist for connected peer")
+                        };
+                        let managed = ManagedConnection::new(conn.clone(), mux, self.timer.clone());
+                        let req_id = managed.next_request_id();
 
-                        let result = conn
-                            .call(
+                        let result = ManagedCall::<F, H::Message>::call(
+                                &managed,
                                 BatchSyncRequest {
                                     id,
                                     req_id,
@@ -1767,7 +1803,7 @@ where
         SyncStats,
         Vec<(
             Authenticated<C, F>,
-            <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+            crate::connection::managed::CallError<<C as Connection<F, H::Message>>::SendError>,
         )>,
         Vec<(SedimentreeId, IoError<F, S, C, H::Message>)>,
     ) {
@@ -1818,7 +1854,7 @@ where
         SyncStats,
         Vec<(
             Authenticated<C, F>,
-            <C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError,
+            crate::connection::managed::CallError<<C as Connection<F, H::Message>>::SendError>,
         )>,
         Vec<(SedimentreeId, IoError<F, S, C, H::Message>)>,
     ) {
@@ -2162,13 +2198,14 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> Drop for Subduction<'a, F, S, C, H, P, Sig, M, N>
+> Drop for Subduction<'a, F, S, C, H, P, Sig, O, M, N>
 {
     fn drop(&mut self) {
         self.abort_manager_handle.abort();
@@ -2180,13 +2217,14 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> ConnectionPolicy<F> for Subduction<'a, F, S, C, H, P, Sig, M, N>
+> ConnectionPolicy<F> for Subduction<'a, F, S, C, H, P, Sig, O, M, N>
 {
     type ConnectionDisallowed = P::ConnectionDisallowed;
 
@@ -2202,13 +2240,14 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> StoragePolicy<F> for Subduction<'a, F, S, C, H, P, Sig, M, N>
+> StoragePolicy<F> for Subduction<'a, F, S, C, H, P, Sig, O, M, N>
 {
     type FetchDisallowed = P::FetchDisallowed;
     type PutDisallowed = P::PutDisallowed;
@@ -2255,7 +2294,7 @@ impl<
 pub trait SubductionFutureForm<
     'a,
     S: Storage<Self>,
-    C: Connection<Self, W> + Roundtrip<Self, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<Self, W> + PartialEq + 'a,
     W: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sig: Signer<Self>,
@@ -2268,7 +2307,7 @@ pub trait SubductionFutureForm<
 impl<
     'a,
     S: Storage<Self>,
-    C: Connection<Self, W> + Roundtrip<Self, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<Self, W> + PartialEq + 'a,
     W: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
     Sig: Signer<Self>,
@@ -2290,7 +2329,7 @@ impl<
 pub trait StartListener<
     'a,
     S: Storage<Self>,
-    C: Connection<Self, W> + Roundtrip<Self, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<Self, W> + PartialEq + 'a,
     W: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
     H: Handler<Self, C, Message = W>,
     P: ConnectionPolicy<Self> + StoragePolicy<Self>,
@@ -2301,8 +2340,8 @@ pub trait StartListener<
     H::HandlerError: Into<ListenError<Self, S, C, W>>,
 {
     /// Start the listener task for Subduction.
-    fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, H, P, Sig, M, N>>,
+    fn start_listener<O: Timeout<Self> + Clone + Send + Sync + 'a>(
+        subduction: Arc<Subduction<'a, Self, S, C, H, P, Sig, O, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>>
     where
@@ -2311,7 +2350,7 @@ pub trait StartListener<
 
 #[future_form(
     Sendable where
-        C: Connection<Sendable, W> + Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse> + PartialEq + Clone + Send + Sync + 'static,
+        C: Connection<Sendable, W> + PartialEq + Clone + Send + Sync + 'static,
         W: Encode + Decode + Clone + Send + Sync + core::fmt::Debug + 'static,
         S: Storage<Sendable> + Send + Sync + 'a,
         P: ConnectionPolicy<Sendable> + StoragePolicy<Sendable> + Send + Sync + 'a,
@@ -2323,11 +2362,10 @@ pub trait StartListener<
         H::HandlerError: Into<ListenError<Sendable, S, C, W>> + Send + 'static,
         S::Error: Send + 'static,
         C::DisconnectionError: Send + 'static,
-        <C as Roundtrip<Sendable, BatchSyncRequest, BatchSyncResponse>>::CallError: Send + 'static,
         C::RecvError: Send + 'static,
         C::SendError: Send + 'static,
     Local where
-        C: Connection<Local, W> + Roundtrip<Local, BatchSyncRequest, BatchSyncResponse> + PartialEq + Clone + 'static,
+        C: Connection<Local, W> + PartialEq + Clone + 'static,
         W: Encode + Decode + Clone + Send + core::fmt::Debug + 'static,
         S: Storage<Local> + 'a,
         P: ConnectionPolicy<Local> + StoragePolicy<Local> + 'a,
@@ -2343,8 +2381,8 @@ where
     H::HandlerError: Into<ListenError<K, S, C, W>>,
     W: Encode + Decode + Clone + Send + core::fmt::Debug + From<SyncMessage> + 'static,
 {
-    fn start_listener(
-        subduction: Arc<Subduction<'a, Self, S, C, H, P, Sig, M, N>>,
+    fn start_listener<O: Timeout<Self> + Clone + Send + Sync + 'a>(
+        subduction: Arc<Subduction<'a, Self, S, C, H, P, Sig, O, M, N>>,
         abort_reg: AbortRegistration,
     ) -> Abortable<Self::Future<'a, ()>> {
         Abortable::new(
@@ -2367,28 +2405,30 @@ pub struct ListenerFuture<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
     fut: Pin<Box<Abortable<F::Future<'a, ()>>>>,
-    _phantom: PhantomData<(S, C, H, P, Sig, M)>,
+    _phantom: PhantomData<(S, C, H, P, Sig, O, M)>,
 }
 
 impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> ListenerFuture<'a, F, S, C, H, P, Sig, M, N>
+> ListenerFuture<'a, F, S, C, H, P, Sig, O, M, N>
 {
     /// Create a new [`ListenerFuture`] wrapping the given abortable future.
     pub(crate) fn new(fut: Abortable<F::Future<'a, ()>>) -> Self {
@@ -2409,13 +2449,14 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> Deref for ListenerFuture<'a, F, S, C, H, P, Sig, M, N>
+> Deref for ListenerFuture<'a, F, S, C, H, P, Sig, O, M, N>
 {
     type Target = Abortable<F::Future<'a, ()>>;
 
@@ -2428,13 +2469,14 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> Future for ListenerFuture<'a, F, S, C, H, P, Sig, M, N>
+> Future for ListenerFuture<'a, F, S, C, H, P, Sig, O, M, N>
 {
     type Output = Result<(), Aborted>;
 
@@ -2447,13 +2489,14 @@ impl<
     'a,
     F: SubductionFutureForm<'a, S, C, H::Message, P, Sig, M, N>,
     S: Storage<F>,
-    C: Connection<F, H::Message> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse> + PartialEq + 'a,
+    C: Connection<F, H::Message> + PartialEq + 'a,
     H: Handler<F, C>,
     P: ConnectionPolicy<F> + StoragePolicy<F>,
     Sig: Signer<F>,
+    O: Timeout<F> + Clone,
     M: DepthMetric,
     const N: usize,
-> Unpin for ListenerFuture<'a, F, S, C, H, P, Sig, M, N>
+> Unpin for ListenerFuture<'a, F, S, C, H, P, Sig, O, M, N>
 {
 }
 
@@ -2461,7 +2504,9 @@ impl<
 mod tests {
     use super::*;
     use crate::{
-        connection::test_utils::{FailingSendMockConnection, TestSpawn, test_signer},
+        connection::test_utils::{
+            FailingSendMockConnection, InstantTimeout, TestSpawn, test_signer,
+        },
         handler::sync::SyncHandler,
         nonce_cache::NonceCache,
         policy::open::OpenPolicy,
@@ -2543,7 +2588,7 @@ mod tests {
         ));
 
         let (subduction, _listener_fut, _actor_fut) =
-            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
                 handler.clone(),
                 None,
                 test_signer(),
@@ -2553,6 +2598,7 @@ mod tests {
                 storage,
                 pending,
                 NonceCache::default(),
+                InstantTimeout,
                 CountLeadingZeroBytes,
                 TestSpawn,
             );
@@ -2608,7 +2654,7 @@ mod tests {
         ));
 
         let (subduction, _listener_fut, _actor_fut) =
-            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+            Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
                 handler.clone(),
                 None,
                 test_signer(),
@@ -2618,6 +2664,7 @@ mod tests {
                 storage,
                 pending,
                 NonceCache::default(),
+                InstantTimeout,
                 CountLeadingZeroBytes,
                 TestSpawn,
             );

@@ -9,7 +9,9 @@ use sedimentree_core::{
     id::SedimentreeId, loose_commit::LooseCommit,
 };
 use subduction_core::{
-    connection::test_utils::{FailingSendMockConnection, MockConnection, TestSpawn, test_signer},
+    connection::test_utils::{
+        test_signer, FailingSendMockConnection, InstantTimeout, MockConnection, TestSpawn,
+    },
     handler::sync::SyncHandler,
     nonce_cache::NonceCache,
     peer::id::PeerId,
@@ -17,8 +19,8 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
     subduction::{
+        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
 };
 use testresult::TestResult;
@@ -64,7 +66,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
     ));
 
     let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
             test_signer(),
@@ -74,6 +76,7 @@ async fn test_add_commit_unregisters_connection_on_send_failure() -> TestResult 
             storage,
             pending,
             NonceCache::default(),
+            InstantTimeout,
             CountLeadingZeroBytes,
             TestSpawn,
         );
@@ -120,7 +123,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
     ));
 
     let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
             test_signer(),
@@ -130,6 +133,7 @@ async fn test_add_fragment_unregisters_connection_on_send_failure() -> TestResul
             storage,
             pending,
             NonceCache::default(),
+            InstantTimeout,
             CountLeadingZeroBytes,
             TestSpawn,
         );
@@ -182,7 +186,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
     ));
 
     let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _>::new(
+        Subduction::<'_, Sendable, _, FailingSendMockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
             test_signer(),
@@ -192,6 +196,7 @@ async fn test_request_blobs_unregisters_connection_on_send_failure() -> TestResu
             storage,
             pending,
             NonceCache::default(),
+            InstantTimeout,
             CountLeadingZeroBytes,
             TestSpawn,
         );
@@ -238,7 +243,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
     ));
 
     let (subduction, _listener_fut, _actor_fut) =
-        Subduction::<'_, Sendable, _, MockConnection, _, _, _>::new(
+        Subduction::<'_, Sendable, _, MockConnection, _, _, _, InstantTimeout>::new(
             handler,
             None,
             test_signer(),
@@ -248,6 +253,7 @@ async fn test_multiple_connections_only_failing_ones_removed() -> TestResult {
             storage,
             pending,
             NonceCache::default(),
+            InstantTimeout,
             CountLeadingZeroBytes,
             TestSpawn,
         );

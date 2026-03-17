@@ -6,7 +6,7 @@ use core::{convert::Infallible, fmt, time::Duration};
 use std::{collections::BTreeSet, sync::Arc, vec::Vec};
 
 use future_form::Sendable;
-use futures::{FutureExt, future::BoxFuture};
+use futures::{future::BoxFuture, FutureExt};
 use sedimentree_core::{
     blob::Blob,
     crypto::{digest::Digest, fingerprint::FingerprintSeed},
@@ -17,7 +17,10 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::{BatchSyncResponse, SyncMessage, SyncResult},
-        test_utils::{ChannelMockConnection, MockConnection, TestSpawn, TokioSpawn, test_signer},
+        test_utils::{
+            test_signer, ChannelMockConnection, InstantTimeout, MockConnection, TestSpawn,
+            TokioSpawn,
+        },
     },
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
@@ -150,10 +153,11 @@ fn make_commit_parts(data: &[u8]) -> (BTreeSet<Digest<LooseCommit>>, Blob) {
 #[tokio::test]
 async fn add_sedimentree_rejected_by_policy() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
             .spawner(TestSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
@@ -176,10 +180,11 @@ async fn add_sedimentree_rejected_by_policy() {
 #[tokio::test]
 async fn add_commit_rejected_by_policy() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
             .spawner(TestSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
@@ -204,13 +209,14 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
     let disallowed_id = SedimentreeId::new([99u8; 32]);
 
     let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(
                 MemoryStorage::new(),
                 Arc::new(AllowSpecificIdPolicy { allowed_id }),
             )
             .spawner(TestSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
     // Adding to allowed ID should succeed
@@ -238,10 +244,11 @@ async fn policy_allows_specific_sedimentree_id() -> TestResult {
 #[tokio::test]
 async fn policy_rejection_does_not_store_data() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
             .spawner(TestSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
     let id = SedimentreeId::new([1u8; 32]);
@@ -321,10 +328,11 @@ impl StoragePolicy<Sendable> for RejectFetchPolicy {
 #[tokio::test]
 async fn multiple_rejections_all_fail_cleanly() {
     let (subduction, _handler, _listener_fut, _actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectPutsPolicy))
             .spawner(TestSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, MockConnection>();
 
     // Try multiple operations - all should fail
@@ -345,10 +353,11 @@ async fn multiple_rejections_all_fail_cleanly() {
 #[tokio::test]
 async fn unauthorized_fetch_returns_unauthorized_result() -> TestResult {
     let (subduction, _handler, listener_fut, actor_fut) =
-        SubductionBuilder::<_, _, _, _, 256>::new()
+        SubductionBuilder::<_, _, _, _, _, 256>::new()
             .signer(test_signer())
             .storage(MemoryStorage::new(), Arc::new(RejectFetchPolicy))
             .spawner(TokioSpawn)
+            .timer(InstantTimeout)
             .build::<Sendable, ChannelMockConnection<SyncMessage>>();
 
     let peer_id = PeerId::new([1u8; 32]);

@@ -14,9 +14,9 @@ use sedimentree_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 
 use super::{
-    Connection, Roundtrip,
     manager::Spawn,
     message::{BatchSyncRequest, BatchSyncResponse, RequestId, SyncMessage},
+    Connection, Roundtrip,
 };
 use crate::{
     authenticated::Authenticated,
@@ -24,7 +24,7 @@ use crate::{
     peer::id::PeerId,
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
-    subduction::{Subduction, builder::SubductionBuilder},
+    subduction::{builder::SubductionBuilder, Subduction},
 };
 
 /// A minimal mock connection for testing.
@@ -633,6 +633,16 @@ impl crate::timeout::Timeout<Sendable> for InstantTimeout {
     }
 }
 
+impl crate::timeout::Timeout<Local> for InstantTimeout {
+    fn timeout<'a, T: 'a>(
+        &'a self,
+        _dur: Duration,
+        fut: LocalBoxFuture<'a, T>,
+    ) -> LocalBoxFuture<'a, Result<T, crate::timeout::TimedOut>> {
+        Box::pin(async move { Ok(fut.await) })
+    }
+}
+
 /// Create a test signer with deterministic key bytes.
 #[must_use]
 pub fn test_signer() -> MemorySigner {
@@ -691,6 +701,7 @@ pub fn new_test_subduction() -> (
             SyncHandler<Sendable, MemoryStorage, MockConnection, OpenPolicy, CountLeadingZeroBytes>,
             OpenPolicy,
             MemorySigner,
+            InstantTimeout,
             CountLeadingZeroBytes,
         >,
     >,
@@ -701,6 +712,7 @@ pub fn new_test_subduction() -> (
         .signer(test_signer())
         .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
         .spawner(TestSpawn)
+        .timer(InstantTimeout)
         .build::<Sendable, MockConnection>();
 
     (sd, listener, manager)

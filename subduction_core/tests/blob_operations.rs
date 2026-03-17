@@ -18,7 +18,9 @@ use sedimentree_core::{
 use subduction_core::{
     connection::{
         message::SyncMessage,
-        test_utils::{ChannelMockConnection, TokioSpawn, new_test_subduction, test_signer},
+        test_utils::{
+            new_test_subduction, test_signer, ChannelMockConnection, InstantTimeout, TokioSpawn,
+        },
     },
     handler::sync::SyncHandler,
     nonce_cache::NonceCache,
@@ -27,8 +29,8 @@ use subduction_core::{
     sharded_map::ShardedMap,
     storage::{memory::MemoryStorage, powerbox::StoragePowerbox},
     subduction::{
+        pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
         Subduction,
-        pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
     },
 };
 use testresult::TestResult;
@@ -75,6 +77,7 @@ fn new_dispatch_subduction() -> (
             >,
             OpenPolicy,
             subduction_crypto::signer::memory::MemorySigner,
+            InstantTimeout,
             CountLeadingZeroBytes,
         >,
     >,
@@ -98,7 +101,7 @@ fn new_dispatch_subduction() -> (
         CountLeadingZeroBytes,
     ));
 
-    Subduction::<'_, Sendable, _, ChannelMockConnection<SyncMessage>, _, _, _>::new(
+    Subduction::<'_, Sendable, _, ChannelMockConnection<SyncMessage>, _, _, _, InstantTimeout>::new(
         handler,
         None,
         test_signer(),
@@ -108,6 +111,7 @@ fn new_dispatch_subduction() -> (
         storage,
         pending,
         NonceCache::default(),
+        InstantTimeout,
         CountLeadingZeroBytes,
         TokioSpawn,
     )

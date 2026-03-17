@@ -7,10 +7,7 @@ use sedimentree_core::{blob::Blob, crypto::digest::Digest, id::SedimentreeId};
 use thiserror::Error;
 
 use crate::{
-    connection::{
-        Connection, Roundtrip,
-        message::{BatchSyncRequest, BatchSyncResponse},
-    },
+    connection::{Connection, managed::CallError},
     peer::id::PeerId,
     storage::traits::Storage,
 };
@@ -48,12 +45,7 @@ pub enum HydrationError<F: FutureForm, S: Storage<F>> {
 ///
 /// This covers storage and network connection errors.
 #[derive(Debug, Error)]
-pub enum IoError<
-    F: FutureForm + ?Sized,
-    S: Storage<F>,
-    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
-    M: Encode + Decode,
-> {
+pub enum IoError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode> {
     /// An error occurred while using storage.
     #[error(transparent)]
     Storage(S::Error),
@@ -68,7 +60,7 @@ pub enum IoError<
 
     /// An error occurred during a roundtrip call on the connection.
     #[error(transparent)]
-    ConnCall(<C as Roundtrip<F, BatchSyncRequest, BatchSyncResponse>>::CallError),
+    ConnCall(CallError<C::SendError>),
 
     /// The blob content doesn't match the claimed metadata.
     #[error(transparent)]
@@ -77,12 +69,7 @@ pub enum IoError<
 
 /// An error that can occur while handling a blob request.
 #[derive(Debug, Error)]
-pub enum BlobRequestErr<
-    F: FutureForm,
-    S: Storage<F>,
-    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
-    M: Encode + Decode,
-> {
+pub enum BlobRequestErr<F: FutureForm, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode> {
     /// An IO error occurred while handling the blob request.
     #[error("IO error: {0}")]
     IoError(#[from] IoError<F, S, C, M>),
@@ -94,12 +81,8 @@ pub enum BlobRequestErr<
 
 /// An error that can occur while handling a batch sync request.
 #[derive(Debug, Error)]
-pub enum ListenError<
-    F: FutureForm + ?Sized,
-    S: Storage<F>,
-    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
-    M: Encode + Decode,
-> {
+pub enum ListenError<F: FutureForm + ?Sized, S: Storage<F>, C: Connection<F, M>, M: Encode + Decode>
+{
     /// An IO error occurred while handling the batch sync request.
     #[error(transparent)]
     IoError(#[from] IoError<F, S, C, M>),
@@ -128,7 +111,7 @@ pub enum AddConnectionError<D> {
 pub enum WriteError<
     F: FutureForm + ?Sized,
     S: Storage<F>,
-    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, M>,
     M: Encode + Decode,
     PutErr = core::convert::Infallible,
 > {
@@ -150,7 +133,7 @@ pub enum WriteError<
 pub enum SendRequestedDataError<
     F: FutureForm + ?Sized,
     S: Storage<F>,
-    C: Connection<F, M> + Roundtrip<F, BatchSyncRequest, BatchSyncResponse>,
+    C: Connection<F, M>,
     M: Encode + Decode,
 > {
     /// An I/O error occurred.
