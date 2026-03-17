@@ -15,6 +15,7 @@ repository.workspace = true
 async-channel = { workspace = true }
 async-lock = { workspace = true }
 bijou64 = { workspace = true }
+bolero = { workspace = true, optional = true, features = ["arbitrary"] }
 future_form = { workspace = true }
 futures = { workspace = true }
 nonempty = { workspace = true }
@@ -32,6 +33,7 @@ tokio = { workspace = true, features = ["rt", "macros", "time"] }
 
 [features]
 default = []
+bolero = ["dep:bolero", "sedimentree_core/bolero", "std"]
 std = [
   "async-channel/std",
   "async-lock/std",

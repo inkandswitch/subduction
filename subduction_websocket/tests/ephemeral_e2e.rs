@@ -12,8 +12,10 @@ use std::{
 };
 
 use future_form::Sendable;
-use sedimentree_core::codec::{decode::Decode, encode::Encode};
-use sedimentree_core::id::SedimentreeId;
+use sedimentree_core::{
+    codec::{decode::Decode, encode::Encode},
+    id::SedimentreeId,
+};
 use subduction_core::{
     connection::Connection, handshake::audience::Audience, peer::id::PeerId,
     policy::open::OpenPolicy, storage::memory::MemoryStorage,
@@ -22,11 +24,11 @@ use subduction_core::{
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_ephemeral::message::EphemeralMessage;
 use subduction_websocket::{
-    tokio::{
-        client::TokioWebSocketClient, server::TokioWebSocketServer, unified::UnifiedWebSocket,
-        TimeoutTokio, TokioSpawn,
-    },
     DEFAULT_MAX_MESSAGE_SIZE,
+    tokio::{
+        TimeoutTokio, TokioSpawn, client::TokioWebSocketClient, server::TokioWebSocketServer,
+        unified::UnifiedWebSocket,
+    },
 };
 use testresult::TestResult;
 

@@ -573,3 +573,92 @@ async fn subscribe_rejected_message_is_noop() -> TestResult {
 
     Ok(())
 }
+
+// ── Edge cases ──────────────────────────────────────────────────────────
+
+#[tokio::test]
+async fn publish_to_topic_with_no_subscribers() -> TestResult {
+    let connections: Connections = Arc::new(Mutex::new(Map::new()));
+    let (handler, event_rx) = make_open_handler(connections.clone());
+    let (auth, _handle) = register_peer(&connections, peer(1)).await;
+
+    handler
+        .handle(
+            &auth,
+            EphemeralMessage::Ephemeral {
+                id: topic(0x99),
+                payload: vec![1, 2, 3],
+            },
+        )
+        .await?;
+
+    // Callback still fires (the event happened), even with no subscribers.
+    let event = tokio::time::timeout(Duration::from_millis(100), event_rx.recv()).await??;
+    assert_eq!(event.id, topic(0x99));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn unsubscribe_from_non_subscribed_topic_is_noop() -> TestResult {
+    let connections: Connections = Arc::new(Mutex::new(Map::new()));
+    let (handler, _rx) = make_open_handler(connections.clone());
+    let (auth, _handle) = register_peer(&connections, peer(1)).await;
+
+    handler
+        .handle(
+            &auth,
+            EphemeralMessage::Unsubscribe {
+                ids: vec![topic(0xAA)],
+            },
+        )
+        .await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn duplicate_subscribe_does_not_duplicate_delivery() -> TestResult {
+    let connections: Connections = Arc::new(Mutex::new(Map::new()));
+    let (handler, _rx) = make_open_handler(connections.clone());
+    let (auth_a, handle_a) = register_peer(&connections, peer(1)).await;
+    let (auth_b, _handle_b) = register_peer(&connections, peer(2)).await;
+
+    // Subscribe twice to the same topic.
+    for _ in 0..2 {
+        handler
+            .handle(
+                &auth_a,
+                EphemeralMessage::Subscribe {
+                    ids: vec![topic(0xDD)],
+                },
+            )
+            .await?;
+    }
+
+    handler
+        .handle(
+            &auth_b,
+            EphemeralMessage::Ephemeral {
+                id: topic(0xDD),
+                payload: vec![42],
+            },
+        )
+        .await?;
+
+    // Should receive exactly one message, not two.
+    let msg =
+        tokio::time::timeout(Duration::from_millis(100), handle_a.outbound_rx.recv()).await??;
+    assert_eq!(
+        msg,
+        EphemeralMessage::Ephemeral {
+            id: topic(0xDD),
+            payload: vec![42],
+        }
+    );
+
+    let second = tokio::time::timeout(Duration::from_millis(50), handle_a.outbound_rx.recv()).await;
+    assert!(second.is_err(), "should not receive a duplicate");
+
+    Ok(())
+}

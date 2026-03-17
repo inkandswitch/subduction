@@ -5161,6 +5161,7 @@ dependencies = [
  "async-channel",
  "async-lock",
  "bijou64",
+ "bolero",
  "future_form",
  "futures 0.3.32",
  "nonempty 0.12.0",

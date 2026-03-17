@@ -59,6 +59,7 @@ mod min_sizes {
 ///
 /// [`SyncMessage`]: subduction_core::connection::message::SyncMessage
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "bolero", derive(bolero::TypeGenerator))]
 pub enum EphemeralMessage {
     /// An ephemeral payload for a specific sedimentree topic.
     ///
@@ -460,7 +461,49 @@ mod tests {
     }
 
     #[test]
-    fn schema_bytes_are_correct() {
-        assert_eq!(&EPHEMERAL_SCHEMA, b"SUE\x00");
+    fn too_short_rejected() {
+        let err = EphemeralMessage::try_decode(&[0x00, 0x01, 0x02]).unwrap_err();
+        assert!(
+            matches!(err, DecodeError::MessageTooShort { .. }),
+            "expected MessageTooShort, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn size_mismatch_rejected() {
+        let msg = EphemeralMessage::Ephemeral {
+            id: SedimentreeId::new([0xAA; 32]),
+            payload: vec![1, 2, 3, 4, 5],
+        };
+        let mut encoded = msg.encode();
+        encoded.truncate(encoded.len() - 2);
+
+        let err = EphemeralMessage::try_decode(&encoded).unwrap_err();
+        assert!(
+            matches!(err, DecodeError::SizeMismatch(_)),
+            "expected SizeMismatch, got {err:?}"
+        );
+    }
+
+    #[cfg(feature = "bolero")]
+    #[test]
+    fn prop_roundtrip() {
+        bolero::check!()
+            .with_type::<EphemeralMessage>()
+            .for_each(|msg| {
+                let encoded = msg.encode();
+                let decoded = EphemeralMessage::try_decode(&encoded).expect("roundtrip decode");
+                assert_eq!(&decoded, msg);
+            });
+    }
+
+    #[cfg(feature = "bolero")]
+    #[test]
+    fn prop_encoded_size_matches() {
+        bolero::check!()
+            .with_type::<EphemeralMessage>()
+            .for_each(|msg| {
+                assert_eq!(msg.encoded_size(), msg.encode().len());
+            });
     }
 }
