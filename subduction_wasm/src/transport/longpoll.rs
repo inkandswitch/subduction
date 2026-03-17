@@ -60,20 +60,17 @@ impl Timeout<Local> for JsTimeout {
     }
 }
 
-/// Type alias for the long-poll transport used in Wasm.
-pub type WasmLongPollTransport = HttpLongPollTransport;
-
-/// JS-facing wrapper around [`WasmLongPollTransport`] that exposes the
+/// JS-facing wrapper around [`HttpLongPollTransport`] that exposes the
 /// byte-oriented [`Transport`](super::JsTransport) interface
 /// (`sendBytes`/`recvBytes`/`disconnect`) so it can be used as a
 /// duck-typed `JsTransport` from JavaScript.
 #[wasm_bindgen(js_name = SubductionHttpLongPoll)]
 #[derive(Debug, Clone)]
-pub struct WasmHttpLongPoll(WasmLongPollTransport);
+pub struct WasmHttpLongPoll(HttpLongPollTransport);
 
 impl WasmHttpLongPoll {
     /// Wrap a raw long-poll transport for JS exposure.
-    pub(crate) fn new(transport: WasmLongPollTransport) -> Self {
+    pub(crate) fn new(transport: HttpLongPollTransport) -> Self {
         Self(transport)
     }
 }
@@ -151,7 +148,7 @@ impl WasmHttpLongPoll {
 #[wasm_bindgen(js_name = AuthenticatedLongPoll)]
 #[derive(Debug)]
 pub struct WasmAuthenticatedLongPoll {
-    inner: Authenticated<WasmLongPollTransport, Local>,
+    inner: Authenticated<HttpLongPollTransport, Local>,
     session_id: SessionId,
 }
 
@@ -298,7 +295,7 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
-    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollTransportError>
+    ) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
         let client = make_client(base_url);
 
@@ -319,7 +316,7 @@ impl WasmLongPoll {
         base_url: &str,
         signer: &JsSigner,
         service_name: Option<String>,
-    ) -> Result<(Authenticated<WasmLongPollTransport, Local>, SessionId), LongPollTransportError>
+    ) -> Result<(Authenticated<HttpLongPollTransport, Local>, SessionId), LongPollTransportError>
     {
         let client = make_client(base_url);
         let service_name = service_name.unwrap_or_else(|| host_from_url(base_url));
