@@ -31,11 +31,6 @@ use alloc::{sync::Arc, vec::Vec};
 
 use future_form::FutureForm;
 
-pub use self::{
-    message::{MessageTransport, RecvDecodeError},
-    mux::{MuxCallError, MuxTransport},
-};
-
 /// A bidirectional transport.
 ///
 /// Implement this for transport backends (WebSocket, QUIC, HTTP long-poll,

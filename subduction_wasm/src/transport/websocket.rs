@@ -34,7 +34,7 @@ use subduction_core::{
 /// Raw bytes from the WebSocket's `onmessage` handler are buffered in an
 /// `async_channel` and returned via `recvBytes`. No message decoding or
 /// request-response routing happens here — that's handled by
-/// [`MessageTransport`] and [`MuxTransport`](subduction_core::transport::MuxTransport).
+/// [`MessageTransport`] and [`MuxTransport`](subduction_core::transport::mux::MuxTransport).
 #[wasm_bindgen(js_name = SubductionWebSocket)]
 #[derive(Debug, Clone)]
 pub struct WasmWebSocket {

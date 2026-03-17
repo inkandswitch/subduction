@@ -129,7 +129,7 @@ impl<K: FutureForm, T, O> Transport<K> for MuxTransport<T, O> {
 }
 
 /// Error from a [`MuxTransport`] call.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug, Clone, thiserror::Error)]
 pub enum MuxCallError<S: core::error::Error> {
     /// The transport failed to send the request.
     #[error("send error: {0}")]
@@ -142,6 +142,18 @@ pub enum MuxCallError<S: core::error::Error> {
     /// The call timed out waiting for a response.
     #[error("call timed out")]
     Timeout,
+}
+
+impl<S: core::error::Error> MuxCallError<S> {
+    /// Short error name suitable for JS `Error.name` or logging.
+    #[must_use]
+    pub const fn error_name(&self) -> &'static str {
+        match self {
+            Self::Send(_) => "CallSendError",
+            Self::ResponseDropped => "CallResponseDropped",
+            Self::Timeout => "CallTimeout",
+        }
+    }
 }
 
 #[future_form(

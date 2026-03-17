@@ -21,7 +21,7 @@ use subduction_core::{
     policy::open::OpenPolicy,
     storage::memory::MemoryStorage,
     subduction::{Subduction, builder::SubductionBuilder},
-    transport::MessageTransport,
+    transport::message::MessageTransport,
 };
 use subduction_crypto::signer::memory::MemorySigner;
 use subduction_websocket::{

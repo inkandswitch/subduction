@@ -21,7 +21,7 @@ use subduction_core::{
     storage::metrics::{MetricsStorage, RefreshMetrics},
     subduction::{Subduction, builder::SubductionBuilder},
     timestamp::TimestampSeconds,
-    transport::MessageTransport,
+    transport::message::MessageTransport,
 };
 use subduction_crypto::{nonce::Nonce, signer::memory::MemorySigner};
 use subduction_http_longpoll::server::LongPollHandler;

@@ -79,14 +79,29 @@ impl WasmHttpLongPoll {
 }
 
 /// Error from a long-poll transport method exposed to JS.
-#[derive(Debug, Error)]
-#[error("{0}")]
-pub struct WasmHttpLongPollError(String);
+#[derive(Debug, Clone, Copy, Error)]
+pub enum WasmHttpLongPollError {
+    /// Outbound channel closed.
+    #[error(transparent)]
+    Send(#[from] subduction_http_longpoll::error::SendError),
+
+    /// Inbound channel closed.
+    #[error(transparent)]
+    Recv(#[from] subduction_http_longpoll::error::RecvError),
+
+    /// Disconnection failed.
+    #[error(transparent)]
+    Disconnect(#[from] subduction_http_longpoll::error::DisconnectionError),
+}
 
 impl From<WasmHttpLongPollError> for JsValue {
     fn from(err: WasmHttpLongPollError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("HttpLongPollError");
+        js_err.set_name(match &err {
+            WasmHttpLongPollError::Send(_) => "HttpLongPollSendError",
+            WasmHttpLongPollError::Recv(_) => "HttpLongPollRecvError",
+            WasmHttpLongPollError::Disconnect(_) => "HttpLongPollDisconnectError",
+        });
         js_err.into()
     }
 }
@@ -100,9 +115,8 @@ impl WasmHttpLongPoll {
     /// Returns an error if the outbound channel is closed.
     #[wasm_bindgen(js_name = sendBytes)]
     pub async fn send_bytes(&self, bytes: &[u8]) -> Result<(), WasmHttpLongPollError> {
-        Transport::<Local>::send_bytes(&self.0, bytes)
-            .await
-            .map_err(|e| WasmHttpLongPollError(e.to_string()))
+        Transport::<Local>::send_bytes(&self.0, bytes).await?;
+        Ok(())
     }
 
     /// Receive the next message frame as raw bytes.
@@ -112,9 +126,7 @@ impl WasmHttpLongPoll {
     /// Returns an error if the inbound channel is closed.
     #[wasm_bindgen(js_name = recvBytes)]
     pub async fn recv_bytes(&self) -> Result<js_sys::Uint8Array, WasmHttpLongPollError> {
-        let bytes = Transport::<Local>::recv_bytes(&self.0)
-            .await
-            .map_err(|e| WasmHttpLongPollError(e.to_string()))?;
+        let bytes = Transport::<Local>::recv_bytes(&self.0).await?;
         Ok(js_sys::Uint8Array::from(bytes.as_slice()))
     }
 
@@ -125,9 +137,8 @@ impl WasmHttpLongPoll {
     /// Returns an error if the disconnect fails.
     #[wasm_bindgen(js_name = disconnect)]
     pub async fn disconnect(&self) -> Result<(), WasmHttpLongPollError> {
-        Transport::<Local>::disconnect(&self.0)
-            .await
-            .map_err(|e| WasmHttpLongPollError(e.to_string()))
+        Transport::<Local>::disconnect(&self.0).await?;
+        Ok(())
     }
 }
 

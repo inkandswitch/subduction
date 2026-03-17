@@ -1,18 +1,17 @@
 //! Wasm-specific handshake implementations.
 //!
-//! This module provides [`Handshake`] trait implementations for:
-//! - [`WasmWebSocketHandshake`] — operates on a raw `web_sys::WebSocket`
-//! - [`JsHandshakeTransport`] — operates on a user-provided JS object that
-//!   implements the `Transport` interface (`sendBytes`/`recvBytes`/`disconnect`)
+//! Provides [`WasmWebSocketHandshake`] — a [`Handshake`] impl that operates
+//! on a raw `web_sys::WebSocket` for the WebSocket-specific handshake path.
+//!
+//! For custom JS transports, `Handshake<Local>` is implemented directly on
+//! [`JsTransport`](super::JsTransport) in the parent module.
 
 use alloc::{format, string::String, vec::Vec};
 
-use future_form::{FutureForm, Local};
-use futures::{channel::oneshot, future::LocalBoxFuture};
-use js_sys::{Promise, Uint8Array};
+use future_form::Local;
+use futures::{FutureExt, channel::oneshot, future::LocalBoxFuture};
 use subduction_core::handshake::Handshake;
-use wasm_bindgen::{JsCast, closure::Closure, prelude::*};
-use wasm_bindgen_futures::JsFuture;
+use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{MessageEvent, WebSocket, js_sys};
 
 use crate::error::WasmHandshakeError;
@@ -41,16 +40,17 @@ impl Handshake<Local> for WasmWebSocketHandshake {
     type Error = WasmHandshakeError;
 
     fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        Local::from_future(async move {
+        async move {
             self.ws
                 .send_with_u8_array(&bytes)
                 .map_err(|e| WasmHandshakeError::WebSocket(format!("{e:?}")))?;
             Ok(())
-        })
+        }
+        .boxed_local()
     }
 
     fn recv(&mut self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::Error>> {
-        Local::from_future(async move {
+        async move {
             // Set up oneshot channel to receive the response
             let (tx, rx) = oneshot::channel::<Result<Vec<u8>, String>>();
             let tx_cell = core::cell::RefCell::new(Some(tx));
@@ -84,62 +84,7 @@ impl Handshake<Local> for WasmWebSocketHandshake {
             drop(onmessage);
 
             Ok(result)
-        })
-    }
-}
-
-// ── Generic JS handshake connection ──────────────────────────────────────────
-
-#[wasm_bindgen]
-extern "C" {
-    /// A JS `Transport` used for the handshake phase.
-    ///
-    /// Any object that implements the `Transport` interface (`sendBytes`,
-    /// `recvBytes`, `disconnect`) can be passed to
-    /// [`AuthenticatedTransport.setup`] or [`.accept`].
-    /// The same object is reused as the post-handshake transport.
-    #[wasm_bindgen(js_name = Transport, typescript_type = "Transport")]
-    pub type JsHandshakeTransport;
-
-    /// Send raw bytes over the transport (handshake phase).
-    #[wasm_bindgen(method, js_name = sendBytes)]
-    fn js_send_bytes(this: &JsHandshakeTransport, bytes: Uint8Array) -> Promise;
-
-    /// Receive raw bytes from the transport (handshake phase).
-    #[wasm_bindgen(method, js_name = recvBytes)]
-    fn js_recv_bytes(this: &JsHandshakeTransport) -> Promise;
-}
-
-impl core::fmt::Debug for JsHandshakeTransport {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        f.debug_tuple("JsHandshakeTransport").finish()
-    }
-}
-
-impl Handshake<Local> for JsHandshakeTransport {
-    type Error = WasmHandshakeError;
-
-    fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
-        Local::from_future(async move {
-            let array = Uint8Array::from(bytes.as_slice());
-            JsFuture::from(self.js_send_bytes(array))
-                .await
-                .map_err(|e| WasmHandshakeError::WebSocket(format!("{e:?}")))?;
-            Ok(())
-        })
-    }
-
-    fn recv(&mut self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::Error>> {
-        Local::from_future(async move {
-            let value = JsFuture::from(self.js_recv_bytes())
-                .await
-                .map_err(|e| WasmHandshakeError::WebSocket(format!("{e:?}")))?;
-
-            let array: Uint8Array = value.dyn_into().map_err(|v| {
-                WasmHandshakeError::WebSocket(format!("expected Uint8Array, got {v:?}"))
-            })?;
-
-            Ok(array.to_vec())
-        })
+        }
+        .boxed_local()
     }
 }

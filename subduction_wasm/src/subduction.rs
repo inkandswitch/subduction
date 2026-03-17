@@ -1028,19 +1028,15 @@ impl DepthMetric for WasmHashMetric {
 /// Wasm wrapper for call errors.
 #[wasm_bindgen(js_name = CallError)]
 #[derive(Debug, Clone, thiserror::Error)]
-#[error("{0}")]
-pub struct WasmCallError(String);
-
-impl<E: core::error::Error> From<subduction_core::transport::MuxCallError<E>> for WasmCallError {
-    fn from(err: subduction_core::transport::MuxCallError<E>) -> Self {
-        Self(err.to_string())
-    }
-}
+#[error(transparent)]
+pub struct WasmCallError(
+    #[from] subduction_core::transport::mux::MuxCallError<crate::transport::JsTransportError>,
+);
 
 impl From<WasmCallError> for js_sys::Error {
     fn from(err: WasmCallError) -> Self {
         let js_err = js_sys::Error::new(&err.to_string());
-        js_err.set_name("CallError");
+        js_err.set_name(err.0.error_name());
         js_err
     }
 }

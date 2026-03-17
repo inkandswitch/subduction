@@ -18,9 +18,9 @@ use js_sys::{self, Promise};
 use subduction_core::{
     authenticated::Authenticated,
     connection::message::{BatchSyncRequest, BatchSyncResponse, RequestId},
-    handshake::{self as hs, audience::Audience},
+    handshake::{self as hs, Handshake, audience::Audience},
     timestamp::TimestampSeconds,
-    transport::{MessageTransport, MuxTransport, Transport},
+    transport::{Transport, message::MessageTransport, mux::MuxTransport},
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
 use thiserror::Error;
@@ -138,6 +138,38 @@ impl Transport<Local> for JsTransport {
                 .await
                 .map_err(JsTransportError::Disconnect)?;
             Ok(())
+        }
+        .boxed_local()
+    }
+}
+
+impl Handshake<Local> for JsTransport {
+    type Error = crate::error::WasmHandshakeError;
+
+    fn send(&mut self, bytes: Vec<u8>) -> LocalBoxFuture<'_, Result<(), Self::Error>> {
+        let array = js_sys::Uint8Array::from(bytes.as_slice());
+        async move {
+            JsFuture::from(self.js_send_bytes(&array))
+                .await
+                .map_err(|e| crate::error::WasmHandshakeError::WebSocket(format!("{e:?}")))?;
+            Ok(())
+        }
+        .boxed_local()
+    }
+
+    fn recv(&mut self) -> LocalBoxFuture<'_, Result<Vec<u8>, Self::Error>> {
+        async move {
+            let value = JsFuture::from(self.js_recv_bytes())
+                .await
+                .map_err(|e| crate::error::WasmHandshakeError::WebSocket(format!("{e:?}")))?;
+
+            let array: js_sys::Uint8Array = value.dyn_into().map_err(|v| {
+                crate::error::WasmHandshakeError::WebSocket(format!(
+                    "expected Uint8Array, got {v:?}"
+                ))
+            })?;
+
+            Ok(array.to_vec())
         }
         .boxed_local()
     }
@@ -355,7 +387,7 @@ impl WasmAuthenticatedTransport {
     ///
     /// # Arguments
     ///
-    /// * `connection` - A transport implementing `sendBytes`/`recvBytes`/`disconnect`
+    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`
     /// * `signer` - The client's signer for authentication
     /// * `expected_peer_id` - The expected server peer ID (verified during handshake)
     ///
@@ -364,7 +396,7 @@ impl WasmAuthenticatedTransport {
     /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
     #[wasm_bindgen]
     pub async fn setup(
-        connection: handshake::JsHandshakeTransport,
+        transport: JsTransport,
         signer: &JsSigner,
         expected_peer_id: &WasmPeerId,
     ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
@@ -374,10 +406,8 @@ impl WasmAuthenticatedTransport {
         let nonce = Nonce::random();
 
         let (authenticated, peer_id) = hs::initiate::<Local, _, _, _, _>(
-            connection,
-            |hs_transport, peer_id| {
-                let transport: JsTransport =
-                    wasm_bindgen::JsValue::from(hs_transport).unchecked_into();
+            transport,
+            |transport, peer_id| {
                 (
                     make_transport(transport, peer_id, DEFAULT_MUX_TIME_LIMIT),
                     peer_id,
@@ -405,7 +435,7 @@ impl WasmAuthenticatedTransport {
     ///
     /// # Arguments
     ///
-    /// * `connection` - A `HandshakeConnection` (extends `Transport`)
+    /// * `transport` - A `Transport` implementing `sendBytes`/`recvBytes`/`disconnect`
     /// * `signer` - The responder's signer for authentication
     /// * `max_drift_seconds` - Maximum acceptable clock drift in seconds (default: 600)
     ///
@@ -414,7 +444,7 @@ impl WasmAuthenticatedTransport {
     /// Returns a [`HandshakeError`](WasmHandshakeError) if the handshake fails.
     #[wasm_bindgen]
     pub async fn accept(
-        connection: handshake::JsHandshakeTransport,
+        transport: JsTransport,
         signer: &JsSigner,
         max_drift_seconds: Option<u32>,
     ) -> Result<WasmAuthenticatedTransport, WasmHandshakeError> {
@@ -429,10 +459,8 @@ impl WasmAuthenticatedTransport {
         let now = TimestampSeconds::new((js_sys::Date::now() / 1000.0) as u64);
 
         let (authenticated, peer_id) = hs::respond::<Local, _, _, _, _>(
-            connection,
-            |hs_transport, peer_id| {
-                let transport: JsTransport =
-                    wasm_bindgen::JsValue::from(hs_transport).unchecked_into();
+            transport,
+            |transport, peer_id| {
                 (
                     make_transport(transport, peer_id, DEFAULT_MUX_TIME_LIMIT),
                     peer_id,

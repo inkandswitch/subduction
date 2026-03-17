@@ -14,7 +14,7 @@ use subduction_core::{
     },
     multiplexer::Multiplexer,
     peer::id::PeerId,
-    transport::{MessageTransport, MuxTransport, Transport},
+    transport::{Transport, message::MessageTransport, mux::MuxTransport},
 };
 use testresult::TestResult;
 

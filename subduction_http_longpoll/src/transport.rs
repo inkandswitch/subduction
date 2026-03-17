@@ -334,7 +334,7 @@ mod tests {
         use sedimentree_core::id::SedimentreeId;
         use subduction_core::{
             connection::{Connection, message::RemoveSubscriptions},
-            transport::MessageTransport,
+            transport::message::MessageTransport,
         };
 
         let peer_id = PeerId::new([2u8; 32]);
@@ -359,7 +359,7 @@ mod tests {
         use sedimentree_core::id::SedimentreeId;
         use subduction_core::{
             connection::{Connection, message::RemoveSubscriptions},
-            transport::MessageTransport,
+            transport::message::MessageTransport,
         };
 
         let peer_id = PeerId::new([3u8; 32]);
