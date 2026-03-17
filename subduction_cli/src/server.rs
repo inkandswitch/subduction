@@ -54,6 +54,7 @@ type CliSubduction = Arc<
         >,
         OpenPolicy,
         MemorySigner,
+        FuturesTimerTimeout,
         CountLeadingZeroBytes,
     >,
 >;
@@ -214,7 +215,8 @@ pub(crate) async fn run(args: ServerArgs, token: CancellationToken) -> Result<()
     let mut builder = SubductionBuilder::new()
         .signer(signer.clone())
         .storage(storage, Arc::new(OpenPolicy))
-        .spawner(TokioSpawn);
+        .spawner(TokioSpawn)
+        .timer(FuturesTimerTimeout);
 
     if let Some(id) = discovery_id {
         builder = builder.discovery_id(id);

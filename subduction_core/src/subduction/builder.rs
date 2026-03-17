@@ -67,23 +67,23 @@ use sedimentree_core::{
 
 use crate::{
     authenticated::Authenticated,
-    connection::{Connection, manager::Spawn, message::SyncMessage},
-    handler::{Handler, sync::SyncHandler},
+    connection::{manager::Spawn, message::SyncMessage, Connection},
+    handler::{sync::SyncHandler, Handler},
     handshake::audience::DiscoveryId,
     nonce_cache::NonceCache,
     peer::id::PeerId,
     policy::{connection::ConnectionPolicy, storage::StoragePolicy},
     sharded_map::ShardedMap,
     storage::{powerbox::StoragePowerbox, traits::Storage},
-    timeout::Timeout,
+    timeout::Tmreout,
 };
 use nonempty::NonEmpty;
 use subduction_crypto::signer::Signer;
 
 use super::{
-    ListenerFuture, StartListener, Subduction, SubductionFutureForm,
     error::ListenError,
-    pending_blob_requests::{DEFAULT_MAX_PENDING_BLOB_REQUESTS, PendingBlobRequests},
+    pending_blob_requests::{PendingBlobRequests, DEFAULT_MAX_PENDING_BLOB_REQUESTS},
+    ListenerFuture, StartListener, Subduction, SubductionFutureForm,
 };
 
 /// Marker for a required builder field that hasn't been set yet.
@@ -108,14 +108,14 @@ pub struct SubductionBuilder<
     Sig = Unset,
     Sp = Unset,
     Sto = Unset,
-    Tim = Unset,
+    Tmr = Unset,
     M = CountLeadingZeroBytes,
     const N: usize = 256,
 > {
     signer: Sig,
     spawner: Sp,
     storage: Sto,
-    timer: Tim,
+    timer: Tmr,
 
     discovery_id: Option<DiscoveryId>,
     depth_metric: M,
@@ -174,11 +174,11 @@ impl<const N: usize> Default
     }
 }
 
-impl<Sp, Sto, Tim, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, Tim, M, N> {
+impl<Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, Tmr, M, N> {
     /// Set the signer for peer identity and handshake authentication.
     ///
     /// This is a required field.
-    pub fn signer<Sig>(self, signer: Sig) -> SubductionBuilder<Sig, Sp, Sto, Tim, M, N> {
+    pub fn signer<Sig>(self, signer: Sig) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
         SubductionBuilder {
             signer,
             spawner: self.spawner,
@@ -193,13 +193,13 @@ impl<Sp, Sto, Tim, M, const N: usize> SubductionBuilder<Unset, Sp, Sto, Tim, M, 
     }
 }
 
-impl<Sig, Sto, Tim, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, Tim, M, N> {
+impl<Sig, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, Tmr, M, N> {
     /// Set the task spawner for background work.
     ///
     /// This is a required field. Common implementations:
     /// - `TokioSpawn` for native async (requires `Sendable`)
     /// - `WasmSpawn` for browser environments (requires `Local`)
-    pub fn spawner<Sp>(self, spawner: Sp) -> SubductionBuilder<Sig, Sp, Sto, Tim, M, N> {
+    pub fn spawner<Sp>(self, spawner: Sp) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
         SubductionBuilder {
             signer: self.signer,
             spawner,
@@ -214,7 +214,7 @@ impl<Sig, Sto, Tim, M, const N: usize> SubductionBuilder<Sig, Unset, Sto, Tim, M
     }
 }
 
-impl<Sig, Sp, Tim, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, Tim, M, N> {
+impl<Sig, Sp, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, Tmr, M, N> {
     /// Set the storage backend and authorization policy.
     ///
     /// This is a required field. The `storage` backend provides
@@ -223,7 +223,7 @@ impl<Sig, Sp, Tim, M, const N: usize> SubductionBuilder<Sig, Sp, Unset, Tim, M, 
         self,
         storage: S,
         policy: Arc<P>,
-    ) -> SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tim, M, N> {
+    ) -> SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tmr, M, N> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
@@ -242,8 +242,8 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Unset, M, 
     /// Set the timeout strategy for roundtrip calls.
     ///
     /// This is a required field. Common implementations:
-    /// - `TokioTimeout` for native async
-    /// - `JsTimeout` for browser environments
+    /// - `TokioTmreout` for native async
+    /// - `JsTmreout` for browser environments
     pub fn timer<O>(self, timer: O) -> SubductionBuilder<Sig, Sp, Sto, O, M, N> {
         SubductionBuilder {
             signer: self.signer,
@@ -259,7 +259,7 @@ impl<Sig, Sp, Sto, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Unset, M, 
     }
 }
 
-impl<Sig, Sp, Sto, Tim, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tim, M, N> {
+impl<Sig, Sp, Sto, Tmr, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tmr, M, N> {
     /// Set the discovery ID for discovery-mode connections.
     ///
     /// Defaults to `None` (peer-to-peer mode only).
@@ -275,7 +275,7 @@ impl<Sig, Sp, Sto, Tim, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tim, 
     pub fn depth_metric<M2: DepthMetric>(
         self,
         metric: M2,
-    ) -> SubductionBuilder<Sig, Sp, Sto, Tim, M2, N> {
+    ) -> SubductionBuilder<Sig, Sp, Sto, Tmr, M2, N> {
         SubductionBuilder {
             signer: self.signer,
             spawner: self.spawner,
@@ -326,8 +326,8 @@ impl<Sig, Sp, Sto, Tim, M, const N: usize> SubductionBuilder<Sig, Sp, Sto, Tim, 
 // Build methods (only available when all required fields are set)
 // -----------------------------------------------------------------------
 
-impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
-    SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tim, M, N>
+impl<Sig, Sp, S, P, Tmr, M: DepthMetric, const N: usize>
+    SubductionBuilder<Sig, Sp, StoragePowerbox<S, P>, Tmr, M, N>
 {
     /// Build a [`Subduction`] instance with the default [`SyncHandler`].
     ///
@@ -351,16 +351,16 @@ impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
     ///     .signer(signer)
     ///     .storage(MemoryStorage::new(), Arc::new(OpenPolicy))
     ///     .spawner(TokioSpawn)
-    ///     .timer(TokioTimeout)
+    ///     .timer(TokioTmreout)
     ///     .build::<Sendable, MyConnection>();
     /// ```
     #[allow(clippy::type_complexity)]
     pub fn build<'a, F, C>(
         self,
     ) -> (
-        Arc<Subduction<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tim, M, N>>,
+        Arc<Subduction<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tmr, M, N>>,
         Arc<SyncHandler<F, S, C, P, M, N>>,
-        ListenerFuture<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tim, M, N>,
+        ListenerFuture<'a, F, S, C, SyncHandler<F, S, C, P, M, N>, P, Sig, Tmr, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
@@ -370,18 +370,18 @@ impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
         C: Connection<F, SyncMessage> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
-        Tim: Timeout<F> + Clone + Send + Sync + 'a,
+        Tmr: Tmreout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
         M: Clone,
         SyncHandler<F, S, C, P, M, N>: Handler<F, C, Message = SyncMessage>,
         <SyncHandler<F, S, C, P, M, N> as Handler<F, C>>::HandlerError:
             Into<ListenError<F, S, C, SyncMessage>>,
-        crate::connection::managed::ManagedConnection<C, F, Tim>:
+        crate::connection::managed::ManagedConnection<C, F, Tmr>:
             crate::connection::managed::ManagedCall<
-                    F,
-                    SyncMessage,
-                    SendError = <C as Connection<F, SyncMessage>>::SendError,
-                >,
+                F,
+                SyncMessage,
+                SendError = <C as Connection<F, SyncMessage>>::SendError,
+            >,
     {
         let sedimentrees = self
             .sedimentrees
@@ -440,7 +440,7 @@ impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
     ///     .signer(signer)
     ///     .storage(my_storage, Arc::new(policy))
     ///     .spawner(TokioSpawn)
-    ///     .timer(TokioTimeout)
+    ///     .timer(TokioTmreout)
     ///     .build_with_handler::<Sendable, MyConnection, _>(handler);
     /// ```
     #[allow(clippy::type_complexity)]
@@ -448,8 +448,8 @@ impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
         self,
         handler: Arc<H>,
     ) -> (
-        Arc<Subduction<'a, F, S, C, H, P, Sig, Tim, M, N>>,
-        ListenerFuture<'a, F, S, C, H, P, Sig, Tim, M, N>,
+        Arc<Subduction<'a, F, S, C, H, P, Sig, Tmr, M, N>>,
+        ListenerFuture<'a, F, S, C, H, P, Sig, Tmr, M, N>,
         crate::connection::manager::ManagerFuture<F>,
     )
     where
@@ -459,17 +459,17 @@ impl<Sig, Sp, S, P, Tim, M: DepthMetric, const N: usize>
         C: Connection<F, H::Message> + PartialEq + Clone + 'a,
         P: ConnectionPolicy<F> + StoragePolicy<F>,
         Sig: Signer<F>,
-        Tim: Timeout<F> + Clone + Send + Sync + 'a,
+        Tmr: Tmreout<F> + Clone + Send + Sync + 'a,
         Sp: Spawn<F> + Send + Sync + 'static,
         H: Handler<F, C>,
         H::Message: From<SyncMessage>,
         H::HandlerError: Into<ListenError<F, S, C, H::Message>>,
-        crate::connection::managed::ManagedConnection<C, F, Tim>:
+        crate::connection::managed::ManagedConnection<C, F, Tmr>:
             crate::connection::managed::ManagedCall<
-                    F,
-                    H::Message,
-                    SendError = <C as Connection<F, H::Message>>::SendError,
-                >,
+                F,
+                H::Message,
+                SendError = <C as Connection<F, H::Message>>::SendError,
+            >,
     {
         let sedimentrees = self
             .sedimentrees

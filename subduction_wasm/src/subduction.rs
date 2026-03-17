@@ -53,7 +53,7 @@ use crate::{
     sync_stats::WasmSyncStats,
     transport::{
         DEFAULT_CALL_TIME_LIMIT, JsTransport, MuxedTransport, WasmAuthenticatedTransport,
-        longpoll::{WasmHttpLongPoll, WasmLongPoll},
+        longpoll::{JsTimeout, WasmHttpLongPoll, WasmLongPoll},
         make_transport,
         websocket::WasmWebSocket,
     },
@@ -159,10 +159,11 @@ impl WasmSubduction {
         let depth_metric = WasmHashMetric(raw_fn);
         let max_pending = max_pending_blob_requests.unwrap_or(DEFAULT_MAX_PENDING_BLOB_REQUESTS);
 
-        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+        let mut builder = SubductionBuilder::<_, _, _, _, _, WASM_SHARD_COUNT>::new()
             .signer(signer)
             .storage(storage, Arc::new(OpenPolicy))
             .spawner(WasmSpawn)
+            .timer(JsTimeout)
             .depth_metric(depth_metric)
             .max_pending_blob_requests(max_pending);
 
@@ -269,10 +270,11 @@ impl WasmSubduction {
                 .await;
         }
 
-        let mut builder = SubductionBuilder::<_, _, _, _, WASM_SHARD_COUNT>::new()
+        let mut builder = SubductionBuilder::<_, _, _, _, _, WASM_SHARD_COUNT>::new()
             .signer(signer)
             .storage(storage, Arc::new(OpenPolicy))
             .spawner(WasmSpawn)
+            .timer(JsTimeout)
             .depth_metric(depth_metric)
             .max_pending_blob_requests(max_pending)
             .sedimentrees(sedimentrees);
@@ -1031,7 +1033,7 @@ impl DepthMetric for WasmHashMetric {
 #[derive(Debug, Clone, thiserror::Error)]
 #[error(transparent)]
 pub struct WasmCallError(
-    #[from] subduction_core::transport::mux::MuxCallError<crate::transport::JsTransportError>,
+    #[from] subduction_core::connection::managed::CallError<crate::transport::JsTransportError>,
 );
 
 impl From<WasmCallError> for js_sys::Error {
