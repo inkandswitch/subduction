@@ -34,7 +34,6 @@ use futures::{
 use subduction_core::{
     handshake::{self, HandshakeMessage, audience::Audience},
     peer::id::PeerId,
-    timeout::Timeout,
     timestamp::TimestampSeconds,
 };
 use subduction_crypto::{nonce::Nonce, signer::Signer};
@@ -76,27 +75,22 @@ impl<K: FutureForm> core::fmt::Debug for ConnectResult<K> {
 /// # Type Parameters
 ///
 /// - `H`: The HTTP client implementation
-/// - `O`: The timeout strategy
 #[derive(Debug, Clone)]
-pub struct HttpLongPollClient<H, O> {
+pub struct HttpLongPollClient<H> {
     base_url: String,
     http: H,
-    #[allow(dead_code)]
-    timeout: O,
 }
 
-impl<H, O> HttpLongPollClient<H, O> {
+impl<H> HttpLongPollClient<H> {
     /// Create a new HTTP long-poll client.
     ///
     /// - `base_url`: The server's base URL, e.g., `http://localhost:8080`.
     /// - `http`: The HTTP client implementation.
-    /// - `timeout`: The timeout strategy (retained for the `Connect` trait).
     #[must_use]
-    pub fn new(base_url: &str, http: H, timeout: O) -> Self {
+    pub fn new(base_url: &str, http: H) -> Self {
         Self {
             base_url: base_url.trim_end_matches('/').to_string(),
             http,
-            timeout,
         }
     }
 }
@@ -128,9 +122,9 @@ pub trait Connect<K: FutureForm, Sig: Signer<K>> {
     ) -> K::Future<'a, Result<ConnectResult<K>, ClientError>>;
 }
 
-#[future_form(Sendable where H: Send + Sync, O: Send + Sync, Sig: Sync, H::Error: Send, Local)]
-impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + Clone + 'static>
-    Connect<K, Sig> for HttpLongPollClient<H, O>
+#[future_form(Sendable where H: Send + Sync, Sig: Sync, H::Error: Send, Local)]
+impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static> Connect<K, Sig>
+    for HttpLongPollClient<H>
 {
     fn connect_with_audience<'a>(
         &'a self,
@@ -205,7 +199,7 @@ impl<K: FutureForm, Sig: Signer<K>, H: HttpClient<K> + 'static, O: Timeout<K> + 
     }
 }
 
-impl<H, O: Clone> HttpLongPollClient<H, O> {
+impl<H> HttpLongPollClient<H> {
     /// Connect to the server with a known peer ID.
     ///
     /// The [`FutureForm`] variant `K` is inferred from the HTTP client `H`:

@@ -185,8 +185,8 @@ impl WasmAuthenticatedLongPoll {
 // ---------------------------------------------------------------------------
 
 /// Build an [`HttpLongPollClient`] configured for the browser.
-fn make_client(base_url: &str) -> HttpLongPollClient<FetchHttpClient, JsTimeout> {
-    HttpLongPollClient::new(base_url, FetchHttpClient::new(), JsTimeout)
+fn make_client(base_url: &str) -> HttpLongPollClient<FetchHttpClient> {
+    HttpLongPollClient::new(base_url, FetchHttpClient::new())
 }
 
 /// Extract the host from a URL, falling back to the full URL on parse failure.

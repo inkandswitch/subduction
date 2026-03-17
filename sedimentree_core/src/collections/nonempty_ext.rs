@@ -26,7 +26,6 @@ pub trait NonEmptyExt<T> {
 
 impl<T: PartialEq> NonEmptyExt<T> for NonEmpty<T> {
     fn remove_item(mut self, value: &T) -> RemoveResult<T> {
-        // Check if it's the head
         if self.head == *value {
             return match self.tail.pop() {
                 Some(new_head) => {

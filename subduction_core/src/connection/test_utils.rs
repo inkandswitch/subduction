@@ -168,10 +168,6 @@ pub struct ChannelMockConnection<M> {
 
     /// Receiver for inbound messages (from "remote" to Subduction)
     inbound_rx: async_channel::Receiver<M>,
-
-    /// Sender for inbound messages (kept for potential direct access in complex tests)
-    #[allow(dead_code)]
-    inbound_tx: async_channel::Sender<M>,
 }
 
 impl<M> Clone for ChannelMockConnection<M> {
@@ -180,7 +176,6 @@ impl<M> Clone for ChannelMockConnection<M> {
             peer_id: self.peer_id,
             outbound_tx: self.outbound_tx.clone(),
             inbound_rx: self.inbound_rx.clone(),
-            inbound_tx: self.inbound_tx.clone(),
         }
     }
 }
@@ -216,7 +211,6 @@ impl<M> ChannelMockConnection<M> {
             peer_id,
             outbound_tx,
             inbound_rx,
-            inbound_tx: inbound_tx.clone(),
         };
 
         let handle = ChannelMockConnectionHandle {

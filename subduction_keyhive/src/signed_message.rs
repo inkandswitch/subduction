@@ -113,13 +113,6 @@ impl SignedMessage {
         ))
     }
 
-    /// Get a mutable reference to the signed bytes (for testing tamper scenarios).
-    #[cfg(test)]
-    #[allow(dead_code)]
-    pub(crate) const fn signed_bytes_mut(&mut self) -> &mut Vec<u8> {
-        &mut self.signed
-    }
-
     /// Serialize this message to CBOR bytes.
     ///
     /// # Errors

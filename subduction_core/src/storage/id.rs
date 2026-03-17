@@ -18,7 +18,7 @@ impl StorageId {
 
     /// Get the string representation of the [`StorageId`].
     #[must_use]
-    #[allow(clippy::missing_const_for_fn)]
+    #[allow(clippy::missing_const_for_fn)] // String deref is not const-stable
     pub fn as_str(&self) -> &str {
         &self.0
     }

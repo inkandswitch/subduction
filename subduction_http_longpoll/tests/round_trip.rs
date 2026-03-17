@@ -244,8 +244,7 @@ async fn connected_client(seed: u8, server_addr: SocketAddr) -> TestSubduction {
     tokio::spawn(manager_fut);
 
     let base_url = format!("http://{server_addr}");
-    let lp_client =
-        HttpLongPollClient::new(&base_url, ReqwestHttpClient::new(), FuturesTimerTimeout);
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect_discover(&client_signer, SERVICE_NAME, TimestampSeconds::now())
@@ -315,8 +314,7 @@ async fn connected_client_known_peer(
     tokio::spawn(manager_fut);
 
     let base_url = format!("http://{server_addr}");
-    let lp_client =
-        HttpLongPollClient::new(&base_url, ReqwestHttpClient::new(), FuturesTimerTimeout);
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect(&client_signer, server_peer_id, TimestampSeconds::now())
@@ -782,8 +780,7 @@ async fn server_shutdown_rejects_new_connections() -> TestResult {
     // Use a short timeout to avoid hanging if the TCP socket is lingering.
     let client_signer = signer(92);
     let base_url = format!("http://{address}");
-    let lp_client =
-        HttpLongPollClient::new(&base_url, ReqwestHttpClient::new(), FuturesTimerTimeout);
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let connect_fut =
         lp_client.connect_discover(&client_signer, SERVICE_NAME, TimestampSeconds::now());
@@ -814,8 +811,7 @@ async fn connect_wrong_known_peer_rejected() -> TestResult {
 
     let client_signer = signer(96);
     let base_url = format!("http://{}", server.address);
-    let lp_client =
-        HttpLongPollClient::new(&base_url, ReqwestHttpClient::new(), FuturesTimerTimeout);
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect(&client_signer, wrong_peer_id, TimestampSeconds::now())
@@ -836,8 +832,7 @@ async fn connect_wrong_discovery_service_rejected() -> TestResult {
 
     let client_signer = signer(98);
     let base_url = format!("http://{}", server.address);
-    let lp_client =
-        HttpLongPollClient::new(&base_url, ReqwestHttpClient::new(), FuturesTimerTimeout);
+    let lp_client = HttpLongPollClient::new(&base_url, ReqwestHttpClient::new());
 
     let result = lp_client
         .connect_discover(

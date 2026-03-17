@@ -209,8 +209,7 @@ async fn connect_to_server(base_url: &str, client_seed: u8, service_name: &str) 
     tokio::spawn(listener_fut);
     tokio::spawn(manager_fut);
 
-    let lp_client =
-        HttpLongPollClient::new(base_url, ReqwestHttpClient::new(), FuturesTimerTimeout);
+    let lp_client = HttpLongPollClient::new(base_url, ReqwestHttpClient::new());
 
     let now = TimestampSeconds::now();
     let result = lp_client
