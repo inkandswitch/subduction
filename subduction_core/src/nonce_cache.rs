@@ -188,100 +188,118 @@ mod tests {
         ));
     }
 
-    #[cfg(all(feature = "std", feature = "bolero"))]
+    #[cfg(feature = "std")]
     mod proptests {
         use super::*;
         use futures::executor::block_on;
 
+        const ITERATIONS: usize = 100;
+
+        fn random_peer_id() -> PeerId {
+            let mut bytes = [0u8; 32];
+            getrandom::getrandom(&mut bytes).expect("rng");
+            PeerId::new(bytes)
+        }
+
+        fn random_nonce() -> Nonce {
+            Nonce::random()
+        }
+
+        fn random_timestamp() -> TimestampSeconds {
+            let mut buf = [0u8; 8];
+            getrandom::getrandom(&mut buf).expect("rng");
+            TimestampSeconds::new(u64::from_le_bytes(buf) % 1_000_000)
+        }
+
         #[test]
         fn prop_fresh_nonce_always_succeeds() {
-            bolero::check!()
-                .with_type::<(PeerId, Nonce, TimestampSeconds)>()
-                .with_iterations(100)
-                .for_each(|(peer, nonce, ts)| {
-                    block_on(async {
-                        let cache = NonceCache::default();
-                        assert!(cache.try_claim(*peer, *nonce, *ts).await.is_ok());
-                    });
-                });
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    assert!(
+                        cache
+                            .try_claim(random_peer_id(), random_nonce(), random_timestamp())
+                            .await
+                            .is_ok()
+                    );
+                }
+            });
         }
 
         #[test]
         fn prop_duplicate_nonce_always_fails() {
-            bolero::check!()
-                .with_type::<(PeerId, Nonce, TimestampSeconds)>()
-                .with_iterations(100)
-                .for_each(|(peer, nonce, ts)| {
-                    block_on(async {
-                        let cache = NonceCache::default();
-                        cache
-                            .try_claim(*peer, *nonce, *ts)
-                            .await
-                            .expect("first claim");
-                        assert!(matches!(
-                            cache.try_claim(*peer, *nonce, *ts).await,
-                            Err(NonceReused)
-                        ));
-                    });
-                });
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let peer = random_peer_id();
+                    let nonce = random_nonce();
+                    let ts = random_timestamp();
+
+                    cache.try_claim(peer, nonce, ts).await.expect("first claim");
+                    assert!(matches!(
+                        cache.try_claim(peer, nonce, ts).await,
+                        Err(NonceReused)
+                    ));
+                }
+            });
         }
 
         #[test]
         fn prop_same_nonce_different_peer_succeeds() {
-            bolero::check!()
-                .with_type::<(PeerId, PeerId, Nonce, TimestampSeconds)>()
-                .with_iterations(100)
-                .for_each(|(p1, p2, nonce, ts)| {
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let p1 = random_peer_id();
+                    let p2 = random_peer_id();
+                    let nonce = random_nonce();
+                    let ts = random_timestamp();
+
                     if p1 == p2 {
-                        return;
+                        continue;
                     }
-                    block_on(async {
-                        let cache = NonceCache::default();
-                        cache
-                            .try_claim(*p1, *nonce, *ts)
-                            .await
-                            .expect("first claim");
-                        assert!(cache.try_claim(*p2, *nonce, *ts).await.is_ok());
-                    });
-                });
+                    cache.try_claim(p1, nonce, ts).await.expect("first claim");
+                    assert!(cache.try_claim(p2, nonce, ts).await.is_ok());
+                }
+            });
         }
 
         #[test]
         fn prop_different_nonce_same_peer_succeeds() {
-            bolero::check!()
-                .with_type::<(PeerId, Nonce, Nonce, TimestampSeconds)>()
-                .with_iterations(100)
-                .for_each(|(peer, n1, n2, ts)| {
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let peer = random_peer_id();
+                    let n1 = random_nonce();
+                    let n2 = random_nonce();
+                    let ts = random_timestamp();
+
                     if n1 == n2 {
-                        return;
+                        continue;
                     }
-                    block_on(async {
-                        let cache = NonceCache::default();
-                        cache.try_claim(*peer, *n1, *ts).await.expect("first claim");
-                        assert!(cache.try_claim(*peer, *n2, *ts).await.is_ok());
-                    });
-                });
+                    cache.try_claim(peer, n1, ts).await.expect("first claim");
+                    assert!(cache.try_claim(peer, n2, ts).await.is_ok());
+                }
+            });
         }
 
         #[test]
         fn prop_nonces_expire_after_full_rotation() {
-            bolero::check!()
-                .with_type::<(PeerId, Nonce)>()
-                .with_iterations(100)
-                .for_each(|(peer, nonce)| {
-                    block_on(async {
-                        let cache = NonceCache::default();
-                        let t0 = TimestampSeconds::new(1000);
-                        let t_expired = TimestampSeconds::new(1000 + 15 * 60);
+            block_on(async {
+                for _ in 0..ITERATIONS {
+                    let cache = NonceCache::default();
+                    let peer = random_peer_id();
+                    let nonce = random_nonce();
+                    let t0 = TimestampSeconds::new(1000);
+                    let t_expired = TimestampSeconds::new(1000 + 15 * 60);
 
-                        cache.try_claim(*peer, *nonce, t0).await.expect("claim");
-                        assert!(matches!(
-                            cache.try_claim(*peer, *nonce, t0).await,
-                            Err(NonceReused)
-                        ));
-                        assert!(cache.try_claim(*peer, *nonce, t_expired).await.is_ok());
-                    });
-                });
+                    cache.try_claim(peer, nonce, t0).await.expect("claim");
+                    assert!(matches!(
+                        cache.try_claim(peer, nonce, t0).await,
+                        Err(NonceReused)
+                    ));
+                    assert!(cache.try_claim(peer, nonce, t_expired).await.is_ok());
+                }
+            });
         }
     }
 }
